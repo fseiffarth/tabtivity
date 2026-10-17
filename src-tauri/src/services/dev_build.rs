@@ -234,6 +234,7 @@ fn lock_holder_alive(lock_dir: &Path) -> bool {
 }
 
 fn commits_behind(root: &str, installed: &str) -> Option<u32> {
+    // Bare on purpose: `root` is the app's own checkout, not a project.
     let out = crate::paths::command_no_window("git")
         .args(["-C", root, "rev-list", "--count", &format!("{installed}..HEAD")])
         .output()
@@ -483,6 +484,7 @@ fn run_script(arg: &str) -> Result<(), String> {
 }
 
 fn head_sha(root: &str) -> Option<String> {
+    // Bare on purpose: `root` is the app's own checkout, not a project.
     let out = crate::paths::command_no_window("git")
         .args(["-C", root, "rev-parse", "HEAD"])
         .output()

@@ -386,6 +386,37 @@ aliases, and anything about where or how credentials are stored.
 
 **Assumes**
 
+- **0.163.0 (2026-10-16), live but outside Tabtivity** — the GitHub
+  release's musl build plus its `codex-code-mode-host`, run in a private tmux
+  with its own `CODEX_HOME` and a local Ollama model, inside a fenced agent
+  tab, `--no-daemon`. `--version` prints `codex-cli 0.163.0`;
+  `resume [SESSION_ID]`, `exec --skip-git-repo-check`, `--no-daemon`, `--oss`,
+  `-m`, `-c`, `--dangerously-bypass-hook-trust` stand and `-a` still takes
+  `on-request | never`. Fed to the parsers as captured (real xterm replay,
+  100 columns): the approval menu (same three labels, `›` on row 1,
+  `Environment: local` over the `$ <command>` title; the command in row 2 now
+  carries an OSC 8 link, which `stripAnsi` drops), the decision lamp (while
+  blocked only `[ ! ]`/`[ . ] Action Required | <action> | <dir>` titles and
+  empty synchronized-update frames), both `/model` steps (unchanged, footer
+  `enter default · s session · esc back`), the mode line (CSI-u Shift+Tab and
+  tmux's backtab toggle the silent default and `Plan mode`). The first-run
+  folder question (`Trust and continue` / `Quit`, footer `enter continue ·
+  esc quit`) is followed in place by the "Hooks need review" menu; its
+  `Review hooks` row opens the hooks page — an unnumbered event table, footer
+  `t trust all · enter review · esc close` (`enter details · esc close` once
+  trusted) — which `readCodexHooksPage` reads as a Trust all / Close card
+  (`t` writes the bare `trusted_hash` tables `codex_hook_state_in` reads).
+  Before it, a Chat-view double-click on `Trust and continue` landed its
+  second click on `Review hooks` and left the session on a page the chat did
+  not show; a dialog that replaces an answered one now takes no click for a
+  moment. Hook payloads as on 0.162.1, Stop adding `stop_hook_active`.
+  Rollout: first line `session_meta` with `session_id` and `cwd`,
+  `turn_context.model`, user prompts as `response_item` user messages,
+  `event_msg` `token_count` totals unchanged. Writer lock: a second
+  `exec resume` exits 1 with "already has an active writer"; after the TUI is
+  SIGKILLed the same resume succeeds and the lock file is gone. A fenced
+  Codex still warns that its own bubblewrap sandbox cannot create user
+  namespaces (the startup `⚠ 1 warning`), as expected inside the fence.
 - **0.162.1 (2026-10-11), live but outside Tabtivity** — npm's linux-x64
   tarball (`vendor/<triple>/bin/` still carries `codex-code-mode-host` beside
   `codex`) run in a private tmux with its own `CODEX_HOME` and a local Ollama
@@ -527,7 +558,7 @@ aliases, and anything about where or how credentials are stored.
   duplicate guard independent of hook trust; duplicates use the documented
   `codex resume` picker (no id). Never delete Codex's writer locks to force a
   resume. Verify this lifecycle again when its thread store changes (last
-  checked live on 0.162.1, with the CLI itself: a SIGKILLed writer releases
+  checked live on 0.163.0, with the CLI itself: a SIGKILLed writer releases
   the lock).
 - Session rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`
   whose **first line** is `{"type":"session_meta","payload":{"session_id","cwd",…}}`.
@@ -549,7 +580,7 @@ aliases, and anything about where or how credentials are stored.
   (`CODEX_HOOK_EVENTS`; 0.154.0 names those events and no `Notification`, read
   off the binary's strings, not live — so a Codex approval wait is still read
   off its screen). Their payloads carry `session_id` and `hook_event_name`
-  like Claude's (verified live on 0.161.0 and 0.162.1). Trust state is read from
+  like Claude's (verified live on 0.161.0, 0.162.1 and 0.163.0). Trust state is read from
   `[hooks.state."…"]` tables (`trusted_hash`, enabled flag), each hook by
   position, so the new blocks need the same one-time `/hooks` trust.
   Text-appended per event, never reserialized.
@@ -560,7 +591,7 @@ aliases, and anything about where or how credentials are stored.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.162.1):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.163.0):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -585,7 +616,7 @@ aliases, and anything about where or how credentials are stored.
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
   Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
-  0.161.0 and 0.162.1, where Shift+Tab toggles only the silent default and plan (the
+  0.161.0, 0.162.1 and 0.163.0, where Shift+Tab toggles only the silent default and plan (the
   other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
@@ -594,7 +625,7 @@ aliases, and anything about where or how credentials are stored.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0 and 0.162.1, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0, 0.162.1 and 0.163.0, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 
@@ -626,9 +657,13 @@ Install via `npm install -g @google/gemini-cli`. The 0.59.0 bundle still
 defines `--resume` (alias `-r`) and renders the `NN% used` footer (read out of
 the package, 2026-09-15; not live).
 
-- No transcript is read: the Agents view's last-prompt line comes from the
-  prompt echo on the pane's screen (`> …`, parsed by the mobile `chatTurns`),
-  so a changed echo marker or an unindented multi-line echo loses the line.
+- Phone Chat reads stored sessions through `services::google_chat` (not live
+  verified): `.gemini/tmp/<project>/chats/*.json` and newer JSONL records with
+  `$patch`, `$rewindTo`, `$set`; project directory is SHA-256 or the slug in
+  `.gemini/projects.json`. Messages use `type: user|gemini`, `content`, optional
+  `displayContent`, `timestamp`, `model`; tool calls and thoughts stay out.
+  Re-check those fields and paths on update. The Agents view's last-prompt
+  line still reads the pane's `> …` echo through mobile `chatTurns`.
 
 **Verify** `gemini --help | grep -E 'resume|prompt'`; open a tab, `/stats`.
 
@@ -725,6 +760,20 @@ clears with ctrl+u. A release that changes any of those degrades the phone's
 Focus view for OpenCode; a release that adds an agent switch to mini would let
 the `fixed` flag in `agentModes.ts` be dropped.
 
+**OpenCode questions** (`mobile-web/src/terminal/openCodeQuestion.ts`): source
+checked against [1.18.34 QuestionPrompt](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/tui/src/routes/session/question.tsx)
+on 2026-10-16, using the phone screenshot for the numbered layout; not live
+verified. Assumes `↑↓ select  enter submit|confirm|toggle  esc dismiss`, optional
+`⇆ tab`, numbered choices with indented descriptions, a background highlight,
+`Type your own answer`, and headers separated by padding ending in `Confirm`.
+Digits 1–9 select directly; Tab/Shift+Tab changes questions; custom selection
+opens an editor and Enter saves it (also for multi-select). Ctrl+U clears an
+existing custom answer but closes an empty editor. Confirm shows `Review` and
+Enter submits. Check those shapes and keys together after updates; run
+`npx vitest run src/__tests__/mobile/MobileOpenCodeQuestion.test.ts src/__tests__/mobile/MobileFocusQuestion.test.tsx`.
+Live QA: Chat choices and notes, custom answer, toggle several, switch headers,
+Confirm, return to change an answer, then Submit, on phone and desktop.
+
 **Antigravity's model and effort** are read by the phone since 2026-09-20
 (`mobile-web/src/terminal/antigravity.ts`, verified against 1.2.7 by a pty
 capture; 1.2.14 by a tmux capture at 80×24 on 2026-09-30, run through
@@ -765,6 +814,15 @@ the sheet without its rows. `agy models` lists the model ids and their efforts
 (`gemini-3.1-pro-{high,low}` — no medium), which is the quickest check that the
 list still looks as the sheet expects.
 
+Phone Chat now reads Antigravity's stored conversation through
+`services::google_chat` (not live verified): `conversation_summaries.db`
+selects a main session by `workspace_uris`; its conversation database's
+`steps` holds a CortexStep protobuf in `step_payload`. The installed 1.3.3
+descriptor defines user input as type 14, field 19 → field 2; answers as
+type 15, field 20 → field 1; completion status 3; timestamps at field 5 →
+field 1. Re-check these against the binary descriptor and database schema on
+update. Thinking and tools are omitted. Versions include the WAL's timestamp.
+
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an
 *opportunity*, not a break. Copilot has been alt-screen unconditionally since 1.0.12 (its
@@ -783,7 +841,7 @@ tabs via `ollama launch <agent>`).
 
 **Where** `services/token_stats.rs` (scan + cache), `commands/usage_stats.rs`
 (`usage_token_stats`), `src/lib/tokenStats.ts` (the recap's Tokens section).
-Plan: `docs/token_stats_plan.md`; context: `docs/context/usage_stats.md`.
+Plan: `docs/done/token_stats_plan.md`; context: `docs/context/usage_stats.md`.
 
 **Assumes** (checked against live files, 2026-10-01)
 
@@ -1258,7 +1316,7 @@ restructure or a `spellbook` bump.
 ## 18. Agent Skills
 
 **Where** `services/skills.rs`, `commands/skills.rs`, `src/lib/agents/skills.ts`,
-`docs/skills_plan.md`.
+`docs/done/skills_plan.md`.
 
 **Assumes** the `SKILL.md` frontmatter (`name`, `description`), install
 target `.claude/skills/<name>/`, catalog source

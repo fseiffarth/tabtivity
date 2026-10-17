@@ -64,6 +64,17 @@ const LIVE_SETTLE_MS = 250;
 const LIVE_POLL_MS = 1500;
 /** How long an answered dialog stays unclickable while the session redraws. */
 const ANSWER_WAIT_MS = 3000;
+/** How long the dialog an answer brought up stays unclickable. A CLI asks
+ * its next question at once and in the same place — Codex's "Hooks need
+ * review" under its folder question, both with their first row first — so the
+ * second click of a double-click, meant for the answered row, took the new
+ * dialog's first row (`Review hooks`) unseen. */
+const NEXT_DIALOG_HOLD_MS = 600;
+/** How long the screen must show something the Reader cannot read
+ * (`ReaderLive.stray`) before the chat points at the terminal: a CLI starting
+ * up, a picker answered from the composer or a redraw passes through such a
+ * screen for a moment. */
+const STRAY_MS = 3000;
 const ENCODER = new TextEncoder();
 
 
@@ -104,6 +115,40 @@ function RunningShellLine({ shell }: { shell: RunningShell }) {
 /** The mark Claude Code asks agents to put on the option they would pick,
  * shown as a tag beside the label (the phone's `QuestionList` does the same). */
 const RECOMMENDED = /\s+\(Recommended\)$/u;
+
+/** The reader's answer rows that can be picked right now. */
+const OPTION_BUTTONS = "button.terminal-reader-option:not(:disabled)";
+
+/** Moves the keyboard from the composer onto the open question's rows: the
+ * row the CLI has highlighted, else the first. False when none can be picked. */
+function focusQuestionOption(from: Element): boolean {
+  const root = from.closest(".terminal-reader");
+  const rows = root ? Array.from(root.querySelectorAll<HTMLButtonElement>(OPTION_BUTTONS)) : [];
+  const row = rows.find((candidate) => candidate.classList.contains("current")) ?? rows[0];
+  row?.focus();
+  return !!row;
+}
+
+/** ↑/↓ (Home/End) walk focus over the answer rows, Enter or Space picks the
+ * focused one; ↑ off the first row goes back to the composer. */
+function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  // The free-text row's field keeps its own caret keys.
+  if (!(event.target instanceof HTMLButtonElement)) return;
+  const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(OPTION_BUTTONS));
+  const at = rows.indexOf(event.target);
+  if (at < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0
+    : event.key === "End" ? rows.length - 1
+    : at + (event.key === "ArrowUp" ? -1 : 1);
+  if (next < 0) {
+    event.currentTarget.closest(".terminal-reader")?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")?.focus();
+    return;
+  }
+  rows[Math.min(next, rows.length - 1)]?.focus();
+}
 
 /** The choice the session waits on, as buttons: what it was drawn onto (a
  * permission prompt's command or diff), an agent question's headers as chips,
@@ -147,7 +192,8 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
     [answeredTab && "answered", index === focus && "current"].filter(Boolean).join(" ") || undefined;
   return (
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
-      <small className="terminal-reader-question-head">{t("terminal.reader.question")}</small>
+      <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /></small>
+      {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
         <div className="terminal-reader-question-tabs">
@@ -197,7 +243,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
         </div>
       )}
       {live.ask.length > 0 && <p className="terminal-reader-question-ask">{live.ask.join("\n")}</p>}
-      <div className="terminal-reader-options">
+      <div className="terminal-reader-options" onKeyDown={walkQuestionOptions}>
         {question.options.map((option) => {
           const recommended = RECOMMENDED.exec(option.label);
           const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
@@ -254,6 +300,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
           );
         })}
       </div>
+      {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
     </div>
@@ -413,7 +460,7 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, focused, visible, steering, onEscape, onStatus }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, focused, visible, steering, questionOpen, onEscape, onStatus }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -427,6 +474,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   focused: boolean;
   visible: boolean;
   steering: boolean;
+  /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
+  questionOpen: boolean;
   onEscape: () => void;
   onStatus: () => void;
 }) {
@@ -602,6 +651,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (slashKey(e)) {
       e.preventDefault();
+    } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
+      e.preventDefault();
     } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && walkHistory(e, e.key === "ArrowUp" ? -1 : 1)) {
       e.preventDefault();
     } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -697,6 +748,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const [answered, setAnswered] = useState("");
   /** What `answered` waits on: a row's answer, or a walk along the tab row. */
   const [answeredBy, setAnsweredBy] = useState<"row" | "step">("row");
+  /** The dialog drawn in place of an answered one, while it is held
+   * (`NEXT_DIALOG_HOLD_MS`). */
+  const [heldSignature, setHeldSignature] = useState("");
   const [picking, setPicking] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusRequest, setStatusRequest] = useState(0);
@@ -781,16 +835,25 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     if (!answered) return;
     if (live.signature !== answered) {
       setAnswered("");
+      if (live.question) setHeldSignature(live.signature);
       return;
     }
     const stuckTimer = setTimeout(() => setAnswered(""), ANSWER_WAIT_MS);
     return () => clearTimeout(stuckTimer);
   }, [answered, live.signature]);
+  useEffect(() => {
+    if (!heldSignature) return;
+    const holdTimer = setTimeout(() => setHeldSignature(""), NEXT_DIALOG_HOLD_MS);
+    return () => clearTimeout(holdTimer);
+  }, [heldSignature]);
+  /** The dialog on screen takes no answer: one is on its way, or it has just
+   * replaced the one answered. */
+  const held = (!!answered && answered === live.signature) || (!!heldSignature && heldSignature === live.signature);
 
   const answer = (index: number) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered) return;
+    if (!question || !option || answered || held) return;
     const keys = answerKeys(question, option);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -802,7 +865,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const answerText = (index: number, text: string) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered) return;
+    if (!question || !option || answered || held) return;
     const keys = answerTextKeys(question, option, text);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -812,13 +875,27 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
-    if (!live.question || keys.length === 0 || answered) return;
+    if (!live.question || keys.length === 0 || answered || held) return;
     setAnswered(live.signature);
     setAnsweredBy("step");
     void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
   };
   const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
   const shownLive = picking ? NO_LIVE : live;
+  /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
+   * the chat says so and offers the way to it. Not while a picker the facts
+   * row opened or an answer is on screen — the Reader put those there. */
+  const strayNow = live.stray && !picking && !answered;
+  const [strayShown, setStrayShown] = useState(false);
+  useEffect(() => {
+    if (!strayNow || !visible) {
+      setStrayShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setStrayShown(true), STRAY_MS);
+    return () => clearTimeout(timer);
+  }, [strayNow, visible]);
+  const openTerminal = () => { if (tab) useAgentReaderStore.getState().set(readerAgent(tab), false); };
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
@@ -1083,7 +1160,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       list.scrollTop = list.scrollHeight;
     }
     checkPinnedPrompt();
-  }, [turns, pending, live, shownTranscript, visible, checkPinnedPrompt]);
+  }, [turns, pending, live, strayShown, shownTranscript, visible, checkPinnedPrompt]);
 
   const showEarlier = () => {
     const list = listRef.current;
@@ -1295,7 +1372,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           <LiveQuestion
             live={shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
-            busy={!!answered && answered === live.signature}
+            busy={held}
             onAnswer={answer}
             onType={answerText}
             onStep={step}
@@ -1324,6 +1401,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
               <button type="button" className="terminal-reader-stop" onClick={stop} title={t("terminal.reader.stopHint")}>
                 {t("terminal.reader.stop")}
               </button>
+            </div>
+          )}
+          {strayShown && (
+            <div className="terminal-reader-working terminal-reader-stray" role="status">
+              <span>{t("terminal.reader.stray")}</span>
+              <button type="button" className="terminal-reader-stop" onClick={openTerminal} title={t("terminal.reader.strayOpenHint")}>
+                {t("terminal.reader.strayOpen")}
+              </button>
+              <UntestedTag id="terminal.reader.stray" />
             </div>
           )}
           {backgroundAtWork > 0 && (
@@ -1385,6 +1471,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         focused={focused}
         visible={visible}
         steering={steering}
+        questionOpen={!!shownLive.question}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
       />

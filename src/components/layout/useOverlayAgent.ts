@@ -90,7 +90,7 @@ export interface OverlayAgentHandle {
  * mounts it, and while `live` (the overlay is up) it answers Ctrl+1–9
  * (`OVERLAY_AGENT_EVENT`) addressed to `app` by docking that slot's agent — a
  * ROOT tab, the only kind handed Tabtivity's own MCP tools — in a column beside
- * the app (`OverlayAgentColumn`). See `docs/overlay_agent_plan.md`.
+ * the app (`OverlayAgentColumn`). See `docs/done/overlay_agent_plan.md`.
  *
  * - The numbers are the root console's own + menu's (`useAddTabMenuData(ROOT_SCOPE)`
  *   → `agentShortcutSlots`, the inputs `TabBar` passes), so only root-allowed

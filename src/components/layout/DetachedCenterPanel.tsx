@@ -50,6 +50,7 @@ import {
   SubwindowFilesSidebar,
 } from "../files/SubwindowFilesSidebar";
 import { useWindowFocused } from "../../hooks/useWindowFocused";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { TabHoverCard } from "../tabs/TabHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
@@ -63,6 +64,7 @@ import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { TabStackChip } from "../tabs/TabStackChip";
 import { stackNames, stripItems } from "../../lib/tabStacks";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
+import { useDialogs } from "../common/PromptDialogs";
 import { tabColorCss, type TabColor } from "../../lib/theme/tabColors";
 import { pickEdge } from "../tabs/dragGeometry";
 import {
@@ -228,6 +230,10 @@ export function DetachedCenterPanel({
 }: Props) {
   // The popout's "+" add-tab menu: which group opened it + where to anchor it.
   const t = useT();
+  // Rename / tab-group names ask in the app's own prompt, the main window's
+  // `TabBar` questions word for word. Mounted in this window's own tree, so the
+  // portal lands in the popout's document, not the main window's.
+  const { promptText, dialogs } = useDialogs();
   const [addMenu, setAddMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
@@ -325,11 +331,13 @@ export function DetachedCenterPanel({
         void useAgentSchedulesStore.getState().load(scope, tab.scheduleTargetId).catch(() => []);
       }
     }
-    let stop: (() => void) | undefined;
-    void listen("agent-schedules-changed", () => {
-      void useAgentSchedulesStore.getState().refreshLoaded();
-    }).then((unlisten) => { stop = unlisten; });
-    return () => stop?.();
+    // `subscribeTauri`: a cleanup that runs before `listen` settles (unmount,
+    // or `tabs` changing on the next render) still drops the listener.
+    return subscribeTauri(() =>
+      listen("agent-schedules-changed", () => {
+        void useAgentSchedulesStore.getState().refreshLoaded();
+      }),
+    );
   }, [scope, tabs]);
   const landedNonce = useTabLandStore((s) => s.landed?.nonce ?? 0);
   const clearLanded = useTabLandStore((s) => s.clear);
@@ -2000,14 +2008,21 @@ export function DetachedCenterPanel({
       {agentDialogOpen && (
         <CustomAgentDialog onClose={() => setAgentDialogOpen(false)} />
       )}
+      {dialogs}
       {tabMenu && createPortal(
         <div className="tab-new-menu" ref={tabMenuRef} style={{ position: "fixed", left: tabMenu.x, top: tabMenu.y }}>
           <button className="tab-new-menu-item" onClick={() => {
             const tab = byKey.get(tabMenu.key);
             setTabMenu(null);
             if (!tab) return;
-            const next = window.prompt(t("detachedTabs.renamePrompt"), tab.label);
-            if (next != null && next.trim() && next !== tab.label) onRename?.(tab.key, next.trim());
+            void promptText({
+              title: t("detachedTabs.renamePrompt"),
+              label: t("tabBar.renameAriaLabel"),
+              initial: tab.label,
+              unchanged: tab.label,
+            }).then((next) => {
+              if (next) onRename?.(tab.key, next);
+            });
           }}>
             <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
             {t("common.rename")}
@@ -2055,8 +2070,13 @@ export function DetachedCenterPanel({
                   onClick={() => {
                     const key = tabMenu.key;
                     setTabMenu(null);
-                    const name = window.prompt(t("tabStack.nameLabel"), "");
-                    if (name?.trim()) onSetStack(key, name.trim());
+                    void promptText({
+                      title: t("tabStack.newTitle"),
+                      label: t("tabStack.nameLabel"),
+                      confirmLabel: t("tabStack.create"),
+                    }).then((name) => {
+                      if (name) onSetStack(key, name);
+                    });
                   }}
                 >
                   <span className="tab-new-menu-dot tab-new-menu-dot--accent">▤</span>
@@ -2104,10 +2124,14 @@ export function DetachedCenterPanel({
               className="tab-new-menu-item"
               onClick={() => {
                 setStackMenu(null);
-                const next = window.prompt(t("tabStack.nameLabel"), stackMenu.name);
-                if (next?.trim() && next.trim() !== stackMenu.name) {
-                  for (const key of members) onSetStack(key, next.trim());
-                }
+                void promptText({
+                  title: t("tabStack.renameTitle"),
+                  label: t("tabStack.nameLabel"),
+                  initial: stackMenu.name,
+                  unchanged: stackMenu.name,
+                }).then((next) => {
+                  if (next) for (const key of members) onSetStack(key, next);
+                });
               }}
             >
               <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>

@@ -46,10 +46,27 @@ pub struct PtySpawned {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_spawn(
     ctx: Ctx,
-    opts: PtyOptions,
+    mut opts: PtyOptions,
     session_name: Option<String>,
 ) -> Result<PtySpawned, String> {
     let registry = ctx.get::<RegistryState>();
+    // Whatever this spawn is, the id's previous spawn no longer runs a login once
+    // it is replaced: its paste mark must not carry over (`commands::credentials`).
+    crate::commands::credentials::forget_login_pty(&opts.id);
+    // A login tab runs the backend's own ssh / OpenVPN argv, never the caller's
+    // command line; refused outright when anything else rides along.
+    // Checked before the login's argv is built: building a VPN one claims the
+    // tunnel's pidfile.
+    if opts.login.is_some() && login_would_join(&ctx, registry, &opts.id) {
+        return Err(format!(
+            "terminal: '{}' is a running tab; a login opens in a tab of its own",
+            opts.id
+        ));
+    }
+    let login = crate::commands::credentials::apply_login(&mut opts, &ctx.caller)?;
+    // Building a VPN login's argv claimed its tunnel: every way out of here short
+    // of the login running hands that claim back.
+    let claim = crate::commands::credentials::LoginClaim::of(login.as_ref());
     // A server client opening a tab another client already runs in local
     // tmux gets a tmux client of its own instead of replacing that one's
     // (TODO #2347). Every desktop window takes the ordinary spawn below.
@@ -93,6 +110,14 @@ pub async fn pty_spawn(
         prepared.spawn_seq(),
     );
     if result.is_ok() {
+        claim.keep();
+        if let Some(target) = login {
+            crate::commands::credentials::note_login_pty(
+                &prepared.opts.id,
+                target,
+                prepared.spawn_seq(),
+            );
+        }
         registry.lock_ok().set_drop_dir(&prepared.opts.id, drop_dir);
         prepared.commit();
         if mcp_token_handed_out {
@@ -101,6 +126,16 @@ pub async fn pty_spawn(
         }
     }
     result.map(|()| PtySpawned { named, interrupted, attached: false, resting })
+}
+
+/// Whether a server client's spawn of `id` would join the tab another client
+/// runs in local tmux (`terminal::join_tab`) instead of spawning — never what a
+/// login asks for: it must be the PTY's own program.
+fn login_would_join(ctx: &Ctx, registry: &RegistryState, id: &str) -> bool {
+    match &ctx.caller {
+        app_core::Caller::Client(client) => registry.lock_ok().attachable(id, client).is_some(),
+        _ => false,
+    }
 }
 
 /// Honest per-scope fence status for the project-pill menu.  This performs no
@@ -139,25 +174,6 @@ pub async fn agent_fence_marks(
             registry.lock_ok().pid(id)
         });
         crate::services::agent_fence::marks_for_scopes(&project_ids, &live)
-    })
-    .await
-}
-
-/// List the tmux sessions running on the **local** machine (TODO #85), for a local
-/// project's Sessions view. Empty on Windows / without tmux / no server.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSession>, String> {
-    if !crate::services::tmux_local::tmux_available() {
-        return Ok(Vec::new());
-    }
-    app_core::rt::blocking("terminal", || {
-        let out = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_ls_args())
-            .output();
-        match out {
-            Ok(o) => crate::services::ssh_exec::parse_tmux_ls(&String::from_utf8_lossy(&o.stdout)),
-            Err(_) => Vec::new(),
-        }
     })
     .await
 }
@@ -344,11 +360,7 @@ pub async fn pty_write(
     data: Vec<u8>,
 ) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();
-    // Watch for a Tabtivity-minted interactive login command being typed in, which is
-    // what marks this PTY as a legitimate destination for the matching saved
-    // credential (see `commands::credentials`).
     let id = pty_id_for(&ctx, registry, id);
-    crate::commands::credentials::note_pty_input(&id, &data);
     let sender = registry.lock_ok().input_sender(&id);
     if let Some(sender) = sender {
         sender

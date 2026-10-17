@@ -64,6 +64,7 @@ import {
   TabAgentModeMarks,
   TabSourceBadge,
   TabStatusMark,
+  statusMarkSlots,
   TabTexLinkBadge,
   TabLocalityBadge,
   LocalityMenu,
@@ -353,7 +354,7 @@ const TabItem = memo(function TabItem({
           : undefined
       }
     >
-      <TabStatusMark stateClass={stateClass} />
+      <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
       {editing ? (
         <input
           className="tab-label-edit"
@@ -782,6 +783,15 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   useEffect(() => {
     updateScrollState();
   }, [tabs, updateScrollState]);
+
+  // A tab that becomes active off-screen — one just added at the strip's far
+  // end, or switched to by keyboard — scrolls into view (mirrors the popout's
+  // `ScrollingTabStrip`); clicks reveal through `revealTab` in the commit path.
+  useEffect(() => {
+    if (!activeKey) return;
+    const tabEl = stripRef.current?.querySelector<HTMLElement>(".tab.active");
+    if (tabEl) revealTab(tabEl);
+  }, [activeKey, tabs.length, revealTab]);
 
   function openAddMenu() {
     if (menuPos) { setMenuPos(null); return; }
@@ -1666,6 +1676,16 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       >
         ⠿
       </div>
+      <button
+        className="tab-scroll-btn tab-popout-btn"
+        title={t("tabBar.popOutTitle")}
+        aria-label={t("tabBar.popOutTitle")}
+        // Keep the button out of the bar's detach-drag and tab pointer flow.
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => detachGroup(groupId, { allowLastGroup: true })}
+      >
+        ⧉
+      </button>
       {canScrollLeft && (
         <button
           className="tab-scroll-btn left"
@@ -1790,6 +1810,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           className={`tab-new-btn${tabs.length === 0 ? " empty-hint" : ""}`}
           data-hint-anchor="tab-add"
           title={t("tabBar.newTabTitle")}
+          aria-label={t("tabBar.newTabTitle")}
+          aria-haspopup="menu"
+          aria-expanded={menuPos !== null}
           onClick={openAddMenu}
         >
           +

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OPENCODE_MODEL_KEYS, isOpenCodeTab } from "../../mobile-web/src/terminal/openCodeMini";
+import { OPENCODE_MODEL_KEYS, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
 import { sameSelectStep, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
+import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
 import { modelPickKeys, readModelPicker } from "../lib/agents/readerLive";
 import { submitScheduledAgentCommand } from "../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
@@ -81,6 +82,17 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     setPicker(null);
     setAnswered(null);
   }, []);
+  /** OpenCode's picker is opened by keys, not a command: one this never read
+   * is still up in the session, where the next prompt would land in it
+   * (`openCodeDialogCloseKeys`). Closed there; nothing is sent without one. */
+  const typeKeysNow = useRef(typeKeys);
+  useEffect(() => { typeKeysNow.current = typeKeys; });
+  const closeUnread = useCallback(() => {
+    const term = terminalFor(ptyId);
+    if (!term || !isOpenCodeTab(agentLabel)) return;
+    const keys = openCodeDialogCloseKeys(bufferRows(term.buffer.active, term.rows));
+    if (keys.length > 0) void typeKeysNow.current(keys).catch(() => {});
+  }, [ptyId, agentLabel]);
 
   // The step on screen, unless it is the one just answered and the session
   // has not redrawn yet.
@@ -109,9 +121,12 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
       return () => clearTimeout(next);
     }
     // Never drawn: the session may have no picker, or was busy.
-    const never = setTimeout(finish, PICKER_WAIT_MS);
+    const never = setTimeout(() => {
+      closeUnread();
+      finish();
+    }, PICKER_WAIT_MS);
     return () => clearTimeout(never);
-  }, [picking, step, picker, answered, finish]);
+  }, [picking, step, picker, answered, finish, closeUnread]);
 
   const open = (next: SessionPickerCommand = "/model") => {
     if (picking) return;
@@ -137,6 +152,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const close = () => {
     // The picker is the session's own: close it there too.
     if (picker) void typeKeys(["\u001b"]).catch(() => {});
+    else closeUnread();
     finish();
   };
 

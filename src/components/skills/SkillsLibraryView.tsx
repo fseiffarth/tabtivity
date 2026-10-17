@@ -22,6 +22,7 @@ import type {
   SkillSource,
 } from "../../types/skills";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 
 export interface SkillsLibraryViewProps {
   /** Absolute path to the project skills may install into, or `null` where
@@ -33,7 +34,7 @@ export interface SkillsLibraryViewProps {
 }
 
 /**
- * The Skills Library's whole UI (`docs/skills_plan.md`): a sources bar, the
+ * The Skills Library's whole UI (`docs/done/skills_plan.md`): a sources bar, the
  * install scope's already-installed skills, a browsable/filterable catalog, and
  * a preview panel that is the ONLY place the install action lives — showing a
  * skill's content before it is copied into agent-trusted territory is the one
@@ -65,6 +66,7 @@ export interface SkillsLibraryViewProps {
  */
 export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryViewProps) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
 
   const [scope, setScope] = useState<"project" | "personal">(
     projectDir ? "project" : "personal",
@@ -100,7 +102,8 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   const [addLabel, setAddLabel] = useState("");
   const [addUrl, setAddUrl] = useState("");
   const [addBusy, setAddBusy] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [view, setView] = useState<"browse" | "installed">("browse");
 
   const reloadInstalled = useCallback(() => {
     listInstalledSkills(target)
@@ -195,7 +198,6 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
       setSelectedSourceId(created.id);
       setAddLabel("");
       setAddUrl("");
-      setAddOpen(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -204,7 +206,13 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   }
 
   async function handleRemoveSource(source: SkillSource) {
-    if (!window.confirm(t("skillsLibrary.confirmRemoveSource", { label: source.label }))) return;
+    const ok = await confirmAction({
+      title: t("skillsLibrary.removeSource"),
+      body: t("skillsLibrary.confirmRemoveSource", { label: source.label }),
+      confirmLabel: t("skillsLibrary.removeSource"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await removeSkillSource(source.id);
       const remaining = sources.filter((s) => s.id !== source.id);
@@ -237,7 +245,12 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   async function handleInstall() {
     if (!selectedEntry || !detail) return;
     if (installedNames.has(detail.name)) {
-      if (!window.confirm(t("skillsLibrary.confirmReinstall", { name: detail.name }))) return;
+      const ok = await confirmAction({
+        title: t("skillsLibrary.reinstall"),
+        body: t("skillsLibrary.confirmReinstall", { name: detail.name }),
+        confirmLabel: t("skillsLibrary.reinstall"),
+      });
+      if (!ok) return;
     }
     setInstalling(true);
     setError("");
@@ -259,7 +272,13 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
     const question = personal
       ? t("skillsLibrary.confirmUninstallPersonal", { name: skill.name })
       : t("skillsLibrary.confirmUninstall", { name: skill.name });
-    if (!window.confirm(question)) return;
+    const ok = await confirmAction({
+      title: t("skillsLibrary.uninstall"),
+      body: question,
+      confirmLabel: t("skillsLibrary.uninstall"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await uninstallSkill(personal ? PERSONAL_SKILLS : target, skill.name);
       reloadInstalled();
@@ -268,12 +287,48 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
     }
   }
 
+  const q = filter.trim().toLowerCase();
+  const matches = (e: { name: string; description: string }) =>
+    !q || e.name.toLowerCase().includes(q) || e.description.toLowerCase().includes(q);
+  const installedShown = installed.filter(matches);
+  const inheritedShown = inProject ? inherited.filter(matches) : [];
+  const installedCount = installed.length + (inProject ? inherited.length : 0);
+  const selectedSource = sources.find((s) => s.id === selectedSourceId) ?? null;
+  // With no source there is nothing to browse, so the form is the whole screen.
+  const sourcesShown = sourcesOpen || sources.length === 0;
+  const previewOpen = view === "browse" && !!selectedEntry;
+  const isInstalled = !!detail && installedNames.has(detail.name);
+
+  const installedRow = (skill: InstalledSkill, from: "target" | "personal") => (
+    <div className="skills-card skills-card-static" key={`${from}:${skill.name}`}>
+      <span className="skills-card-name">{skill.name}</span>
+      <span className="skills-card-desc">{skill.description}</span>
+      <span className="skills-card-foot">
+        <button
+          type="button"
+          className="skills-btn danger"
+          onClick={() => handleUninstall(skill, from)}
+        >
+          {t("skillsLibrary.uninstall")}
+        </button>
+      </span>
+    </div>
+  );
+
   return (
     <div className="skills-pane">
       <div className="skills-toolbar">
-        <span className="skills-title">{t("skillsLibrary.title")}</span>
+        <input
+          className="skills-input skills-search"
+          type="search"
+          aria-label={t("skillsLibrary.searchPlaceholder")}
+          placeholder={t("skillsLibrary.searchPlaceholder")}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
         <select
           className="skills-source-select"
+          aria-label={t("skillsLibrary.sources")}
           value={selectedSourceId}
           onChange={(e) => setSelectedSourceId(e.target.value)}
           disabled={sources.length === 0}
@@ -285,246 +340,283 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
             </option>
           ))}
         </select>
-        {sources.map((s) =>
-          s.id === selectedSourceId ? (
-            <button
-              key={s.id}
-              className="skills-btn small"
-              disabled={refreshingId === s.id}
-              onClick={() => handleRefresh(s)}
-            >
-              {refreshingId === s.id ? t("skillsLibrary.refreshing") : t("skillsLibrary.refresh")}
-            </button>
-          ) : null,
-        )}
-        {selectedSourceId && (
-          <button
-            className="skills-btn small danger"
-            onClick={() => {
-              const source = sources.find((s) => s.id === selectedSourceId);
-              if (source) handleRemoveSource(source);
-            }}
-          >
-            {t("skillsLibrary.removeSource")}
-          </button>
-        )}
-        <span className="skills-toolbar-spacer" />
-        <button className="skills-btn small" onClick={() => setAddOpen((v) => !v)}>
-          {t("skillsLibrary.addSource")}
+        <button
+          type="button"
+          className="skills-btn"
+          title={t("skillsLibrary.refreshTitle")}
+          disabled={!selectedSource || refreshingId !== null}
+          onClick={() => selectedSource && handleRefresh(selectedSource)}
+        >
+          {refreshingId ? t("skillsLibrary.refreshing") : t("skillsLibrary.refresh")}
+        </button>
+        <button
+          type="button"
+          className={`skills-btn${sourcesShown ? " on" : ""}`}
+          aria-expanded={sourcesShown}
+          onClick={() => setSourcesOpen((v) => !v)}
+        >
+          {t("skillsLibrary.sources")}
         </button>
       </div>
 
-      {addOpen && (
-        <div className="skills-add-source">
-          <input
-            className="skills-input"
-            placeholder={t("skillsLibrary.addSourceLabelPlaceholder")}
-            value={addLabel}
-            onChange={(e) => setAddLabel(e.target.value)}
-          />
-          <input
-            className="skills-input"
-            placeholder={t("skillsLibrary.addSourceUrlPlaceholder")}
-            value={addUrl}
-            onChange={(e) => setAddUrl(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleAddSource();
-            }}
-          />
-          <button className="skills-btn small" disabled={addBusy || !addUrl.trim()} onClick={handleAddSource}>
-            {t("skillsLibrary.add")}
-          </button>
+      {sourcesShown && (
+        <div className="skills-sources">
+          {sources.length === 0 && <div className="skills-empty">{t("skillsLibrary.noSourcesHint")}</div>}
+          {sources.map((s) => (
+            <div className="skills-source-row" key={s.id}>
+              <span className="skills-source-label">{s.label}</span>
+              <span className="skills-source-url" title={s.url}>
+                {s.url}
+              </span>
+              <button type="button" className="skills-btn danger" onClick={() => handleRemoveSource(s)}>
+                {t("skillsLibrary.remove")}
+              </button>
+            </div>
+          ))}
+          <div className="skills-add-source">
+            <input
+              className="skills-input"
+              placeholder={t("skillsLibrary.addSourceLabelPlaceholder")}
+              value={addLabel}
+              onChange={(e) => setAddLabel(e.target.value)}
+            />
+            <input
+              className="skills-input skills-add-url"
+              placeholder={t("skillsLibrary.addSourceUrlPlaceholder")}
+              value={addUrl}
+              onChange={(e) => setAddUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleAddSource();
+              }}
+            />
+            <button
+              type="button"
+              className="skills-btn"
+              disabled={addBusy || !addUrl.trim()}
+              onClick={handleAddSource}
+            >
+              {t("skillsLibrary.add")}
+            </button>
+          </div>
         </div>
       )}
 
-      {/* The scope, in its own row rather than folded into the toolbar: it is
-          not another source control, it is what the install button means. Drawn
-          only where there is a second scope to choose — a host with no project
-          gets the sentence instead, since a one-option selector is chrome that
-          asks a question with one answer. */}
-      <div className="skills-scope-row">
-        {projectDir ? (
-          <>
-            <span className="skills-scope-label">{t("skillsLibrary.installTo")}</span>
-            <div className="skills-scope-choices" role="radiogroup" aria-label={t("skillsLibrary.installTo")}>
-              <button
-                type="button"
-                className={`skills-scope-btn${scope === "project" ? " on" : ""}`}
-                role="radio"
-                aria-checked={scope === "project"}
-                onClick={() => setScope("project")}
-              >
-                {t("skillsLibrary.scopeProject")}
-              </button>
-              <button
-                type="button"
-                className={`skills-scope-btn${scope === "personal" ? " on" : ""}`}
-                role="radio"
-                aria-checked={scope === "personal"}
-                onClick={() => setScope("personal")}
-              >
-                {t("skillsLibrary.scopePersonal")}
-              </button>
-            </div>
-          </>
-        ) : (
-          <span className="skills-scope-label">{t("skillsLibrary.scopePersonalOnly")}</span>
-        )}
-        {/* Stated on every personal install, because it is the one thing the
-            scope's own name does not say: personal means every project on THIS
-            machine, and no other machine — a remote project's agents run on the
-            host, where this folder does not exist. */}
-        <span className="skills-scope-note">
-          {inProject ? t("skillsLibrary.scopeProjectNote") : t("skillsLibrary.scopePersonalNote")}
-        </span>
-      </div>
-
       {error && <ErrorNote className="skills-strip error" error={error} />}
 
-      <div className="skills-body">
+      <div className="skills-tabs">
+        <button
+          type="button"
+          className={`skills-tab${view === "browse" ? " on" : ""}`}
+          aria-pressed={view === "browse"}
+          onClick={() => setView("browse")}
+        >
+          {t("skillsLibrary.viewBrowse")}
+        </button>
+        <button
+          type="button"
+          className={`skills-tab${view === "installed" ? " on" : ""}`}
+          aria-pressed={view === "installed"}
+          onClick={() => setView("installed")}
+        >
+          {t("skillsLibrary.viewInstalled")}
+          <span className="skills-tab-count">{installedCount}</span>
+        </button>
+      </div>
+
+      <div className={`skills-body${previewOpen ? " has-preview" : ""}`}>
         <div className="skills-list-col">
-          <section className="skills-installed">
-            <div className="skills-section-title">
-              {inProject ? t("skillsLibrary.installed") : t("skillsLibrary.installedPersonal")}
-            </div>
-            {installed.length === 0 ? (
+          {view === "installed" ? (
+            installedCount === 0 ? (
               <div className="skills-empty">{t("skillsLibrary.noInstalled")}</div>
+            ) : installedShown.length + inheritedShown.length === 0 ? (
+              <div className="skills-empty">{t("skillsLibrary.noMatches", { q: filter.trim() })}</div>
             ) : (
-              installed.map((skill) => (
-                <div className="skills-installed-row" key={skill.name}>
-                  <div className="skills-installed-info">
-                    <span className="skills-installed-name">{skill.name}</span>
-                    <span className="skills-installed-desc">{skill.description}</span>
-                  </div>
-                  <button
-                    className="skills-btn small danger"
-                    onClick={() => handleUninstall(skill, "target")}
-                  >
-                    {t("skillsLibrary.uninstall")}
-                  </button>
-                </div>
-              ))
-            )}
-          </section>
-
-          {/* Personal skills this project already gets for free. A separate
-              section rather than merged rows: they are usable here but are not
-              this project's, they do not travel with its repo, and removing one
-              removes it from every other project too. */}
-          {inProject && inherited.length > 0 && (
-            <section className="skills-installed">
-              <div className="skills-section-title">{t("skillsLibrary.inherited")}</div>
-              {inherited.map((skill) => (
-                <div className="skills-installed-row" key={skill.name}>
-                  <div className="skills-installed-info">
-                    <span className="skills-installed-name">{skill.name}</span>
-                    <span className="skills-installed-desc">{skill.description}</span>
-                  </div>
-                  <button
-                    className="skills-btn small danger"
-                    onClick={() => handleUninstall(skill, "personal")}
-                  >
-                    {t("skillsLibrary.uninstall")}
-                  </button>
-                </div>
-              ))}
-            </section>
-          )}
-
-          <input
-            className="skills-input skills-filter"
-            placeholder={t("skillsLibrary.searchPlaceholder")}
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
-
-          <div className="skills-catalog">
-            {loadingCatalog ? (
-              <div className="skills-empty">{t("skillsLibrary.loading")}</div>
-            ) : filteredCatalog.length === 0 ? (
-              <div className="skills-empty">{t("skillsLibrary.noCatalog")}</div>
-            ) : (
-              filteredCatalog.map((entry) => (
-                <div
+              <>
+                {installedShown.length > 0 && (
+                  <section className="skills-group">
+                    {inProject && <h3 className="skills-group-title">{t("skillsLibrary.scopeProject")}</h3>}
+                    <div className="skills-grid">{installedShown.map((s) => installedRow(s, "target"))}</div>
+                  </section>
+                )}
+                {/* Personal skills this project already gets for free. A separate
+                    group rather than merged cards: they are usable here but are
+                    not this project's, they do not travel with its repo, and
+                    removing one removes it from every other project too. */}
+                {inheritedShown.length > 0 && (
+                  <section className="skills-group">
+                    <h3 className="skills-group-title">{t("skillsLibrary.inherited")}</h3>
+                    <div className="skills-grid">{inheritedShown.map((s) => installedRow(s, "personal"))}</div>
+                  </section>
+                )}
+              </>
+            )
+          ) : loadingCatalog ? (
+            <div className="skills-empty">{t("skillsLibrary.loading")}</div>
+          ) : filteredCatalog.length === 0 ? (
+            <div className="skills-empty">
+              {!selectedSource
+                ? t("skillsLibrary.noSourcesHint")
+                : q
+                  ? t("skillsLibrary.noMatches", { q: filter.trim() })
+                  : t("skillsLibrary.emptySource")}
+            </div>
+          ) : (
+            <div className="skills-grid">
+              {filteredCatalog.map((entry) => (
+                <button
+                  type="button"
                   key={`${entry.source_id}:${entry.rel_path}`}
-                  className={`skills-catalog-row${
+                  className={`skills-card${
                     selectedEntry?.rel_path === entry.rel_path ? " selected" : ""
                   }`}
+                  aria-pressed={selectedEntry?.rel_path === entry.rel_path}
                   onClick={() => setSelectedEntry(entry)}
                 >
-                  <div className="skills-catalog-row-head">
-                    <span className="skills-catalog-name">{entry.name}</span>
+                  <span className="skills-card-name">{entry.name}</span>
+                  <span className="skills-card-desc">{entry.description}</span>
+                  <span className="skills-card-foot">
                     {installedNames.has(entry.name) ? (
-                      <span className="skills-badge">{t("skillsLibrary.installedBadge")}</span>
+                      <span className="skills-badge installed">{t("skillsLibrary.installedBadge")}</span>
                     ) : inheritedNames.has(entry.name) ? (
                       <span className="skills-badge personal" title={t("skillsLibrary.personalBadgeTitle")}>
                         {t("skillsLibrary.personalBadge")}
                       </span>
                     ) : null}
-                    {entry.has_scripts && <span className="skills-scripts-dot" title={t("skillsLibrary.hasScripts")} />}
-                  </div>
-                  <div className="skills-catalog-desc">{entry.description}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="skills-preview">
-          {!selectedEntry ? (
-            <div className="skills-empty skills-preview-empty">{t("skillsLibrary.noSelection")}</div>
-          ) : loadingDetail || !detail ? (
-            <div className="skills-empty">{t("skillsLibrary.loading")}</div>
-          ) : (
-            <>
-              <div className="skills-preview-head">
-                <span className="skills-preview-name">{detail.name}</span>
-                {/* The button names its destination. It is the only install
-                    control in the feature and the scope can be changed two rows
-                    above it, so a bare "Install" would be the one word that
-                    cannot say where the copy lands. */}
-                <button className="skills-btn primary" disabled={installing} onClick={handleInstall}>
-                  {installedNames.has(detail.name)
-                    ? inProject
-                      ? t("skillsLibrary.reinstallProject")
-                      : t("skillsLibrary.reinstallPersonal")
-                    : inProject
-                      ? t("skillsLibrary.installProject")
-                      : t("skillsLibrary.installPersonal")}
+                    {entry.has_scripts && (
+                      <span className="skills-badge scripts" title={t("skillsLibrary.hasScripts")}>
+                        {t("skillsLibrary.scriptsBadge")}
+                      </span>
+                    )}
+                  </span>
                 </button>
-              </div>
-              <div className="skills-preview-desc">{detail.description}</div>
-              {/* Already usable here through the personal scope — installing a
-                  project copy is a real choice (it travels with the repo, and to
-                  a remote host), not a no-op, but it must not look like the only
-                  way to get the skill. */}
-              {inProject && !installedNames.has(detail.name) && inheritedNames.has(detail.name) && (
-                <div className="skills-strip notice">{t("skillsLibrary.alreadyPersonal")}</div>
-              )}
-              {detail.has_scripts && (
-                <div className="skills-strip notice">{t("skillsLibrary.hasScriptsWarning")}</div>
-              )}
-              {detail.files.length > 0 && (
-                <div className="skills-preview-files">
-                  <div className="skills-section-title">{t("skillsLibrary.bundledFiles")}</div>
-                  <ul>
-                    {detail.files.map((f) => (
-                      <li key={f}>{f}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {/* A skill body has no file here to resolve links against:
-                  anchors scroll, nothing navigates the app window away. */}
-              <div
-                className="skills-preview-body markdown-body"
-                onClick={(e) => onMarkdownLinkClick(e)}
-                dangerouslySetInnerHTML={{ __html: detailHtml }}
-              />
-            </>
+              ))}
+            </div>
           )}
         </div>
+
+        {previewOpen && selectedEntry && (
+          <aside className="skills-preview" aria-label={selectedEntry.name}>
+            <div className="skills-preview-head">
+              <div className="skills-preview-titles">
+                <h3 className="skills-preview-name">{selectedEntry.name}</h3>
+                <div className="skills-preview-meta">
+                  {selectedSource && (
+                    <span>{t("skillsLibrary.fromSource", { label: selectedSource.label })}</span>
+                  )}
+                  {isInstalled ? (
+                    <span className="skills-badge installed">{t("skillsLibrary.installedBadge")}</span>
+                  ) : inProject && inheritedNames.has(selectedEntry.name) ? (
+                    <span className="skills-badge personal" title={t("skillsLibrary.personalBadgeTitle")}>
+                      {t("skillsLibrary.personalBadge")}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="skills-close"
+                aria-label={t("skillsLibrary.closePreview")}
+                title={t("skillsLibrary.closePreview")}
+                onClick={() => setSelectedEntry(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="skills-preview-scroll">
+              {loadingDetail || !detail ? (
+                <div className="skills-empty">{t("skillsLibrary.loading")}</div>
+              ) : (
+                <>
+                  <p className="skills-preview-desc">{detail.description}</p>
+                  {/* Already usable here through the personal scope — installing a
+                      project copy is a real choice (it travels with the repo, and
+                      to a remote host), not a no-op, but it must not look like
+                      the only way to get the skill. */}
+                  {inProject && !isInstalled && inheritedNames.has(detail.name) && (
+                    <div className="skills-strip info">{t("skillsLibrary.alreadyPersonal")}</div>
+                  )}
+                  {detail.has_scripts && (
+                    <div className="skills-strip notice">{t("skillsLibrary.hasScriptsWarning")}</div>
+                  )}
+                  {detail.files.length > 0 && (
+                    <details className="skills-preview-files">
+                      <summary>
+                        {t("skillsLibrary.bundledFiles")} ({detail.files.length})
+                      </summary>
+                      <ul>
+                        {detail.files.map((f) => (
+                          <li key={f}>{f}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                  {/* A skill body has no file here to resolve links against:
+                      anchors scroll, nothing navigates the app window away. */}
+                  <div
+                    className="skills-preview-body markdown-body"
+                    onClick={(e) => onMarkdownLinkClick(e)}
+                    dangerouslySetInnerHTML={{ __html: detailHtml }}
+                  />
+                </>
+              )}
+            </div>
+            {/* The one install control in the feature, with its destination
+                beside it: the scope is what the button means, so it is chosen
+                where the click happens. A host with no project gets the sentence
+                instead, since a one-option selector asks a question with one
+                answer. */}
+            <div className="skills-install-bar">
+              <div className="skills-install-scope">
+                {projectDir ? (
+                  <div className="skills-seg" role="radiogroup" aria-label={t("skillsLibrary.installTo")}>
+                    <span className="skills-seg-label">{t("skillsLibrary.installTo")}</span>
+                    <button
+                      type="button"
+                      className={`skills-seg-btn${scope === "project" ? " on" : ""}`}
+                      role="radio"
+                      aria-checked={scope === "project"}
+                      title={t("skillsLibrary.scopeProjectNote")}
+                      onClick={() => setScope("project")}
+                    >
+                      {t("skillsLibrary.scopeProject")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`skills-seg-btn${scope === "personal" ? " on" : ""}`}
+                      role="radio"
+                      aria-checked={scope === "personal"}
+                      title={t("skillsLibrary.scopePersonalNote")}
+                      onClick={() => setScope("personal")}
+                    >
+                      {t("skillsLibrary.scopePersonal")}
+                    </button>
+                  </div>
+                ) : (
+                  <span className="skills-seg-label">{t("skillsLibrary.scopePersonalOnly")}</span>
+                )}
+                {/* Stated on every personal install, because it is the one thing
+                    the scope's own name does not say: personal means every
+                    project on THIS machine, and no other machine. */}
+                <span
+                  className="skills-install-note"
+                  title={inProject ? t("skillsLibrary.scopeProjectNote") : t("skillsLibrary.scopePersonalNote")}
+                >
+                  {inProject ? t("skillsLibrary.noteProject") : t("skillsLibrary.notePersonal")}
+                </span>
+              </div>
+              <button
+                type="button"
+                className={isInstalled ? "skills-btn" : "btn-primary skills-install-btn"}
+                disabled={installing || !detail}
+                onClick={handleInstall}
+              >
+                {isInstalled ? t("skillsLibrary.reinstall") : t("skillsLibrary.install")}
+              </button>
+            </div>
+          </aside>
+        )}
       </div>
+      {dialogs}
     </div>
   );
 }

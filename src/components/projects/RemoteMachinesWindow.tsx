@@ -12,6 +12,7 @@ import { rememberArg, useSavedCredential } from "./useSavedCredential";
 import { CredentialPasteBar, sshPasteEntries } from "./CredentialPasteBar";
 import { TerminalView } from "../terminal/TerminalView";
 import { forgetConnection, markConnectionOpened, resolveRemoteStartDir } from "../../lib/remote/remoteConnect";
+import { loginDedupeKey, sshLogin, type LoginTarget } from "../../lib/remote/loginTarget";
 import { formatBytes } from "../../lib/formatBytes";
 import { withHostKeyConfirm } from "../../lib/remote/hostKey";
 import { sameTarget } from "../../lib/remote/machineSync";
@@ -30,6 +31,7 @@ import { formatRemoteTarget, resolveLocalMirror } from "../../types";
 import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 
 /** Distinct PTY id per login terminal opened here — the id is the handle
  *  `pty_kill` and the output stream use, so it must never be reused. */
@@ -80,6 +82,7 @@ export function RemoteMachinesWindow({
 }) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
+  const { confirmAction, dialogs } = useDialogs();
   const workers = project.compute_hosts ?? [];
   const openConnect = useConnectDialogStore((s) => s.open);
   const byHost = useRemoteStatusStore((s) => s.byHost[project.id]);
@@ -279,7 +282,7 @@ export function RemoteMachinesWindow({
   // is the mode, and only here was it missing.
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   const [viaTerminal, setViaTerminal] = useState(!headless);
-  const [loginTerm, setLoginTerm] = useState<{ id: string; command: string; key: string } | null>(
+  const [loginTerm, setLoginTerm] = useState<{ id: string; login: LoginTarget; key: string } | null>(
     null,
   );
   const loginPoll = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -350,6 +353,7 @@ export function RemoteMachinesWindow({
         remember: rememberArg(savePassword),
         startPath: remotePath.trim() || null,
       });
+      if (!outcome) return;
       // What the backend actually did, not what the box asked for.
       credential.applyOutcome(outcome);
       setBrowsing(true);
@@ -425,23 +429,14 @@ export function RemoteMachinesWindow({
     }
     setAddError("");
     browse.setError("");
-    try {
-      const command = await invoke<string>("remote_login_command", {
-        user: parsed.user,
-        host: parsed.host,
-        port: parsed.port,
-      });
-      // Pre-mark the activation dedupe key this login satisfies, so the project's
-      // own root-terminal login isn't opened a second time for the same target.
-      const target = `${parsed.user ? `${parsed.user}@` : ""}${parsed.host}`;
-      const key = `ssh:${target}:${parsed.port ?? ""}`;
-      markConnectionOpened(key);
-      setLoginTerm({ id: nextMachineTermId(), command, key });
-      setBrowseConnecting(true);
-      pollLoginReady(parsed);
-    } catch (e) {
-      setAddError(String(e));
-    }
+    const login = sshLogin(parsed.user, parsed.host, parsed.port);
+    // Pre-mark the activation dedupe key this login satisfies, so the project's
+    // own root-terminal login isn't opened a second time for the same target.
+    const key = loginDedupeKey(login);
+    markConnectionOpened(key);
+    setLoginTerm({ id: nextMachineTermId(), login, key });
+    setBrowseConnecting(true);
+    pollLoginReady(parsed);
   };
 
   /** Re-arm the readiness poll — for a login finished after the bound ran out. */
@@ -623,9 +618,11 @@ export function RemoteMachinesWindow({
         setPullNote((p) => ({ ...p, [hostId]: t("remoteMachines.noOutputFiles") }));
         return;
       }
-      const ok = window.confirm(
-        t("remoteMachines.pullConfirm", { files: preview.files, bytes: formatBytes(preview.bytes) }),
-      );
+      const ok = await confirmAction({
+        title: t("remoteMachines.pullConfirmTitle"),
+        body: t("remoteMachines.pullConfirm", { files: preview.files, bytes: formatBytes(preview.bytes) }),
+        confirmLabel: t("remoteMachines.pullConfirmTitle"),
+      });
       if (!ok) return;
       const rep = await invoke<{ pulled: number; bytes: number; dest: string; errors: string[] }>(
         "worker_pull_outputs",
@@ -1031,7 +1028,7 @@ export function RemoteMachinesWindow({
                       id={loginTerm.id}
                       cmd=""
                       cwd=""
-                      initialInput={loginTerm.command}
+                      login={loginTerm.login}
                       visible
                       focused
                       persistOnUnmount
@@ -1169,9 +1166,9 @@ export function RemoteMachinesWindow({
           )}
         </div>
         </div>
+        {dialogs}
       </div>
     </div>,
     document.body,
   );
 }
-

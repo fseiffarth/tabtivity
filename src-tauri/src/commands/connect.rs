@@ -109,17 +109,17 @@ fn valid_event(name: &str) -> bool {
     name.strip_prefix("connect-frame-").is_some_and(|rest| (1..=32).contains(&rest.len()) && rest.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn connect_status() -> Option<Paired> {
     connect::paired_in(&crate::storage::state_dir())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn connect_pair(origin: String, code: String, device_name: String) -> Result<Paired, String> {
     connect::pair_in(&crate::storage::state_dir(), &origin, &code, &device_name).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn connect_forget(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(WINDOW) {
         let _ = window.close();
@@ -128,7 +128,7 @@ pub fn connect_forget(app: AppHandle) -> Result<(), String> {
 }
 
 /// Open (or focus) the Connect window for the paired server.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn connect_open(app: AppHandle) -> Result<(), String> {
     let state_dir = crate::storage::state_dir();
     let paired = connect::paired_in(&state_dir).ok_or("this computer is not paired with a server")?;
@@ -172,7 +172,7 @@ pub fn connect_open(app: AppHandle) -> Result<(), String> {
 
 /// Sign in and open the server's desktop socket for the Connect window; its
 /// frames are emitted to that window as `event`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn connect_ws_open(app: AppHandle, window: tauri::Window, bridge: tauri::State<'_, ConnectBridgeState>, event: String, resume: Option<String>) -> Result<u64, String> {
     only_connect(&window)?;
     if !valid_event(&event) {
@@ -214,7 +214,7 @@ pub async fn connect_ws_open(app: AppHandle, window: tauri::Window, bridge: taur
     Ok(id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn connect_ws_send(window: tauri::Window, bridge: tauri::State<'_, ConnectBridgeState>, id: u64, text: Option<String>, binary: Option<String>) -> Result<(), String> {
     only_connect(&window)?;
     let message = match (text, binary) {
@@ -227,7 +227,7 @@ pub fn connect_ws_send(window: tauri::Window, bridge: tauri::State<'_, ConnectBr
     sender.send(message).map_err(|_| "the socket is closed".to_string())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn connect_ws_close(window: tauri::Window, bridge: tauri::State<'_, ConnectBridgeState>, id: u64) -> Result<(), String> {
     only_connect(&window)?;
     if let Some(sender) = bridge.sockets.lock_ok().remove(&id) {
@@ -241,7 +241,7 @@ pub fn connect_ws_close(window: tauri::Window, bridge: tauri::State<'_, ConnectB
 /// user's Downloads folder and opened with the system's default app — only
 /// an inert viewer type (`connect::opens_as_inert_viewer`); anything else is
 /// shown in its folder instead, and the answer says why.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn connect_open_download(window: tauri::Window, url: String) -> Result<String, String> {
     only_connect(&window)?;
     let paired = connect::paired_in(&crate::storage::state_dir()).ok_or("this computer is not paired with a server")?;

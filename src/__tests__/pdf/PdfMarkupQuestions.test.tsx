@@ -1,6 +1,6 @@
 /**
  * The agent's markup questions on the desktop (`markup_ask`,
- * `docs/markup_questions_mcp_plan.md` P2): `usePdfMarkup` lists the target
+ * `docs/done/markup_questions_mcp_plan.md` P2): `usePdfMarkup` lists the target
  * tab's open ask for the file on `markup-mcp-changed` while the pane is on
  * screen, `PdfMarkupQuestions` renders it as the reader's question card, and an
  * answer goes out the Submit's way (`queuePromptForTab` + `holdPhonePrompt`).

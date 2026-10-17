@@ -1,7 +1,7 @@
 /**
  * The files library's covers (`FilesLibrary`'s `LibraryCover`), drawn on the
  * phone and only there: the desktop has no thumbnail route
- * (`docs/mobile_files_library_plan.md`, decision 3).
+ * (`docs/done/mobile_files_library_plan.md`, decision 3).
  *
  * A picture is fetched by its sealed token, as the viewer fetches it, and
  * scaled with `createImageBitmap`; a PDF's first page comes from the sealed

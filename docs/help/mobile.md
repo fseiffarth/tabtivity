@@ -67,8 +67,11 @@ Tailscale command.
 On Windows the phone cannot open this computer's terminals or agent tabs:
 they attach through tmux, which Windows does not have.
 
-An agent tab that was already running becomes reachable after its next normal
-reopen, because the phone attaches to its terminal session.
+An agent tab that was already running when you switched access on has no
+terminal session for the phone to attach to yet. Tap it on the phone and the
+desktop restarts it in one, resuming its conversation; that waits until the
+agent is idle, and a tab that cannot resume its conversation (a local-model,
+sign-in or cloud tab) is reopened on the desktop instead.
 
 ### Which phones see a project
 
@@ -97,6 +100,22 @@ is refused. Works with the desktop window closed.
 
 ## Using it
 
+- The start page opens on **Active**. **Needs you** at the top lists the agent
+  tabs asking you something or cut off, the finished tabs you have not opened
+  on this phone yet, then your mail, to-do and calendar alerts (✓ resolves
+  one); **Show all** opens the rest in place, and **n working · see Agents**
+  switches to the **Agents** view. The badge on **Agents** counts the tabs
+  asking something. Your active projects follow — drag ⠿ to arrange them —
+  and **Search** finds any project with Mobile access. **Desktop** at the
+  bottom sends a file to the desktop and manages local models. The phone's own
+  settings, and the version of the phone app, are behind ⚙ (**This device**).
+- In a project, **＋ New tab** floats above the bottom bar. Tap a tab card to
+  open it; its model opens the model picker, ◷ (shown once the tab has
+  scheduled prompts) lists them, ✕ closes the tab — as does swiping the card
+  to the left — and ⋯ holds **Rename**, **Colour…**, **Scheduled prompts**,
+  **Subagents** and **Close tab**. Under the cards, **Recently closed (n)**
+  unfolds to reopen one, and **◷ Collected prompts** opens the project's
+  prompts. The hint line under the cards goes for good once you tap its ×.
 - Attaching to a running tab keeps working while the desktop Tabtivity is closed
   or restarting.
 - Creating a new tab from the phone goes through the running desktop, so
@@ -415,10 +434,11 @@ and turn on **Always-on VPN** for it (search Settings for "VPN", then tap the
 gear next to Tailscale; Samsung lists it under Connections → More connection
 settings → VPN).
 
-The splash also shows the phone app's version and build time (`v0.1.x ·
-dd-mm hh:mm`), the same line as the home screen's header. After the desktop
-updates, a build time older than the desktop's means the phone is still
-running an old copy: close and reopen the app.
+The splash also shows the phone app's version and bundle id (`v0.1.x ·
+<8 characters>`), the same line as the home screen's header. The id changes
+whenever the phone app's code does, and only then. After the desktop updates,
+an id that did not change means the phone may still be running an old copy:
+close and reopen the app.
 
 The desktop keeps the phone's server up to date by itself: each time Tabtivity
 starts, a server older than Tabtivity is replaced (phones reconnect within

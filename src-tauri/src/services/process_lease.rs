@@ -31,6 +31,13 @@ use std::sync::Mutex;
 
 use crate::storage::FileLock;
 
+/// The go-ahead [`free_to_tear_down`] answers: hold it for the teardown's
+/// length. It carries no lock on a file system without advisory locks, where
+/// a teardown proceeds as it did before leases existed.
+pub struct TearDown {
+    _lock: Option<FileLock>,
+}
+
 /// What this process holds, by key.
 static HELD: Mutex<Option<HashMap<PathBuf, FileLock>>> = Mutex::new(None);
 
@@ -81,7 +88,7 @@ pub fn release(key: &str) {
 
 /// Drop this process's own hold of `key`, then take it exclusively if no
 /// other process holds it; keep the guard for the teardown's length.
-pub fn free_to_tear_down(key: &str) -> Option<FileLock> {
+pub fn free_to_tear_down(key: &str) -> Option<TearDown> {
     free_to_tear_down_at(&path(key))
 }
 
@@ -101,10 +108,13 @@ pub(crate) fn hold_at(path: &Path) {
         if held.contains_key(path) {
             return;
         }
-        match FileLock::shared(path) {
-            Ok(lock) => {
+        // A file system without locks leaves the thing unguarded, as
+        // before leases existed (logged once by the fallback).
+        match FileLock::shared_or_unlocked(path) {
+            Ok(Some(lock)) => {
                 held.insert(path.to_path_buf(), lock);
             }
+            Ok(None) => {}
             Err(e) => eprintln!("process_lease: hold {}: {e}", path.display()),
         }
     });
@@ -116,14 +126,20 @@ pub(crate) fn release_at(path: &Path) {
     });
 }
 
-pub(crate) fn free_to_tear_down_at(path: &Path) -> Option<FileLock> {
+pub(crate) fn free_to_tear_down_at(path: &Path) -> Option<TearDown> {
     release_at(path);
     match FileLock::try_exclusive(path) {
-        Ok(lock) => lock,
+        Ok(lock) => lock.map(|lock| TearDown { _lock: Some(lock) }),
         // No lock to be had at all: behave as before leases existed.
+        Err(e) if crate::storage::lock_unsupported(&e) => {
+            eprintln!("process_lease: {}: {e}; tearing down unguarded", path.display());
+            Some(TearDown { _lock: None })
+        }
+        // A lock that exists but failed: nobody can tell whether another
+        // process still uses it, so it stays.
         Err(e) => {
             eprintln!("process_lease: {}: {e}", path.display());
-            FileLock::exclusive(path).ok()
+            None
         }
     }
 }

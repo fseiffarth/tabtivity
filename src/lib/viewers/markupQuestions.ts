@@ -1,6 +1,6 @@
 /**
  * The markup questions MCP's window side, the parts with no React in them
- * (`docs/markup_questions_mcp_plan.md` P2): the typed calls into
+ * (`docs/done/markup_questions_mcp_plan.md` P2): the typed calls into
  * `commands/markup_mcp.rs`, the card's picks as the answers those calls take,
  * the refusal codes in the reader's words, and where a question's pin goes on
  * its page (its `quote` found in the page's text runs, `pageText.ts`).

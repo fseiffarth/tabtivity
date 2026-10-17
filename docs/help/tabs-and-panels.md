@@ -60,8 +60,11 @@ fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
 
 ## The file panel
 
-- Push the cursor to the right edge to reveal it; click the pin to dock it.
-  It can be resized and moved to the left edge.
+- Click an icon on the edge bar (or press Ctrl+B / ⌘B; Alt+1 also works from a
+  terminal) to show or hide the panel; click the active icon to hide it. The
+  panel docks beside your work. Auto-hide (right-click the bar, or Settings)
+  brings back the reveal-on-hover overlay. It can be resized (drag it narrow to
+  close it, double-click the edge to reset) and moved to the left edge.
 - Views in its header: **Files** (tree with git markers and a context menu),
   **Git** (branches, commits, Git sync), **Search** (file names and contents),
   **Apps** (tracked external windows), and for remote projects the **±** sync

@@ -435,7 +435,10 @@
   font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
   will-change: transform;
-  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+  /* No box-shadow here: .blob-node-active / -center carry blurred glows, and a
+     transitioned blurred box-shadow is software-repainted every frame on
+     WebKitGTK. The shadow switches with the class instead. */
+  transition: border-color var(--transition), background var(--transition);
 }
 .blob-node:hover {
   border-color: var(--accent);
@@ -3054,6 +3057,11 @@ button.terminal-reader-option:hover:not(:disabled) {
 .terminal-reader-option.current {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
 }
+.terminal-reader-option:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .terminal-reader-option:disabled {
   opacity: 0.55;
   cursor: var(--cur-default, default);
@@ -3174,6 +3182,13 @@ button.terminal-reader-option:hover:not(:disabled) {
 }
 .terminal-reader-stop:hover {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.terminal-reader-stray .terminal-reader-stop {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.terminal-reader-stray .terminal-reader-stop:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 @media (prefers-reduced-motion: reduce) {
   .terminal-reader-working-dots i { animation: none; opacity: 0.7; }

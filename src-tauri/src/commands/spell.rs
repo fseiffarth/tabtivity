@@ -51,16 +51,6 @@ pub async fn spell_check(
         })
 }
 
-/// The installed dictionary language codes (system dirs + the state dir's
-/// `dictionaries/` folder), for the settings dropdown.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn spell_languages() -> Result<Vec<String>, String> {
-    app_core::rt::blocking("spell", || {
-        spell::available_languages_in(&spell::dict_dirs())
-    })
-    .await
-}
-
 /// Add a word to the personal dictionary (append-only
 /// `<state_dir>/dictionaries/personal.dic`, folded into every language).
 #[cfg_attr(feature = "desktop", tauri::command)]

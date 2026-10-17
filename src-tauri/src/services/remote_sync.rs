@@ -328,7 +328,8 @@ fn save_manifest_at(path: &Path, manifest: &Manifest) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let _lock = crate::storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    // On a file system without advisory locks the stamp check alone guards.
+    let _lock = crate::storage::FileLock::exclusive_or_unlocked(path).map_err(|e| e.to_string())?;
     let mut stamps = stamps();
     if let Some(expected) = stamps.get(path) {
         if *expected != stamp_of(path) {
@@ -355,6 +356,96 @@ pub fn update_manifest(project_id: &str, update: impl FnOnce(&mut Manifest)) -> 
     crate::storage::write_json_atomic(&path, &manifest).map_err(|e| e.to_string())?;
     stamps().remove(&path);
     Ok(())
+}
+
+/// Persist `manifest` after an operation recorded fresh bases for `recorded`
+/// in it (a transfer, a restamp, a content-verified heal) — or, when that save
+/// fails, make sure the record that never landed can not pass for the truth
+/// (fixed decision #7 of the 2026-10-15 screen; every former `let _ =
+/// save_manifest(..)` goes through here).
+///
+/// On failure: each `recorded` entry's base is forgotten ([`forget_base`]) in
+/// `manifest`, the same marking is written to `sync.json` when the file can
+/// still be written (compare-and-swap, so another process's newer version is
+/// never clobbered), and the cache's stamp is dropped so the next
+/// [`ensure_loaded`] re-reads the file — as [`save_manifest`] already does for
+/// [`CHANGED_ELSEWHERE`]. A forgotten base reads as moved on both sides: the
+/// next status re-derives the row (amber, or green again once its bytes are
+/// verified identical), auto-sync leaves it alone, and a push asks instead of
+/// writing. The save's error is returned; a user-initiated caller surfaces it,
+/// a background one logs it.
+pub fn save_manifest_or_mark_stale(
+    project_id: &str,
+    manifest: &mut Manifest,
+    recorded: &[String],
+) -> Result<(), String> {
+    save_or_mark_stale_at(&manifest_path(project_id), manifest, recorded)
+}
+
+fn save_or_mark_stale_at(path: &Path, manifest: &mut Manifest, recorded: &[String]) -> Result<(), String> {
+    let err = match save_manifest_at(path, manifest) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    for rel in recorded {
+        if let Some(entry) = manifest.get_mut(rel) {
+            forget_base(entry);
+        }
+    }
+    if let Err(e) = mark_stale_on_disk(path, recorded) {
+        eprintln!("sync manifest: could not mark {} path(s) stale in {}: {e}", recorded.len(), path.display());
+    }
+    stamps().remove(path);
+    Err(err)
+}
+
+/// Forget the bases of the `recorded` entries `sync.json` holds, straight in
+/// the file: read it, mark, and write it back only if it is still the version
+/// read ([`save_manifest_at`]'s compare-and-swap). An entry the file does not
+/// hold is left absent — never selected, so it can read as nothing cleaner
+/// than "new" either.
+fn mark_stale_on_disk(path: &Path, recorded: &[String]) -> Result<(), String> {
+    if recorded.is_empty() {
+        return Ok(());
+    }
+    let read_from = stamp_of(path);
+    let mut disk: Manifest = if path.exists() {
+        crate::storage::read_json(path).map_err(|e| e.to_string())?
+    } else {
+        Manifest::new()
+    };
+    let mut marked = false;
+    for rel in recorded {
+        if let Some(entry) = disk.get_mut(rel) {
+            forget_base(entry);
+            marked = true;
+        }
+    }
+    if !marked {
+        return Ok(());
+    }
+    stamps().insert(path.to_path_buf(), read_from);
+    let written = save_manifest_at(path, &disk);
+    // The stamp now names the version just written, which is not what the
+    // caller's cache holds: drop it either way so the cache re-reads.
+    stamps().remove(path);
+    written
+}
+
+/// The base size a forgotten base carries: no real file has it, so the host
+/// and the mirror both read as moved (`divergence`) and a push asks
+/// (`push_decision`) — whatever size, mtime or emptiness the file has.
+pub const UNKNOWN_BASE_SIZE: u64 = u64::MAX;
+
+/// Forget one entry's recorded bases, keeping everything the user chose
+/// (selection, auto, exclusion) and the transfer timestamps — so a later pull
+/// still warns about local edits it would overwrite rather than treating the
+/// file as never synced.
+pub fn forget_base(entry: &mut SyncEntry) {
+    entry.host_size = UNKNOWN_BASE_SIZE;
+    entry.host_mtime = None;
+    entry.local_size = UNKNOWN_BASE_SIZE;
+    entry.local_mtime = None;
 }
 
 /// Which version of a `sync.json` a cache holds: `None` = no file. Writes are
@@ -669,6 +760,9 @@ pub struct HostFile {
     pub rel: String,
     pub size: u64,
     pub mtime: Option<u64>,
+    /// The host's permission bits (`0o777`), when the server reported them —
+    /// what [`pull_file`] gives the mirror copy.
+    pub mode: Option<u32>,
 }
 
 /// Recursively collect the regular FILES under `rel` on the host, lstat-typed so
@@ -721,6 +815,7 @@ async fn walk_inner(
                 rel: child_rel,
                 size: entry.size,
                 mtime: entry.modified_secs,
+                mode: entry.mode,
             }),
             // G3: symlinks and special files are never mirrored.
             SyncKind::Symlink | SyncKind::Other => {}
@@ -734,14 +829,17 @@ async fn walk_inner(
 /// captured after the write. The host `abs` path must already be confined by the
 /// caller; the local destination is project-relative `rel` under `mirror_root`,
 /// confined here by [`write_mirror_file`] (#863) — refused before any byte moves.
+/// `host_mode` is the host file's permission bits from the stat the caller
+/// already holds (see [`replace_local_atomic`] for what the mirror copy gets).
 pub async fn pull_file(
     sftp: &openssh_sftp_client::Sftp,
     host_abs: &str,
     host_size: u64,
+    host_mode: Option<u32>,
     mirror_root: &Path,
     rel: &str,
 ) -> Result<(u64, Option<u64>), String> {
-    pull_file_with(host_abs, host_size, mirror_root, rel, || sftp::read_file_on(sftp, host_abs)).await
+    pull_file_with(host_abs, host_size, host_mode, mirror_root, rel, || sftp::read_file_on(sftp, host_abs)).await
 }
 
 /// [`pull_file`] with the host read passed in (`read`, called at most once and
@@ -751,6 +849,7 @@ pub async fn pull_file(
 async fn pull_file_with<R, F>(
     host_abs: &str,
     host_size: u64,
+    host_mode: Option<u32>,
     mirror_root: &Path,
     rel: &str,
     read: R,
@@ -772,7 +871,7 @@ where
             bytes.len()
         ));
     }
-    let local = write_mirror_file(mirror_root, rel, &bytes)?;
+    let local = write_mirror_file_with_mode(mirror_root, rel, &bytes, host_mode)?;
     let meta = std::fs::metadata(&local).map_err(|e| e.to_string())?;
     let local_size = meta.len();
     let local_mtime = meta
@@ -787,30 +886,97 @@ where
 /// mirror (#863): [`confined_mirror_path`] before creating the parent dirs and
 /// again after, so a directory symlink planted while they were being created is
 /// still refused (a narrowed window, not a closed one — no `openat` walk here).
-/// Returns the path written.
+/// Returns the path written. The file gets no host mode (see
+/// [`write_mirror_file_with_mode`]).
 pub fn write_mirror_file(mirror_root: &Path, rel: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    write_mirror_file_with_mode(mirror_root, rel, bytes, None)
+}
+
+/// [`write_mirror_file`] carrying the host file's permission bits, when known
+/// (see [`replace_local_atomic`]).
+pub fn write_mirror_file_with_mode(
+    mirror_root: &Path,
+    rel: &str,
+    bytes: &[u8],
+    host_mode: Option<u32>,
+) -> Result<PathBuf, String> {
     let local = confined_mirror_path(mirror_root, rel)?;
     if let Some(parent) = local.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     confined_mirror_path(mirror_root, rel)?;
-    replace_local_atomic(&local, bytes)?;
+    replace_local_atomic(&local, bytes, host_mode)?;
     Ok(local)
 }
 
 /// Atomically replace one mirror file with fully-read host bytes. The caller
 /// confines `local` ([`write_mirror_file`]).
-fn replace_local_atomic(local: &Path, bytes: &[u8]) -> Result<(), String> {
+///
+/// The mode (Unix): the staged file used to keep `NamedTempFile`'s `0600`, so
+/// every SFTP pull dropped a host script's executable bit (rsync's fast path
+/// never did). Now: the host's permission bits (`host_mode`, masked to `0o777`
+/// — never setuid/setgid/sticky from the host) through the umask — what rsync
+/// gives a new file without `-p`, and never a world-writable mirror file
+/// because the host had one; with no host mode, the existing mirror file's
+/// permission bits exactly; else the umask default for a new file.
+fn replace_local_atomic(local: &Path, bytes: &[u8], host_mode: Option<u32>) -> Result<(), String> {
     let parent = local.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     // Stage beside the destination and atomically replace it. A crash or process
     // kill can now leave either the old complete file or the new complete file,
     // never a mirror file truncated by `fs::write`.
-    let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    let mut staged = staged_mirror_file(parent, local, host_mode)?;
     staged.write_all(bytes).map_err(|e| e.to_string())?;
     staged.flush().map_err(|e| e.to_string())?;
     staged.persist(local).map_err(|e| e.error.to_string())?;
     Ok(())
+}
+
+/// The temp file [`replace_local_atomic`] stages in, created with the mode the
+/// replacement must end up with (Unix; see there).
+#[cfg(unix)]
+fn staged_mirror_file(
+    parent: &Path,
+    local: &Path,
+    host_mode: Option<u32>,
+) -> Result<tempfile::NamedTempFile, String> {
+    use std::os::unix::fs::PermissionsExt;
+    // The file being replaced, never followed through a symlink: the rename
+    // replaces a link itself, so a link's target says nothing about this file.
+    // Permission bits only (`0o777`), from either side: the host is
+    // attacker-controlled, and `open(2)` would honour a setuid/setgid/sticky bit
+    // in the create mode (only a later unprivileged write clears setuid/setgid —
+    // never for an empty file or a privileged process). Nor does a local special
+    // bit survive a replacement whose bytes are the host's. rsync without `-p`
+    // drops them the same way.
+    let existing = std::fs::symlink_metadata(local)
+        .ok()
+        .filter(|m| m.file_type().is_file())
+        .map(|m| m.permissions().mode() & 0o777);
+    let create_mode = host_mode.map(|m| m & 0o777).or(existing).unwrap_or(0o666);
+    let staged = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(create_mode))
+        .tempfile_in(parent)
+        .map_err(|e| e.to_string())?;
+    // `open(2)` applied the umask; a kept local mode is the file's own permission
+    // bits, exactly.
+    if let (None, Some(mode)) = (host_mode, existing) {
+        staged
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(staged)
+}
+
+/// The temp file [`replace_local_atomic`] stages in (no Unix modes here).
+#[cfg(not(unix))]
+fn staged_mirror_file(
+    parent: &Path,
+    _local: &Path,
+    _host_mode: Option<u32>,
+) -> Result<tempfile::NamedTempFile, String> {
+    tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())
 }
 
 /// Re-stat a host path over SFTP, returning `(size, mtime)` or `(0, None)` when
@@ -1322,6 +1488,151 @@ mod tests {
         save_manifest_at(&path, &cache["p"]).expect("current again");
     }
 
+    /// Fixed decision #7: a pull or push whose record fails to save must never
+    /// leave a base that reads clean or lets a push through unasked. Here the
+    /// other process wrote `sync.json` meanwhile (the CAS refusal): the save
+    /// fails, the record is forgotten in the cache AND on disk, and the re-read
+    /// entry is amber against the post-transfer stats with a push that asks.
+    #[test]
+    fn a_failed_manifest_save_after_a_transfer_never_reads_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p").join("sync.json");
+        let old_base = SyncEntry {
+            selected: true,
+            host_size: 10,
+            host_mtime: Some(100),
+            local_size: 10,
+            local_mtime: Some(100),
+            last_pull_ts: Some(1),
+            ..Default::default()
+        };
+        let mut cache = HashMap::new();
+        ensure_loaded_at(&mut cache, "p", &path).insert("f".into(), old_base.clone());
+        save_manifest_at(&path, &cache["p"]).unwrap();
+        // The other process writes its own version (same old base for `f`).
+        let theirs: Manifest = [("f".to_string(), old_base.clone()), ("theirs".to_string(), SyncEntry::default())]
+            .into_iter()
+            .collect();
+        std::fs::write(&path, serde_json::to_string_pretty(&theirs).unwrap()).unwrap();
+        // A pull landed new bytes: host (20, 200), mirror (20, 201).
+        let host_now = Some((20, Some(200)));
+        let local_now = Some((20, Some(201)));
+        let m = cache.get_mut("p").unwrap();
+        record_pull(m, "f", 20, Some(200), 20, Some(201));
+        let err = save_or_mark_stale_at(&path, m, &["f".to_string()]).unwrap_err();
+        assert_eq!(err, CHANGED_ELSEWHERE);
+        // The caller's copy no longer vouches for the record.
+        assert_eq!(compute_state(&m["f"], host_now, local_now, false), SyncState::Amber);
+        assert_eq!(push_decision(&m["f"], host_now), PushDecision::Stale);
+        // Nor does the file, re-read through the cache; the other process's
+        // entries survive.
+        let fresh = ensure_loaded_at(&mut cache, "p", &path);
+        assert!(fresh.contains_key("theirs"), "their version was kept, not clobbered");
+        let f = &fresh["f"];
+        assert!(f.selected && f.last_pull_ts.is_some(), "the user's choices and history stay");
+        assert_eq!(compute_state(f, host_now, local_now, false), SyncState::Amber);
+        assert_eq!(push_decision(f, host_now), PushDecision::Stale);
+        // Even the pre-transfer stats do not match a forgotten base (the old
+        // base would have read green against them).
+        assert_eq!(compute_state(f, Some((10, Some(100))), Some((10, Some(100))), false), SyncState::Amber);
+        // A later successful save goes through as usual.
+        record_pull(fresh, "f", 20, Some(200), 20, Some(201));
+        save_or_mark_stale_at(&path, fresh, &["f".to_string()]).expect("current again");
+        assert_eq!(compute_state(&cache["p"]["f"], host_now, local_now, false), SyncState::Green);
+    }
+
+    /// The same when the file cannot be written at all: the in-memory record is
+    /// forgotten and the cache re-derives from disk instead of trusting it.
+    #[test]
+    fn an_unwritable_manifest_forgets_the_unsaved_record() {
+        let dir = tempfile::tempdir().unwrap();
+        // The state dir is a FILE, so neither the save nor the marking can write.
+        let blocker = dir.path().join("p");
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        let path = blocker.join("sync.json");
+        let mut cache = HashMap::new();
+        let m = ensure_loaded_at(&mut cache, "p", &path);
+        record_push(m, "f", 20, Some(200), 20, Some(201));
+        assert!(save_or_mark_stale_at(&path, m, &["f".to_string()]).is_err());
+        let host_now = Some((20, Some(200)));
+        assert_eq!(compute_state(&m["f"], host_now, Some((20, Some(201))), false), SyncState::Amber);
+        assert_eq!(push_decision(&m["f"], host_now), PushDecision::Stale);
+        assert!(!stamps().contains_key(&path), "the cache re-reads the file next time");
+    }
+
+    /// The SFTP pull used to leave every mirror file at the staging temp file's
+    /// 0600: a host `0755` script lost its executable bit (rsync's path kept it).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_sftp_pull_keeps_the_host_files_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let mirror = tempfile::tempdir().unwrap();
+        let mode_of = |rel: &str| std::fs::metadata(mirror.path().join(rel)).unwrap().permissions().mode() & 0o7777;
+        let umask = process_umask();
+        let pull = |rel: &'static str, mode: Option<u32>| {
+            pull_file_with(rel, 3, mode, mirror.path(), rel, || async { Ok(b"#!x".to_vec()) })
+        };
+        pull("run.sh", Some(0o755)).await.unwrap();
+        assert_eq!(mode_of("run.sh"), 0o755 & !umask);
+        assert_eq!(mode_of("run.sh") & 0o100, 0o100, "the owner can still execute it");
+        pull("data.txt", Some(0o644)).await.unwrap();
+        assert_eq!(mode_of("data.txt"), 0o644 & !umask);
+        // A re-pull with the host's new mode applies it to the existing copy.
+        pull("data.txt", Some(0o755)).await.unwrap();
+        assert_eq!(mode_of("data.txt"), 0o755 & !umask);
+        // No host mode: the existing mirror file's own mode is kept exactly …
+        std::fs::set_permissions(mirror.path().join("data.txt"), std::fs::Permissions::from_mode(0o750)).unwrap();
+        pull("data.txt", None).await.unwrap();
+        assert_eq!(mode_of("data.txt"), 0o750);
+        // … and a new file gets the umask default, not 0600.
+        pull("new.txt", None).await.unwrap();
+        assert_eq!(mode_of("new.txt"), 0o666 & !umask);
+        assert_eq!(std::fs::read(mirror.path().join("run.sh")).unwrap(), b"#!x");
+    }
+
+    /// M4b review: the host is attacker-controlled, so its setuid/setgid/sticky
+    /// bits never reach the mirror (rsync without `-p` drops them too). `open(2)`
+    /// honours them in the create mode; only a later write by an unprivileged
+    /// process clears setuid/setgid — an empty file (no write) or a privileged
+    /// process kept a planted `06755`. Nor does a local special bit survive a
+    /// replacement whose bytes are the host's.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_sftp_pull_never_applies_the_hosts_special_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let mirror = tempfile::tempdir().unwrap();
+        let mode_of = |rel: &str| std::fs::metadata(mirror.path().join(rel)).unwrap().permissions().mode() & 0o7777;
+        let umask = process_umask();
+        let empty = |rel: &'static str, mode: Option<u32>| {
+            pull_file_with(rel, 0, mode, mirror.path(), rel, || async { Ok(Vec::new()) })
+        };
+        empty("planted", Some(0o6755)).await.unwrap();
+        assert_eq!(mode_of("planted") & 0o7000, 0, "no setuid/setgid/sticky from the host");
+        assert_eq!(mode_of("planted"), 0o755 & !umask);
+        pull_file_with("sticky", 3, Some(0o1777), mirror.path(), "sticky", || async { Ok(b"abc".to_vec()) })
+            .await
+            .unwrap();
+        assert_eq!(mode_of("sticky") & 0o7000, 0);
+        // A kept local mode carries its permission bits, not a special bit.
+        std::fs::set_permissions(mirror.path().join("planted"), std::fs::Permissions::from_mode(0o4750)).unwrap();
+        empty("planted", None).await.unwrap();
+        assert_eq!(mode_of("planted"), 0o750);
+    }
+
+    /// This process's umask, read without changing it (Linux `/proc`; the usual
+    /// `022` elsewhere).
+    #[cfg(unix)]
+    fn process_umask() -> u32 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("Umask:"))
+                    .and_then(|v| u32::from_str_radix(v.trim(), 8).ok())
+            })
+            .unwrap_or(0o022)
+    }
+
     /// #23 D2. Both walkers skipped the entry *named* `.git`, which correctly skips a
     /// linked worktree's `.git` FILE — but the checkout around it is not named `.git`
     /// and was walked like ordinary content. A worktree inside the project was
@@ -1698,9 +2009,9 @@ mod tests {
             .set_len(MAX_SYNC_FILE_BYTES + 1)
             .unwrap();
         vec![
-            HostFile { rel: "a.txt".into(), size: 1, mtime: None },
-            HostFile { rel: "d/big.bin".into(), size: MAX_SYNC_FILE_BYTES + 1, mtime: None },
-            HostFile { rel: "d/b.txt".into(), size: 2, mtime: None },
+            HostFile { rel: "a.txt".into(), size: 1, mtime: None, mode: None },
+            HostFile { rel: "d/big.bin".into(), size: MAX_SYNC_FILE_BYTES + 1, mtime: None, mode: None },
+            HostFile { rel: "d/b.txt".into(), size: 2, mtime: None, mode: None },
         ]
     }
 
@@ -1753,7 +2064,7 @@ mod tests {
         let mut outcome = PullOutcome::default();
         for file in &files {
             let host_abs = host.path().join(&file.rel);
-            let landed = pull_file_with(&host_abs.to_string_lossy(), file.size, mirror.path(), &file.rel, || {
+            let landed = pull_file_with(&host_abs.to_string_lossy(), file.size, file.mode, mirror.path(), &file.rel, || {
                 reads.borrow_mut().push(file.rel.clone());
                 let path = host_abs.clone();
                 async move { std::fs::read(path).map_err(|e| e.to_string()) }
@@ -1783,7 +2094,7 @@ mod tests {
         assert_eq!(old, PullOutcome { pulled: 3, skipped_too_large: Vec::new() });
         // A file that failed for another reason is not reported as too large.
         let mut outcome = PullOutcome::default();
-        outcome.tally(&HostFile { rel: "gone.txt".into(), size: 5, mtime: None }, false);
+        outcome.tally(&HostFile { rel: "gone.txt".into(), size: 5, mtime: None, mode: None }, false);
         assert_eq!(outcome, PullOutcome::default());
     }
 
@@ -1794,11 +2105,13 @@ mod tests {
                 rel: "data/one.txt".into(),
                 size: 1,
                 mtime: None,
+                mode: None,
             },
             HostFile {
                 rel: "data/nested/two.txt".into(),
                 size: 2,
                 mtime: None,
+                mode: None,
             },
         ];
         assert_eq!(
@@ -1827,7 +2140,7 @@ mod tests {
         let target = dir.path().join("nested/file.txt");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, b"old complete bytes").unwrap();
-        replace_local_atomic(&target, b"new complete bytes").unwrap();
+        replace_local_atomic(&target, b"new complete bytes", None).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new complete bytes");
     }
 

@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
+import type { LoginTarget } from "../../lib/remote/loginTarget";
+import { needsSeparateKeyPassphrase, type VpnAuthNeeds } from "../../types";
+import { useSavedCredential } from "./useSavedCredential";
 
 /**
  * "Paste it for me" for a **login terminal** — the row of buttons above the embedded
@@ -26,8 +29,13 @@ import { writePtyInput } from "../../lib/terminal/terminalInput";
  *
  * Nothing is submitted: the credential lands at the cursor and the user presses Enter.
  * A paste is not a login, and a wrong one should be correctable on the line rather than
- * committed on the user's behalf — the same reason the login command itself is typed
- * into a visible terminal instead of run behind it.
+ * committed on the user's behalf — the same reason the login itself runs in a visible
+ * terminal instead of behind it.
+ *
+ * The backend takes a paste only into a **login terminal** (`TerminalView`'s `login`
+ * prop / `TabEntry.login`) whose login is still running: the PTY's program is the
+ * ssh/OpenVPN login it built from the target, so a saved secret never lands in a
+ * shell, and once the login exits the paste is refused (shown here as the note).
  */
 
 /** A saved credential, named by *what it is* — the keychain account spelling stays
@@ -53,11 +61,17 @@ const ENCODER = new TextEncoder();
 export function CredentialPasteBar({
   ptyId,
   entries,
+  className,
+  children,
 }: {
   ptyId: string;
   /** Entries with neither a non-empty `text` nor a `credential` are dropped, so a
    *  caller can list every field it *might* have and let this decide. */
   entries: PasteEntry[];
+  /** A modifier for where the bar sits (a root login tab's pane). */
+  className?: string;
+  /** The call site's own untested pill, in place of the bar's generic one. */
+  children?: ReactNode;
 }) {
   const t = useT();
   const [note, setNote] = useState("");
@@ -98,7 +112,7 @@ export function CredentialPasteBar({
   };
 
   return (
-    <div className="credential-paste-bar">
+    <div className={className ? `credential-paste-bar ${className}` : "credential-paste-bar"}>
       <span className="ssh-optional-hint">{t("credentialPasteBar.typeItForMe")}</span>
       {usable.map((entry) => (
         <button
@@ -117,9 +131,73 @@ export function CredentialPasteBar({
           {entry.label}
         </button>
       ))}
-      <UntestedTag id="credentialPasteBar.1" />
+      {children ?? <UntestedTag id="credentialPasteBar.1" />}
       {note && <span className="ssh-optional-hint credential-paste-note">{note}</span>}
     </div>
+  );
+}
+
+/**
+ * The same bar above a **root-console login tab** (`TabEntry.login`, opened by
+ * `openConnectionInRoot` when connections are not headless): the backend takes a
+ * paste into that PTY exactly as into a dialog's embedded login, so the only thing
+ * missing was the bar. It shows only when the tab's target has a credential saved —
+ * there is no on-screen login name here to offer on its own — and asks the
+ * keychain the dialogs' way: `useSavedCredential` for SSH, `vpn_has_saved_password`
+ * plus `openvpn_auth_needs` for OpenVPN, built into the same entries by
+ * `sshPasteEntries` / `vpnPasteEntries`.
+ *
+ * The read is gated on `visible`: every tab stays mounted in the keep-alive layer
+ * (and again, attach-only, in the root console), and a hidden pane must not make
+ * keychain round trips. Re-asked on every show, so a password saved meanwhile
+ * shows up the next time the tab is looked at.
+ */
+export function LoginTabPasteBar({
+  ptyId,
+  login,
+  visible,
+}: {
+  ptyId: string;
+  login: LoginTarget;
+  visible: boolean;
+}) {
+  const t = useT();
+  const ssh = login.kind === "ssh" ? login : null;
+  const config = login.kind === "vpn" ? login.config : "";
+  const sshCredential = useSavedCredential(
+    ssh ? { user: ssh.user, host: ssh.host, port: ssh.port } : null,
+    { enabled: visible && !!ssh },
+  );
+  const [vpnSaved, setVpnSaved] = useState(false);
+  const [vpnNeeds, setVpnNeeds] = useState<VpnAuthNeeds>({ username: false, keyPassphrase: false });
+  useEffect(() => {
+    if (!config || !visible) return;
+    let cancelled = false;
+    void invoke<boolean>("vpn_has_saved_password", { config })
+      .then((v) => !cancelled && setVpnSaved(v === true))
+      .catch(() => {});
+    void invoke<VpnAuthNeeds>("openvpn_auth_needs", { config })
+      .then((v) => !cancelled && v && setVpnNeeds(v))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [config, visible]);
+
+  const saved = ssh ? sshCredential.saved : vpnSaved;
+  if (!saved) return null;
+  const entries = ssh
+    ? sshPasteEntries(t, { user: ssh.user, host: ssh.host, port: ssh.port, saved })
+    : vpnPasteEntries(t, {
+        config,
+        saved,
+        needsUsername: vpnNeeds.username,
+        needsKeyPassphrase: needsSeparateKeyPassphrase(vpnNeeds),
+      });
+  return (
+    <CredentialPasteBar ptyId={ptyId} entries={entries} className="credential-paste-bar-tab">
+      <UntestedTag id="credentialPasteBar.rootLogin" />
+    </CredentialPasteBar>
   );
 }
 

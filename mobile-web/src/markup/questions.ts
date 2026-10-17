@@ -14,7 +14,7 @@ function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
 
 /**
  * The agent tab's open markup questions (`markup_ask`,
- * `docs/markup_questions_mcp_plan.md` P3), for the file `source` names — or
+ * `docs/done/markup_questions_mcp_plan.md` P3), for the file `source` names — or
  * every open one, without a source (the Focus banner).
  *
  * Read now, every `MARKUP_ASK_POLL` while `active` and the page is visible,
@@ -26,7 +26,7 @@ function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
  * dropped connection keeps what is shown until the next poll.
  *
  * The same read brings the agent's ticks for that file (`markup_done`,
- * `docs/markup_tick_approve_plan.md` §4) — none without a source.
+ * `docs/done/markup_tick_approve_plan.md` §4) — none without a source.
  */
 export function useMarkupAsks(tabId: string | undefined, source: MarkupSource | undefined, active: boolean, edge?: unknown, paused = false): {
   asks: PhoneMarkupAsk[];

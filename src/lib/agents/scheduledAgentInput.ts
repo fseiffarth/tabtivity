@@ -29,6 +29,10 @@ export interface ScheduledAgentInput {
   /** Stamps input only. Used for prefix commands, which are not prompts: the
    *  usage recap counts what the user asked, and `/clear` is not a question. */
   noteInput?: () => void;
+  /** Keys that close a dialog the CLI has up over its composer, typed before
+   *  anything goes in — OpenCode's (`openCodeDialogCloseKeys`), which would
+   *  otherwise take the words instead of the agent. Unset or empty: none. */
+  dialogCloseKeys?: () => string[];
 }
 
 export interface SubmitOptions {
@@ -91,6 +95,7 @@ export async function submitScheduledAgentMessage(
     .filter((writes) => writes.length > 0);
 
   const submissions = [...prefaceWrites, messageWrites];
+  submissions[0] = [...(input.dialogCloseKeys?.() ?? []), ...submissions[0]];
   for (let submission = 0; submission < submissions.length; submission += 1) {
     // Only the message counts as a prompt asked; a prefix command still stamps
     // input, or the output it provokes would not read as this tab working.
@@ -116,8 +121,9 @@ export async function submitScheduledAgentMessage(
 export async function submitScheduledAgentCommand(scheduleTargetId: string, command: string): Promise<string> {
   const input = inputs.get(scheduleTargetId);
   if (!input || !input.ready()) throw new Error("agent terminal is not ready");
-  const writes = agentInputWrites(command, bracketsAgentMessage(input.agent, input.bracketedPaste()));
-  if (writes.length === 0) throw new Error("command is empty");
+  const typed = agentInputWrites(command, bracketsAgentMessage(input.agent, input.bracketedPaste()));
+  if (typed.length === 0) throw new Error("command is empty");
+  const writes = [...(input.dialogCloseKeys?.() ?? []), ...typed];
   input.noteInput?.();
   for (let index = 0; index < writes.length; index += 1) {
     await writePtyInput(input.ptyId, ENCODER.encode(writes[index]));

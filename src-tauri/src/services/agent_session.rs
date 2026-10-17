@@ -384,9 +384,16 @@ where
 
 /// Where a scope's Claude keeps its transcripts: `<scope home>/.claude/projects`.
 pub(crate) fn claude_projects_roots(project_id: Option<&str>) -> Vec<PathBuf> {
-    vec![crate::services::agent_home::scope_home(project_id)
+    let mut roots = vec![crate::services::agent_home::scope_home(project_id)
         .join(".claude")
-        .join("projects")]
+        .join("projects")];
+    // The chat assistant's local-Claude chats run in the scope's local-model
+    // home (`assistant.local`), not its cloud one; a chat's uuid is in one of
+    // the two (the phone's Focus view reads the transcript from here).
+    if project_id.is_some_and(|id| crate::storage::project_key(id.trim()).eq_ignore_ascii_case(crate::storage::ASSISTANT_SCOPE)) {
+        roots.push(crate::services::agent_home::local_model_home(project_id).join(".claude").join("projects"));
+    }
+    roots
 }
 
 /// Where a scope's Codex keeps its rollouts: `<scope home>/.codex/sessions`.
@@ -401,7 +408,7 @@ pub(crate) fn codex_sessions_root(project_id: Option<&str>) -> PathBuf {
 /// `<projects>/<encoded-cwd>/<uuid>.jsonl`; since uuids are globally unique we
 /// scan the project dirs for `<uuid>.jsonl` rather than re-deriving the cwd
 /// encoding.
-fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> bool {
+pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> bool {
     claude_session_log(projects, uuid).is_some()
 }
 
@@ -2059,6 +2066,16 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
+         # A Bash call put in the background (`run_in_background`, or moved there\n\
+         # while it ran) comes back with its task id, and its shell writes to\n\
+         # `<id>.output`: that is how the job scan tells it from the call the\n\
+         # agent waits on, which looks the same. The last few ids are kept; written\n\
+         # before the turn record, whose write is what makes the scan look.\n\
+         if [ \"$event\" = PostToolUse ]; then\n\
+         \x20 bg=$(printf '%s' \"$input\" | sed -n 's/.*\"backgroundTaskId\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z0-9]*\\)\".*/\\1/p')\n\
+         \x20 [ -n \"$bg\" ] && {{ tail -n 15 \"$dir/${UPPER}_TAB_UID.bg\" 2>/dev/null; printf '%s\\n' \"$bg\"; }} > \"$dir/${UPPER}_TAB_UID.bg.$$\" &&\n\
+         \x20   mv -f \"$dir/${UPPER}_TAB_UID.bg.$$\" \"$dir/${UPPER}_TAB_UID.bg\"\n\
+         fi\n\
          [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
          # A prompt in the conversation a /clear started ends that clear's undo:\n\
          # resuming the one it ended would leave the prompt behind. Not a session\n\
@@ -2504,6 +2521,8 @@ mod tests {
 
     fn opts_with_args(args: &[&str]) -> PtyOptions {
         PtyOptions {
+            login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
@@ -2571,6 +2590,19 @@ mod tests {
         assert!(once.contains("name = \"mine\""));
         assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The assistant's local-Claude chats keep their transcripts in the
+    /// scope's local-model home, so its Claude roots name both homes; no
+    /// other scope's do.
+    #[test]
+    fn the_assistants_claude_roots_include_its_local_model_home() {
+        let roots = claude_projects_roots(Some("assistant"));
+        assert_eq!(roots.len(), 2);
+        assert!(roots[1].starts_with(crate::services::agent_home::local_model_home(Some("assistant"))));
+        assert_eq!(claude_projects_roots(Some(" Assistant ")).len(), 2);
+        assert_eq!(claude_projects_roots(Some("p1")).len(), 1);
+        assert_eq!(claude_projects_roots(None).len(), 1);
     }
 
     #[test]
@@ -3573,6 +3605,25 @@ mod tests {
         assert_eq!(turn().as_deref(), Some("decision"));
         run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"Bash""#));
         assert_eq!(turn().as_deref(), Some("working"));
+        // A Bash call put in the background leaves its task id for the job scan
+        // (the result's shape as Claude 2.1.300 records it); a foreground call,
+        // even one whose OUTPUT quotes such a field, leaves none.
+        let bg = || std::fs::read_to_string(live.join(format!("{uid}.bg"))).ok();
+        let fg_result = r#","tool_name":"Bash","tool_response":{"stdout":"{\"backgroundTaskId\":\"zzz9\"}","stderr":""}"#;
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", fg_result));
+        assert_eq!(bg(), None);
+        let bg_result = |id: &str| {
+            format!(r#","tool_name":"Bash","tool_response":{{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"{id}"}}"#)
+        };
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", &bg_result("brwkwm4yv")));
+        assert_eq!(bg().as_deref(), Some("brwkwm4yv\n"));
+        assert_eq!(turn().as_deref(), Some("working"));
+        // Only the last sixteen are kept.
+        for i in 0..20 {
+            run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", &bg_result(&format!("t{i}"))));
+        }
+        let kept: Vec<String> = bg().unwrap().lines().map(str::to_string).collect();
+        assert_eq!(kept, (4..20).map(|i| format!("t{i}")).collect::<Vec<_>>());
         // A notification that is not a wait leaves the state alone.
         run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", r#","notification_type":"auth_success""#));
         assert_eq!(turn().as_deref(), Some("working"));

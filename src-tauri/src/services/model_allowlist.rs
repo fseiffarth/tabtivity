@@ -46,6 +46,9 @@ pub const MODEL_ARG: &[(&str, &str)] = &[
     // Forwards nothing to Ollama, but names a model (AGENTS.md): on a server a
     // user clears only an allowed model's conversations.
     ("clear_local_model_conversations", "model"),
+    // A local chat names an Ollama model; a cloud chat's model id passes the
+    // same check (the assistant is not offered on a server).
+    ("assistant_new_chat", "model"),
 ];
 
 /// Where the allowlist and the installed set come from; a seam so the check

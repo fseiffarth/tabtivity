@@ -1537,7 +1537,8 @@ untested tag until a VM has actually booted on this machine).
   wiring, three-mode egress knob, blocked-CONNECT log surfaced in the VM
   settings dialog, clone-time temporary allow.
 - [x] Phase 5 (partial) — mirrorless-by-default posture + `vm_unpushed_commits`
-  surfacing.
+  surfacing (the command was never called and was removed 2026-10-15; see
+  the frontend follow-up below).
 - [ ] Phase 5 (rest) — the **opt-in mirror flow** for an existing VM project
   (pair a local mirror later), **manual-pull-only** gating in `git_peer`
   scheduling, and the view-diff-before-pull viewer (also deferred by the SSH local-sync work).
@@ -1552,7 +1553,9 @@ untested tag until a VM has actually booted on this machine).
   as terminal text; turn it into a "Boot VM" placeholder action (like
   `RemotePaneHold`). The locality *badges* (`TabLocalityBadges`) still label a
   VM project's agent tabs with the per-kind default; the spawn path is pinned,
-  only the glyph can mislabel. Surface `vm_unpushed_commits` in the pill.
+  only the glyph can mislabel. Surface the in-VM unpushed-commit count in the
+  pill (the uncalled `vm_unpushed_commits` command was removed 2026-10-15;
+  restore it from `2f0569c5` `commands/vm.rs` with its caller).
 - [ ] Phase 6 (deferred by plan) — macOS/Windows backends, snapshots,
   background-running VMs, local-model-only closed profile, "convert existing
   project to VM" data move.

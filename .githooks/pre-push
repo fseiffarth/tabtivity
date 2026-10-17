@@ -11,8 +11,10 @@
 #      v* tag, which this hook deliberately doesn't bump.
 #
 # git can't add a commit to a push that is already in flight, so this hook:
-#   1. bumps package.json / Cargo.toml / tauri.conf.json / Cargo.lock,
-#   2. commits the bump onto the current branch,
+#   1. bumps package.json / package-lock.json / Cargo.toml / tauri.conf.json /
+#      Cargo.lock,
+#   2. commits the bump onto the current branch — those five files only, from
+#      a private index, whatever else is staged,
 #   3. re-runs the push (which carries the bump), and
 #   4. aborts the original push, now superseded by the re-push.
 #
@@ -206,18 +208,96 @@ fi
 
 [ "$bump" -eq 0 ] && exit 0
 
-new="$("$repo_root/scripts/bump-version.sh" patch)"
+# The bump commit is made from a private index holding HEAD plus the five
+# version files, never from the shared one: whatever else is staged must not
+# ride into a commit this hook makes after the scan (the scan covered HEAD, and
+# the re-push skips the hook). That leaves the version files themselves, which
+# bump-version.sh rewrites in the working tree — an uncommitted edit in one of
+# them would ride along unscanned, so the bump stops instead.
+bump_files=(package.json package-lock.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock)
+if ! git -C "$repo_root" diff --quiet HEAD -- "${bump_files[@]}"; then
+  echo "pre-push: not bumping — the version files carry uncommitted changes:" >&2
+  git -C "$repo_root" diff --name-only HEAD -- "${bump_files[@]}" | sed 's/^/          /' >&2
+  echo "          Commit or revert them, then push again." >&2
+  exit 1
+fi
 
-# Cargo.lock carries the workspace's own version too, so it is part of the bump
-# — staged with the rest or the bump commit leaves the tree dirty behind it.
-# `--` and the explicit list keep this to the version files: a push must never
-# sweep up whatever else happens to be in the working tree.
-git -C "$repo_root" add -- \
-  package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock
+# A bump that fails halfway must not leave the tree behind it half-bumped: the
+# working tree would carry bumped version files (and the next push refuse on
+# them), and a bump commit whose shared-index reset failed would leave the
+# index staging the *old* versions — the next commit would quietly revert the
+# bump. So every step below that can fail undoes the whole bump instead: the
+# bump commit comes off the branch again (ref only, compare-and-swap on its
+# sha, so nothing newer is ever dropped) and the five files get HEAD's bytes
+# back, written straight from the blobs — no index lock needed, since a held
+# `index.lock` is exactly what makes the reset fail. The shared index was never
+# touched before the reset, and the check above made the files match HEAD, so
+# that is the state before the push, exactly.
+pre_bump="$(git -C "$repo_root" rev-parse HEAD)"
+bump_sha=""
+restore_version_files() {
+  local f tmp failed=0
+  for f in "${bump_files[@]}"; do
+    git -C "$repo_root" cat-file -e "$pre_bump:$f" 2>/dev/null || continue
+    tmp="$repo_root/$f.pre-push-restore"
+    if git -C "$repo_root" cat-file blob "$pre_bump:$f" >"$tmp" 2>/dev/null && mv -f "$tmp" "$repo_root/$f"; then
+      :
+    else
+      rm -f "$tmp"
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+bump_failed() {
+  echo "pre-push: the version bump failed ($1) — push aborted, nothing was sent." >&2
+  if [ -n "$bump_sha" ]; then
+    if git -C "$repo_root" update-ref -m "pre-push: undo a failed version bump" HEAD "$pre_bump" "$bump_sha" 2>/dev/null; then
+      echo "          The bump commit ${bump_sha:0:12} was taken back off the branch." >&2
+    else
+      echo "          The bump commit ${bump_sha:0:12} is still on the branch and the index" >&2
+      echo "          still stages the old version files. Before committing anything, run:" >&2
+      echo "            git reset -q -- ${bump_files[*]}" >&2
+      exit 1
+    fi
+  fi
+  if restore_version_files; then
+    echo "          The version files are back as they were; push again." >&2
+  else
+    echo "          Could not put the version files back; restore them with:" >&2
+    echo "            git checkout HEAD -- ${bump_files[*]}" >&2
+  fi
+  exit 1
+}
+
+new="$("$repo_root/scripts/bump-version.sh" patch)" || bump_failed "scripts/bump-version.sh"
+
+# The private index lives in the git dir, not /tmp: under Tabtivity's fenced
+# push preflight .git is writable and /tmp is not shared. mktemp reserves the
+# name, and the empty file goes again so read-tree writes a fresh index
+# instead of parsing a zero-byte one.
+bump_index="$(mktemp "$(git -C "$repo_root" rev-parse --absolute-git-dir)/bump-index.XXXXXX")" \
+  || bump_failed "no private index"
+trap 'rm -f "$bump_index" "$bump_index.lock"' EXIT
+rm -f "$bump_index"
+GIT_INDEX_FILE="$bump_index" git -C "$repo_root" read-tree HEAD \
+  || bump_failed "reading HEAD into the private index"
+# Cargo.lock and package-lock.json carry the app's own version too, so they are
+# part of the bump — committed with the rest or the bump commit leaves the tree
+# dirty behind it (or, for package-lock.json, quietly a version behind).
+GIT_INDEX_FILE="$bump_index" git -C "$repo_root" add -- "${bump_files[@]}" \
+  || bump_failed "staging the version files in the private index"
 # TABTIVITY_VERSION_BUMP tells post-commit this is the push's own bump: its
 # phone-staleness advisory has nothing to do with pushing, and git routes a
 # hook's output to stderr, where it read as the push's error.
-TABTIVITY_VERSION_BUMP=1 git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null
+GIT_INDEX_FILE="$bump_index" TABTIVITY_VERSION_BUMP=1 \
+  git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null \
+  || bump_failed "the bump commit"
+bump_sha="$(git -C "$repo_root" rev-parse HEAD)"
+# The shared index still holds the pre-bump version files: point those five
+# entries at the bump commit. Anything else staged there stays staged.
+git -C "$repo_root" reset -q -- "${bump_files[@]}" \
+  || bump_failed "resetting the version files in the shared index"
 
 # Under Tabtivity's preflight there is nothing to re-push with: the bump commit
 # is on the branch, Tabtivity's own transport (hooks off, with the token this

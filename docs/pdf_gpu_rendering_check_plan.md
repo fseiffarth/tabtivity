@@ -285,7 +285,7 @@ measurable 2.54 risk is speed: the CPU path regresses badly (table above).
 
 ### Verdict
 
-**Built behind a flag** (2026-10-14, `docs/gpu_compositing_plan.md`): an
+**Built behind a flag** (2026-10-14, `docs/done/gpu_compositing_plan.md`): an
 experimental Linux "GPU compositing" switch, canvas acceleration off on every
 webview. Live-unverified.
 

@@ -1,9 +1,9 @@
 import {
   FILES_TAB_CMD,
-  RESUMABLE_AGENTS,
   TabEntry,
   TabKind,
 } from "../../stores/tabs";
+import { AGENT_CLI_ROWS, RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import type { CustomAgent } from "../../types";
 import type { AddMenuEntry } from "./AddTabMenuList";
 import type { TranslationKey } from "../../lib/i18n";
@@ -50,40 +50,20 @@ export interface StaticMenuItem {
 // (`codex resume <id>`) and Mistral/vibe (`--resume [id]`) mint their own ids
 // and only accept one when resuming, so there's no deterministic id to capture
 // up front — passing `--session-id` would just error and break the tab.
-export const AGENT_ITEMS: StaticMenuItem[] = [
-  { label: "Claude",   cmd: "claude",       kind: "agent", sessionRename: (n) => `/rename ${n}`, sessionIdArgs: (id) => ["--session-id", id] },
-  { label: "Codex",    cmd: "codex",        kind: "agent" },
-  { label: "Google Antigravity", cmd: "agy", kind: "agent" },
-  { label: "Google Gemini", cmd: "gemini", kind: "agent", sessionIdArgs: (id) => ["--session-id", id] },
-  { label: "Mistral",  cmd: "vibe",         kind: "agent" },
-  // Kiro installs as `kiro-cli` — it is the renamed Amazon Q Developer CLI
-  // and kept that executable name.
-  { label: "Kiro",     cmd: "kiro-cli",     kind: "agent" },
-  { label: "Cline",    cmd: "cline",        kind: "agent" },
-  { label: "Aider",    cmd: "aider",        kind: "agent" },
-  { label: "OpenCode", cmd: "opencode",     kind: "agent" },
-  { label: "Cursor",   cmd: "cursor-agent", kind: "agent" },
-  { label: "Copilot",  cmd: "copilot",      kind: "agent" },
-  { label: "Droid",    cmd: "droid",        kind: "agent" },
-  { label: "Grok",     cmd: "grok",         kind: "agent" },
-  { label: "Qwen",     cmd: "qwen",         kind: "agent" },
-  { label: "OpenClaw", cmd: "openclaw",     kind: "agent" },
-  { label: "Auggie",   cmd: "auggie",       kind: "agent" },
-  { label: "Kilo Code", cmd: "kilo",        kind: "agent" },
-  { label: "Continue.dev", cmd: "cn",       kind: "agent" },
-  { label: "JetBrains Junie", cmd: "junie", kind: "agent" },
-  { label: "CodeBuddy", cmd: "codebuddy",   kind: "agent" },
-  { label: "Goose",    cmd: "goose",        kind: "agent" },
-  { label: "Pi",       cmd: "pi",           kind: "agent" },
-  { label: "Plandex",  cmd: "plandex",      kind: "agent" },
-  { label: "SWE-agent", cmd: "sweagent",    kind: "agent" },
-  { label: "mini-SWE-agent", cmd: "mini",   kind: "agent" },
-  { label: "Crush",    cmd: "crush",        kind: "agent" },
-  { label: "Amp",      cmd: "amp",          kind: "agent" },
-  { label: "Kimi Code", cmd: "kimi",        kind: "agent" },
-  { label: "Qoder",    cmd: "qoder",        kind: "agent" },
-  { label: "Meta Muse Code", cmd: "muse",   kind: "agent" },
-];
+const AGENT_ITEM_EXTRAS: Record<string, Partial<StaticMenuItem>> = {
+  claude: { sessionRename: (n) => `/rename ${n}`, sessionIdArgs: (id) => ["--session-id", id] },
+  gemini: { sessionIdArgs: (id) => ["--session-id", id] },
+};
+
+/** The built-in agents, in menu order: the backend registry's rows
+ *  (`lib/agents/agentClis`) — its label, and its binary as the tab's `cmd` —
+ *  plus the launch extras above. */
+export const AGENT_ITEMS: StaticMenuItem[] = AGENT_CLI_ROWS.map((row) => ({
+  label: row.label,
+  cmd: row.bin,
+  kind: "agent",
+  ...AGENT_ITEM_EXTRAS[row.bin],
+}));
 
 export const SHELL_ITEMS: StaticMenuItem[] = [
   // Empty cmd → backend `default_shell()` picks the OS-appropriate shell

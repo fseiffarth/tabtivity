@@ -10,6 +10,7 @@ pub mod proc_table;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
+pub mod google_chat;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
@@ -24,6 +25,8 @@ pub mod git_push_mcp;
 pub mod git_release;
 pub mod git_ci;
 pub mod help_mcp;
+// The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
+pub mod web_lane;
 pub use app_core::services::schedule_usage;
 pub use app_core::services::agent_usage;
 pub mod markup_mcp;
@@ -61,6 +64,8 @@ pub mod api_usage;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;
+// The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
+pub mod assistant;
 // Where each CLI keeps its conversations in an agent home, for export/import.
 pub mod agent_history;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.

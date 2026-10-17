@@ -5,9 +5,10 @@ import { runInstallInTab } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
+import { useDialogs } from "../common/PromptDialogs";
 
 /** `translate` at the live language, for the callbacks below (the component's
- *  `t` inside a `window.confirm` string would read a stale language). */
+ *  `t` captured by an awaiting callback would read a stale language). */
 function tr(
   key: Parameters<typeof translate>[1],
   params?: Parameters<typeof translate>[2],
@@ -43,12 +44,18 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   const command = `tailscale serve --bg http://127.0.0.1:${port}`;
 
   const modalRef = useModalFocus(onClose);
+  const { confirmAction, dialogs } = useDialogs();
 
   // Same one-click shape as Mobile settings' own button (and every other
   // install-via-command flow): the command runs in a root terminal the root
   // console floats over — so the guide steps aside for the terminal it opened.
-  const setUpInTerminal = () => {
-    if (!window.confirm(tr("mobile.setUpConfirm", { command }))) return;
+  const setUpInTerminal = async () => {
+    const ok = await confirmAction({
+      title: tr("mobile.setUpInTerminal"),
+      body: tr("mobile.setUpConfirm", { command }),
+      confirmLabel: tr("mobile.setUpInTerminal"),
+    });
+    if (!ok) return;
     runInstallInTab(tr("mobile.guideSummary"), command, "default");
     onClose();
   };
@@ -61,97 +68,100 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        className="settings-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("mobile.setupTitle")}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="settings-title-row">
-          <h2>{t("mobile.setupTitle")} <UntestedTag id="mobile.setupTitle" /></h2>
-          <button
-            type="button"
-            className="dialog-close-btn"
-            aria-label={t("common.close")}
-            onClick={onClose}
-          >×</button>
-        </div>
-        <div className="dialog-scroll">
-          <p className="settings-help">{t("mobile.setupIntro")}</p>
+    <>
+      <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
+        <div
+          ref={modalRef}
+          tabIndex={-1}
+          className="settings-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("mobile.setupTitle")}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="settings-title-row">
+            <h2>{t("mobile.setupTitle")} <UntestedTag id="mobile.setupTitle" /></h2>
+            <button
+              type="button"
+              className="dialog-close-btn"
+              aria-label={t("common.close")}
+              onClick={onClose}
+            >×</button>
+          </div>
+          <div className="dialog-scroll">
+            <p className="settings-help">{t("mobile.setupIntro")}</p>
 
-          <ol className="how-to-start-steps">
-            <li className="how-to-start-step">
-              <span className="how-to-start-num">1</span>
-              <div>
-                <div className="how-to-start-step-title">{t("mobile.setupStep1Title")}</div>
-                <div className="settings-help">{t("mobile.setupStep1Body")}</div>
-              </div>
-            </li>
-            <li className="how-to-start-step">
-              <span className="how-to-start-num">2</span>
-              <div>
-                <div className="how-to-start-step-title">{t("mobile.setupStep2Title")}</div>
-                <div className="settings-help">{t("mobile.setupStep2Body")}</div>
-              </div>
-            </li>
-            <li className="how-to-start-step">
-              <span className="how-to-start-num">3</span>
-              <div>
-                <div className="how-to-start-step-title">{t("mobile.setupStep3Title")}</div>
-                <div className="settings-help">{t("mobile.setupStep3Body")}</div>
-                <code className="mobile-settings-guide-command">{command}</code>
-                <div className="settings-link-row">
-                  <button type="button" className="settings-btn sm" onClick={setUpInTerminal}>
-                    {t("mobile.setUpInTerminal")}
-                  </button>
-                  <span className="settings-help">{t("mobile.setUpInTerminalHelp")}</span>
+            <ol className="how-to-start-steps">
+              <li className="how-to-start-step">
+                <span className="how-to-start-num">1</span>
+                <div>
+                  <div className="how-to-start-step-title">{t("mobile.setupStep1Title")}</div>
+                  <div className="settings-help">{t("mobile.setupStep1Body")}</div>
                 </div>
-              </div>
-            </li>
-            <li className="how-to-start-step">
-              <span className="how-to-start-num">4</span>
-              <div>
-                <div className="how-to-start-step-title">{t("mobile.setupStep4Title")}</div>
-                <div className="settings-help">{t("mobile.setupStep4Body")}</div>
-                <div className="settings-link-row">
-                  <button type="button" className="settings-btn sm" onClick={openMobileSettings}>
-                    {t("mobile.setupOpenSettings")}
-                  </button>
+              </li>
+              <li className="how-to-start-step">
+                <span className="how-to-start-num">2</span>
+                <div>
+                  <div className="how-to-start-step-title">{t("mobile.setupStep2Title")}</div>
+                  <div className="settings-help">{t("mobile.setupStep2Body")}</div>
                 </div>
-              </div>
-            </li>
-            <li className="how-to-start-step">
-              <span className="how-to-start-num">5</span>
-              <div>
-                <div className="how-to-start-step-title">{t("mobile.setupStep5Title")}</div>
-                <div className="settings-help">{t("mobile.setupStep5Body")}</div>
-              </div>
-            </li>
-            <li className="how-to-start-step">
-              <span className="how-to-start-num">6</span>
-              <div>
-                <div className="how-to-start-step-title">{t("mobile.setupStep6Title")}</div>
-                <div className="settings-help">{t("mobile.setupStep6Body")}</div>
-              </div>
-            </li>
-          </ol>
+              </li>
+              <li className="how-to-start-step">
+                <span className="how-to-start-num">3</span>
+                <div>
+                  <div className="how-to-start-step-title">{t("mobile.setupStep3Title")}</div>
+                  <div className="settings-help">{t("mobile.setupStep3Body")}</div>
+                  <code className="mobile-settings-guide-command">{command}</code>
+                  <div className="settings-link-row">
+                    <button type="button" className="settings-btn sm" onClick={() => void setUpInTerminal()}>
+                      {t("mobile.setUpInTerminal")}
+                    </button>
+                    <span className="settings-help">{t("mobile.setUpInTerminalHelp")}</span>
+                  </div>
+                </div>
+              </li>
+              <li className="how-to-start-step">
+                <span className="how-to-start-num">4</span>
+                <div>
+                  <div className="how-to-start-step-title">{t("mobile.setupStep4Title")}</div>
+                  <div className="settings-help">{t("mobile.setupStep4Body")}</div>
+                  <div className="settings-link-row">
+                    <button type="button" className="settings-btn sm" onClick={openMobileSettings}>
+                      {t("mobile.setupOpenSettings")}
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <li className="how-to-start-step">
+                <span className="how-to-start-num">5</span>
+                <div>
+                  <div className="how-to-start-step-title">{t("mobile.setupStep5Title")}</div>
+                  <div className="settings-help">{t("mobile.setupStep5Body")}</div>
+                </div>
+              </li>
+              <li className="how-to-start-step">
+                <span className="how-to-start-num">6</span>
+                <div>
+                  <div className="how-to-start-step-title">{t("mobile.setupStep6Title")}</div>
+                  <div className="settings-help">{t("mobile.setupStep6Body")}</div>
+                </div>
+              </li>
+            </ol>
 
-          <p className="settings-help">{t("mobile.guideOutro")}</p>
+            <p className="settings-help">{t("mobile.guideOutro")}</p>
 
-          <div className="settings-link-row">
-            <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer">
-              {t("mobile.serveDocs")}
-            </a>
-            <button type="button" className="how-to-start-got-it" onClick={onClose}>
-              {t("common.close")}
-            </button>
+            <div className="settings-link-row">
+              <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer">
+                {t("mobile.serveDocs")}
+              </a>
+              <button type="button" className="how-to-start-got-it" onClick={onClose}>
+                {t("common.close")}
+              </button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+      {dialogs}
+    </>
   );
 }

@@ -31,6 +31,8 @@ import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusStore } from "../../stores/headerStatus";
+import { useHostBusyStore } from "../../stores/remote/hostBusy";
+import { targetKey } from "../../lib/remote/machineSync";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -54,6 +56,7 @@ beforeEach(() => {
   useMachinesOverlayStore.setState({ open: false });
   useHeaderHoverMenuStore.setState({ openId: null });
   useHeaderStatusStore.setState({ reports: {} });
+  useHostBusyStore.setState({ readings: {}, inFlight: {}, probeGlobal: vi.fn(async () => {}) });
 });
 
 afterEach(() => {
@@ -68,9 +71,10 @@ describe("Machines overlay", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("lays every machine out as a tile with its target, state and actions", () => {
+  it("lays every machine out as a tile with its target, state and actions", async () => {
     useMachinesOverlayStore.setState({ open: true });
     const { container } = render(<MachinesOverlayHost />);
+    await act(async () => {});
     const grid = container.querySelector(".machines-grid");
     expect(grid).not.toBeNull();
     const tiles = grid!.querySelectorAll(".machines-tile.models-tile");
@@ -89,6 +93,36 @@ describe("Machines overlay", () => {
     expect(tiles[0].lastElementChild?.classList.contains("machines-row-actions")).toBe(true);
 
     expect(within(tiles[1] as HTMLElement).getByText("build.example.org:2222")).toBeTruthy();
+  });
+
+  it.each(["menu", "overlay"] as const)("puts creation controls and the add form before machines in the %s", (surface) => {
+    useMachinesOverlayStore.setState({ open: surface === "overlay" });
+    useHeaderHoverMenuStore.setState({ openId: surface === "menu" ? "machines" : null });
+    const { container } = render(surface === "overlay" ? <MachinesOverlayHost /> : <MachinesIndicator />);
+    const firstMachine = container.querySelector(".machines-indicator-row")!;
+    const add = screen.getByRole("button", { name: "Add machine…" });
+    for (const control of [add, screen.getByRole("button", { name: "Import…" }), screen.getByRole("button", { name: "Export…" })]) {
+      expect(control.compareDocumentPosition(firstMachine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+
+    fireEvent.click(add);
+    const address = screen.getByRole("textbox", { name: "SSH address" });
+    expect(address.compareDocumentPosition(firstMachine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.activeElement).toBe(address);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Add machine…" })).toBeTruthy();
+  });
+
+  it.each([1, 4])("summarizes %i running sessions without filling the card with session names", (count) => {
+    const names = Array.from({ length: count }, (_, i) => `session-${i}-${"long-id-".repeat(30)}`);
+    useHostBusyStore.setState({
+      readings: { [targetKey(MACHINES[0])]: { sessions: count, names, at: Date.now() } },
+    });
+    useMachinesOverlayStore.setState({ open: true });
+    render(<MachinesOverlayHost />);
+    const summary = dialog().querySelector(".machines-tile-busy")!;
+    expect(summary.textContent).toBe(`${count} session${count === 1 ? "" : "s"} running`);
+    expect(summary.getAttribute("title")).toContain(names.join(", "));
   });
 
   it("closes on Escape and on a backdrop press, not on a press inside", () => {

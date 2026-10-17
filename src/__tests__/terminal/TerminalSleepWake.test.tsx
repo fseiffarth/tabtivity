@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, cleanup } from "@testing-library/react";
 
 class ResizeObserverStub {
   observe() {}
@@ -146,6 +146,10 @@ function agentPane(extra: Partial<Parameters<typeof TerminalView>[0]> = {}): Rea
   );
 }
 
+function loginPane(login: { kind: "ssh"; user: string | null; host: string; port: number | null }): ReactElement {
+  return <TerminalView id={ID} cmd="" cwd="" login={login} visible={false} focused={false} />;
+}
+
 /** Mount a pane, let it spawn and report ready, then put it to sleep the way
  *  the pane layer does: mark the PTY asleep, then unmount the view. */
 async function mountAndSleep(ui: ReactElement = agentPane()) {
@@ -268,6 +272,39 @@ describe("TerminalView — sleeping terminal panes (§5.3)", () => {
     expect(names().indexOf("pty_kill")).toBeLessThan(names().indexOf("pty_spawn"));
     expect(names()).not.toContain("pty_scrollback");
     expect(asleepPty(ID)).toBeUndefined();
+  });
+
+  it("a login pane sends its target in pty_spawn's opts", async () => {
+    const ssh = { kind: "ssh" as const, user: "alice", host: "h.example", port: 2222 };
+    let unmount = () => {};
+    await act(async () => {
+      unmount = render(loginPane(ssh)).unmount;
+    });
+    const spawn = calls("pty_spawn");
+    expect(spawn).toHaveLength(1);
+    expect((spawn[0][1] as { opts: { login: unknown } }).opts.login).toEqual(ssh);
+    await act(async () => {
+      unmount();
+    });
+  });
+
+  it("an equal login target rebuilt by the caller wakes; another target respawns", async () => {
+    const ssh = { kind: "ssh" as const, user: "alice", host: "h.example", port: 2222 };
+    await mountAndSleep(loginPane(ssh));
+    invoke.mockClear();
+    await act(async () => {
+      render(loginPane({ ...ssh }));
+    });
+    expect(names()).not.toContain("pty_spawn");
+    cleanup();
+
+    _clearAsleepPtysForTest();
+    await mountAndSleep(loginPane(ssh));
+    invoke.mockClear();
+    await act(async () => {
+      render(loginPane({ ...ssh, host: "other.example" }));
+    });
+    expect(names().indexOf("pty_kill")).toBeLessThan(names().indexOf("pty_spawn"));
   });
 
   it("Strict Mode's replay of a waking mount neither kills nor spawns", async () => {

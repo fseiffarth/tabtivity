@@ -5,7 +5,7 @@ first backend runtime boundary pass is implemented: project switching is
 coordinated through `switch_project_runtime`, core services live under
 `services/`, tab/file/layout/window metadata is mirrored into
 `.tabtivity/sessions/`, download routing is part of switching, and the old
-`switch_project_windows` command is deprecated. Related to #24 (session restore),
+`switch_project_windows` command is removed (2026-10-15). Related to #24 (session restore),
 but backend-owned.*
 
 32. **Backend runtime follow-ups.** Remaining backend-side work on the runtime

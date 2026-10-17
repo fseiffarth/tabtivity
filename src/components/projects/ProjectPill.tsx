@@ -20,7 +20,7 @@ import { PillStatusBars } from "./PillStatusBars";
 import { PillTabMarks } from "./PillTabMarks";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
-import { adoptSyncOutcome, cmdToKind, isResumableAgentTab, isRestorableTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
+import { adoptSyncOutcome, isResumableAgentTab, restorableSavedTabs, savedLayoutTreeOf, syncWorkspace, useTabsStore } from "../../stores/tabs";
 import { IS_HOST_LINUX, IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL, providerAuthLoginCmd } from "../../lib/installCommand";
 import { PythonInterpreterWindow } from "./PythonInterpreterWindow";
@@ -1250,7 +1250,7 @@ export function ProjectPill({
   const setProjectRemoteControl = useProjectsStore((s) => s.setProjectRemoteControl);
   const setProjectScheduleMcp = useProjectsStore((s) => s.setProjectScheduleMcp);
   const setProjectGitPushMcp = useProjectsStore((s) => s.setProjectGitPushMcp);
-  const { confirmAction, dialogs: pillDialogs } = useDialogs();
+  const { confirmAction, showMessage, dialogs: pillDialogs } = useDialogs();
   const [agentFenceStatus, setAgentFenceStatus] = useState<AgentFenceStatus | null>(null);
   useEffect(() => {
     if (!contextMenu) return;
@@ -2269,36 +2269,33 @@ export function ProjectPill({
                 onClick={() => {
                   setContextMenu(null);
                   void (async () => {
+                    // The file sits in the project folder (attacker-controlled):
+                    // read the answer as `unknown` and let the typed guards keep
+                    // what a restore can use, never cast it through.
+                    let body: string;
                     try {
-                      const session = await invoke<{
-                        tabLayout?: Array<Record<string, unknown>>;
-                        tabGroups?: unknown;
-                      }>("adopt_folder_tab_layout", {
+                      const session = await invoke<unknown>("adopt_folder_tab_layout", {
                         projectId: project.id,
                         localFile: project.local_file,
                       });
-                      const raw = session.tabLayout ?? [];
-                      const restorable = raw.filter((t) => {
-                        const cmd = String(t.cmd ?? "");
-                        return isRestorableTab({
-                          kind: (t.kind as never) ?? cmdToKind(cmd),
-                          cmd,
-                          sessionId: t.sessionId as string | undefined,
-                          viewer: t.viewer as never,
-                        });
-                      });
+                      const fields =
+                        typeof session === "object" && session !== null
+                          ? (session as { tabLayout?: unknown; tabGroups?: unknown })
+                          : {};
+                      const restorable = restorableSavedTabs(fields.tabLayout);
                       useTabsStore
                         .getState()
                         .loadFromLayout(
-                          restorable as never,
+                          restorable,
                           project.directory ?? "",
                           project.id,
-                          (session.tabGroups as never) ?? undefined,
+                          savedLayoutTreeOf(fields.tabGroups),
                         );
-                      alert(t("pill.adoptFolderLayoutOk", { count: restorable.length }));
+                      body = t("pill.adoptFolderLayoutOk", { count: restorable.length });
                     } catch {
-                      alert(t("pill.adoptFolderLayoutNone"));
+                      body = t("pill.adoptFolderLayoutNone");
                     }
+                    await showMessage({ title: t("pill.adoptFolderLayoutTitle"), body });
                   })();
                 }}
               >
@@ -2638,6 +2635,7 @@ export function ProjectPill({
         )}
         <button
           className="pill-main"
+          aria-current={active ? "page" : undefined}
           onClick={onClick}
           title={fastMode ? project.name : undefined}
         >

@@ -26,15 +26,12 @@ import {
 } from "./scaffold";
 import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
-import {
-  stashRemotePassword,
-  stashRemoteViaLogin,
-  useProjectsStore,
-} from "../../stores/projects";
+import { useProjectsStore } from "../../stores/projects";
 import { Dropdown } from "../common/Dropdown";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../lib/platform";
+import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
@@ -200,7 +197,6 @@ export function ProjectDialog({
     remoteChosenPath,
     setRemoteChosenPath,
     rememberChosenPath,
-    remotePassword,
     toggleRemoteProject,
     buildRemoteSpec,
   } = remote;
@@ -932,18 +928,12 @@ export function ProjectDialog({
       }
       if (isRemoteProject) {
         rememberChosenPath();
-        // The new project's pooled connect happens on activation, inside `onProject`
-        // below — hand it the credential this dialog authenticated with, so that leg
-        // doesn't have to ride the master we happen to have left up (and so a
-        // password host isn't recorded as key-auth). Single-use; not persisted —
-        // persisting is what the "Save password" toggle is for.
-        stashRemotePassword(project.id, remotePassword);
-        // A login the user typed into the embedded terminal leaves no password to
-        // stash, and in headless mode the mode alone doesn't say so — mark it, or the
-        // credential-less first connect is recorded as key auth on a password host.
-        if (remote.sshTerm) stashRemoteViaLogin(project.id);
       }
       await onProject(created);
+      // The new project's first pooled connect, carrying how this dialog signed in:
+      // the typed password, or `viaLogin` when it rides the login terminal's master —
+      // never a bare credential-less connect the backend would read as key auth.
+      if (isRemoteProject) void connectCreatedRemoteProject(created.id, remote.remotePassword);
       await openScaffoldAgentTabs(created, scaffoldAgentFills);
       await openDescriptionAgentTab(created, descriptionAgent);
       // Last, because it is the one step that can fail with the project already
@@ -1103,7 +1093,7 @@ export function ProjectDialog({
 
         <label className={`toggle-card${isRemoteProject ? " is-on" : ""}`}>
           <span className="toggle-card-body">
-            <span className="toggle-card-title">{t("projectDialog.remoteToggleTitle")}</span>
+            <span className="toggle-card-title">{t("projectDialog.remoteToggleTitle")} <UntestedTag id="projectDialog.remoteToggleTitle" /></span>
             <span className="toggle-card-desc">
               {t("projectDialog.remoteToggleDesc")}
             </span>

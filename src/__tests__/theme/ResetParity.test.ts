@@ -1,6 +1,6 @@
 /**
  * `src/styles/reset.css` is Tailwind 3.4.19's preflight, vendored when Tailwind
- * was removed (S5 of docs/vite8_vitest5_migration_plan.md). The table below was
+ * was removed (S5 of docs/done/vite8_vitest5_migration_plan.md). The table below was
  * captured ONCE from what Tailwind itself emitted for this repo, before the
  * removal, and frozen here — so the vendored copy is held to Tailwind's real
  * output, not to a re-reading of it. Every rule, in order, with every

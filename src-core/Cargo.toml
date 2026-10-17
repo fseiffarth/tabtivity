@@ -24,7 +24,11 @@ chrono-tz = "0.10"
 regex = "1"
 # The one URL parser (`services::web_safety`); see src-tauri/Cargo.toml.
 url = "2"
+# Punycode/IDNA for the link-safety host comparison (plan B §2.5).
 idna = "1"
+# RFC 1918 / ULA / CGNAT / link-local classification for the loopback-and-intranet
+# navigation gate. `IpAddr::is_global()` is still unstable, so this is the stable
+# replacement rather than a convenience.
 ipnet = "2"
 # Same spec as src-tauri's: `rustls-no-provider` takes the process-wide
 # CryptoProvider the host installs (`mail_engine::install_crypto_provider`).

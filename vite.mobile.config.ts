@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
@@ -6,6 +5,8 @@ import react from "@vitejs/plugin-react";
 import autoprefixer from "autoprefixer";
 import { manifestPath, PAGE_COLOR, type PaintedTheme } from "./mobile-web/src/pageColors.ts";
 import { shellAssets } from "./mobile-web/src/shellAssets.ts";
+import { pushTitleTable, stampPushTitles } from "./mobile-web/src/pushTitles.ts";
+import { TRANSLATIONS } from "./src/lib/i18nDicts/all.ts";
 import { themeColors } from "./mobile-web/src/themeColors.ts";
 
 const BUILD_PLACEHOLDER = "__APP_BUILD__";
@@ -17,12 +18,17 @@ const ASSETS_PLACEHOLDER = "__APP_ASSETS__";
  * never fingerprints it. That left the browser with an unchanging `sw.js` — no
  * new worker was ever installed, its `activate` never purged the old cache,
  * and a phone could keep booting a superseded bundle out of it. Giving the
- * cache a per-build name fixes both halves at once: the bytes change, so the
- * browser installs; the name changes, so `activate` drops what came before.
+ * cache a per-bundle name (the entry chunk's content hash) fixes both halves
+ * at once: a new bundle changes the bytes, so the browser installs; the name
+ * changes, so `activate` drops what came before. An unchanged bundle keeps
+ * its name, so a rebuild never makes phones re-download.
  *
  * The asset list is what the worker precaches, so the shell can boot offline
  * after the first visit — the worker only sees the page's asset requests once
  * it controls the page, which on the first visit is after they were made.
+ *
+ * It also stamps the titles a push without one is shown under, in every
+ * language (`pushTitles.ts`): the worker cannot import the dictionaries.
  *
  * Runs in `closeBundle`, the one hook that is after vite has copied `public/`
  * into outDir. Failures throw rather than warn — a silently unstamped worker
@@ -53,7 +59,8 @@ function stampServiceWorker(): Plugin {
           throw new Error(`stamp-sw: ${placeholder} is missing from sw.js`);
         }
       }
-      writeFileSync(worker, source.replaceAll(BUILD_PLACEHOLDER, entry).replaceAll(ASSETS_PLACEHOLDER, assets.join(",")));
+      const stamped = source.replaceAll(BUILD_PLACEHOLDER, entry).replaceAll(ASSETS_PLACEHOLDER, assets.join(","));
+      writeFileSync(worker, stampPushTitles(stamped, pushTitleTable(TRANSLATIONS)));
     },
   };
 }
@@ -84,16 +91,6 @@ function themedManifests(): Plugin {
   };
 }
 
-/** The short commit HEAD points at, or "" outside git — the same hash the
- * desktop's `TABTIVITY_BUILD_COMMIT` bakes in. */
-function headCommit(): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch {
-    return "";
-  }
-}
-
 export default defineConfig({
   root: "mobile-web",
   plugins: [react(), themedManifests(), stampServiceWorker()],
@@ -107,11 +104,10 @@ export default defineConfig({
       plugins: [themeColors({ include: (file) => file.replaceAll("\\", "/").includes("/mobile-web/src/") }), autoprefixer()],
     },
   },
-  // The commit and build time the phone shows beside its version (see `src/buildInfo.ts`).
-  define: {
-    __APP_MOBILE_BUILT_AT__: JSON.stringify(new Date().toISOString()),
-    __APP_MOBILE_COMMIT__: JSON.stringify(headCommit()),
-  },
+  // No `define`s that vary between builds (a build time, the commit): inlined
+  // into the hashed entry they changed its hash, so `sw.js`'s cache name, on
+  // every rebuild of an unchanged phone bundle. The phone reads the entry hash
+  // off its own script URL instead (`src/buildInfo.ts`).
   build: {
     outDir: "../mobile-dist",
     emptyOutDir: true,

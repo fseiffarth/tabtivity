@@ -6,8 +6,8 @@ import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession"
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
-  RESUMABLE_AGENTS,
   effectiveTabLocation,
   isResumableAgentTab,
   useTabsStore,

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { ROOT_SCOPE, orderedTabKeys, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { clampOverlayAgentWidth, useOverlayAgentStore } from "../../stores/overlayAgent";
-import { useProjectsStore } from "../../stores/projects";
 import type { SteeringApp } from "../../lib/shortcuts/steeringRegion";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
@@ -10,14 +9,23 @@ import { AGENT_TAB_ACTIONS } from "../../lib/shortcuts/shortcuts";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { ArrowUpRightIcon, SparkleIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
-import { TabScopeContext } from "../tabs/tabScopeContext";
-import { TabPane } from "../tabs/TabPane";
+import { AttachedAgentPane } from "./AttachedAgentPane";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 import type { OverlayAgentHandle } from "./useOverlayAgent";
 
 interface Props {
   /** The overlay this column docks in. */
   app: SteeringApp;
+  /** The scope `tab` belongs to: root (the default, the mail / calendar /
+   *  to-do overlays' docked agent) or the Tabby scope. The root scope brings
+   *  the root console's stand-down and its rights badge; another scope is
+   *  drawn alone (it has no console, and nothing in it holds MCP rights). */
+  scope?: string;
+  /** The root rights badge in the head. Defaults to on for the root scope and
+   *  off for any other. */
+  badge?: boolean;
+  /** Draw the tab's Reader always, with no toggle (Tabby's chats). */
+  readerAlways?: boolean;
   /** The docked root tab (`useOverlayAgent().tab`); `null` shows only the hint.
    *  Drawn only while `app`'s column is open: Ctrl+1's hint can show the
    *  column with a docked tab that was hidden, and that tab stays hidden. */
@@ -36,7 +44,7 @@ interface Props {
 /**
  * The docked agent column of a mail / calendar / to-do overlay: an attach-only
  * view of a ROOT tab beside the app, so a root agent's MCP writes land next to
- * the prompt that caused them (`docs/overlay_agent_plan.md`). The tab is an
+ * the prompt that caused them (`docs/done/overlay_agent_plan.md`). The tab is an
  * ordinary root tab — its PTY is owned by `CenterPanel`'s keep-alive layer and
  * it is in the root console's strip — so hiding the column ends nothing.
  *
@@ -50,11 +58,18 @@ interface Props {
  * drawn here, its key is in `shownKeys` and `CenterPanel`'s root copy steps
  * aside.
  *
+ * With a `scope` other than root (the Tabby scope) the same column draws a tab
+ * of that scope: no rights badge, no console to stand down for or open the tab
+ * in, the key marked shown under its own scope (`AttachedAgentPane`).
+ *
  * The root class `overlay-agent-column` is what the overlays' Escape guard
  * looks for: Escape typed into the agent is the agent's cancel key.
  */
 export function OverlayAgentColumn({
   app,
+  scope = ROOT_SCOPE,
+  badge = scope === ROOT_SCOPE,
+  readerAlways = false,
   tab: dockedTab,
   hint,
   maxWidth,
@@ -62,9 +77,8 @@ export function OverlayAgentColumn({
   onDismissHint,
 }: Props) {
   const t = useT();
-  const rights = useRootMcpRights();
-  const rootDir = useProjectsStore((s) => s.rootDir) ?? "";
-  const consoleOpen = useRootOverlayStore((s) => s.open);
+  // Only the root scope has a console to stand down for.
+  const consoleOpen = useRootOverlayStore((s) => s.open) && scope === ROOT_SCOPE;
   const open = useOverlayAgentStore((s) => s.docks[app].open);
   const tab = open ? dockedTab : null;
   const storedWidth = useOverlayAgentStore((s) => s.width);
@@ -99,15 +113,11 @@ export function OverlayAgentColumn({
   const inPopout = useTabsStore(
     (s) =>
       tabKey !== null &&
-      (s.detachedGroupsByScope[ROOT_SCOPE] ?? []).some((d) => orderedTabKeys(d.subtree).includes(tabKey)),
+      (s.detachedGroupsByScope[scope] ?? []).some((d) => orderedTabKeys(d.subtree).includes(tabKey)),
   );
+  // The pane marks its key shown (`AttachedAgentPane`) for as long as it is
+  // mounted, which is what `CenterPanel`'s copy stands down for.
   const showPane = !!tab && !consoleOpen && !inPopout;
-  useEffect(() => {
-    if (!showPane || !tabKey) return;
-    const { markShown, unmarkShown } = useOverlayAgentStore.getState();
-    markShown(tabKey);
-    return () => unmarkShown(tabKey);
-  }, [showPane, tabKey]);
 
   const hide = () => {
     useOverlayAgentStore.getState().hide(app);
@@ -169,11 +179,11 @@ export function OverlayAgentColumn({
         <span className="overlay-agent-label" title={tab?.label}>
           {tab?.label ?? ""}
         </span>
-        <RootRightsBadge rights={rights} />
-        <UntestedTag id="overlayAgent.dock" />
+        {badge && <RootRights />}
+        {scope === ROOT_SCOPE && <UntestedTag id="overlayAgent.dock" />}
         {/* Not for a popped-out tab: the console can't show it (it draws only
             the in-window root layout), so ↗ would just close the column. */}
-        {tab && !inPopout && (
+        {tab && !inPopout && scope === ROOT_SCOPE && (
           <button
             type="button"
             className="subwindow-hide"
@@ -201,19 +211,9 @@ export function OverlayAgentColumn({
       {tab && (
         <div className="overlay-agent-body">
           {showPane ? (
-            <TabScopeContext.Provider value={ROOT_SCOPE}>
-              {/* Attach-only, as the root console's panes: the PTY belongs to
-                  the root tab's own pane in CenterPanel's keep-alive layer. */}
-              <TabPane
-                tab={tab}
-                scope={ROOT_SCOPE}
-                visible
-                focused={focused}
-                attachOnly
-                filesProjectDir={tab.cwd || rootDir}
-                terminalCwd={tab.cwd || rootDir}
-              />
-            </TabScopeContext.Provider>
+            /* Attach-only, as the root console's panes: the PTY belongs to the
+               tab's own pane in CenterPanel's keep-alive layer. */
+            <AttachedAgentPane scope={scope} tab={tab} focused={focused} readerAlways={readerAlways} />
           ) : (
             <div className="center-placeholder" style={{ height: "100%" }}>
               <div className="center-placeholder-card">
@@ -230,6 +230,12 @@ export function OverlayAgentColumn({
       )}
     </div>
   );
+}
+
+/** The root console's rights badge, asked for once per mount: a column with
+ *  no badge (the Tabby scope) never reads `root_mcp_status`. */
+function RootRights() {
+  return <RootRightsBadge rights={useRootMcpRights()} />;
 }
 
 /**

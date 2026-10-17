@@ -50,7 +50,7 @@ pub const MAX_COMMENT: usize = 500;
 /// own. It asks first: a marked PDF is often built from a `.tex` or `.md`
 /// beside it, and an agent told to "apply" the marks went and edited that
 /// file unasked. A round that can be undone (`Mode::Apply`,
-/// `docs/pdf_markup_direct_apply_plan.md`) gets `DEFAULT_APPLY_INSTRUCTION`
+/// `docs/done/pdf_markup_direct_apply_plan.md`) gets `DEFAULT_APPLY_INSTRUCTION`
 /// instead — the default since the Undo exists; this one is the fallback
 /// where no snapshot could be taken. How often it may stop to ask about a
 /// mark is not part of it but the reader's own dial, `ASK_LINES`, put after
@@ -362,7 +362,7 @@ pub struct MarkupRequest {
     #[serde(default)]
     pub round: Option<String>,
     /// What the user's **Apply marks directly** switch asked for; absent is
-    /// `list` (`docs/pdf_markup_direct_apply_plan.md` §2.1).
+    /// `list` (`docs/done/pdf_markup_direct_apply_plan.md` §2.1).
     #[serde(default)]
     pub mode: Mode,
     /// Where the round was started (`Origin`): the phone sends `viewer` when

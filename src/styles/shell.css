@@ -83,11 +83,11 @@ select option {
    absolutely positioned against its edge, so it fills the freed padding region.
    `left-docked` is the mirror for the left-side variant. */
 .app-body.right-docked {
-  padding-right: 280px;
+  padding-right: calc(280px + var(--side-rail-w));
 }
 
 .app-body.left-docked {
-  padding-left: 280px;
+  padding-left: calc(280px + var(--side-rail-w));
 }
 
 /* ── Header bar ─────────────────────────────────────────────────────── */

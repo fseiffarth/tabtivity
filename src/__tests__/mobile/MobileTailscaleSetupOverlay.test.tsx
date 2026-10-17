@@ -6,7 +6,7 @@
  * without leaving the project. It used to switch the whole window to the root
  * scope instead.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -40,8 +40,13 @@ describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
     // `InstallInRootConsole.test.tsx`'s.
     useTabsStore.setState({ scope: "project:p1", tabsByScope: { root: [] } });
     useRootOverlayStore.setState({ open: false });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
+
+  /** Answer the app's own confirm (never `window.confirm`) with `button`. */
+  async function answer(user: ReturnType<typeof userEvent.setup>, button: string) {
+    const question = await screen.findByRole("dialog", { name: "Set up Tailscale Serve" });
+    await user.click(within(question).getByRole("button", { name: button }));
+  }
 
   afterEach(() => {
     cleanup();
@@ -55,6 +60,9 @@ describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
     const user = userEvent.setup();
     render(<MobileSettings />);
     await user.click(screen.getByRole("button", { name: "Set up in terminal" }));
+    const dialog = await screen.findByRole("dialog", { name: "Set up Tailscale Serve" });
+    expect(dialog.textContent).toMatch(/tailscale serve --bg/);
+    await answer(user, "Set up in terminal");
 
     const rootTabs = useTabsStore.getState().tabsByScope.root ?? [];
     expect(rootTabs).toHaveLength(1);
@@ -66,10 +74,11 @@ describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
   });
 
   it("does nothing when the confirmation is declined", async () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
     const user = userEvent.setup();
     render(<MobileSettings />);
     await user.click(screen.getByRole("button", { name: "Set up in terminal" }));
+    await answer(user, "Cancel");
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(useTabsStore.getState().tabsByScope.root ?? []).toHaveLength(0);
     expect(useRootOverlayStore.getState().open).toBe(false);
   });

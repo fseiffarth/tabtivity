@@ -3521,6 +3521,19 @@ label.settings-toggle-card-row {
   min-width: 0;
 }
 
+/* The same bar above a root-console login tab (TabPane): second in the DOM (the
+   terminal host stays the pane's first child), first on screen — the
+   `.prompt-strip` arrangement. A fixed row, so the terminal refits once when it
+   appears and never again. */
+.credential-paste-bar-tab {
+  order: -1;
+  flex: none;
+  padding: 4px 8px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
 /* "Push to GitHub/GitLab" picked but no Tabtivity connection yet: a nudge to set
    the access token up in Settings → Git Hosting, with a one-click redirect. */
 .git-connect-notice {

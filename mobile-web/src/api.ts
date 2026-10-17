@@ -1,14 +1,15 @@
-import { translate, useI18nStore } from "../../src/lib/i18n";
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 
+/** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
+export type ScopeKind = "project" | "box" | "root" | "assistant";
 /** One row of the phone's list. `kind` says whether it is a project or a box
  * (#31aa) — a box is a scope of its own on the desktop, always "active" here,
  * and a host older than the field sends none, which reads as a project. */
 /** A project's pending git state, the desktop pill's dot: changes not yet added ▸ staged, not committed ▸ committed, not pushed ▸ `.git` missing. Absent when clean. */
 export type GitDot = "dirty" | "staged" | "unpushed" | "broken";
 export interface AgentCounts { working: number; question: number; done: number }
-export interface ProjectRow { id: string; label: string; status: string; kind?: "project" | "box" | "root"; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -53,7 +54,12 @@ export interface SignInRow { agent_id: string; signed_in?: boolean; account?: st
  * frontier models, which a local model may answer badly. */
 export interface LocalAgentRow { id: string; label: string; caution: boolean }
 export interface LocalLaunchRow { model: string; ready: boolean; agents: LocalAgentRow[] }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow }
+/** One way to start a chat of the assistant scope, under an opaque id the host
+ * derived: a CLI, and for a local one the Ollama model it drives. `ready` false
+ * is a CLI that is not signed in; `default` the desktop's own preselection. */
+export interface AssistantLaunchRow { id: string; label: string; local: boolean; model?: string; ready: boolean; default: boolean }
+export interface AssistantLaunchOptions { ollama_reachable: boolean; launches: AssistantLaunchRow[] }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -61,7 +67,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;
@@ -1077,8 +1083,12 @@ export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = f
  * exactly that file instead (`POST /api/v1/open-ticket`). If none can be had
  * the plain URL still opens — in a browser tab of the site the cookie rides.
  * The installed app on an iPhone or iPad cannot be got back to from there
- * (`openingOutsideStrands`): callers keep the file inside the app instead. */
-export async function openOutside(url: string): Promise<void> {
+ * (`openingOutsideStrands`): callers keep the file inside the app instead.
+ *
+ * Resolves `"host_outdated"` (nothing opened) when the host is too old to mint
+ * a ticket: the caller says so where the reader is looking
+ * (`mobile.open.hostOutdated`), in place of a browser `alert()`. */
+export async function openOutside(url: string): Promise<"opened" | "host_outdated"> {
   let target = url;
   try {
     const minted = await api<{ url?: unknown }>("/api/v1/open-ticket", { method: "POST", body: JSON.stringify({ url }) });
@@ -1088,11 +1098,11 @@ export async function openOutside(url: string): Promise<void> {
     // static GET: a bodiless 405 (or 404). The plain URL would only show the
     // browser `authentication_required` there, so say why instead.
     if (error instanceof ApiError && error.code === "request_failed" && (error.status === 404 || error.status === 405)) {
-      window.alert(translate(useI18nStore.getState().lang, "mobile.open.hostOutdated"));
-      return;
+      return "host_outdated";
     }
   }
   window.open(target, "_blank", "noopener");
+  return "opened";
 }
 
 /** One row of a project folder (`files.rs`): `token` is a sealed path the
@@ -1242,7 +1252,7 @@ export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark
  * its asking dial (0–4), absent at the default stop; `mode` what **Apply
  * marks directly** asks for (absent = `list`); `round` this Submit's id
  * (`mintRound`), which the prompt names its marks under for the agent's
- * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`); `origin`
+ * ticks (`markup_done`, `docs/done/markup_tick_approve_plan.md`); `origin`
  * `viewer` when the markup view has no agent chat to send to, so the prompt
  * tells the agent to ask only through `markup_ask` (absent = `chat`). */
 export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string; origin?: MarkupOrigin }
@@ -1331,7 +1341,7 @@ export function markupUndoConflict(error: unknown): { files: string[]; more: num
 }
 
 /** One question of an agent's markup ask (`markup_ask`,
- * `docs/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
+ * `docs/done/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
  * `quote` of that page's words it is about. */
 export interface PhoneMarkupQuestion {
   question: string;

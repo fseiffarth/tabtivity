@@ -7,7 +7,7 @@ import { isDetachedPtyId, isPtyTabKind, splitSubPaneKey, type TabEntry } from ".
 
 /**
  * What an open tab holds in this window's renderer — an ESTIMATE, read on
- * demand (`docs/tab_cost_plan.md` step 1). `AppResourceUsage` is process-wide
+ * demand (`docs/done/tab_cost_plan.md` step 1). `AppResourceUsage` is process-wide
  * and the renderer is one process, so `/proc` cannot say which tab holds the
  * memory; this module can, roughly, for the two kinds that hold the most:
  *

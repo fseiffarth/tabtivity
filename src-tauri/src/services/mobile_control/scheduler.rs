@@ -37,7 +37,7 @@
 //! CLI's own queue as soon as the pane takes keystrokes and is not on a
 //! question, as a prompt typed then would go.
 //!
-//! Not here (recorded in `docs/headless_owner_handoff.md`): the window's
+//! Not here (recorded in `docs/done/headless_owner_handoff.md`): the window's
 //! after-link chaining and prompt blame, both of which need its stores.
 
 use std::collections::{HashMap, HashSet};
@@ -744,6 +744,7 @@ mod tests {
             last: None,
             origin: None,
             phone_device: None,
+            extra: Default::default(),
         }
     }
 
@@ -764,7 +765,7 @@ mod tests {
         assert_eq!(verdict(&rule_once("2026-09-30T09:00"), now), Verdict::Wait { key: "2026-09-30T09:00".into() });
         assert_eq!(verdict(&rule_once("2026-09-30T08:59"), now), Verdict::Missed { key: "2026-09-30T08:59".into() });
         let mut done = rule_once("2026-09-30T09:30");
-        done.last = Some(AgentScheduleLastRun { occurrence: "2026-09-30T09:30".into(), result: AgentScheduleResult::Delivered, at: "x".into() });
+        done.last = Some(AgentScheduleLastRun { occurrence: "2026-09-30T09:30".into(), result: AgentScheduleResult::Delivered, at: "x".into(), extra: Default::default() });
         assert_eq!(verdict(&done, now), Verdict::None);
         let mut off = rule_once("2026-09-30T09:30");
         off.enabled = false;
@@ -774,7 +775,7 @@ mod tests {
         assert_eq!(verdict(&rule_daily("10:00"), now), Verdict::Wait { key: "2026-09-30T10:00".into() });
         assert_eq!(verdict(&rule_daily("10:01"), now), Verdict::Missed { key: "2026-09-29T10:01".into() });
         let mut ran = rule_daily("09:45");
-        ran.last = Some(AgentScheduleLastRun { occurrence: "2026-09-30T09:45".into(), result: AgentScheduleResult::Delivered, at: "x".into() });
+        ran.last = Some(AgentScheduleLastRun { occurrence: "2026-09-30T09:45".into(), result: AgentScheduleResult::Delivered, at: "x".into(), extra: Default::default() });
         assert_eq!(verdict(&ran, now), Verdict::None);
         ran.last.as_mut().unwrap().occurrence = "2026-09-29T09:45".into();
         assert_eq!(verdict(&ran, now), Verdict::Wait { key: "2026-09-30T09:45".into() });

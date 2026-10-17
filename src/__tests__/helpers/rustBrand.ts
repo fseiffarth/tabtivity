@@ -43,6 +43,7 @@ export function readRustBrand(): RustBrand {
     out.legacy[m[2]] = build(forms.legacy);
   }
   if (Object.keys(out.current).length === 0) throw new Error("brand.rs: no names! table found");
+  out.current.ASSISTANT_NAME = macroLiteral("assistant_name");
   out.current.DISPLAY = forms.current.name;
   out.current.SLUG = forms.current.slug;
   out.current.UPPER = forms.current.upper;

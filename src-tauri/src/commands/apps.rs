@@ -2182,11 +2182,6 @@ fn prune_dead_windows_with(
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn check_pid_alive(pid: u32) -> bool {
-    pid_alive(pid)
-}
-
 pub fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -2237,53 +2232,6 @@ pub fn pid_alive(pid: u32) -> bool {
         #[allow(unreachable_code)]
         false
     }
-}
-
-/// Best-effort restore: launch apps from `open_apps` metadata.
-/// Skips embedded-mode apps (unsupported in Tauri).
-///
-/// Async + `spawn_blocking`: each launch pays `do_launch`'s window-resolution
-/// poll (up to ~2 s), and this runs N of them during project activation.
-#[cfg(feature = "desktop")]
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn restore_open_apps(
-    registry: State<'_, WindowRegistryState>,
-    open_apps: Vec<crate::schema::project::OpenApp>,
-    project_id: String,
-) -> Result<Vec<TrackedWindow>, String> {
-    let registry = registry.inner().clone();
-    app_core::rt::try_blocking("app", move || {
-        let mut launched = Vec::new();
-        for app in open_apps {
-            if app.mode.as_deref() == Some("embedded") {
-                continue;
-            }
-            // Skip if already running for this project.
-            {
-                let reg = registry.lock_ok();
-                if reg
-                    .windows
-                    .values()
-                    .any(|w| w.exec == app.exec && w.project_id.as_deref() == Some(&project_id))
-                {
-                    continue;
-                }
-            }
-            if let Ok(win) = do_launch(
-                &registry,
-                &app.exec,
-                &[],
-                app.file.as_deref(),
-                Some(&project_id),
-                None,
-                ORIGIN_RESTORED,
-            ) {
-                launched.push(win);
-            }
-        }
-        Ok(launched)
-    })
-    .await
 }
 
 fn track_opened_file(
@@ -2996,7 +2944,7 @@ mod tests {
 
     #[test]
     fn pid_zero_is_never_alive() {
-        assert!(!check_pid_alive(0));
+        assert!(!pid_alive(0));
     }
 
     #[cfg(target_os = "macos")]

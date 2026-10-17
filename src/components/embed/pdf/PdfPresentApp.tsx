@@ -26,6 +26,7 @@ import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
 import { fileMtime, readFileBytes } from "../fileAccess";
+import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 import { applyTheme, THEME_CHANGED_EVENT, useSettingsStore } from "../../../stores/settings";
 import { useT } from "../../../lib/i18n";
 import { subscribeTauri, useTauriListener } from "../../../hooks/useTauriListener";
@@ -50,10 +51,6 @@ import { PdfPresentLaser } from "./PdfPresentLaser";
 /** How often to re-announce readiness until a seed lands (the editor may still
  *  be mounting its listener when this window first asks). */
 const READY_RETRY_MS = 400;
-
-/** How often the file's mtime is re-checked for a recompile — the viewer's
- *  `RELOAD_POLL_MS`, so both follow a rebuild at the same pace. */
-const RELOAD_POLL_MS = 1500;
 
 /** A recompile rewrites the PDF in place, so a read can catch it mid-write and
  *  pdf.js throws on the truncated bytes. Retried at this spacing, as the viewer
@@ -305,36 +302,17 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, scope, diskVersion]);
 
-  // Watch the file for a recompile. Polls only once the first read has set a
-  // baseline, so the opening read is never doubled; one stat at a time, so a
-  // slow or dead remote session never gets a queue of them; and not while the
-  // window is hidden — showing it again checks at once.
-  useEffect(() => {
-    if (!path) return;
-    let cancelled = false;
-    let inFlight = false;
-    const check = () => {
-      if (inFlight || document.hidden || lastMtime.current == null) return;
-      inFlight = true;
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
-          lastMtime.current = m;
-          setDiskVersion((v) => v + 1);
-        })
-        .catch(() => {})
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-    const id = setInterval(check, RELOAD_POLL_MS);
-    document.addEventListener("visibilitychange", check);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", check);
-    };
-  }, [path, scope]);
+  // Watch the file for a recompile — the viewer's own poll and cadence
+  // (`useDiskReloadPoll`), so both follow a rebuild at the same pace. Nothing is
+  // reported until the first read has set the baseline, so the opening read is
+  // never doubled; one stat at a time, so a slow or dead remote session never
+  // gets a queue of them; and not while the window is hidden — showing it again
+  // checks at once.
+  useDiskReloadPoll(path, scope, () => setDiskVersion((v) => v + 1), {
+    baseline: lastMtime,
+    seed: false,
+    immediate: false,
+  });
 
   // --- painting ------------------------------------------------------------
 

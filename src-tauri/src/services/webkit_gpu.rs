@@ -1,4 +1,4 @@
-//! Which WebKitGTK paint path the window starts on (`docs/gpu_compositing_plan.md`).
+//! Which WebKitGTK paint path the window starts on (`docs/done/gpu_compositing_plan.md`).
 //!
 //! Tabtivity forces `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default, so pages paint
 //! and composite on the CPU. The GPU path was ruled out by its artifacts, and those

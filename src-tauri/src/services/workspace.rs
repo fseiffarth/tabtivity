@@ -1,5 +1,5 @@
 //! The shared tab set of a scope — the workspace service (headless owner plan,
-//! H1, `docs/headless_owner_plan.md` §2).
+//! H1, `docs/done/headless_owner_plan.md` §2).
 //!
 //! What every client must see identically is a scope's ordered tabs with
 //! their persisted fields (`TerminalSession::tab_layout`). Until now each
@@ -140,7 +140,8 @@ fn mint_for_created(scope: &str, tab: &mut TabEntry) {
     if !pty_tab {
         return;
     }
-    if kind != "shell" && extra_str(tab, SCHEDULE_TARGET_KEY).is_none() {
+    // The chat assistant's scope takes no schedules (plan decision, "Call sites").
+    if kind != "shell" && !storage::is_assistant_scope(scope) && extra_str(tab, SCHEDULE_TARGET_KEY).is_none() {
         tab.extra.insert(SCHEDULE_TARGET_KEY.to_string(), Value::String(crate::commands::projects::uuid_v4()));
     }
     if tmux_of(tab).is_none() {
@@ -815,14 +816,18 @@ pub fn bump_raw_version(session: &mut Value) {
 pub fn snapshot(project_id: &str) -> Result<Snapshot, String> {
     let mut snapshot = snapshot_in(&terminal_service::state_session_path(project_id))?;
     terminal_service::sanitize_loaded_layout(&mut snapshot.session.tab_layout);
+    terminal_service::sanitize_scope_layout(project_id, &mut snapshot.session.tab_layout, &storage::state_dir());
     Ok(snapshot)
 }
 
 /// [`sync_in`] for a project scope, then the state-dir write's companions:
 /// stale host-bound markers pruned and the project-tree export copy refreshed
 /// (`terminal_service::store_state_session`).
-pub fn sync(project_id: &str, local_file: &str, client: ClientSync) -> Result<SyncOutcome, String> {
+pub fn sync(project_id: &str, local_file: &str, mut client: ClientSync) -> Result<SyncOutcome, String> {
     let path = terminal_service::state_session_path(project_id);
+    // What a client sends for the chat assistant's scope is cut down to
+    // validated chats before the merge; it has no project folder to copy to.
+    terminal_service::sanitize_scope_layout(project_id, &mut client.tabs, &storage::state_dir());
     let outcome = sync_in(&path, project_id, client)?;
     if !outcome.ops.is_empty() {
         terminal_service::after_state_session_write(project_id, local_file);
@@ -1035,6 +1040,23 @@ mod tests {
         let mut raw = serde_json::to_value(&stored).unwrap();
         bump_raw_version(&mut raw);
         assert_eq!(raw[VERSION_KEY], seeded.version + 2);
+    }
+
+    /// A schedule binding is never minted for the chat assistant's scope, in any
+    /// spelling of its id (they all name one folder on a case-folding filesystem).
+    #[test]
+    fn no_schedule_binding_is_minted_for_any_spelling_of_the_assistant_scope() {
+        for scope in ["assistant", "Assistant", " assistant", "ASSISTANT"] {
+            let mut chat = tab("c", "Chat");
+            chat.extra.insert("kind".to_string(), Value::String("agent".to_string()));
+            mint_for_created(scope, &mut chat);
+            assert!(extra_str(&chat, SCHEDULE_TARGET_KEY).is_none(), "{scope:?}");
+            assert!(extra_str(&chat, TMUX_SESSION_KEY).is_some(), "{scope:?}: the pty tab still gets its session");
+        }
+        let mut project = tab("c", "Chat");
+        project.extra.insert("kind".to_string(), Value::String("agent".to_string()));
+        mint_for_created("p1", &mut project);
+        assert!(extra_str(&project, SCHEDULE_TARGET_KEY).is_some());
     }
 
     fn pty_tab(key: &str, label: &str, tmux: &str) -> TabEntry {

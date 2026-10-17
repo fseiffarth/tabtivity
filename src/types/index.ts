@@ -133,6 +133,23 @@ export type FilesPanelView =
   | "remarks"
   | "todo";
 
+/** `Settings.assistant_settings` (Rust `schema::settings::AssistantSettings`):
+ *  the chat assistant's options. Every key optional; an absent block is the
+ *  defaults. */
+export interface AssistantSettings {
+  /** The CLI a new chat starts with (an assistant CLI id). */
+  default_cli?: string;
+  /** The model a new chat starts with. */
+  default_model?: string;
+  /** Where the web lane's `web_search` looks (plan decision 7). Unset: none. */
+  search?: {
+    /** `"searxng"` or `"ollama"`. */
+    kind?: "searxng" | "ollama";
+    /** The SearXNG instance's base URL. The Ollama key is in the keychain. */
+    searxng_url?: string;
+  };
+}
+
 export interface Settings {
   /** The file's revision (headless owner plan, H1): every write moves it, and
    * the whole-document `save_settings` fallback is refused when the file moved
@@ -180,6 +197,12 @@ export interface Settings {
      * closes the routes. Read by the sidecar per request and repeated by the
      * desktop bridge (`lib/mobileLocalModels`). */
     local_models?: boolean;
+    /** A paired phone may use the chat assistant. Unset is ON; an explicit
+     * false closes it. Only in effect while the experimental `assistant` flag
+     * is on. Read by the sidecar per catalog load and repeated by the desktop
+     * bridge. Every writer of this block must carry it (a settings patch is
+     * shallow: a block that omits it drops it). */
+    assistant_access?: boolean;
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -411,7 +434,7 @@ export interface Settings {
    *  (`"claude"`, `"codex"`, …). Set from the 🧠 menu's Agents section; every
    *  reader falls back to `"claude"` when unset. */
   default_agent_cmd?: string;
-  /** Desktop PDF viewer Mark up prompts (`docs/pdf_markup_rounds_plan.md` §2.8):
+  /** Desktop PDF viewer Mark up prompts (`docs/done/pdf_markup_rounds_plan.md` §2.8):
    *  the Submit's instruction and the **Make these changes** follow-up;
    *  unset/blank = the defaults. */
   pdf_markup_instruction?: string;
@@ -425,7 +448,7 @@ export interface Settings {
   /** Subagent mode: each Submit asks the tab's agent to hand the round to a
    *  new subagent (`markupForSubagent`); unset = off. */
   pdf_markup_subagents?: boolean;
-  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): a
+  /** **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`): a
    *  Submit asks for an `apply` round backed by an undo snapshot; unset = on,
    *  `false` = the agent lists the changes first (**Make these changes**). */
   pdf_markup_direct?: boolean;
@@ -647,7 +670,7 @@ export interface Settings {
   terminal_webgl?: boolean;
   /** EXPERIMENTAL, default OFF, Linux only. Start WebKitGTK with its DMA-BUF
    *  (GPU) renderer on; read by the backend once at launch, so it applies after
-   *  a restart (`docs/gpu_compositing_plan.md`). Like `terminal_webgl`, never
+   *  a restart (`docs/done/gpu_compositing_plan.md`). Like `terminal_webgl`, never
    *  carried by Debug mode. */
   gpu_compositing?: boolean;
   /** EXPERIMENTAL, default OFF. The markdown relationship graph: adds a "Graph"
@@ -658,6 +681,15 @@ export interface Settings {
   md_graph?: boolean;
   /** EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md. */
   project_remarks?: boolean;
+  /** EXPERIMENTAL, default OFF. The chat assistant: chats in a scope of its
+   *  own that can search and read the web and see nothing else
+   *  (`docs/assistant_plan.md`). The backend reads the same flag
+   *  (`Settings::assistant_enabled`) and refuses its commands, the spawn and
+   *  the web lane while it is off. */
+  assistant?: boolean;
+  /** The assistant's options. Not `assistant`: that key is the flag's, and
+   *  `EXPERIMENTAL_FLAGS` are the `boolean | undefined` keys of `Settings`. */
+  assistant_settings?: AssistantSettings;
   /** Marker (tab cost plan step 3): this profile's experimental flags are
    *  explicit, so an unset one is off whatever `debug` says. Written once by
    *  `migrateExperimentalOnce` (`lib/experimental`), together with an explicit
@@ -735,13 +767,23 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
-  /** Lines of history a shell terminal keeps (`docs/tab_cost_plan.md` step
+  /** Lines of history a shell terminal keeps (`docs/done/tab_cost_plan.md` step
    *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
    *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.
    *  Read through `shellScrollbackRows` (`lib/terminal/scrollback`), applied
    *  live to open terminals. */
   shell_scrollback_rows?: number;
-  /** When true, the side panel is docked open (reflows layout) instead of hover-revealed. */
+  /** Whether the side panel is open, docked beside the workspace (VS Code's
+   *  side bar). Unset → the legacy `side_panel_pinned ?? right_panel_pinned`, so a
+   *  user who had pinned the panel finds it open and a hover user finds it closed.
+   *  Ignored while {@link Settings.side_panel_auto_hide} is on. */
+  side_panel_open?: boolean;
+  /** Opt-in: the pre-IDE-toggle behaviour. The panel is an overlay that opens when
+   *  the pointer rests on the edge rail and closes on mouse-leave, with no reflow.
+   *  Unset → off. */
+  side_panel_auto_hide?: boolean;
+  /** @deprecated Read-only fallback for {@link Settings.side_panel_open}; nothing
+   *  writes it any more (it rides in the backend's `extra` catch-all). */
   side_panel_pinned?: boolean;
   /** Width of the side (files/git/search/sessions) panel in px. Set by dragging the
    *  panel's inner border; unset falls back to the default 280px. */

@@ -225,14 +225,6 @@
 }
 
 /* ── Ollama settings panel ───────────────────────────────────────────── */
-.ollama-status-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0 8px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
 .ollama-status-dot {
   width: 8px;
   height: 8px;
@@ -1354,12 +1346,6 @@
   opacity: 0.5;
 }
 
-.ollama-catalog-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 0;
-}
 .ollama-catalog-sort {
   padding: 3px 6px;
   font-size: 11px;
@@ -1379,38 +1365,6 @@
   font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
-}
-
-.ollama-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin: 4px 0;
-}
-.ollama-filter-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-right: 2px;
-  min-width: 40px;
-}
-.ollama-chip {
-  font-size: 11px;
-  padding: 2px 8px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  cursor: var(--cur-pointer, pointer);
-  text-transform: capitalize;
-}
-.ollama-chip:hover {
-  border-color: var(--accent);
-}
-.ollama-chip.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-contrast);
 }
 
 .ollama-install-log {
@@ -1436,11 +1390,15 @@
 .ollama-model-row {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
   background: var(--control-bg);
+  transition: border-color var(--transition);
+}
+.ollama-model-row:hover {
+  border-color: var(--accent);
 }
 
 .ollama-model-header {
@@ -1448,65 +1406,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-
-/* One installed model in the "Load on Tabtivity start" list: switch, name, size.
-   Rounded, with hover and armed states, like every other card list in Settings
-   (.archived-project-row, .remote-machine-card) — the whole label is the hit
-   target, so it has to look like one rather than like a bare bordered strip. */
-.ollama-autostart-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--control-bg);
-  cursor: var(--cur-pointer, pointer);
-  transition: background-color var(--transition), border-color var(--transition);
-}
-.ollama-autostart-row:hover {
-  border-color: var(--accent);
-  background: var(--control-hover-bg);
-}
-/* Armed for the next launch — readable from the row itself, not only from the
-   switch, which is what makes the list scannable at a glance. */
-.ollama-autostart-row.on {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle));
-  background: color-mix(in srgb, var(--accent) 10%, var(--control-bg));
-}
-.ollama-autostart-row .ollama-model-name {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.ollama-autostart-row .ollama-badge {
-  flex-shrink: 0;
-}
-
-/* A machine with many installed models must not push the Energy Saver card
-   (and the registry browser under it) out of reach. */
-.ollama-autostart-list {
-  max-height: 240px;
-  overflow-y: auto;
-}
-/* Its own overlay thumb sits on the rows' right end — the "On start" badge —
-   the same 8px gutter `.menu-scroll-region` reserves, and for its reason. */
-.ollama-autostart-list[data-app-scrollbar] {
-  padding-right: 8px;
-}
-
-/* Save + its "saved" feedback inside the Energy Saver card. Its own row rather
-   than the borrowed install-command row (which carries a command field's
-   margins): the action sits at the card's edge, the confirmation beside it. */
-.ollama-autostart-saver-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.ollama-autostart-saver-actions .ollama-status-text {
-  flex: 0 1 auto;
-  text-align: right;
 }
 
 .ollama-model-name {
@@ -1701,14 +1600,21 @@
   flex-wrap: wrap;
 }
 
+/* A registry card: a grid cell whose foot (size picker + Pull) is pinned to the
+   bottom, so a row of cards of different description lengths lines up. */
 .ollama-catalog-row {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition);
 }
-.ollama-catalog-row:last-child { border-bottom: none; }
+.ollama-catalog-row:hover {
+  border-color: var(--accent);
+}
 
 .ollama-catalog-header {
   display: flex;
@@ -1724,38 +1630,14 @@
 }
 
 .ollama-catalog-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
-  line-height: 1.3;
-}
-
-.ollama-catalog-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 1px;
-}
-
-.ollama-tag-btn {
-  font-size: 10px;
-  padding: 2px 7px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-  color: var(--text-primary);
-  cursor: var(--cur-pointer, pointer);
-  font-family: ui-monospace, monospace;
   line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-.ollama-tag-btn:hover:not(:disabled) {
-  background: var(--control-hover-bg);
-  border-color: var(--accent);
-}
-.ollama-tag-btn.installed {
-  border-color: var(--success);
-  color: var(--success);
-}
-.ollama-tag-btn:disabled { opacity: 0.6; cursor: var(--cur-default, default); }
 
 /* ── Activity window (modal) ─────────────────────────────────────────── */
 .activity-window {
@@ -2069,6 +1951,21 @@
 .header-right-gap {
   width: 8px;
   flex: none;
+}
+
+@media (max-width: 1100px) {
+  .header-center { gap: 3px; }
+  .header-right { gap: 3px; padding-inline: 6px; }
+  .project-switcher { gap: 2px; padding-right: 3px; }
+  .project-search-wrap { width: 128px; }
+  .header-right-gap { width: 4px; }
+}
+
+@media (max-width: 900px) {
+  .header-right { gap: 2px; padding-inline: 4px; }
+  .header-right-gap { width: 1px; }
+  .project-switcher-separator { margin-inline: 1px; }
+  .project-search-wrap { width: 108px; }
 }
 .vpn-indicator-btn:hover,
 .vpn-indicator-btn[aria-expanded="true"],

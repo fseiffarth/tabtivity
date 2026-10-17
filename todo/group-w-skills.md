@@ -4,7 +4,7 @@ bundles from a git source into a project's `.claude/skills/` **or** into the
 machine's personal `~/.claude/skills/` (#156). Claude-only; no
 manifest/versioning, no drag-and-drop, no cross-agent generalization —
 those were explored and intentionally deferred. Full reasoning + deferred
-scope: [`docs/skills_plan.md`](../docs/skills_plan.md).*
+scope: [`docs/done/skills_plan.md`](../docs/done/skills_plan.md).*
 
 *Files: new `src/components/skills/SkillsLibraryTab.tsx` +
 `SkillsLibraryView.tsx` + `SkillsOverlay.tsx`, new `src/stores/skills.ts`,

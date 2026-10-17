@@ -230,6 +230,45 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     vi.restoreAllMocks();
   });
 
+  it("wires OpenCode's screenshot question into Chat and sends the tapped number shortcut", async () => {
+    terminalState.type = "alternate";
+    render(<Terminal tab={{ ...TAB, label: "OpenCode", agent_label: "OpenCode" }} back={() => {}} />);
+    await act(async () => {});
+    await paint([
+      "Asked 2 questions", "", "Which model picker fails   Failure symptoms   Confirm", "",
+      "Which OpenCode model picker do you mean?", "",
+      `${CARD}1. Desktop Reader Chat view`, "   Chat/Terminal switch facts-row model chip",
+      "2. Steering prompt chip", "   Keyboard-steering prompt box",
+      "3. Phone model sheet", "   Mobile Focus model chip sheet",
+      "4. Local-model OpenCode tab", "5. Type your own answer", "",
+      "⇆ tab  ↑↓ select  enter confirm  esc dismiss",
+    ].join("\n"));
+    within(question()).getByText("Which OpenCode model picker do you mean?");
+    within(question()).getByText("Chat/Terminal switch facts-row model chip");
+    within(question()).getByRole("button", { name: "Which model picker fails" });
+    FakeWebSocket.sent = [];
+    fireEvent.click(within(question()).getByText("Phone model sheet"));
+    await settle(400);
+    expect(FakeWebSocket.sent).toEqual(["3"]);
+  });
+
+  it("opens OpenCode's custom-answer editor before typing the Chat field's words", async () => {
+    terminalState.type = "alternate";
+    render(<Terminal tab={{ ...TAB, label: "OpenCode", agent_label: "OpenCode" }} back={() => {}} />);
+    await act(async () => {});
+    await paint([
+      "Which model picker?", "", `${CARD}1. Desktop Reader`, "2. Type your own answer", "",
+      "↑↓ select  enter submit  esc dismiss",
+    ].join("\n"));
+    FakeWebSocket.sent = [];
+    fireEvent.click(within(question()).getByText("Type your own answer"));
+    expect(FakeWebSocket.sent).toEqual([]);
+    fireEvent.change(within(question()).getByRole("textbox", { name: "Your answer…" }), { target: { value: "Phone model sheet" } });
+    fireEvent.click(within(question()).getByRole("button", { name: "Send" }));
+    await settle(600);
+    expect(FakeWebSocket.sent).toEqual(["2", "Phone model sheet", "\r"]);
+  });
+
   it("lists the dialog's rows by their own numbers, and answers the one tapped", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});

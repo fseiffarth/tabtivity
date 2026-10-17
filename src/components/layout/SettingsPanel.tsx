@@ -75,6 +75,7 @@ import {
   RemoteHostsSettings,
 } from "./SettingsSubPanels";
 import { Dropdown } from "../common/Dropdown";
+import { AssistantSettings } from "../assistant/AssistantSettings";
 import { PasswordInput } from "../common/PasswordInput";
 import { useT, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
@@ -1143,6 +1144,7 @@ const MAIN_SECTIONS = [
   "usageStats",
   "pdfMarkup",
   "rootConsole",
+  "assistant",
   "remoteFeatures",
   "vm",
   "mobile",
@@ -1167,7 +1169,7 @@ function sectionOfAnchor(anchor: string | undefined): MainSection {
 const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "system"; entries: NavEntry[] }[] = [
   { key: "general", entries: ["general", "layout", "clock", "hintsOnboarding", "shortcuts", "updates", "help"] },
   { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "calendar", "usageStats", "archive", "scaffoldRepair"] },
-  { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole"] },
+  { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole", "assistant"] },
   { key: "remote", entries: ["remoteFeatures", "git", "remoteHosts", "vpn", "vm", "mobile"] },
   { key: "system", entries: ["performance", "resourceMonitor", "experimental"] },
 ];
@@ -1187,6 +1189,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   usageStats: ["settings.dailyRecap", "settings.openUsageStats"],
   pdfMarkup: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply"],
   rootConsole: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
+  assistant: ["assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"],
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
@@ -1300,6 +1303,8 @@ export function SettingsDialog({
   const navGroups = SETTINGS_GROUPS.map((group) => ({
     label: t(`settings.group.${group.key}` as TranslationKey),
     entries: group.entries.flatMap((entry) => {
+      // The assistant's page exists only while its experimental switch is on.
+      if (entry === "assistant" && !experimentalEnabled(settings, "assistant")) return [];
       const label = isMainSection(entry)
         ? t(`settings.${entry}` as TranslationKey)
         : t(`nav.${entry}.title` as TranslationKey);
@@ -1441,6 +1446,14 @@ export function SettingsDialog({
                 />
               }
             />
+            <SettingsCard>
+              <ToggleRow
+                label={<>{t("settings.sidePanelAutoHide")} <UntestedTag id="sidePanel.ideToggle" /></>}
+                checked={settings?.side_panel_auto_hide ?? false}
+                onChange={(e) => void updateSettings({ side_panel_auto_hide: e.target.checked })}
+              />
+              <p className="settings-help">{t("settings.sidePanelAutoHideHelp")}</p>
+            </SettingsCard>
             {/* Both minimums answer one question, so one card holds them and
                 the help line that explains the pair sits at its foot. */}
             <SettingsCard>
@@ -1909,6 +1922,11 @@ export function SettingsDialog({
             </SettingsAdvanced>
             </>)}
 
+            {section === "assistant" && (<>
+            <SettingsSection anchor="settings-anchor-assistant" title={t("settings.assistant")} help={t("assistant.settings.help")} />
+            <AssistantSettings />
+            </>)}
+
             {section === "remoteFeatures" && (<>
             <SettingsSection anchor="settings-anchor-remoteFeatures" title={t("settings.remoteFeatures")} />
             <SettingsCard>
@@ -1926,7 +1944,7 @@ export function SettingsDialog({
             </SettingsCard>
 
             <ToggleCard
-              label={t("settings.headlessRemote")}
+              label={<>{t("settings.headlessRemote")} <UntestedTag id="settings.headlessRemote" /></>}
               checked={settings?.connections_headless ?? true}
               onChange={(e) => void updateSettings({ connections_headless: e.target.checked })}
               help={t("settings.headlessRemoteHelp")}
@@ -2111,7 +2129,7 @@ export function SettingsDialog({
             />
 
             {/* Linux only: WebKitGTK's DMA-BUF renderer, read by the backend at
-                launch (docs/gpu_compositing_plan.md). The canvas defect that
+                launch (docs/done/gpu_compositing_plan.md). The canvas defect that
                 made it drop PDF content is avoided on every webview regardless. */}
             {IS_LINUX && (
               <ToggleCard
@@ -2143,6 +2161,17 @@ export function SettingsDialog({
               help={t("settings.copilotCompletionHelp")}
             />
             {experimentalEnabled(settings, "copilot_completion") && <CopilotCompletionCard />}
+
+            {/* The chat assistant: the switch the backend reads too
+                (`Settings::assistant_enabled`). Its other settings (CLI,
+                model, search backend) are the assistant page's, which
+                exists in the navigation only while this is on. */}
+            <ToggleCard
+              label={<>{t("settings.assistant")} <UntestedTag id="settings.assistant" /></>}
+              checked={experimentalEnabled(settings, "assistant")}
+              onChange={(e) => void updateSettings({ assistant: e.target.checked })}
+              help={t("settings.assistantHelp")}
+            />
 
             {/* Mail is ONE switch. It used to be two — this gate plus a
                 `mail_global_app` sub-toggle deciding whether the header button

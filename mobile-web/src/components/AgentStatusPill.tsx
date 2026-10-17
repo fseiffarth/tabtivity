@@ -33,9 +33,10 @@ export function AgentStatusPill({ status }: { status: AgentStatus }) {
 }
 
 /** The same state as the bare glyph, for the project screen's tab cards, which
- *  wear it on their left border. It has no word beside it, so the word is its
- *  accessible name. The glyph sits in its own span because the disc's
- *  `transform` places it on the border — the glyph's motion needs its own. */
+ *  wear it as a badge on their tile's corner, and Home's Needs you rows. It has
+ *  no word beside it, so the word is its accessible name. The glyph sits in its
+ *  own span because the badge's own `transform` pulses — the glyph's motion
+ *  needs its own. */
 export function AgentStatusMark({ status }: { status: AgentStatus }) {
   const t = useT();
   const word = t(AGENT_STATUS_WORD[status]);

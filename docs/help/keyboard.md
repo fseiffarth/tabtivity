@@ -16,6 +16,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | Default | Action |
 |---|---|
 | F11 | Toggle fullscreen for the window you're in — the main window, a popout or a presenter window (same as the fullscreen button beside minimize) |
+| Ctrl+B (⌘B on macOS), or Alt+1 from a terminal | Show/hide the side panel. Ctrl+B is left to terminals and text fields |
 | Super (Linux, when the desktop leaves it to the window) or F9 | Show/hide the side panels. To bind a lone Super tap yourself (Linux only), press and release Super while capturing |
 | Esc | Leave a pane's in-app fullscreen (dialogs always close on Esc) |
 | Ctrl + / − / 0 | Zoom the interface in / out / reset — in an agent tab its font, in an editor its text |

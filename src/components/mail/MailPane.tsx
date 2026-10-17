@@ -347,13 +347,20 @@ export function MailPane({ visible }: MailPaneProps) {
   // first: nothing moves and nothing is deleted (a mark is not a folder), but
   // the filing is the user's own work and there is no undo for it. The confirm
   // says both — what goes and what does not.
-  const clearPriorityList = () => {
+  const clearPriorityList = async () => {
     if (!selectedPriority || priorityListCount === 0) return;
-    const name = t(selectedPriority === "urgent" ? "mail.urgent" : "mail.important");
-    if (!window.confirm(t("mail.confirmClearPriority", { name, count: priorityListCount }))) {
-      return;
-    }
-    void useMailStore.getState().clearPriority(selectedPriority);
+    const priority = selectedPriority;
+    const name = t(priority === "urgent" ? "mail.urgent" : "mail.important");
+    const ok = await confirmAction({
+      title: t("mail.clearPriority", { count: priorityListCount }),
+      body: t("mail.confirmClearPriority", { name, count: priorityListCount }),
+      confirmLabel: t("common.remove"),
+      danger: true,
+    });
+    if (!ok) return;
+    // The list asked about, not whichever one is selected by the time the
+    // answer comes back.
+    void useMailStore.getState().clearPriority(priority);
   };
 
   return (
@@ -531,7 +538,7 @@ export function MailPane({ visible }: MailPaneProps) {
               type="button"
               className="settings-btn"
               title={t("mail.clearPriorityTitle")}
-              onClick={clearPriorityList}
+              onClick={() => void clearPriorityList()}
             >
               {t("mail.clearPriority", { count: priorityListCount })}
             </button>

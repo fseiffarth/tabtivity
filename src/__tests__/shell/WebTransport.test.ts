@@ -19,6 +19,8 @@ import { KIND_CALL, KIND_RET, WsClient, type SocketLike } from "../../lib/transp
 import { WsInternals } from "../../lib/transport/wsInternals";
 import { pausePollersWhileDown, socketUrl } from "../../lib/transport/installWeb";
 import { setDialogAdapter } from "../../lib/transport/dialogAdapter";
+import { registerDict, useI18nStore } from "../../lib/i18n";
+import { dict as de } from "../../lib/i18nDicts/de";
 
 class FakeSocket implements SocketLike {
   static instances: FakeSocket[] = [];
@@ -226,6 +228,52 @@ describe("the browser transport", () => {
     expect(next.textFrames()).toEqual([{ t: "sub", name: "terminal-output" }]);
   });
 
+  it("close() settles in-flight calls and ready waiters itself, before the socket's late onclose", async () => {
+    // A real WebSocket fires `onclose` asynchronously, after `close()` has
+    // already dropped the socket: hold it back the way the browser does.
+    const { client, socket, invoke, scheduled } = connected();
+    let lateClose: (() => void) | null = null;
+    socket.close = () => {
+      socket.readyState = 3;
+      lateClose = () => socket.onclose?.({});
+    };
+    const pending = invoke("pty_scrollback", { id: "p" });
+    const raw = client.callRaw("write_file_bytes", { path: "/srv/a" }, new Uint8Array([1]));
+    client.close();
+    await expect(pending).rejects.toBeInstanceOf(DisconnectedError);
+    await expect(raw).rejects.toBeInstanceOf(DisconnectedError);
+    expect(client.up).toBe(false);
+    expect(client.hello).toBeNull();
+    expect(linkState()).toBe("down");
+    // A waiter registered while closed is refused at once, not parked forever.
+    await expect(client.whenReady()).rejects.toBeInstanceOf(DisconnectedError);
+    // The late onclose and a late frame on the dropped socket change nothing.
+    lateClose!();
+    socket.hello();
+    expect(client.hello).toBeNull();
+    expect(linkState()).toBe("down");
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it("close() rejects a whenReady() waiting for the first hello", async () => {
+    const client = new WsClient({
+      url: "ws://127.0.0.1:8742/api/v1/desktop/ws",
+      protocol: "x-desktop.v1",
+      socket: (url, protocol) => {
+        const socket = new FakeSocket(url, protocol);
+        socket.close = () => {
+          socket.readyState = 3;
+        };
+        return socket;
+      },
+      schedule: () => {},
+    });
+    client.connect();
+    const ready = client.whenReady();
+    client.close();
+    await expect(ready).rejects.toBeInstanceOf(DisconnectedError);
+  });
+
   it("pauses interval pollers while the link is down", () => {
     const { socket, scheduled } = connected();
     vi.useFakeTimers();
@@ -266,7 +314,32 @@ describe("the browser transport", () => {
     await expect(invoke("plugin:dialog|message", { message: "Really?", buttons: "YesNo" })).resolves.toBe("Yes");
     await expect(invoke("plugin:dialog|message", { message: "Custom", buttons: { OkCancelCustom: ["Go", "Stay"] } })).resolves.toBe("Go");
     await expect(invoke("plugin:dialog|message", { message: "Note", buttons: "Ok" })).resolves.toBe("Ok");
-    expect(asked).toEqual([["Sure?", "Ok", "Cancel"], ["Really?", "Yes", "No"], ["Custom", "Go", "Stay"]]);
+    expect(asked).toEqual([["Sure?", "OK", "Cancel"], ["Really?", "Yes", "No"], ["Custom", "Go", "Stay"]]);
+  });
+
+  it("shows the default dialog buttons in the app language, answering with the plugin's English tokens", async () => {
+    const { invoke } = connected();
+    const asked: unknown[] = [];
+    setDialogAdapter({
+      open: () => Promise.resolve(null),
+      save: () => Promise.resolve(null),
+      confirm: (message, options) => {
+        asked.push([message, options.okLabel, options.cancelLabel]);
+        return Promise.resolve(false);
+      },
+      message: () => Promise.resolve(),
+    });
+    registerDict("de", de);
+    const before = useI18nStore.getState().lang;
+    useI18nStore.setState({ lang: "de" });
+    try {
+      // Declined: the answer is the cancel TOKEN `ask`/`confirm` compare against.
+      await expect(invoke("plugin:dialog|message", { message: "Sicher?", buttons: "YesNo" })).resolves.toBe("No");
+      await expect(invoke("plugin:dialog|message", { message: "Wirklich?", buttons: "OkCancel" })).resolves.toBe("Cancel");
+    } finally {
+      useI18nStore.setState({ lang: before });
+    }
+    expect(asked).toEqual([["Sicher?", "Ja", "Nein"], ["Wirklich?", "OK", "Abbrechen"]]);
   });
 
   it("answers the window plugin for the one page it is", async () => {
@@ -432,10 +505,10 @@ describe("the installed @tauri-apps JS through the shim", () => {
     await expect(confirm("Sure?")).resolves.toBe(true);
     await expect(confirm("Delete it?", { okLabel: "Delete", cancelLabel: "Keep" })).resolves.toBe(true);
     expect(calls).toEqual([
-      ["message", "Saved", { title: "Export", kind: "info", okLabel: "Ok", cancelLabel: undefined }],
+      ["message", "Saved", { title: "Export", kind: "info", okLabel: "OK", cancelLabel: undefined }],
       ["message", "Done", { title: undefined, kind: undefined, okLabel: "Got it", cancelLabel: undefined }],
       ["confirm", "Really?", { title: "Remove", kind: "warning", okLabel: "Yes", cancelLabel: "No" }],
-      ["confirm", "Sure?", { title: undefined, kind: undefined, okLabel: "Ok", cancelLabel: "Cancel" }],
+      ["confirm", "Sure?", { title: undefined, kind: undefined, okLabel: "OK", cancelLabel: "Cancel" }],
       ["confirm", "Delete it?", { title: undefined, kind: undefined, okLabel: "Delete", cancelLabel: "Keep" }],
     ]);
   });

@@ -97,8 +97,9 @@ describe("openConnectionInRoot", () => {
     useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
     forgetConnection("vpn:/x.ovpn");
 
-    openConnectionInRoot({ label: "VPN", command: "openvpn x", dedupeKey: "vpn:/x.ovpn" });
-    openConnectionInRoot({ label: "VPN", command: "openvpn x", dedupeKey: "vpn:/x.ovpn" });
+    const login = { kind: "vpn" as const, config: "/x.ovpn" };
+    openConnectionInRoot({ label: "VPN", login, dedupeKey: "vpn:/x.ovpn" });
+    openConnectionInRoot({ label: "VPN", login, dedupeKey: "vpn:/x.ovpn" });
 
     await vi.waitFor(() => expect(useRootOverlayStore.getState().open).toBe(true));
     expect(rootTabs().map((tab) => tab.label)).toEqual(["VPN"]);

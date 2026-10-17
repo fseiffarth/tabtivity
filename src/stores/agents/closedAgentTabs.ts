@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { reseedDetached } from "../detached";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
-  RESUMABLE_AGENTS,
   allGroups,
   findGroup,
   findGroupOfTab,
@@ -142,7 +142,7 @@ export function noteClosedPopoutTabs(scope: string, detachedGroupId: string, key
 }
 
 /** The args a restore would respawn this tab with (see `loadFromLayout`). */
-function resumeArgsOf(tab: TabEntry): string[] {
+export function resumeArgsOf(tab: TabEntry): string[] {
   if (isResumableAgentTab(tab) && tab.sessionId) {
     return tab.cmd in RESUMABLE_AGENTS ? RESUMABLE_AGENTS[tab.cmd](tab.sessionId) : [...(tab.resumeArgs ?? [])];
   }

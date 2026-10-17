@@ -1,5 +1,5 @@
 //! The **Undo** behind a PDF markup round that applied the marks directly
-//! (`docs/pdf_markup_direct_apply_plan.md` §2.2).
+//! (`docs/done/pdf_markup_direct_apply_plan.md` §2.2).
 //!
 //! A Submit in `apply` mode first takes a snapshot of the project's git work
 //! tree ([`begin`]); once the agent's turn has finished the round is settled

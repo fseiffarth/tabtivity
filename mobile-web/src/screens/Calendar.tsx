@@ -1,30 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, reloadIfApplied, wasApplied, type CalendarAction, type MobileCalendar, type MobileCalendarEvent, type MobileCalendarEventInput, type MobileCalendarInfo } from "../api";
-import { OptionSheet } from "../components/OptionSheet";
+import { ConfirmSheet, type Confirm } from "../components/ConfirmSheet";
 import { describeFailure } from "../connection";
 import { NotificationsSheet } from "../components/NotificationsSheet";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
-
-/** A destructive act waiting on a second tap: the shared option sheet, with
- * one option, in place of `window.confirm` — the same sheet the composer's
- * choices and the calendar's edits use, so a delete looks like the rest of
- * the phone and cannot be reached by a stray tap. */
-type Confirm = { title: string; note: string; label: string; run: () => Promise<void> };
-
-function ConfirmSheet({ confirm, busy, onClose }: { confirm: Confirm; busy: boolean; onClose: () => void }) {
-  return <OptionSheet
-    title={confirm.title}
-    note={{ text: confirm.note }}
-    options={[{ key: "confirm", label: confirm.label, current: false }]}
-    waiting=""
-    busy={busy}
-    onPick={() => { void confirm.run().finally(onClose); }}
-    onClose={onClose}
-  />;
-}
 
 const NAMES: TranslationKey[] = ["agentSchedule.sun", "agentSchedule.mon", "agentSchedule.tue", "agentSchedule.wed", "agentSchedule.thu", "agentSchedule.fri", "agentSchedule.sat"];
 const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };
@@ -33,12 +15,32 @@ const dayId = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padSta
 const addDays = (date: string, amount: number) => { const [y, m, d] = date.split("-").map(Number); return dayId(new Date(y, m - 1, d + amount, 12)); };
 const addMonths = (month: string, amount: number) => { const [y, m] = month.split("-").map(Number); const d = new Date(y, m - 1 + amount, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 const grid = (month: string, weekStart: 0 | 1) => { const [y, m] = month.split("-").map(Number); const first = new Date(y, m - 1, 1, 12); const start = addDays(`${month}-01`, -((first.getDay() - weekStart + 7) % 7)); return Array.from({ length: 42 }, (_, i) => addDays(start, i)); };
+/** The 7 dates of the week holding `date`, starting on `weekStart`. */
+export const startOfWeekDate = (date: string, weekStart: 0 | 1) => addDays(date, -((new Date(`${date}T12:00`).getDay() - weekStart + 7) % 7));
+export const weekDates = (date: string, weekStart: 0 | 1) => { const start = startOfWeekDate(date, weekStart); return Array.from({ length: 7 }, (_, i) => addDays(start, i)); };
+/** The hour (0–23) a `YYYY-MM-DDTHH:MM` stamp starts in, or null for a bare date. */
+export const hourOf = (stamp: string) => { const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(stamp); return m ? Number(m[2]) : null; };
 const datePart = (stamp: string) => stamp.slice(0, 10);
 const eventEnd = (event: MobileCalendarEvent) => event.all_day || event.end.endsWith("T00:00") ? datePart(event.end) : addDays(datePart(event.end), 1);
 const happensOn = (event: MobileCalendarEvent, date: string) => date >= datePart(event.start) && date < eventEnd(event);
 const dateTitle = (date: string, lang: Language) => new Intl.DateTimeFormat(lang, { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date(`${date}T12:00`));
+/** A week strip's short range label (`28 Sept – 4 Oct`), with the year when it spans one. */
+export const weekTitle = (dates: string[], lang: Language) => {
+  const first = dates[0], last = dates[dates.length - 1];
+  if (!first || !last) return "";
+  const sameYear = first.slice(0, 4) === last.slice(0, 4);
+  const fmt = (date: string, withYear: boolean) => new Intl.DateTimeFormat(lang, { day: "numeric", month: "short", ...(withYear ? { year: "numeric" } : {}) }).format(new Date(`${date}T12:00`));
+  return `${fmt(first, !sameYear)} – ${fmt(last, true)}`;
+};
+/** A week agenda's per-day heading (`Mon 28 Sept`), shorter than the full `dateTitle`. */
+export const dayGroupTitle = (date: string, lang: Language) => new Intl.DateTimeFormat(lang, { weekday: "short", day: "numeric", month: "short" }).format(new Date(`${date}T12:00`));
+
+type CalendarView = "day" | "week" | "month";
+const VIEWS: CalendarView[] = ["day", "week", "month"];
 
 const blankEvent = (date: string, calendars: MobileCalendarInfo[]): MobileCalendarEventInput => ({ calendar_id: calendars.find((c) => !c.readonly)?.id ?? "", start: `${date}T09:00`, end: `${date}T10:00`, all_day: false, title: "", location: "", notes: "", conference: "", category: "", status: "confirmed" });
+/** A new event starting at `hour` on `date` — what tapping an empty hour of the day view drafts. */
+export const blankEventAt = (date: string, hour: number, calendars: MobileCalendarInfo[]): MobileCalendarEventInput => { const start = `${date}T${String(hour).padStart(2, "0")}:00`; return { ...blankEvent(date, calendars), start, end: defaultEnd(start) ?? start }; };
 const inputOf = (event: MobileCalendarEvent, calendarId: string): MobileCalendarEventInput => ({ calendar_id: calendarId, start: event.start, end: event.end, all_day: event.all_day, title: event.title, location: event.location ?? "", notes: event.notes ?? "", conference: event.conference ?? "", category: event.category ?? "", status: event.status ?? "confirmed" });
 
 /** The desktop stores an all-day end as the day *after* the last day (iCal's
@@ -57,32 +59,89 @@ export function Calendar() {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
   const [month, setMonth] = useState(monthOf); const [selected, setSelected] = useState(today);
+  const [view, setView] = useState<CalendarView>("month");
   const [data, setData] = useState<MobileCalendar | null>(null); const [editing, setEditing] = useState<Editing>(null);
   const [manage, setManage] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [reminders, setReminders] = useState(false);
   const load = useCallback(async () => { setBusy(true); setError(""); try { const { calendar } = await api<{ calendar: MobileCalendar }>(`/api/v1/calendar?month=${month}`); setData(calendar); setSelected((d) => d.startsWith(month) ? d : `${month}-01`); } catch (e) { setError(describeFailure(e)); } finally { setBusy(false); } }, [month]);
   useEffect(() => { void load(); }, [load]);
+  // Day and week stepping can walk the selection out of the fetched month (the
+  // fetched six-week window always covers the selected day's own month, so
+  // following the selection keeps every visible day covered).
+  useEffect(() => { if (view !== "month" && monthOf(selected) !== month) setMonth(monthOf(selected)); }, [view, selected, month]);
   const mutate = async (action: CalendarAction) => { setBusy(true); setError(""); try { const { calendar } = await reloadIfApplied(api<{ calendar: MobileCalendar }>(`/api/v1/calendar?month=${month}`, { method: "POST", body: JSON.stringify(action) }), () => api<{ calendar: MobileCalendar }>(`/api/v1/calendar?month=${month}`)); setData(calendar); return true; } catch (e) { setError(describeFailure(e)); /* Made on the desktop, only not shown: done, as far as the editor goes. */ return wasApplied(e); } finally { setBusy(false); } };
   const weekStart = data?.week_start ?? 1; const days = useMemo(() => grid(month, weekStart), [month, weekStart]);
+  const week = useMemo(() => weekDates(selected, weekStart), [selected, weekStart]);
   const events = useCallback((date: string) => (data?.events ?? []).filter((event) => happensOn(event, date)), [data]);
-  const selectedEvents = useMemo(() => events(selected).sort((a, b) => Number(b.all_day) - Number(a.all_day) || a.start.localeCompare(b.start)), [events, selected]);
-  const label = useMemo(() => new Intl.DateTimeFormat(lang, { month: "long", year: "numeric" }).format(new Date(`${month}-01T12:00`)), [month, lang]);
+  const sortEvents = (rows: MobileCalendarEvent[]) => [...rows].sort((a, b) => Number(b.all_day) - Number(a.all_day) || a.start.localeCompare(b.start));
+  const selectedEvents = useMemo(() => sortEvents(events(selected)), [events, selected]);
+  const monthLabel = useMemo(() => new Intl.DateTimeFormat(lang, { month: "long", year: "numeric" }).format(new Date(`${month}-01T12:00`)), [month, lang]);
+  const navLabel = view === "day" ? dateTitle(selected, lang) : view === "week" ? weekTitle(week, lang) : monthLabel;
+  const step = (dir: -1 | 1) => {
+    if (view === "day") setSelected((d) => addDays(d, dir));
+    else if (view === "week") setSelected((d) => addDays(d, 7 * dir));
+    else setMonth((m) => addMonths(m, dir));
+  };
+  const goToday = () => { const d = today(); setSelected(d); setMonth(monthOf(d)); };
   const open = (event: MobileCalendarEvent) => { if (event.calendar_id) setEditing({ event, draft: inputOf(event, event.calendar_id) }); };
+  const createAt = (date: string, hour?: number) => setEditing({ draft: hour === undefined ? blankEvent(date, data?.calendars ?? []) : blankEventAt(date, hour, data?.calendars ?? []) });
+  const canWrite = !!data?.calendars.some((c) => !c.readonly);
   return <main className="screen mobile-calendar-screen">
     <header><h1>{t("mobile.calendar.title")}</h1><button onClick={() => void load()} disabled={busy}>↻</button></header>
-    <div className="mobile-calendar-actions"><button className="primary" disabled={busy || !data?.calendars.some((c) => !c.readonly)} onClick={() => setEditing({ draft: blankEvent(selected, data?.calendars ?? []) })}>{t("mobile.calendar.addEvent")}</button><button disabled={busy} onClick={() => setManage(true)}>{t("calendarSidebar.calendarsTitle")}</button><button onClick={() => setReminders(true)}>{t("mobile.push.reminders")}{isUntested("mobile.calendar.push") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</button></div>
+    <div className="mobile-calendar-actions"><button className="primary" disabled={busy || !canWrite} onClick={() => createAt(selected)}>{t("mobile.calendar.addEvent")}</button><button disabled={busy} onClick={() => setManage(true)}>{t("calendarSidebar.calendarsTitle")}</button><button onClick={() => setReminders(true)}>{t("mobile.push.reminders")}{isUntested("mobile.calendar.push") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</button></div>
     {error && <p className="error">{error}</p>}
     {data?.desktop_available === false && <p className="notice">{t("mobile.headless.owner")} {isUntested("mobile.headless.calendar") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
-    <div className="mobile-calendar-nav"><button onClick={() => setMonth((m) => addMonths(m, -1))} disabled={busy}>‹</button><strong>{label}</strong><button onClick={() => setMonth((m) => addMonths(m, 1))} disabled={busy}>›</button></div>
-    <section className="mobile-calendar-grid" aria-label={label}>{Array.from({ length: 7 }, (_, i) => <span className="mobile-calendar-weekday" key={NAMES[(i + weekStart) % 7]}>{t(NAMES[(i + weekStart) % 7])}</span>)}{days.map((date) => { const rows = events(date); return <button className={`mobile-calendar-day${date.startsWith(month) ? "" : " outside"}${date === selected ? " selected" : ""}${date === today() ? " today" : ""}`} key={date} onClick={() => setSelected(date)}><span>{Number(date.slice(-2))}</span><i className="mobile-calendar-dots">{rows.slice(0, 3).map((event, i) => <b key={`${event.id}-${i}`} style={{ backgroundColor: event.color }} />)}</i></button>; })}</section>
-    {data?.truncated && <p className="mobile-calendar-warning">{t("mobile.calendar.truncated")}</p>}
-    <section className="mobile-calendar-agenda"><h2>{dateTitle(selected, lang)}</h2>{selectedEvents.length ? selectedEvents.map((event) => <button className={`mobile-calendar-event${event.status === "cancelled" ? " cancelled" : ""}`} key={`${event.id}-${event.occurrence_start}`} onClick={() => open(event)}><i style={{ backgroundColor: event.color }} /><div><small>{event.all_day ? t("calendar.allDay") : event.start.slice(11, 16)}{event.recurring ? ` · ${t("recurrence.repeats")}` : ""}</small><strong>{event.title || t("mobile.calendar.untitled")}</strong>{event.location && <span>{event.location}</span>}</div></button>) : <p>{t("mobile.calendar.noEvents")}</p>}</section>
+    <div className="mobile-calendar-actions" role="group" aria-label={t("mobile.calendar.title")}>{VIEWS.map((v) => <button key={v} className={view === v ? "primary" : undefined} aria-pressed={view === v} disabled={busy} onClick={() => setView(v)}>{t(`mobile.calendar.${v}` as "mobile.calendar.day")}</button>)}<button disabled={busy} onClick={goToday}>{t("mobile.calendar.today")}</button>{isUntested("mobile.calendar.views") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>
+    <div className="mobile-calendar-nav"><button onClick={() => step(-1)} disabled={busy}>‹</button><strong>{navLabel}</strong><button onClick={() => step(1)} disabled={busy}>›</button></div>
+    {view === "month" && <>
+      <section className="mobile-calendar-grid" aria-label={monthLabel}>{Array.from({ length: 7 }, (_, i) => <span className="mobile-calendar-weekday" key={NAMES[(i + weekStart) % 7]}>{t(NAMES[(i + weekStart) % 7])}</span>)}{days.map((date) => { const rows = events(date); return <button className={`mobile-calendar-day${date.startsWith(month) ? "" : " outside"}${date === selected ? " selected" : ""}${date === today() ? " today" : ""}`} key={date} onClick={() => setSelected(date)}><span>{Number(date.slice(-2))}</span><i className="mobile-calendar-dots">{rows.slice(0, 3).map((event, i) => <b key={`${event.id}-${i}`} style={{ backgroundColor: event.color }} />)}</i></button>; })}</section>
+      {data?.truncated && <p className="mobile-calendar-warning">{t("mobile.calendar.truncated")}</p>}
+      <section className="mobile-calendar-agenda"><h2>{dateTitle(selected, lang)}</h2>{selectedEvents.length ? selectedEvents.map((event) => <EventCard key={`${event.id}-${event.occurrence_start}`} event={event} open={open} />) : <p>{t("mobile.calendar.noEvents")}</p>}</section>
+    </>}
+    {view === "week" && <WeekView week={week} selected={selected} weekStart={weekStart} events={events} sortEvents={sortEvents} open={open} truncated={!!data?.truncated} onPick={(date) => { setSelected(date); setView("day"); }} />}
+    {view === "day" && <DayView date={selected} dayEvents={selectedEvents} open={open} truncated={!!data?.truncated} canWrite={canWrite} onCreateAt={(hour) => createAt(selected, hour)} />}
     {editing && <EventEditor editing={editing} calendars={data?.calendars ?? []} busy={busy} close={() => setEditing(null)} save={async (event) => { const eventId = editing.event?.id; const ok = await mutate(eventId ? { type: "update_event", event_id: eventId, event } : { type: "create_event", event }); if (ok) setEditing(null); }} remove={editing.event ? () => { const eventId = editing.event?.id; if (!eventId) return; setConfirm({ title: t("mobile.calendar.deleteNamed", { name: editing.event?.title || t("mobile.calendar.untitled") }), note: t(editing.event?.recurring ? "mobile.calendar.deleteSeries" : "mobile.calendar.deleteFromDesktop"), label: t("mobile.calendar.deleteEvent"), run: async () => { if (await mutate({ type: "delete_event", event_id: eventId })) setEditing(null); } }); } : undefined} />}
     {manage && <CalendarManager calendars={data?.calendars ?? []} busy={busy} mutate={mutate} confirm={setConfirm} close={() => setManage(false)} />}
     {confirm && <ConfirmSheet confirm={confirm} busy={busy} onClose={() => setConfirm(null)} />}
     {reminders && <NotificationsSheet onClose={() => setReminders(false)} />}
   </main>;
+}
+
+/** One event row, shared by the month agenda and the day and week views: the
+ * colour bar, the time span (or the all-day label) with the repeat mark, the
+ * title and the location. */
+function EventCard({ event, open }: { event: MobileCalendarEvent; open: (event: MobileCalendarEvent) => void }) {
+  const t = useT();
+  const time = event.all_day ? t("calendar.allDay") : `${event.start.slice(11, 16)}–${event.end.slice(11, 16)}${event.recurring ? ` · ${t("recurrence.repeats")}` : ""}`;
+  return <button className={`mobile-calendar-event${event.status === "cancelled" ? " cancelled" : ""}`} onClick={() => open(event)}><i style={{ backgroundColor: event.color }} /><div><small>{time}</small><strong>{event.title || t("mobile.calendar.untitled")}</strong>{event.location && <span>{event.location}</span>}</div></button>;
+}
+
+/** The week view: a tappable seven-day strip (a tap drills into that day) over
+ * a per-day agenda of the days that hold something. */
+function WeekView({ week, selected, weekStart, events, sortEvents, open, truncated, onPick }: { week: string[]; selected: string; weekStart: 0 | 1; events: (date: string) => MobileCalendarEvent[]; sortEvents: (rows: MobileCalendarEvent[]) => MobileCalendarEvent[]; open: (event: MobileCalendarEvent) => void; truncated: boolean; onPick: (date: string) => void }) {
+  const t = useT();
+  const lang = useI18nStore((state) => state.lang);
+  const groups = week.map((date) => ({ date, rows: sortEvents(events(date)) }));
+  return <>
+    <section className="mobile-calendar-weekstrip" aria-label={weekTitle(week, lang)}>{Array.from({ length: 7 }, (_, i) => <span className="mobile-calendar-weekday" key={NAMES[(i + weekStart) % 7]}>{t(NAMES[(i + weekStart) % 7])}</span>)}{groups.map(({ date, rows }) => <button className={`mobile-calendar-day${date === selected ? " selected" : ""}${date === today() ? " today" : ""}`} key={date} onClick={() => onPick(date)} aria-label={dateTitle(date, lang)}><span>{Number(date.slice(-2))}</span><i className="mobile-calendar-dots">{rows.slice(0, 3).map((event, i) => <b key={`${event.id}-${i}`} style={{ backgroundColor: event.color }} />)}</i></button>)}</section>
+    {truncated && <p className="mobile-calendar-warning">{t("mobile.calendar.truncated")}</p>}
+    <section className="mobile-calendar-agenda">{groups.every((g) => !g.rows.length) ? <p>{t("mobile.calendar.noEvents")}</p> : groups.filter((g) => g.rows.length).map(({ date, rows }) => <div className="mobile-calendar-weekgroup" key={date}><h2>{dayGroupTitle(date, lang)}</h2>{rows.map((event) => <EventCard key={`${event.id}-${event.occurrence_start}`} event={event} open={open} />)}</div>)}</section>
+  </>;
+}
+
+/** The day view: the all-day rows on top, then one row per hour — an event
+ * sits in the hour it starts in, and an empty row's + drafts an event there. */
+function DayView({ date, dayEvents, open, truncated, canWrite, onCreateAt }: { date: string; dayEvents: MobileCalendarEvent[]; open: (event: MobileCalendarEvent) => void; truncated: boolean; canWrite: boolean; onCreateAt: (hour: number) => void }) {
+  const t = useT();
+  const lang = useI18nStore((state) => state.lang);
+  const allDay = dayEvents.filter((event) => event.all_day);
+  const timed = dayEvents.filter((event) => !event.all_day);
+  return <>
+    <section className="mobile-calendar-agenda" aria-label={dateTitle(date, lang)}>{allDay.map((event) => <EventCard key={`${event.id}-${event.occurrence_start}`} event={event} open={open} />)}</section>
+    {truncated && <p className="mobile-calendar-warning">{t("mobile.calendar.truncated")}</p>}
+    <section className="mobile-calendar-dayview">{Array.from({ length: 24 }, (_, hour) => { const rows = timed.filter((event) => hourOf(event.start) === hour || (hourOf(event.start) === null && hour === 0)); return <div className="mobile-calendar-hour" key={hour}><span className="mobile-calendar-hour-label">{`${String(hour).padStart(2, "0")}:00`}</span><div className="mobile-calendar-hour-lane">{rows.map((event) => <EventCard key={`${event.id}-${event.occurrence_start}`} event={event} open={open} />)}{!rows.length && canWrite && <button className="mobile-calendar-hour-add" aria-label={`${t("mobile.calendar.addEvent")} ${String(hour).padStart(2, "0")}:00`} onClick={() => onCreateAt(hour)}>＋</button>}</div></div>; })}{!dayEvents.length && <p className="mobile-calendar-empty">{t("mobile.calendar.noEvents")}</p>}</section>
+  </>;
 }
 
 function EventEditor({ editing, calendars, busy, close, save, remove }: { editing: Exclude<Editing, null>; calendars: MobileCalendarInfo[]; busy: boolean; close: () => void; save: (value: MobileCalendarEventInput) => Promise<void>; remove?: () => void }) {

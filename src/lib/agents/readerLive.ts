@@ -3,9 +3,11 @@ import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import {
+  answerRowKeys,
   freeTextRow,
   freeTextWrites,
   questionTabKeys,
+  readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
   selectKeys,
@@ -54,10 +56,15 @@ export interface ReaderLive {
    * context, mode) — the phone's facts row reads the same `sessionStatus`.
    * Null while the bottom of the screen is not the input frame. */
   status: SessionStatus | null;
+  /** The screen shows something none of the above reads: no dialog, no busy
+   * row and no input box at its bottom, yet it is not blank — a picker, an
+   * error or a screen of the CLI's own the chat cannot draw. The Reader
+   * points at the terminal once this lasts (`STRAY_MS`). */
+  stray: boolean;
 }
 
 export const NO_LIVE: ReaderLive = {
-  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null,
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false,
 };
 
 /** Rows read off the end of the buffer for the live reading. What it looks
@@ -75,11 +82,15 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
-  const screen = lines.slice(0, inputFrameStart(lines, agentLabel));
+  const frameStart = inputFrameStart(lines, agentLabel);
+  const screen = lines.slice(0, frameStart);
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
-  const tail = screen.slice(start);
-  const question = tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null;
+  // Codex's hooks page replaces the input box, whose `›` its highlighted row
+  // reads as: it is read off the whole screen.
+  const hooksPage = readCodexHooksPage(lines, agentLabel);
+  const tail = hooksPage ? lines : screen.slice(start);
+  const question = hooksPage ?? (tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null);
   if (question) {
     const parts = questionParts(tail, question);
     const ask = parts.ask.map((line) => line.text.trimEnd());
@@ -100,9 +111,14 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
         : selectSignature(question),
       working: null,
       status,
+      stray: false,
     };
   }
-  return { ...NO_LIVE, working: agentWork(lines), status };
+  const working = agentWork(lines);
+  // `inputFrameStart` answers the screen's length when it finds no input box
+  // (or the box-like row is a dialog's highlighted option).
+  const stray = !working && frameStart >= lines.length && lines.some((line) => line.text.trim() !== "");
+  return { ...NO_LIVE, working, status, stray };
 }
 
 function tabsKey(tabs: readonly QuestionTab[]): string {
@@ -122,6 +138,7 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.working?.elapsed === b.working?.elapsed
     && a.working?.tokens === b.working?.tokens
     && a.working?.effort === b.working?.effort
+    && a.stray === b.stray
     && sameStatus(a.status, b.status);
 }
 
@@ -149,7 +166,8 @@ export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentL
 }
 
 /** The keystrokes that answer `question` with `option`: arrows from the
- * highlighted row, then Enter — what the phone sends for a tapped row.
+ * highlighted row, then Enter — or the row's own keys (`answerRowKeys`) —
+ * what the phone sends for a tapped row.
  *
  * None for Claude Code's free-text row (`freeTextRow`): Enter on its empty
  * field does not pick it, it turns the whole question down ("User declined to
@@ -157,7 +175,7 @@ export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentL
  * (`answerTextKeys`). */
 export function answerKeys(question: SelectPrompt, option: SelectOption): string[] {
   if (freeTextRow(option)) return [];
-  return selectKeys(question.current, option.index);
+  return answerRowKeys(question, option);
 }
 
 /** The keystrokes that answer `question`'s free-text row with `text` — the

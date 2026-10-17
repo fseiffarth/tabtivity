@@ -6,6 +6,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
@@ -15,6 +16,7 @@ import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
 import { SentFilesIndex, sentFiles, type SentFile } from "../components/SentFilesIndex";
+import { useScopeKind } from "../scopeKind";
 import { ComposerThumb, InboxAlbum, leafName } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -81,10 +83,12 @@ import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { sessionLimits } from "../terminal/sessionUsage";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import {
+  answerRowKeys,
   freeTextRow,
   freeTextWrites,
   mergeSelectRows,
   questionTabKeys,
+  readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
   dialogFooterShown,
@@ -101,6 +105,7 @@ import {
 import { NO_QUESTION_PARTS, questionParts, type QuestionParts } from "../terminal/questionParts";
 import {
   isOpenCodeTab,
+  openCodeDialogCloseKeys,
   openCodePickKeys,
   readOpenCodePicker,
   OPENCODE_MODEL_KEYS,
@@ -297,6 +302,11 @@ const NEWEST_SLACK = 4;
  * opens. Past it the sheet steps aside: the dialog — or the reason there is
  * none — is in the session output, and the arrow keys still answer it. */
 const MODEL_PICKER_WAIT = 6_000;
+/** How long the dialog an answer brought up takes no tap: a CLI asks its next
+ * question at once and in the same place (Codex's "Hooks need review" under
+ * its folder question), and a second tap meant for the answered row took the
+ * new dialog's row unseen. */
+const NEXT_DIALOG_HOLD = 600;
 /** How long after asking a CLI for its sign-in link (`askForLink`) its
  * clipboard copy is taken as the answer. */
 const LINK_WAIT_MS = 5_000;
@@ -718,6 +728,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
   const stepClass = (answered: boolean, index: number) =>
     [answered && "answered", index === tabFocus && "current"].filter(Boolean).join(" ") || undefined;
   return <>
+    {prompt.source === "opencode" && isUntested("agents.opencode.questions") && <em>{t("mobile.focus.untested")}</em>}
     {tabs.length > 0 && !stepped && <div className="question-tabs">
       {tabs.map((tab, index) => <span key={index} className={tab.answered ? "answered" : undefined}>{tab.answered && "✓ "}{tab.label}</span>)}
     </div>}
@@ -753,6 +764,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
       onType={(row, text) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onType(option, text); }}
       typeNote={isUntested("mobile.question.freeText") && <em>{t("mobile.focus.untested")}</em>}
     />
+    {prompt.options.some((option) => option.keys) && isUntested("mobile.question.codexHooksPage") && <em>{t("mobile.focus.untested")}</em>}
   </>;
 }
 
@@ -802,7 +814,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
  * model picker already up — once, as soon as the session has drawn.
  * `subagent`: one was picked off the tab card's subagent list, so the session
  * opens in Focus on that subagent's own conversation. */
-export function Terminal({ tab, project, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab }: {
+export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
@@ -822,6 +834,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   // retry, its other way in and the Done that closes the tab.
   const signInTab = openedToSignIn || tab.sign_in === true;
   const t = useT();
+  /** A chat of the assistant scope: it has no folder behind it, so the
+   * affordances that reach one are gone — the files drawer, the outbox, inbox
+   * uploads (the composer's **+**), Commit and Mark up. */
+  const bare = useScopeKind(projectOfTab) === "assistant";
+  const project = bare ? undefined : projectOfTab;
   const host = useRef<HTMLDivElement>(null);
   const wideHint = useRef<HTMLDivElement>(null);
   const readableHost = useRef<HTMLElement>(null);
@@ -857,6 +874,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** The bottom rows of the attached screen as drawn: Claude's agent list
    * is walked by them (`subagentInput`). */
   const screenRows = useRef<() => string[]>(() => []);
+  /** The attached screen's rows, the viewport only: whether OpenCode has a
+   * dialog up over its composer (`openCodeDialogCloseKeys`). */
+  const viewportRows = useRef<() => string[]>(() => []);
   const [viewportHeight, setViewportHeight] = useState<number>();
   const [connected, setConnected] = useState(false);
   const [stoppedReason, setStoppedReason] = useState("");
@@ -1083,6 +1103,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const [addSheet, setAddSheet] = useState(false);
   /** The Commit chip's sheet: commit everything, or split it up. */
   const [commitSheet, setCommitSheet] = useState(false);
+  // The key row's Interrupt asks first, in the phone's own sheet.
+  const [interruptSheet, setInterruptSheet] = useState(false);
   /** The "From the desktop" list: `null` while the desktop is being asked. */
   const [desktopSheet, setDesktopSheet] = useState(false);
   const [desktopImages, setDesktopImages] = useState<DesktopImage[] | null>(null);
@@ -1412,6 +1434,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     });
     bracketedPaste.current = () => term.modes.bracketedPasteMode === true;
     screenRows.current = () => bufferRows(term.buffer.active);
+    viewportRows.current = () => bufferRows(term.buffer.active, term.rows);
     // The history log needs to know when xterm trims scrollback (row indices
     // shift), and xterm has no public event for it — so this rides the internal
     // buffer list's own trim emitter (`scrollbackTrimEvent`), guarded: when a
@@ -1971,6 +1994,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       write.current = () => false;
       bracketedPaste.current = () => false;
       screenRows.current = () => [];
+      viewportRows.current = () => [];
       clearTimeout(reconnectTimer);
       clearTimeout(ackTimer);
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "detached" }));
@@ -2073,7 +2097,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** What this chat changed and has not committed: the Commit chip's count
    * and its sheet's list, read again each time the sheet opens. */
   const [commitRefresh, setCommitRefresh] = useState(0);
-  const uncommitted = useChatUncommitted(tab.id, tab.kind === "agent", transcript?.version, commitRefresh);
+  const uncommitted = useChatUncommitted(tab.id, tab.kind === "agent" && !bare, transcript?.version, commitRefresh);
   const uncommittedCount = uncommitted?.available ? uncommitted.total : 0;
   /** Reads the stored session: on open, every TRANSCRIPT_POLL while the page
    * is visible, and TRANSCRIPT_SETTLE after the screen last changed. A read
@@ -2341,6 +2365,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     setGallery(false);
     setOutboxOpen(null);
     setInboxOpen(null);
+    if (bare) return;
     let stopped = false;
     let inflight: AbortController | undefined;
     const poll = () => {
@@ -2365,7 +2390,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [tab.id]);
+  }, [tab.id, bare]);
   /** Reads the usage panel now and every `LIMITS_POLL` while the page is
    * visible. A CLI with no usage readout stops the polling; a failed read keeps
    * what was shown — the next poll retries. */
@@ -2540,7 +2565,13 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * composer's Send and the composer chips' slash commands. */
   const sendAgentText = (text: string, prompt?: number) => {
     const bracketed = bracketsAgentMessage(tab.agent_label ?? tab.label, bracketedPaste.current());
-    const message = { writes: agentInputWrites(text, bracketed), prompt, settles: SLASH_COMMAND.test(text) };
+    const typed = agentInputWrites(text, bracketed);
+    // A dialog OpenCode has up over its composer would take the message
+    // instead of the agent: closed first (`openCodeDialogCloseKeys`).
+    const writes = typed.length > 0 && isOpenCodeTab(tab.agent_label ?? tab.label)
+      ? [...openCodeDialogCloseKeys(viewportRows.current()), ...typed]
+      : typed;
+    const message = { writes, prompt, settles: SLASH_COMMAND.test(text) };
     // Behind a command still settling, and behind anything already waiting on
     // one, a message queues; the writes it reports as sent go once it drains.
     if (message.writes.length > 0 && (settleQueue.current.length > 0 || !commandSettled())) {
@@ -2673,7 +2704,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       return true;
     }
     const id = slash ? undefined : ++pendingId.current;
-    if (id !== undefined && agentAtWork && !interrupt) {
+    // A chat of the assistant scope has no held-prompt binding: its words go straight to the CLI.
+    if (id !== undefined && agentAtWork && !interrupt && !bare) {
       holdDraft(id, text, fromComposer);
       return true;
     }
@@ -2760,7 +2792,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** The markup view's Submit: the desktop's prompt goes out like a typed
    * one — into the agent's queue while it works (a markup prompt is never a
    * slash command, so `submitDraft` holds it exactly then). The viewer stays
-   * open for the next round (`docs/pdf_markup_rounds_plan.md` §2.5). */
+   * open for the next round (`docs/done/pdf_markup_rounds_plan.md` §2.5). */
   const sendMarkup = useCallback((text: string): MarkupSend => {
     const queued = agentAtWorkRef.current;
     if (!submitDraftRef.current(text, false)) return false;
@@ -3176,10 +3208,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       return () => window.clearTimeout(next);
     }
     // Never drawn: the session may have no `/model` picker at all. Step out of
-    // the way rather than hold an empty sheet over its output.
-    const timer = window.setTimeout(() => setModelSheet(false), MODEL_PICKER_WAIT);
+    // the way rather than hold an empty sheet over its output. OpenCode's was
+    // opened by the chip's own keys, and one this could not read is still up
+    // in the session, where the next message would land in it: closed there.
+    const timer = window.setTimeout(() => {
+      if (openCode) openCodeDialogCloseKeys(viewportRows.current()).forEach((key) => write.current(key));
+      setModelSheet(false);
+    }, MODEL_PICKER_WAIT);
     return () => window.clearTimeout(timer);
-  }, [modelSheet, picker, pickerStep, answered]);
+  }, [modelSheet, picker, pickerStep, answered, openCode]);
   /** A windowed picker says how many rows it is not drawing: the highlight is
    * walked to each one it hides, which scrolls it into view, and back. Only
    * arrow keys — nothing is accepted — and only while nothing was tapped. */
@@ -3373,6 +3410,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     // The dialog is the session's own and still open: close it there too,
     // rather than leaving a modal behind that the reader can no longer see.
     if (picker) type("\u001b");
+    else if (openCode) openCodeDialogCloseKeys(viewportRows.current()).forEach((key) => type(key));
     setModelSheet(false);
     setAnswered(null);
     setReveal(null);
@@ -3615,6 +3653,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * choice the session is waiting on, which the transcript cannot carry. */
   const liveTail = useMemo(() => {
     if (!sessionShown) return [];
+    // Codex's hooks page replaces the input box, whose `›` its highlighted
+    // row reads as: it is read off the whole screen.
+    if (readCodexHooksPage(liveScreen, agentLabel)) return liveScreen;
     // On the alternate screen that tail is the frame itself, cut at its input
     // box the way `painted` cuts the scrollback's: a fullscreen agent draws its
     // session there, so a question of its own reaches the phone in no other
@@ -3630,7 +3671,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * itself — its rows, and where on the tail they start — not just that there
    * is one. */
   const liveQuestion = useMemo(
-    () => (liveTail.length > 0 ? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel) : null),
+    () => (liveTail.length > 0
+      ? readCodexHooksPage(liveTail, agentLabel) ?? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel)
+      : null),
     [liveTail, agentLabel],
   );
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
@@ -3657,15 +3700,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** An agent tab's viewers offer **Mark up**; a shell has no chat to send to.
    * The agent's state is in the deps, so the viewers re-render on its edges. */
   const markupTarget = useMemo<MarkupTarget | undefined>(
-    () => (tab.kind === "agent"
+    () => (tab.kind === "agent" && !bare
       ? { tabId: tab.id, projectId: project ?? `tab:${tab.id}`, onSend: sendMarkup, agent: markupAgent, refresh: refreshOutboxFile }
       : undefined),
-    [tab.kind, tab.id, project, sendMarkup, markupAgent, refreshOutboxFile],
+    [tab.kind, tab.id, bare, project, sendMarkup, markupAgent, refreshOutboxFile],
   );
   /** The agent's open markup question (`markup_ask`), for the banner over the
    * composer: read on the markup views' own poll, only while the Focus chat
    * is on screen (no viewer over it) and on each agent edge. */
-  const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" ? tab.id : undefined, undefined,
+  const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" && !bare ? tab.id : undefined, undefined,
     view === "focus" && !outboxOpen && !inboxOpen && !filesOpen && !gallery && !askedFile, markupAgent);
   const markupAsk = markupAsks.find((ask) => ask.questions.length > 0);
   /** The file it is about, if this tab's outbox has it — the newest copy. */
@@ -3717,11 +3760,21 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * its rows stay listed, but nothing can be tapped twice. */
   const [questionSent, setQuestionSent] = useState<{ signature: string; number: number } | null>(null);
   const sentSignature = questionSent?.signature ?? "";
+  /** The dialog drawn in place of an answered one, while it is held
+   * (`NEXT_DIALOG_HOLD`). */
+  const [heldQuestion, setHeldQuestion] = useState("");
+  useEffect(() => {
+    if (!heldQuestion) return;
+    const timer = window.setTimeout(() => setHeldQuestion(""), NEXT_DIALOG_HOLD);
+    return () => window.clearTimeout(timer);
+  }, [heldQuestion]);
+  const questionHeld = !!questionSent || (!!heldQuestion && heldQuestion === questionSignature);
   useEffect(() => {
     if (!sentSignature) return;
     // Redrawn as something else — answered, or moved on: the list is live again.
     if (questionSignature !== sentSignature) {
       setQuestionSent(null);
+      if (questionSignature) setHeldQuestion(questionSignature);
       return;
     }
     // Still the same question after the keys had time to land: the answer did
@@ -3733,9 +3786,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * and Enter the on-screen key row sends, so a tapped row lands exactly as a
    * walked one. Nothing here decides what the options are. */
   const answerQuestion = (option: SelectOption) => {
-    if (!liveQuestion || questionSent) return;
+    if (!liveQuestion || questionHeld) return;
     clearPending();
-    if (!deliver(selectKeys(liveQuestion.current, option.index))) return;
+    if (!deliver(answerRowKeys(liveQuestion, option))) return;
     setQuestionSent({ signature: questionSignature, number: option.number });
   };
   /** Walks a several-question dialog — Claude Code's ←/→, Codex's
@@ -3743,7 +3796,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * sent. No row is pending, but none can be tapped until the session redraws. */
   const stepQuestion = (from: number, to: number) => {
     const keys = questionTabKeys(from, to, questionStepKeys);
-    if (!liveQuestion || questionSent || keys.length === 0) return;
+    if (!liveQuestion || questionHeld || keys.length === 0) return;
     clearPending();
     if (!deliver(keys)) return;
     setQuestionSent({ signature: questionSignature, number: -1 });
@@ -3752,7 +3805,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * under it: the highlight walked there, the words, and Enter where Enter
    * sends them (`freeTextWrites`). */
   const answerQuestionText = (option: SelectOption, text: string) => {
-    if (!liveQuestion || questionSent) return;
+    if (!liveQuestion || questionHeld) return;
     const writes = freeTextWrites(liveQuestion.current, option, text);
     if (writes.length === 0) return;
     clearPending();
@@ -4108,7 +4161,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           setFocusSource("session");
           setFocusMenu(false);
         }}>
-          <span><strong>{t("mobile.focus.session")} {isUntested("mobile.focus.session") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
+          <span><strong>{t("mobile.focus.session")} {(isUntested("mobile.focus.session") || ((antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession"))) && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
           {sessionShown && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
         </button>
         <button role="menuitemradio" aria-checked={!sessionShown} onClick={() => {
@@ -4398,10 +4451,12 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>
+            {!bare && <>
             <input ref={fileInput} type="file" accept={ANY_FILE_ACCEPT} multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-file-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-camera-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <button className={`composer-add${addSheet ? " open" : ""}`} disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            </>}
             {/* Folds the key row below in and out; it starts folded. */}
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
@@ -4419,7 +4474,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
               : <button className="composer-prefix" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}>{t("mobile.composer.clearChip")}</button>}
             {((undoable && isUntested("mobile.composer.undoClear")) || (undoing && isUntested("mobile.composer.undoing"))) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
             {/* Commit opens its sheet: one commit, or split into several. */}
-            <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>
+{!bare &&             <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>}
             </div>
           </>}
           {tab.kind !== "agent" && <>
@@ -4437,7 +4492,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       </div>
       {keysShown && <div className="keys" id="terminal-keys">
       {isUntested("mobile.composer.keysToggle") && <em className="composer-untested keys-untested">{t("mobile.focus.untested")}</em>}
-      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => window.confirm(t("mobile.keys.interruptConfirm")) && type("\u0003")}>{t("mobile.keys.interrupt")}</button>
+      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => setInterruptSheet(true)}>{t("mobile.keys.interrupt")}</button>
       </div>}
     </div>
     {/* Lifted over a markup view, whose model chip opens it too. */}
@@ -4470,6 +4525,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       tiles={attachTiles}
       onPick={pickAdd}
       onClose={() => setAddSheet(false)}
+    />}
+    {interruptSheet && <ConfirmSheet
+      confirm={{ title: t("mobile.keys.interrupt"), note: t("mobile.keys.interruptConfirm"), label: t("mobile.keys.interrupt"), run: () => { type("\u0003"); } }}
+      busy={!connected}
+      onClose={() => setInterruptSheet(false)}
     />}
     {commitSheet && <OptionSheet
       title={t("mobile.commit.title")}

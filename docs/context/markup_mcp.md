@@ -6,12 +6,12 @@ about their PDF marks and tick off the ones it has handled. Three tools:
 `markup_ask` (1–4 questions, 2–6 options each, an optional `file`, and per
 question an optional `page` + `quote`), `markup_withdraw { id }` and
 `markup_done { file, round, marks: [{ page, mark }] }` (see **Ticks** below;
-plan `docs/markup_tick_approve_plan.md`). The questions show as a card in that tab's markup
+plan `docs/done/markup_tick_approve_plan.md`). The questions show as a card in that tab's markup
 view — the desktop's `PdfMarkupQuestions` under `PdfMarkupBar`, the phone's
 `MarkupQuestionsCard` in `MarkupView` — with a numbered pin at the quoted
 words. A tap answers. On by default (`Settings::markup_mcp`, absent = on;
 switch in Manage CLIs → Advanced). Plan and phase notes:
-`docs/markup_questions_mcp_plan.md`, `docs/markup_questions_mcp_handoff.md`.
+`docs/done/markup_questions_mcp_plan.md`, `docs/done/markup_questions_mcp_handoff.md`.
 
 How often the agent may ask is the reader's dial, not the instruction:
 `markup::ASK_LINES` words five stops (ask about every mark … never ask,

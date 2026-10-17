@@ -12,7 +12,7 @@ interface Props {
 }
 
 /**
- * The Skills Library tab (`docs/skills_plan.md`): a thin host, `ProjectFilesTab`'s
+ * The Skills Library tab (`docs/done/skills_plan.md`): a thin host, `ProjectFilesTab`'s
  * shape applied to a simpler view — it resolves the project from its own
  * `scope` (so it works identically in a popout, which has no store-resolved
  * `projectDir` to hand it) and renders `SkillsLibraryView`, which owns

@@ -5,6 +5,7 @@ import { currentMode, modeChoices, modeFixed } from "../../../mobile-web/src/ter
 import { agentWorking } from "../../../mobile-web/src/terminal/agentBusy";
 import {
   joinOpenCodeWraps,
+  openCodeDialogCloseKeys,
   openCodePickKeys,
   readOpenCodePicker,
 } from "../../../mobile-web/src/terminal/openCodeMini";
@@ -379,6 +380,34 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     expect(read?.options[6].description).toBeUndefined();
   });
 
+  it("reads the picker over a conversation the dimmed screen still shows", () => {
+    // In a session the full TUI dims rather than clears what is behind the
+    // overlay, so the title row carries the transcript's words to its left
+    // and the sidebar's to its right. Unread, the sheet gave up and left the
+    // picker up in the session, where the next message landed in it.
+    const read = readOpenCodePicker(lines(
+      "  The dialog card   Select model                         esc     Context",
+      "  is the right one",
+      "  so I'll add it.   Search",
+      "",
+      "  > Recent        ● Muse Spark 1.3 Free OpenCode Zen    Free     12.3K tokens",
+      "                    Big Pickle OpenCode Zen             Free",
+      "",
+      "                    Connect provider ctrl+a  Favorite ctrl+f",
+    ));
+    expect(read?.title).toBe("Select model");
+    expect(read?.options.map((option) => option.label))
+      .toEqual(["Muse Spark 1.3 Free OpenCode Zen", "Big Pickle OpenCode Zen"]);
+    // The dialog ends at its `esc`: the sidebar beyond it is not a column of the row.
+    expect(read?.options[0].description).toBe("Free");
+    // The transcript's `>` far left of the labels is not the highlight.
+    expect(read?.current).toBe(0);
+  });
+
+  it("is no picker for a conversation that only mentions one", () => {
+    expect(readOpenCodePicker(lines("  I opened   Select model to check", "", "  Search", "  Big Pickle"))).toBeNull();
+  });
+
   it("stops at the picker's key hints rather than listing them", () => {
     expect(readOpenCodePicker(fullPicker)?.options.some((option) => /ctrl\+/u.test(option.label)))
       .toBe(false);
@@ -393,5 +422,31 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     // A label the pane truncated is typed without its ellipsis: the picker
     // filters on a prefix, and the `…` itself matches nothing.
     expect(openCodePickKeys("Ling 3.0 Flash Fin…")).toEqual(["", "Ling 3.0 Flash Fin", "\r"]);
+  });
+});
+
+describe(`${BRAND.display} Mobile OpenCode dialogs over the composer`, () => {
+  it("closes any dialog it has up before a message goes in", () => {
+    // The model picker, and the provider list its Ctrl+A opens — the one the
+    // composer's own line reset reached when a "yes" was typed into the picker.
+    expect(openCodeDialogCloseKeys(["            Select model                         esc"])).toEqual(["\u001b"]);
+    expect(openCodeDialogCloseKeys([
+      "  The dialog card   Connect a provider                   esc     Context",
+      "                    Search",
+    ])).toEqual(["\u001b"]);
+    // Painted over the composer box, whose `┃` stands right of the `esc`.
+    expect(openCodeDialogCloseKeys(["  ┃         Rename session                   esc       ┃"])).toEqual(["\u001b"]);
+    // Read lines as the phone's reading view hands them over work the same.
+    expect(openCodeDialogCloseKeys(lines("            Select model 25                      esc"))).toEqual(["\u001b"]);
+  });
+
+  it("presses nothing without one: Escape is half an interrupt while it works", () => {
+    expect(openCodeDialogCloseKeys([
+      "  The tests pass.",
+      " ⬝⬝■■■⬝⬝⬝ esc interrupt                 12.3K (5%)  ctrl+p commands",
+    ])).toEqual([]);
+    expect(openCodeDialogCloseKeys([" ~/projects/app                 esc exit shell mode"])).toEqual([]);
+    expect(openCodeDialogCloseKeys(["  press esc to close it"])).toEqual([]);
+    expect(openCodeDialogCloseKeys([])).toEqual([]);
   });
 });

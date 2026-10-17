@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import { formatRemoteTarget, resolveLocalMirror } from "../../types";
 import { projectDirectory } from "./scaffold";
@@ -36,7 +36,7 @@ function matchesQuery(project: ProjectEntry, q: string): boolean {
 }
 
 /**
- * The inactive-project / box search box and its results popover. Owns its own
+ * The project / box search box and its results popover. Owns its own
  * query state and click-outside dismissal; activation is delegated to the
  * parent via `onActivateProject` / `onOpenBox`.
  *
@@ -62,20 +62,21 @@ export function ProjectSearch({
   const [selected, setSelected] = useState(0);
   /** Jump mode's steering level to return to; null outside jump mode. */
   const [jumpBack, setJumpBack] = useState<SteeringBaseLevel | null>(null);
+  const listId = useId();
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
   const results = useMemo<SearchRow[]>(() => {
     const q = query.trim().toLowerCase();
-    const openRows: SearchRow[] = jumpBack
+    const openRows: SearchRow[] = q || jumpBack
       ? projects
           .filter((p) => p.status !== "inactive" && (!q || matchesQuery(p, q)))
           .sort((a, b) => a.position - b.position)
           .map((project) => ({ kind: "project", project }))
       : [];
     if (!q) return openRows;
-    // Boxes first (distinct rows), then matching inactive projects. Boxes are
+    // Open projects, boxes, then matching inactive projects. Boxes are
     // opt-in: a box's members stay independently searchable below.
     const boxRows: SearchRow[] = boxes
       .filter((b) => b.name.toLowerCase().includes(q))
@@ -87,6 +88,10 @@ export function ProjectSearch({
       .map((project) => ({ kind: "project", project }));
     return [...openRows, ...boxRows, ...projectRows];
   }, [projects, boxes, query, jumpBack]);
+  const expanded = !!(query.trim() || jumpBack);
+  const optionId = (row: SearchRow) => `${listId}-${row.kind}-${row.kind === "box" ? row.box.id : row.project.id}`;
+  const selectedRow = results[selected];
+  const selectedName = selectedRow?.kind === "box" ? selectedRow.box.name : selectedRow?.project.name;
 
   // A narrowed query can remove the currently highlighted row. Keep the
   // selection valid so Enter always picks a visible result.
@@ -156,6 +161,12 @@ export function ProjectSearch({
         ref={inputRef}
         className="project-search-entry"
         type="search"
+        role="combobox"
+        aria-label={t("projectSearch.label")}
+        aria-autocomplete="list"
+        aria-expanded={expanded}
+        aria-controls={expanded ? listId : undefined}
+        aria-activedescendant={expanded && selectedRow ? optionId(selectedRow) : undefined}
         placeholder={t(jumpBack ? "projectSearch.jumpPlaceholder" : "projectSearch.placeholder")}
         value={query}
         onChange={(e) => {
@@ -183,14 +194,14 @@ export function ProjectSearch({
           }
         }}
       />
-      {(query.trim() || jumpBack) && (
+      {expanded && (
         <div className="project-search-popover" ref={resultsRef}>
           {jumpBack && (
             <div className="project-search-jump-head">
               <UntestedTag id="steering.jumpProject" />
             </div>
           )}
-          <div className="menu-scroll-region">
+          <div className="menu-scroll-region" id={listId} role="listbox" aria-label={t("projectSearch.resultsLabel")}>
             {results.length === 0 ? (
               <div className="project-search-empty">{t("projectSearch.noProjects")}</div>
             ) : (
@@ -198,6 +209,9 @@ export function ProjectSearch({
                 row.kind === "box" ? (
                   <button
                     key={`box:${row.box.id}`}
+                    id={optionId(row)}
+                    role="option"
+                    aria-selected={index === selected}
                     data-result-index={index}
                     className={`project-search-row is-box${index === selected ? " is-selected" : ""}`}
                     onClick={() => activateSearchResult(row)}
@@ -215,6 +229,9 @@ export function ProjectSearch({
                 ) : (
                   <button
                     key={row.project.id}
+                    id={optionId(row)}
+                    role="option"
+                    aria-selected={index === selected}
                     data-result-index={index}
                     className={`project-search-row${index === selected ? " is-selected" : ""}`}
                     onClick={() => activateSearchResult(row)}
@@ -239,6 +256,9 @@ export function ProjectSearch({
               )
             )}
           </div>
+          <span className="project-search-status" role="status" aria-live="polite">
+            {selectedName ? t("projectSearch.selectedResult", { name: selectedName }) : t("projectSearch.noProjects")}
+          </span>
         </div>
       )}
     </div>

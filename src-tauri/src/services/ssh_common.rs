@@ -302,7 +302,7 @@ pub fn ssh_base_args(
     args.extend(crate::services::vm::vm_ssh_opts(host, port));
 
     // Reuse (never create) the multiplexing master the pooled connection / an
-    // interactive login may have opened (see `ssh_exec::interactive_login_command`
+    // interactive login may have opened (see `ssh_exec::interactive_login_args`
     // and `services::remote`). With `ControlMaster=no` + the shared `cm-%C`
     // socket, an otherwise-`BatchMode=yes` probe/exec rides that authenticated
     // master with no second prompt; if no master exists it simply falls through to

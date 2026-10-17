@@ -8,7 +8,7 @@
  * switched on and off in the same view, by the pen without a tap, and opened
  * in the mode this phone chose. ⋯ Clear all marks is one undoable step, ↑ ↓
  * step from mark to mark, and an outbox copy of a project file opens that
- * file's own layer (`docs/mobile_markup_shared_layer_plan.md`).
+ * file's own layer (`docs/done/mobile_markup_shared_layer_plan.md`).
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

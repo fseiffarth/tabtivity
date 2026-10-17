@@ -11,7 +11,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
   text-align: center;
   max-width: 360px;
   padding: 0 16px;
@@ -28,9 +28,26 @@
 }
 
 .center-placeholder-title {
+  margin: 0;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
+}
+
+.center-placeholder-action {
+  margin-top: 8px;
+  min-height: 36px;
+  padding: 7px 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+
+.center-placeholder-action:hover {
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg-panel));
 }
 
 .center-placeholder-hint {
@@ -279,9 +296,33 @@
   /* Fade in on appearance, then keep a slow accent breathing on the border so a
      freshly-surfaced hint draws the eye without nagging. Opacity-only entry so it
      never fights the inline/class positioning transforms (translateY/translateX).
-     Shares the pulse vocabulary of tab-new-hint-pulse / side-panel-drop-pulse. */
+     Shares the pulse vocabulary of tab-new-hint-pulse / side-panel-drop-pulse.
+     The breathing glow is the static shadow of ::after, whose opacity pulses in
+     step — never an animated blurred box-shadow (WebKitGTK software path). */
   animation: hint-bubble-in 0.24s ease-out,
     hint-bubble-breathe 2.4s ease-in-out 0.24s infinite;
+}
+
+.hint-bubble::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45),
+    0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  opacity: 0;
+  animation: hint-bubble-glow 2.4s ease-in-out 0.24s infinite;
+}
+
+@keyframes hint-bubble-glow {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes hint-bubble-in {
@@ -297,12 +338,9 @@
   0%,
   100% {
     border-color: var(--border-color);
-    box-shadow: var(--shadow-3);
   }
   50% {
     border-color: var(--accent);
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45),
-      0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
   }
 }
 
@@ -366,6 +404,7 @@
 @media (prefers-reduced-motion: reduce) {
   .hint-bubble,
   .hint-bubble--banner,
+  .hint-bubble::after,
   .hint-target,
   .tour-target {
     animation: none;
@@ -441,8 +480,8 @@
 
 /* The sign-in card over a terminal pane (TerminalSignInCard): the hint bubble's
    look, pinned to the pane's bottom-right instead of the viewport. Fades in
-   only — the bubble's breathing border animates a blurred box-shadow, which a
-   card that can sit on screen for minutes must not do on WebKitGTK. */
+   only: a card that can sit on screen for minutes does not breathe, so its
+   glow layer is not drawn at all. */
 .hint-bubble.terminal-sign-in {
   position: absolute;
   right: 16px;
@@ -450,6 +489,9 @@
   z-index: 5;
   width: min(360px, calc(100% - 32px));
   animation: hint-bubble-in 0.24s ease-out;
+}
+.hint-bubble.terminal-sign-in::after {
+  content: none;
 }
 
 /* The version-drift and undo-clear cards sit over a running agent, whose input
@@ -526,7 +568,7 @@
    border eats mousemove in the last few edge pixels, so the reveal band never
    fires and the in-panel pin can't be reached. This rail sits in that dead-zone
    and opens the panel on click (delivered even where mousemove isn't).
-   Unmounts as soon as the panel is open, so it never overlaps the panel. */
+   Always mounted: the panel opens beside it, never over it. */
 /* The closed panel's edge rail: one tab per view the panel can open on. Also the
    only marker of WHICH edge the unpinned panel lives on, so the tabs carry an
    accent-tinted body and a vertical label rather than a bare chevron — a 16px
@@ -636,6 +678,19 @@
   opacity: 1;
   color: var(--text-primary);
   background-color: color-mix(in srgb, var(--accent) 30%, var(--bg-panel));
+}
+
+/* The tab of the view on show: VS Code's active indicator — a static accent bar
+   on the rail's outer window edge (an inset shadow, not animated) and a fuller
+   fill. */
+.side-panel-reveal-handle.active {
+  opacity: 1;
+  color: var(--text-primary);
+  background-color: color-mix(in srgb, var(--accent) 30%, var(--bg-panel));
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+.side-panel-reveal-rail.left .side-panel-reveal-handle.active {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* Mirror the reveal rail and tour marker to the left edge when the panel docks

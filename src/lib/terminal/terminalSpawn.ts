@@ -1,5 +1,7 @@
 import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type TabKind } from "../../stores/tabs";
 import { envName } from "../brand";
+import type { LoginTarget } from "../remote/loginTarget";
+import { ASSISTANT_SCOPE, type AssistantLaunch } from "../assistant";
 
 /**
  * The kind a `TerminalView` acts as: its declared `kind` prop, else a
@@ -27,6 +29,7 @@ export interface TerminalSpawnInputs {
   args?: string[];
   env?: Record<string, string>;
   initialInput?: string;
+  login?: LoginTarget | null;
   cwd: string;
   localOnly?: boolean;
   projectId?: string | null;
@@ -36,6 +39,7 @@ export interface TerminalSpawnInputs {
   tmuxAttach?: string | null;
   hostBoundUid?: string | null;
   hostSession?: boolean;
+  assistant?: AssistantLaunch | null;
   kind?: string;
   scheduleTargetId?: string;
   relaunchSeq?: number;
@@ -56,6 +60,7 @@ export function terminalSpawnKey(p: TerminalSpawnInputs): string {
     p.args ?? [],
     p.env ?? {},
     p.initialInput ?? null,
+    p.login ?? null,
     p.cwd,
     !!p.localOnly,
     p.projectId ?? null,
@@ -65,6 +70,7 @@ export function terminalSpawnKey(p: TerminalSpawnInputs): string {
     p.tmuxAttach ?? null,
     p.hostBoundUid ?? null,
     !!p.hostSession,
+    p.assistant ?? null,
     p.kind ?? null,
     p.scheduleTargetId ?? null,
     p.relaunchSeq ?? 0,
@@ -91,30 +97,41 @@ export function tabTerminalSpawn(
   },
 ) {
   const location = effectiveTabLocation(tab, { vmProject: !!derived.vmProject });
+  // A Tabby chat: the backend builds the argv and the environment from the
+  // launch and reads one thing from the renderer, the chat's uid, which is the
+  // tab's `sessionId`. Nothing else is sent, so a stale or planted `env`/`args`
+  // on the record cannot ride along.
+  const assistant = scope === ASSISTANT_SCOPE ? (tab.assistant ?? null) : null;
   return {
     // PTY ids include the scope: tab keys alone collide across projects.
     id: `${scope}:${tab.key}`,
     cmd: tab.cmd,
-    args: tab.args ?? [],
-    env: tab.env ?? {},
+    args: assistant ? [] : (tab.args ?? []),
+    env: assistant ? (tab.sessionId ? { [envName("TAB_UID")]: tab.sessionId } : {}) : (tab.env ?? {}),
     // A popout is attach-only and never spawns, and its `terminal-ready`
     // never fires, so it takes no initialInput (matches its old behavior).
     initialInput: derived.attachOnly ? undefined : tab.initialInput,
+    // A login terminal runs its login as the PTY's program (the backend builds
+    // it from this target) and is a plain local PTY: never tmux-wrapped or
+    // containered, which the backend would refuse.
+    login: tab.login ?? null,
     cwd: derived.terminalCwd,
     localOnly: location === "local",
     projectId: scope === "root" ? null : scope,
     // Multi-host: the worker id (or "primary") this tab runs on, so the
     // backend resolves the right host's RemoteSpec (null for a local tab).
     remoteHostId: remoteHostIdOf(location),
-    sandbox: !!derived.sandbox,
+    sandbox: !tab.login && !!derived.sandbox,
     // Persistent remote session (TODO #85). An explicit attach (opened from
     // the Sessions view) wins over the tab's own persistent session.
-    tmuxSession: derived.tmuxSession ?? null,
-    tmuxAttach: tab.tmuxAttach ?? null,
+    tmuxSession: tab.login ? null : (derived.tmuxSession ?? null),
+    tmuxAttach: tab.login ? null : (tab.tmuxAttach ?? null),
     hostBoundUid: tab.hostBoundUid ?? null,
     hostSession: !!tab.hostSession,
+    assistant,
     kind: tab.kind,
-    scheduleTargetId: tab.scheduleTargetId,
+    // Tabby chats take no schedule (the backend refuses one for the scope).
+    scheduleTargetId: assistant ? undefined : tab.scheduleTargetId,
     relaunchSeq: tab.relaunchSeq ?? 0,
     zoomable: tab.kind === "agent" || tab.kind === "local_agent",
   };

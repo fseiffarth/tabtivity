@@ -1,0 +1,74 @@
+[
+  {
+    "path": "src-core/src/brand.rs",
+    "line": 363,
+    "source": "names! {",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "82dcf74e7f5c4249da3bf0d534189811839673520b2abc0d83e313ee97699929",
+    "reason": "MOBILE_FILES_SALT is a public HKDF domain label, not a password salt. files::token_key_with derives from the random host key and uses a fresh XChaCha20 nonce per token. The label must remain stable for existing tokens."
+  },
+  {
+    "path": "src-tauri/src/services/agent_tasks.rs",
+    "line": 62,
+    "source": "if !path.exists() {",
+    "rule": "rust/path-injection",
+    "sha256": "a4d4e2c8add89e29679ac36e4f3252c93931e01cf56c96662db1fd4b24c32a70",
+    "reason": "read_at receives only the schedule file under the startup-selected state directory, through file_path or trusted scheduler paths. The environment override belongs to the process owner; phone input never selects this path."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 872,
+    "source": "fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "3616c488e92feb1f6b8434d0b582b73993b03765c8e8a8145d01f1eebd2c1e69",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed settings.json leaf to check the shell-tab opt-in."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 907,
+    "source": "fs::read(state_dir.join(\"projects.json\")).map_err(|e| format!(\"read projects: {e}\"))?;",
+    "rule": "rust/path-injection",
+    "sha256": "3616c488e92feb1f6b8434d0b582b73993b03765c8e8a8145d01f1eebd2c1e69",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed projects.json registry, never a project-folder file."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 913,
+    "source": "let boxes: Vec<BoxRecord> = fs::read(state_dir.join(\"boxes.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "3616c488e92feb1f6b8434d0b582b73993b03765c8e8a8145d01f1eebd2c1e69",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed boxes.json registry."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/headless.rs",
+    "line": 361,
+    "source": "std::fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "a16df124f38be20985703cee4de69faf6b094a63ac9d3fa2e8950980bf973bc6",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only settings.json to filter installed agent choices."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/headless.rs",
+    "line": 376,
+    "source": "std::fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "a16df124f38be20985703cee4de69faf6b094a63ac9d3fa2e8950980bf973bc6",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only settings.json for the default agent."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/headless.rs",
+    "line": 1388,
+    "source": "std::fs::read_to_string(state_dir.join(\"mobile-control\").join(\"seen\").join(uid))",
+    "rule": "rust/path-injection",
+    "sha256": "a16df124f38be20985703cee4de69faf6b094a63ac9d3fa2e8950980bf973bc6",
+    "reason": "state_dir is startup configuration. uid is rejected unless nonempty and every character is ASCII alphanumeric or hyphen, so it cannot contain separators, dots, drive prefixes or traversal. It names a stamp under mobile-control/seen only."
+  },
+  {
+    "path": "src/__tests__/helpers/pdfFixture.ts",
+    "line": 69,
+    "source": "for (const p of parts) h.update(p);",
+    "rule": "js/insufficient-password-hash",
+    "sha256": "2848fcc1cdffd87884ca4d1395e2ece821d7e68adfe8e90b5caaeb624dbe83e4",
+    "reason": "This helper creates only encrypted PDF test fixtures. ISO 32000-1 revision 2 requires MD5 and RC4; a stronger password hash would produce an invalid fixture. It never stores real credentials and is not imported by production code."
+  }
+]

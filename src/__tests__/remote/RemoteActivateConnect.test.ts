@@ -20,6 +20,17 @@ import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+// The PTY exit half of the lifecycle bus, so a test can end a login tab's program.
+const bus = vi.hoisted(() => ({ exit: new Map<string, Set<() => void>>() }));
+vi.mock("../../lib/terminal/terminalBus", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/terminal/terminalBus")>()),
+  onTerminalExit: (id: string, h: () => void) => {
+    const set = bus.exit.get(id) ?? new Set();
+    set.add(h);
+    bus.exit.set(id, set);
+    return () => set.delete(h);
+  },
+}));
 
 import { retryAutoConnectAfterVpn, useProjectsStore } from "../../stores/projects";
 import { useConnectDialogStore } from "../../stores/remote/connectDialog";
@@ -90,10 +101,6 @@ const backend = (opts: {
         return Promise.resolve(opts.vpnSaved ?? false);
       case "openvpn_connect":
         return opts.vpnFails ? Promise.reject("tunnel failed") : Promise.resolve();
-      case "remote_login_command":
-        return Promise.resolve("ssh -tt alice@host.example");
-      case "openvpn_login_command":
-        return Promise.resolve("pkexec openvpn --config /cfg.ovpn");
       case "openvpn_status":
         return Promise.resolve(++vpnStatusChecks > (opts.vpnUpAfter ?? Infinity));
       case "ssh_connect":
@@ -314,7 +321,11 @@ describe("auto-connect opt-in", () => {
  */
 describe("auto-connect with connections_headless off", () => {
   const rootTabs = () => useTabsStore.getState().tabsByScope.root ?? [];
-  const rootInputs = () => rootTabs().map((t) => t.initialInput);
+  // What each root tab's PTY runs as its login (`TabEntry.login`) — never a command
+  // typed into a shell (`initialInput`).
+  const rootLogins = () => rootTabs().map((t) => t.login);
+  const SSH_LOGIN = { kind: "ssh", user: "alice", host: "host.example", port: null };
+  const VPN_LOGIN = { kind: "vpn", config: "/cfg.ovpn" };
 
   beforeEach(() => {
     useSettingsStore.setState({
@@ -330,6 +341,7 @@ describe("auto-connect with connections_headless off", () => {
     // its keys back or only the first would open one.
     forgetConnection("ssh:alice@host.example:");
     forgetConnection("vpn:/cfg.ovpn");
+    bus.exit.clear();
     vi.useFakeTimers();
   });
 
@@ -350,7 +362,7 @@ describe("auto-connect with connections_headless off", () => {
     await useProjectsStore.getState().setActive("remote1");
     await vi.advanceTimersByTimeAsync(0);
     // The login is waiting for the user; the lamp says so rather than going red.
-    expect(rootInputs()).toContain("ssh -tt alice@host.example");
+    expect(rootLogins()).toContainEqual(SSH_LOGIN);
     expect(sshLamp()).toBe("connecting");
     expect(useConnectDialogStore.getState().projectId).toBeNull();
 
@@ -390,7 +402,7 @@ describe("auto-connect with connections_headless off", () => {
 
     await useProjectsStore.getState().setActive("remote1");
     await vi.advanceTimersByTimeAsync(0);
-    expect(rootInputs()).toContain("pkexec openvpn --config /cfg.ovpn");
+    expect(rootLogins()).toContainEqual(VPN_LOGIN);
     // Tabtivity never handles the passphrase here, so the headless connect must not fire.
     expect(invokeMock).not.toHaveBeenCalledWith("openvpn_connect", expect.anything());
     // Red, not "connecting" — the host is unreachable until the tunnel is up, and red
@@ -461,8 +473,8 @@ describe("auto-connect with connections_headless off", () => {
     await useProjectsStore.getState().setActive("remote1");
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(invokeMock).not.toHaveBeenCalledWith("openvpn_login_command", expect.anything());
-    expect(rootInputs()).toContain("ssh -tt alice@host.example");
+    expect(rootLogins()).not.toContainEqual(VPN_LOGIN);
+    expect(rootLogins()).toContainEqual(SSH_LOGIN);
   });
 
   it("gives up on a login that is never authenticated, without prompting", async () => {
@@ -499,7 +511,8 @@ describe("auto-connect with connections_headless off", () => {
     await useProjectsStore.getState().setActive("remote1");
     await vi.advanceTimersByTimeAsync(0);
     const login = rootTabs()[0];
-    expect(login.initialInput).toBe("ssh -tt alice@host.example");
+    expect(login.login).toEqual(SSH_LOGIN);
+    expect(login.initialInput).toBeUndefined();
 
     // The user closes the login instead of authenticating.
     useTabsStore.getState().removeTab(login.key);
@@ -515,6 +528,32 @@ describe("auto-connect with connections_headless off", () => {
     await useProjectsStore.getState().setActive("local1");
     await useProjectsStore.getState().setActive("remote1");
     await vi.advanceTimersByTimeAsync(0);
-    expect(rootInputs()).toContain("ssh -tt alice@host.example");
+    expect(rootLogins()).toContainEqual(SSH_LOGIN);
+  });
+
+  it("treats an ended login (ssh exited) like a closed tab — and opens a fresh one next time", async () => {
+    backend({ probe: REJECTED, sshSaved: false, loginReadyAfter: Infinity });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true }), project("local1")],
+    });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+    const login = rootTabs()[0];
+    expect(login.login).toEqual(SSH_LOGIN);
+
+    // ssh exits (wrong password three times, or the user typed `exit`): the tab stays,
+    // showing its exited state, but there is nothing left in it to authenticate.
+    for (const h of [...(bus.exit.get(`root:${login.key}`) ?? [])]) h();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(rootTabs()).toHaveLength(1);
+    expect(sshLamp()).toBe("off");
+
+    // Re-activating opens a NEW login tab rather than pointing at the dead one.
+    await useProjectsStore.getState().setActive("local1");
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rootTabs()).toHaveLength(2);
+    expect(rootTabs()[1].login).toEqual(SSH_LOGIN);
   });
 });

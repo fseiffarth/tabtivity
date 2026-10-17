@@ -19,7 +19,7 @@ export type MarkupSend = "queued" | "sent" | false;
  * the prompt goes to, the project the phone-side layer is kept under, a
  * project file's folder trail, the send into the chat, what the agent is
  * doing now (the round's pill), and how to find the file's newest version
- * for **Reload** (`docs/pdf_markup_rounds_plan.md` §2.2–2.3). */
+ * for **Reload** (`docs/done/pdf_markup_rounds_plan.md` §2.2–2.3). */
 export type MarkupTarget = {
   tabId: string;
   projectId: string;
@@ -395,7 +395,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     {isText ? <div className="outbox-text-body">
       <pre>{text ?? (failure ? "" : t("mobile.outbox.loading"))}</pre>
       {file.size > INLINE_LIMIT && !whole && (file.size <= WHOLE_LIMIT || !strands) && <button className="outbox-open"
-        onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url); }}>{t("mobile.outbox.whole")}</button>}
+        onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url).then((opened) => { if (opened === "host_outdated") setFailure(t("mobile.open.hostOutdated")); }); }}>{t("mobile.outbox.whole")}</button>}
     </div> : isImage ? <div ref={stage} className={`outbox-viewer-stage${zoomed ? " zoomed" : ""}`}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
       <img ref={image} src={url} alt={sentName(file)} draggable={false}

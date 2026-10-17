@@ -33,20 +33,21 @@ static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// is the only at-most-once check there is). Fields drop in order — the
 /// file lock goes before the mutex.
 struct Guard {
-    _file: Option<storage::FileLock>,
+    _file: storage::FileLock,
     _mutex: std::sync::MutexGuard<'static, ()>,
 }
 
-fn lock() -> Guard {
+fn lock() -> Result<Guard, String> {
     let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
-    Guard { _file: file_lock(&path()), _mutex: mutex }
+    Ok(Guard { _file: file_lock(&path())?, _mutex: mutex })
 }
 
-/// The cross-process lock beside `path` (`agent_tasks.json.lock`). Best
-/// effort, like every `FileLock`: a filesystem without advisory locks still
-/// gets the occurrence checks inside the transaction.
-fn file_lock(path: &std::path::Path) -> Option<storage::FileLock> {
-    storage::FileLock::exclusive(path).ok()
+/// The cross-process lock beside `path` (`agent_tasks.json.lock`). Not
+/// optional: a claim is the at-most-once check, and it holds across
+/// processes only under this lock, so a lock that cannot be taken fails the
+/// transaction instead of running it unguarded.
+fn file_lock(path: &std::path::Path) -> Result<storage::FileLock, String> {
+    storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))
 }
 
 /// `<state_dir>/agent_tasks.json`.
@@ -232,7 +233,7 @@ fn target_mut<'a>(
 pub fn list(project_id: &str, target_id: &str) -> Result<Vec<ScheduledAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     if super::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339()) {
         write(&file)?;
@@ -285,7 +286,7 @@ fn schedules_of(file: &AgentTasksFile, project_id: &str, target_id: &str) -> Vec
 
 /// Schedule MCP uses the same transaction lock for validation, quotas and writes.
 pub(crate) fn mutate<T>(f: impl FnOnce(&mut AgentTasksFile) -> Result<T, String>) -> Result<T, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = f(&mut file)?;
     write(&file)?;
@@ -333,6 +334,22 @@ fn check_live(
     Ok(())
 }
 
+/// The unknown fields `agent_tasks.json` holds for one stored rule.
+fn stored_extra(
+    file: &AgentTasksFile,
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+) -> Option<BTreeMap<String, serde_json::Value>> {
+    file.projects
+        .get(project_id)?
+        .get(target_id)?
+        .schedules
+        .iter()
+        .find(|item| item.id == schedule_id)
+        .map(|item| item.extra.clone())
+}
+
 /// Pure core of [`upsert`]. `expect_existing_on` names the target the edited
 /// rule must still be live on ([`check_live`]); the write itself goes to
 /// `target_id`, which differs from it when a rule moves to another tab.
@@ -345,6 +362,22 @@ pub(crate) fn apply_upsert(
 ) -> Result<Vec<ScheduledAgentPrompt>, String> {
     if let Some(source) = expect_existing_on {
         check_live(file, project_id, source, &prompt.id)?;
+    }
+    // Unknown fields come only from the file, never from a caller: a browser
+    // client or phone could otherwise plant a field a newer build trusts (a
+    // runner-owned one, as `last` is here). The stored rule's own unknown
+    // fields survive the edit, and a move takes the source's along.
+    let mut prompt = prompt;
+    prompt.extra = stored_extra(file, project_id, target_id, &prompt.id)
+        .or_else(|| {
+            expect_existing_on.and_then(|source| stored_extra(file, project_id, source, &prompt.id))
+        })
+        .unwrap_or_default();
+    if let Some(origin) = prompt.origin.as_mut() {
+        origin.extra.clear();
+    }
+    if let Some(last) = prompt.last.as_mut() {
+        last.extra.clear();
     }
     let target = target_mut(file, project_id, target_id);
     match target
@@ -397,7 +430,7 @@ pub fn upsert(
     // schedule nor an editor request may manufacture one at the CRUD boundary.
     prompt.last = None;
     let prompt = validate_prompt(prompt)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_upsert(&mut file, project_id, target_id, prompt, expect_existing_on)?;
     write(&file)?;
@@ -421,7 +454,7 @@ pub fn upsert_in(
     }
     prompt.last = None;
     let prompt = validate_prompt(prompt)?;
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     let mut file = read_at(path)?;
     let result = apply_upsert(&mut file, project_id, target_id, prompt, expect_existing_on)?;
     write_at(path, &file)?;
@@ -457,7 +490,7 @@ pub fn delete(
     schedule_id: &str,
     expect_undelivered: bool,
 ) -> Result<(), String> {
-    let _guard = lock();
+    let _guard = lock()?;
     delete_locked(&path(), project_id, target_id, schedule_id, expect_undelivered)
 }
 
@@ -470,7 +503,7 @@ pub fn delete_in(
     schedule_id: &str,
     expect_undelivered: bool,
 ) -> Result<(), String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     delete_locked(path, project_id, target_id, schedule_id, expect_undelivered)
 }
 
@@ -492,7 +525,7 @@ fn delete_locked(
 pub fn delete_target(project_id: &str, target_id: &str) -> Result<(), String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     if let Some(project) = file.projects.get_mut(project_id) {
         project.remove(target_id);
@@ -518,7 +551,7 @@ pub fn claim(
     schedule_id: &str,
     occurrence: &str,
 ) -> Result<ClaimOutcome, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     claim_locked(&path(), project_id, target_id, schedule_id, occurrence, chrono::Local::now())
 }
 
@@ -535,7 +568,7 @@ pub fn claim_in(
     occurrence: &str,
     now: chrono::DateTime<chrono::Local>,
 ) -> Result<bool, String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     claim_locked(path, project_id, target_id, schedule_id, occurrence, now).map(|outcome| outcome == ClaimOutcome::Claimed)
 }
 
@@ -630,7 +663,7 @@ pub fn cancel_phone_rules(
     // first inverted it: a claim holding the mutex and this holding the file
     // lock waited on each other for good.
     let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
-    let _guard = Guard { _file: file_lock(path), _mutex: mutex };
+    let _guard = Guard { _file: file_lock(path)?, _mutex: mutex };
     cancel_phone_rules_locked(path, reaches)
 }
 
@@ -640,7 +673,7 @@ pub fn cancel_phone_rules_in(
     path: &std::path::Path,
     reaches: impl Fn(&str, &str) -> Result<bool, String>,
 ) -> Result<Vec<CancelledRule>, String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     cancel_phone_rules_locked(path, reaches)
 }
 
@@ -684,7 +717,7 @@ pub fn complete(
     occurrence: &str,
     result: AgentScheduleResult,
 ) -> Result<Vec<ScheduledAgentPrompt>, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     complete_locked(&path(), project_id, target_id, schedule_id, occurrence, result)
 }
 
@@ -697,7 +730,7 @@ pub fn complete_in(
     occurrence: &str,
     result: AgentScheduleResult,
 ) -> Result<Vec<ScheduledAgentPrompt>, String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     complete_locked(path, project_id, target_id, schedule_id, occurrence, result)
 }
 
@@ -733,6 +766,7 @@ fn complete_locked(
         occurrence: occurrence.to_string(),
         result,
         at: storage::iso_now(),
+        extra: Default::default(),
     });
     let record_id = delivery_id(prompt, occurrence);
     if let Some(delivery) = target.agent_deliveries.iter_mut().find(|r| r.id == record_id) {
@@ -766,6 +800,7 @@ fn reserve_agent_delivery(target: &mut AgentPromptTarget, schedule_id: &str, occ
     target.agent_deliveries.retain(|r| r.day >= cutoff);
     target.agent_deliveries.push(crate::schema::agent_tasks::AgentScheduleDelivery {
         id, day, at: now.to_rfc3339(), result: None,
+        extra: Default::default(),
     });
     true
 }
@@ -800,7 +835,7 @@ fn saved_bindings(file: &AgentTasksFile) -> HashSet<(String, String)> {
 }
 
 pub fn cleanup_orphans(live: &[AgentScheduleTargetBinding]) -> Result<usize, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let mut keep = saved_bindings(&file);
     keep.extend(
@@ -830,14 +865,14 @@ mod tests {
         let mut target = AgentPromptTarget::default();
         for i in 0..6 {
             let mut row = once(&format!("agent-{i}"));
-            row.origin = Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: "s".into(), at: now.to_rfc3339(), from_delivery: None });
+            row.origin = Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: "s".into(), at: now.to_rfc3339(), from_delivery: None, extra: Default::default() });
             target.schedules.push(row.clone());
             assert!(reserve_agent_delivery(&mut target, &row.id, "2026-09-20T12:00", now));
             target.schedules.clear();
         }
         let mut target: AgentPromptTarget = serde_json::from_value(serde_json::to_value(target).unwrap()).unwrap();
         let mut row = once("next");
-        row.origin = Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: "new-spawn".into(), at: now.to_rfc3339(), from_delivery: None });
+        row.origin = Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: "new-spawn".into(), at: now.to_rfc3339(), from_delivery: None, extra: Default::default() });
         target.schedules.push(row);
         target.schedules.push(once("user"));
         assert!(!reserve_agent_delivery(&mut target, "next", "2026-09-20T12:00", now));
@@ -891,6 +926,7 @@ mod tests {
             last: None,
             origin: None,
             phone_device: None,
+            extra: Default::default(),
         }
     }
 
@@ -907,6 +943,7 @@ mod tests {
             occurrence: "2026-09-04T08:00".into(),
             result: AgentScheduleResult::Delivered,
             at: "2026-09-04T08:00:03+00:00".into(),
+            extra: Default::default(),
         })
     }
 
@@ -955,6 +992,66 @@ mod tests {
         drop(held);
         assert_eq!(sweeping.join().unwrap(), Ok(0));
         assert!(free, "the sweep held the file lock while waiting for the mutex");
+    }
+
+    /// F-b: a file a newer build wrote keeps its unknown fields through an
+    /// edit, a create and a move by this build, and a caller can never add
+    /// one — the maps hold only what the file held.
+    #[test]
+    fn unknown_fields_survive_writes_and_never_come_from_a_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_path(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"version":1,"future_top":1,"projects":{"p":{"t1":{"future_target":2,
+                "schedules":[{"id":"s1","enabled":true,"message":"go",
+                    "rule":{"type":"daily","time":"08:00"},
+                    "last":{"occurrence":"2026-10-14T08:00","result":"delivered","at":"a","future_last":3},
+                    "origin":{"by":"agent","session":"sess","at":"a","future_origin":4},
+                    "future_schedule":5}],
+                "agent_deliveries":[{"id":"d","day":"2026-10-14","at":"a","future_delivery":6}]}}}}"#,
+        )
+        .unwrap();
+        let planted = || -> BTreeMap<String, serde_json::Value> {
+            [("planted".to_string(), serde_json::json!(true))].into()
+        };
+        let raw = || std::fs::read_to_string(&path).unwrap();
+
+        // An edit of the stored rule: its own unknown fields stay, the
+        // caller's never land.
+        let mut edit = ScheduledAgentPrompt { message: "edited".into(), extra: planted(), ..daily("s1") };
+        edit.origin = Some(crate::schema::agent_tasks::ScheduleOrigin {
+            by: crate::schema::agent_tasks::ScheduleAuthor::Agent,
+            session: "other".into(),
+            at: "b".into(),
+            from_delivery: None,
+            extra: planted(),
+        });
+        upsert_in(&path, "p", "t1", edit, Some("t1")).unwrap();
+        let text = raw();
+        for kept in ["future_top", "future_target", "future_last", "future_origin", "future_schedule", "future_delivery"] {
+            assert!(text.contains(kept), "{kept} survives an edit: {text}");
+        }
+        assert!(text.contains("edited"));
+        assert!(!text.contains("planted"), "{text}");
+
+        // A new rule takes no unknown field from its caller.
+        let mut fresh = ScheduledAgentPrompt { extra: planted(), ..daily("s2") };
+        fresh.origin = Some(crate::schema::agent_tasks::ScheduleOrigin {
+            by: crate::schema::agent_tasks::ScheduleAuthor::Agent,
+            session: "x".into(),
+            at: "b".into(),
+            from_delivery: None,
+            extra: planted(),
+        });
+        let rows = upsert_in(&path, "p", "t1", fresh, None).unwrap();
+        assert!(rows[1].extra.is_empty() && rows[1].origin.as_ref().unwrap().extra.is_empty());
+        assert!(!raw().contains("planted"));
+
+        // A move takes the source rule's unknown fields along.
+        let moved = upsert_in(&path, "p", "t2", ScheduledAgentPrompt { extra: planted(), ..daily("s1") }, Some("t1")).unwrap();
+        assert_eq!(moved[0].extra, [("future_schedule".to_string(), serde_json::json!(5))].into());
+        assert!(!raw().contains("planted"));
     }
 
     #[test]

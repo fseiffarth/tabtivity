@@ -87,12 +87,6 @@ pub async fn vm_rebuild(project_id: String) -> Result<(), String> {
     app_core::rt::try_blocking("vm", move || vm::rebuild(&project_id)).await
 }
 
-/// The blocked-connections log (Proxy egress) for the pill / settings dialog.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn vm_blocked(project_id: String) -> vm_proxy::BlockedReport {
-    vm_proxy::blocked_report(&project_id)
-}
-
 /// Temporarily allow one host through the egress proxy (15 min) — the
 /// clone-at-creation channel: the git host is admitted for the initial clone
 /// without becoming a standing hole.
@@ -193,29 +187,6 @@ pub fn vm_set_spec(project_id: String, mut spec: VmSpec) -> Result<VmSpec, Strin
         );
     }
     Ok(spec)
-}
-
-/// Commits inside the VM that no remote (and no mirror) has — the "the overlay
-/// is the only copy" surfacing for mirrorless projects. `None` when the VM is
-/// down, the tree isn't a repo yet, or the count could not be read (never 0
-/// for "couldn't tell").
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn vm_unpushed_commits(project_id: String) -> Result<Option<u64>, String> {
-    if !vm::is_running(&project_id) {
-        return Ok(None);
-    }
-    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
-        return Ok(None);
-    };
-    let count = app_core::rt::try_blocking("vm", move || {
-        crate::services::ssh_exec::run_remote_script(
-            &target.spec,
-            "git rev-list --count --branches --not --remotes 2>/dev/null || true",
-        )
-    })
-    .await?;
-    let text = String::from_utf8_lossy(&count.stdout);
-    Ok(text.trim().parse::<u64>().ok())
 }
 
 pub(crate) fn project_name(project_id: &str) -> Option<String> {

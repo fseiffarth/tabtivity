@@ -525,6 +525,39 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("walks the question's rows with ↑/↓ from the empty composer, Enter picking the focused one", async () => {
+    term = fakeTerminal([
+      "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
+      "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. Yes, allow all edits during this session", "  3. No, and tell Claude what to do differently",
+      "", "  esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    // A typed draft keeps ↑/↓ for itself.
+    fireEvent.change(box, { target: { value: "x" } });
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(box);
+    fireEvent.change(box, { target: { value: "" } });
+    // Empty: ↓ lands on the highlighted row, ↓ again on the next.
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    const first = screen.getByRole("button", { name: /^1\. ?Yes$|^1Yes$/ });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    const second = screen.getByRole("button", { name: /Yes, allow all edits/ });
+    expect(document.activeElement).toBe(second);
+    fireEvent.keyDown(second, { key: "ArrowDown" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /No, and tell Claude/ }));
+    // ↑ off the first row hands the keyboard back to the composer.
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(box);
+  });
+
   it("answers Claude's \"Type something.\" row with typed words, never with Enter on the empty row", async () => {
     term = fakeTerminal([
       "> ask me", "", "☐ Fruit", "", "Which fruit?", "",

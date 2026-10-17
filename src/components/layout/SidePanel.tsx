@@ -16,7 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useActivityStore, type AttentionKind, type BusyKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
 import { useT } from "../../lib/i18n";
-import { RailSwitchSideIcon } from "../common/EdgeRailIcons";
+import { RailChevronIcon, RailSwitchSideIcon } from "../common/EdgeRailIcons";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import { terminalCharsPerSecond } from "../../dev/terminalOutputRate";
 import {
@@ -30,12 +30,13 @@ import {
 // Single source of truth for the displayed version: package.json is kept in
 // lockstep with the Tauri manifests on each version bump.
 import { version as APP_VERSION } from "../../../package.json";
-import { PinIcon, UndoIcon } from "../common/icons/Icon";
+import { UndoIcon } from "../common/icons/Icon";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 
 interface Props {
   open: boolean;
-  pinned?: boolean;
+  /** Auto-hide mode: the panel is an overlay that slides in, instead of docked. */
+  overlay?: boolean;
   /** Which edge the panel docks against; drives the mirrored slide/border/resize
    *  layout via the `.left` class. Defaults to "right". */
   side?: "left" | "right";
@@ -47,7 +48,9 @@ interface Props {
   onResizeStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   onResizeMove?: (e: React.PointerEvent<HTMLDivElement>) => void;
   onResizeEnd?: (e: React.PointerEvent<HTMLDivElement>) => void;
-  onTogglePin?: () => void;
+  onHide?: () => void;
+  /** Double-click on the resize sash: back to the default width. */
+  onResizeReset?: () => void;
   onToggleSide?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -161,14 +164,15 @@ function RendererRssDisplay() {
  */
 export function SidePanel({
   open,
-  pinned,
+  overlay,
   side = "right",
   width,
   resizing,
   onResizeStart,
   onResizeMove,
   onResizeEnd,
-  onTogglePin,
+  onHide,
+  onResizeReset,
   onToggleSide,
   onMouseEnter,
   onMouseLeave,
@@ -317,6 +321,7 @@ export function SidePanel({
       onPointerDown={onResizeStart}
       onPointerMove={onResizeMove}
       onPointerUp={onResizeEnd}
+      onDoubleClick={onResizeReset}
       title={t("sidePanel.resizeTitle")}
       aria-hidden
     />
@@ -326,7 +331,7 @@ export function SidePanel({
   // the single `pin` slot ProjectFilesView exposes (a tab passes neither), so no
   // extra slot is threaded through the shared viewer.
   const chrome =
-    onTogglePin || onToggleSide ? (
+    onHide || onToggleSide ? (
       <>
         {onToggleSide && (
           <button
@@ -340,14 +345,14 @@ export function SidePanel({
             <RailSwitchSideIcon side={side} />
           </button>
         )}
-        {onTogglePin && (
+        {onHide && (
           <button
-            className={`side-panel-pin${pinned ? " pinned" : ""}`}
-            aria-pressed={pinned}
-            onClick={onTogglePin}
-            title={t(pinned ? "sidePanel.unpinTitle" : "sidePanel.pinTitle")}
+            className="side-panel-pin"
+            onClick={onHide}
+            title={t("sidePanel.hideTitle")}
+            aria-label={t("sidePanel.hideTitle")}
           >
-            <PinIcon />
+            <RailChevronIcon dir={side === "left" ? "left" : "right"} />
           </button>
         )}
       </>
@@ -478,7 +483,7 @@ export function SidePanel({
       // Right-click → "Open in a new tab": the same file view, on that folder,
       // as a Files (Project) tab in this project's scope.
       onOpenFolderTab={(rel) => openProjectFilesTab(t, projectDir, rel)}
-      containerClassName={`side-panel${side === "left" ? " left" : ""} ${open ? "open" : ""}${resizing ? " resizing" : ""}${switching ? " switching" : ""}`}
+      containerClassName={`side-panel${side === "left" ? " left" : ""} ${open ? "open" : ""}${overlay ? " overlay" : ""}${resizing ? " resizing" : ""}${switching ? " switching" : ""}`}
       containerStyle={width ? { width } : undefined}
       containerProps={{ onMouseEnter, onMouseLeave }}
       resizeHandle={resizeHandle}

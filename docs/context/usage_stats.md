@@ -30,7 +30,7 @@ its remainder does not count again. The recap groups outcomes by mode/model.
 These are local counters only: no document text, paths or reference contents.
 
 **Agent tokens are derived, not counted** (`services::token_stats`,
-`usage_token_stats`, plan in `docs/token_stats_plan.md`). Claude and Codex
+`usage_token_stats`, plan in `docs/done/token_stats_plan.md`). Claude and Codex
 already write per-message usage into each Eldrun agent home, so the recap's
 Tokens section reads those records (fresh in, cache write, cache read, output;
 a Codex SQLite `total` with no split when a thread has no rollout) as

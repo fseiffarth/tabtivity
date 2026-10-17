@@ -91,6 +91,24 @@ describe("CredentialPasteBar", () => {
     expect(await screen.findByText(/nothing saved/i)).toBeTruthy();
   });
 
+  it("shows the backend's refusal when the terminal's login has ended", async () => {
+    // The gate is the backend's: only a PTY whose current program is a login for this
+    // credential (`TabEntry.login` / `login` on an embedded terminal) takes the paste,
+    // and the mark goes when ssh/openvpn exits. The bar must say so, not swallow it.
+    const refusal =
+      "that terminal is not a login for this credential — open the connection's login terminal and try again";
+    invokeMock.mockImplementation(() => Promise.reject(refusal));
+    render(
+      <CredentialPasteBar
+        ptyId="dialog-ssh-1"
+        entries={sshPasteEntries(t, { user: "alice", host: "host.example", saved: true })}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /paste password/i }));
+    expect(await screen.findByText(/not a login for this credential/i)).toBeTruthy();
+    expect(invokeMock).not.toHaveBeenCalledWith("pty_write", expect.anything());
+  });
+
   it("gives an auth-user-pass + encrypted-key tunnel a button per secret", () => {
     const entries = vpnPasteEntries(t, {
       config: "/store/office.ovpn",

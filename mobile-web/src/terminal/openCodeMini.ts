@@ -439,6 +439,12 @@ function dropLeading(spans: readonly ReadableSpan[], count: number): ReadableSpa
  * ambiguity here.
  */
 const PICKER_TITLE = /^(\s+)(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\/\d+)?)?(?:\s+esc)?$/u;
+/** The same title row with the screen behind the overlay showing on either
+ * side of it: the full TUI dims its session rather than clearing it, so over a
+ * conversation the title row carries the transcript's words to its left and
+ * the sidebar's to its right. Only with its `esc`, which is what tells the
+ * dialog's title from those words — and where the dialog's right edge is. */
+const PICKER_TITLE_OVER = /^(.*?\S\s{2,})(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\/\d+)?)?\s+esc(?=\s{2,}|\s*[│┃]|\s*$)/u;
 /** Rows read out of one picker. The full TUI lists every provider's models on
  * a tall pane; the cap only bounds a misread. */
 const MAX_PICKER_ROWS = 40;
@@ -452,6 +458,7 @@ const PICKER_FOOTER = /(?:^|\s)ctrl\+\p{L}\b/u;
 /** The full TUI's highlight, drawn left of the labels' column. Mini draws no
  * marker at all, so a picker without one simply reports no current row. */
 const PICKER_MARK = /[●▸❯>]/u;
+const MARK_REACH = 3;
 /** Narrower than any picker OpenCode draws: a title row that ends before this
  * is not the overlay's right edge. */
 const MIN_PICKER_WIDTH = 24;
@@ -463,7 +470,7 @@ export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPr
   let title = -1;
   let heading: RegExpExecArray | null = null;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    heading = PICKER_TITLE.exec(lines[index].text);
+    heading = PICKER_TITLE.exec(lines[index].text) ?? PICKER_TITLE_OVER.exec(lines[index].text);
     if (heading) {
       title = index;
       break;
@@ -477,14 +484,17 @@ export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPr
    * paints over the session's status bar as well as its composer box, and
    * without this the bar's tail rode into a row's second column (`GitHub
    * Copilot` · `ommands`). A title too short to bound anything — a dialog this
-   * has misread, or one drawn without the hint — bounds nothing. */
-  const right = lines[title].text.trimEnd().length;
+   * has misread, or one drawn without the hint — bounds nothing. A title row
+   * over the screen behind it ends at its `esc` (`PICKER_TITLE_OVER`). */
+  const right = heading[0].trimEnd().length;
   const end = right >= column + MIN_PICKER_WIDTH ? right : Number.POSITIVE_INFINITY;
   /** The row as the dialog drew it: what stands between the dialog's own two
    * columns, with whatever the screen behind it left on either side dropped. */
   const cell = (text: string) => (text.length > column ? text.slice(column, end).trimEnd() : "");
   let index = title + 1;
-  const skipBlank = () => { while (index < lines.length && !lines[index].text.trim()) index += 1; };
+  // Blank within the dialog's own band: over a conversation, the rows the
+  // dialog leaves empty still carry the transcript beside it.
+  const skipBlank = () => { while (index < lines.length && !cell(lines[index].text)) index += 1; };
   skipBlank();
   // The search field, whether it holds the placeholder or a typed query.
   if (index >= lines.length) return null;
@@ -495,22 +505,22 @@ export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPr
   let gap = 0;
   for (; index < lines.length && options.length < MAX_PICKER_ROWS; index += 1) {
     const text = lines[index].text;
-    if (!text.trim()) {
-      // Between two groups of the same list; past the list, the end of it.
+    const row = cell(text);
+    // Nothing in the dialog's band — a blank row, or the screen behind the
+    // overlay showing past its left edge: between two groups of the same
+    // list; past the list, the end of it.
+    if (!row) {
       gap += 1;
       if (gap > MAX_LIST_GAP || options.length === 0) break;
       continue;
     }
-    const row = cell(text);
-    // A line that reaches the dialog's column with nothing on it is the screen
-    // behind the overlay showing past its left edge, not a row of the list.
-    if (!row) break;
     if (PICKER_FOOTER.test(row)) break;
     const columns = row.split(COLUMN_SPLIT);
     const label = columns[0].trim();
     if (!label) break;
     gap = 0;
-    if (PICKER_MARK.test(text.slice(0, column))) current = options.length;
+    // Two columns left of the labels; further left is the screen behind.
+    if (PICKER_MARK.test(text.slice(Math.max(0, column - MARK_REACH), column))) current = options.length;
     options.push({
       index: options.length,
       number: options.length + 1,
@@ -548,4 +558,33 @@ export const OPENCODE_MODEL_KEYS = [PALETTE, "model", "\r"];
  * still finds the row, while the `…` itself would match nothing. */
 export function openCodePickKeys(label: string): string[] {
   return [CLEAR_SEARCH, label.replace(/\s*(?:…|\.\.\.)$/u, "").trim(), "\r"];
+}
+
+/** The top row of any dialog OpenCode draws over its session — `DialogSelect`
+ * (the pickers, "Connect a provider"), its alerts, confirms and prompts: the
+ * title, then the `esc` that closes it at the dialog's far edge, with whatever
+ * the dimmed screen behind shows on either side. The working row's
+ * `esc interrupt` and shell mode's `esc exit shell mode` are hints, not this. */
+const DIALOG_HEADER = /\S\s{2,}esc(?=\s{2,}|\s*[│┃]|\s*$)/u;
+const DIALOG_CLOSE = "\u001b";
+
+/**
+ * The keys that clear a dialog OpenCode has open over its composer before a
+ * message goes in: one Escape, which closes the top dialog and hands focus
+ * back to the prompt — or none, with no dialog on `rows`.
+ *
+ * Typed into a dialog, a message never reaches the agent: its search field
+ * takes the words, Enter picks whatever row they matched, and the composer's
+ * line reset (Ctrl+A) is the model picker's own "Connect provider" key — a
+ * "yes" sent from the Chat view showed as sent, the agent never answered, and
+ * the terminal had "Connect a provider" up (1.18.32). A picker the model chip
+ * opened and could not read back was left up exactly so. With no dialog the
+ * Escape is withheld: a working session reads it as half an interrupt.
+ *
+ * `rows` are the screen as it stands, the viewport only — a mini session's
+ * scrollback can still hold an overlay it has since closed.
+ */
+export function openCodeDialogCloseKeys(rows: readonly (string | { text: string })[]): string[] {
+  const open = rows.some((row) => DIALOG_HEADER.test((typeof row === "string" ? row : row.text).trimEnd()));
+  return open ? [DIALOG_CLOSE] : [];
 }

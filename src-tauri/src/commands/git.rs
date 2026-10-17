@@ -502,6 +502,7 @@ fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String
         return Ok(None);
     }
     let path = config_path.to_str().ok_or_else(|| format!("{}: not a UTF-8 path", config_path.display()))?;
+    // Bare on purpose: `config --file` reads one file as plain config, no repo.
     let listed = crate::paths::command_no_window("git")
         .args(["config", "--file", path, "--name-only", "--list", "--no-includes"])
         .output()
@@ -518,10 +519,44 @@ fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String
 
 /// A command that runs nothing and fails with `message` on stderr — what a
 /// git call becomes when [`sanitize_repo_git_config_strict`] refuses it.
+/// The message is `sh`'s `$1`, so arguments a caller appends to the returned
+/// command (`worktree repair <paths>`) are only more ignored parameters.
 fn refusing_command(message: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("/bin/sh");
+    let mut cmd = crate::paths::command_no_window(refusal_shell());
     cmd.args(["-c", "printf '%s\\n' \"$1\" >&2; exit 128", "sh", message]);
     cmd
+}
+
+#[cfg(not(windows))]
+fn refusal_shell() -> PathBuf {
+    PathBuf::from("/bin/sh")
+}
+
+/// Windows has no `/bin/sh` (the refusal used to surface as a spawn error,
+/// its message lost): Git for Windows' own `sh.exe`, from the install the
+/// git we run comes from. Not cmd or PowerShell: both re-parse appended
+/// arguments as code. With no Git for Windows `sh` the spawn still fails —
+/// still refused, only without the message.
+#[cfg(windows)]
+fn refusal_shell() -> PathBuf {
+    let git = crate::paths::helper_program(std::ffi::OsStr::new("git"))
+        .or_else(|| crate::paths::resolve_executable("git"));
+    git.into_iter()
+        .flat_map(|git| sh_beside_git(&git))
+        .find(|sh| sh.is_file())
+        .unwrap_or_else(|| PathBuf::from("sh"))
+}
+
+/// Where Git for Windows keeps `sh.exe` relative to a `git.exe` it ships —
+/// `<root>\cmd\git.exe`, `<root>\bin\git.exe` or
+/// `<root>\mingw64\bin\git.exe` — in lookup order. Pure.
+#[cfg(any(windows, test))]
+fn sh_beside_git(git: &Path) -> Vec<PathBuf> {
+    git.ancestors()
+        .skip(2)
+        .take(2)
+        .flat_map(|root| [root.join("bin").join("sh.exe"), root.join("usr").join("bin").join("sh.exe")])
+        .collect()
 }
 
 fn sanitize_git_config_file(config_path: &Path) {
@@ -531,6 +566,8 @@ fn sanitize_git_config_file(config_path: &Path) {
     if !config_path.is_file() {
         return;
     }
+    // Bare on purpose (both spawns here): `config --file` edits one file as
+    // plain config, no repo — this is the sanitizer the hardened builder runs.
     let mut list = crate::paths::command_no_window("git");
     list.args([
         "config",
@@ -568,6 +605,8 @@ fn sanitize_git_config_file(config_path: &Path) {
 /// function every LOCAL git spawn in this codebase goes through, so "this
 /// project's repo is untrusted" (Group O #151, #862) has one definition instead
 /// of one per call site. Hooks run only through [`hooked_git_command_in`].
+/// The test `every_local_git_spawn_goes_through_the_hardened_builder` scans
+/// the sources for a bare spawn outside its allowlist.
 pub(crate) fn hardened_git_command_in<S: AsRef<str>, P: AsRef<Path>>(
     project_dir: P,
     args: &[S],
@@ -758,6 +797,7 @@ pub(crate) fn local_non_repo(target: Option<&RemoteTarget>, project_dir: &str) -
 /// (see its `let _ =` discard) and registering a git-typed project with no repo.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_available() -> bool {
+    // Bare on purpose: `--version` touches no repo.
     crate::paths::command_no_window("git")
         .arg("--version")
         .output()
@@ -1012,8 +1052,10 @@ fn git_repo_root_blocking(project_dir: String, rel_path: String) -> Result<Optio
     // `--show-toplevel` prints the absolute root of the innermost repo enclosing
     // `dir`. Any failure (not a repo, missing dir) maps to `None`, not an error,
     // so the UI treats it as "no repo here" rather than flashing a banner.
-    let mut cmd = crate::paths::command_no_window("git");
-    cmd.args(["rev-parse", "--show-toplevel"]).current_dir(&dir);
+    // Hardened like every local call: `dir` is inside the project, so its
+    // repo's config is untrusted. The builder discovers the git dir from `dir`
+    // (the innermost repo, the one `--show-toplevel` reports).
+    let cmd = hardened_git_command_in(&dir, &["rev-parse", "--show-toplevel"]);
     let out = crate::services::git_bounded::output(cmd);
     match out {
         Ok(o) if o.status.success() => {
@@ -2100,6 +2142,8 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
         lower.starts_with("https://") || lower.starts_with("http://")
     };
 
+    // Bare on purpose: a network clone into a new, empty `dest`; no local repo
+    // whose config or hooks could run (the URL is validated above).
     let mut cmd = crate::paths::command_no_window("git");
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
@@ -2190,6 +2234,7 @@ fn git_remote_visibility_blocking(url: String) -> Result<String, String> {
     let Some(probe) = https_probe_url(&url) else {
         return Ok("unknown".to_string());
     };
+    // Bare on purpose: an anonymous `ls-remote` against a URL, no local repo.
     let mut cmd = crate::paths::command_no_window("git");
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     // No credential helper, no stored token: the whole point is what an
@@ -3604,8 +3649,8 @@ fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, St
         }
         // Bounded (#2349), in the folder rather than `-C` so the FIFO pre-check
         // sees it: one hung `config` read must not hold the whole sweep.
-        let mut cmd = crate::paths::command_no_window("git");
-        cmd.args(["remote", "get-url", "origin"]).current_dir(dir);
+        // Hookless: a background sweep over every project's repo.
+        let cmd = hookless_git_command_in(dir, &["remote", "get-url", "origin"]);
         let output = crate::services::git_bounded::output_within(cmd, std::time::Duration::from_secs(15));
         let Ok(output) = output else { continue };
         if !output.status.success() {
@@ -5634,6 +5679,197 @@ filename note.txt
         assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
         assert!(!Path::new(&format!("/proc/{pid}")).exists(), "git {pid} left behind");
     }
+
+    /// Spawns of `git` that bypass [`hardened_git_command_in`] on purpose, as
+    /// `(file under src/, enclosing fn, why)`. None of them runs git in a
+    /// project's repo; each site carries the same reason as a comment.
+    const BARE_GIT_ALLOWED: &[(&str, &str, &str)] = &[
+        ("commands/git.rs", "git_command", "the hardened builder itself"),
+        ("commands/git.rs", "surviving_denylisted_key", "`config --file` on one file, no repo"),
+        ("commands/git.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
+        ("commands/git.rs", "git_available", "`--version`, no repo"),
+        ("commands/git.rs", "git_clone_blocking", "network clone into a new empty dir"),
+        ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),
+        ("commands/sync.rs", "diff_mirror_vs_host", "`diff --no-index` of two files"),
+        ("services/dev_build.rs", "commits_behind", "the app's own checkout"),
+        ("services/dev_build.rs", "head_sha", "the app's own checkout"),
+        ("services/skills.rs", "refresh_source", "the skills cache clone in the state dir"),
+    ];
+
+    /// A `#[cfg(test)]`-style attribute line (`cfg(test)`, `cfg(all(test, …))`).
+    fn is_test_cfg(line: &str) -> bool {
+        let t = line.trim();
+        t.starts_with("#[cfg(test)]") || t.starts_with("#[cfg(all(test")
+    }
+
+    /// The `mod` an attribute at `lines[at]` applies to: `Some((name, inline))`
+    /// when the next non-attribute, non-comment line declares one.
+    fn module_after(lines: &[&str], at: usize) -> Option<(String, bool)> {
+        let next = lines[at + 1..]
+            .iter()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty() && !l.starts_with("#[") && !l.starts_with("//"))?;
+        let rest = next.strip_prefix("pub(crate) ").or_else(|| next.strip_prefix("pub ")).unwrap_or(next);
+        let rest = rest.strip_prefix("mod ")?;
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        Some((name, rest.trim_end().ends_with('{')))
+    }
+
+    /// The name of the `fn` whose body holds `lines[at]`: the nearest
+    /// `fn` item header at or above it.
+    fn enclosing_fn(lines: &[&str], at: usize) -> String {
+        const QUALIFIERS: &[&str] = &["pub", "pub(crate)", "pub(super)", "async", "const", "unsafe"];
+        for line in lines[..=at].iter().rev() {
+            let t = line.trim();
+            if t.starts_with("//") {
+                continue;
+            }
+            let Some(idx) = t.find("fn ") else { continue };
+            if !t[..idx].split_whitespace().all(|w| QUALIFIERS.contains(&w)) {
+                continue;
+            }
+            return t[idx + 3..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        }
+        String::new()
+    }
+
+    /// Which lines belong to an inline `#[cfg(test)] mod … { … }`: from the
+    /// attribute to the module's closing `}` — the first later line that is
+    /// exactly the `mod` line's indentation plus `}` (rustfmt layout). Code
+    /// after a test module (this file has some) is still scanned.
+    fn inline_test_lines(lines: &[&str]) -> Vec<bool> {
+        let mut in_test = vec![false; lines.len()];
+        let mut i = 0;
+        while i < lines.len() {
+            if !is_test_cfg(lines[i]) || !matches!(module_after(lines, i), Some((_, true))) {
+                i += 1;
+                continue;
+            }
+            let Some(mod_at) = (i + 1..lines.len()).find(|&j| {
+                let t = lines[j].trim_start();
+                t.starts_with("mod ") || t.starts_with("pub mod ") || t.starts_with("pub(crate) mod ")
+            }) else {
+                break;
+            };
+            let indent = &lines[mod_at][..lines[mod_at].len() - lines[mod_at].trim_start().len()];
+            let close = format!("{indent}}}");
+            let end = (mod_at + 1..lines.len()).find(|&j| lines[j].trim_end() == close).unwrap_or(lines.len() - 1);
+            for flag in &mut in_test[i..=end] {
+                *flag = true;
+            }
+            i = end + 1;
+        }
+        in_test
+    }
+
+    #[test]
+    fn the_git_spawn_scan_skips_test_modules_but_not_code_after_them() {
+        let src = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {\n    }\n}\n\nfn b() {}\n    #[cfg(test)]\n    mod inner {\n    }\nfn c() {}\n";
+        let lines: Vec<&str> = src.lines().collect();
+        let flagged: Vec<usize> = inline_test_lines(&lines).iter().enumerate().filter(|(_, f)| **f).map(|(i, _)| i).collect();
+        assert_eq!(flagged, vec![1, 2, 3, 4, 5, 8, 9, 10]);
+        assert_eq!(enclosing_fn(&lines, 4), "t");
+        assert_eq!(enclosing_fn(&lines, 10), "b");
+        assert_eq!(enclosing_fn(&lines, 11), "c"); // a one-line fn names itself
+    }
+
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// #6 (whole-project screen 2026-10-15): every LOCAL git spawn goes through
+    /// [`hardened_git_command_in`] (config sanitized, hooks off, common dir
+    /// pinned). A source scan over every production file under `src/`: a bare
+    /// `command_no_window("git")` / `Command::new("git")` outside
+    /// [`BARE_GIT_ALLOWED`] fails. Test code is skipped: inline
+    /// `#[cfg(test)] mod … { … }` bodies ([`inline_test_lines`]) and files that
+    /// are themselves `#[cfg(test)] mod …;` modules. Remote git (`ssh … git`)
+    /// does not match.
+    #[test]
+    fn every_local_git_spawn_goes_through_the_hardened_builder() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+        let rel = |p: &Path| -> String {
+            p.strip_prefix(&src)
+                .unwrap()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        let texts: Vec<(PathBuf, String)> = files
+            .into_iter()
+            .map(|p| {
+                let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+                (p, text)
+            })
+            .collect();
+
+        // Out-of-line test modules: `#[cfg(test)] mod name;` in `a/b.rs` is
+        // `a/b/name.rs` or `a/b/name/…`; in `a/mod.rs` / `lib.rs` it is `a/name…`.
+        let mut test_only: Vec<PathBuf> = Vec::new();
+        for (path, text) in &texts {
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if !is_test_cfg(line) {
+                    continue;
+                }
+                let Some((name, false)) = module_after(&lines, i) else { continue };
+                let parent = path.parent().unwrap();
+                let stem = path.file_stem().unwrap().to_string_lossy();
+                let dir = if matches!(stem.as_ref(), "mod" | "lib" | "main") {
+                    parent.to_path_buf()
+                } else {
+                    parent.join(stem.as_ref())
+                };
+                test_only.push(dir.join(format!("{name}.rs")));
+                test_only.push(dir.join(&name));
+            }
+        }
+
+        let mut used = std::collections::HashSet::new();
+        let mut offenders = Vec::new();
+        for (path, text) in &texts {
+            if test_only.iter().any(|t| path.starts_with(t)) {
+                continue;
+            }
+            let file = rel(path);
+            let lines: Vec<&str> = text.lines().collect();
+            let in_test = inline_test_lines(&lines);
+            for (i, line) in lines.iter().enumerate() {
+                let t = line.trim();
+                if in_test[i] || t.starts_with("//") {
+                    continue;
+                }
+                if !t.contains(concat!("command_no_window(", "\"git\")")) && !t.contains(concat!("Command::new(", "\"git\")")) {
+                    continue;
+                }
+                let func = enclosing_fn(&lines, i);
+                match BARE_GIT_ALLOWED.iter().find(|(f, n, _)| *f == file && *n == func) {
+                    Some(allowed) => {
+                        used.insert(*allowed);
+                    }
+                    None => offenders.push(format!("{file}:{} (fn {func}): {t}", i + 1)),
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "bare local git spawns — use commands::git::hardened_git_command_in (hookless_ in the background), \
+             or allow one in BARE_GIT_ALLOWED with its reason:\n{}",
+            offenders.join("\n")
+        );
+        let stale: Vec<_> = BARE_GIT_ALLOWED.iter().filter(|a| !used.contains(*a)).collect();
+        assert!(stale.is_empty(), "BARE_GIT_ALLOWED entries that match no spawn any more: {stale:?}");
+    }
 }
 
 /// Hosted plan §6.5 gate 1: in a shared project's repo, config sanitizing
@@ -5709,6 +5945,34 @@ mod shared_gate_tests {
         assert_eq!(out.status.code(), Some(128));
         assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "refused: because");
         assert!(out.stdout.is_empty());
+        // A caller appending arguments (`worktree repair <paths>`) adds nothing
+        // that runs: they are positional parameters, never code.
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("ran");
+        let out = refusing_command("refused")
+            .arg(format!("; touch {}", marker.display()))
+            .arg(format!("$(touch {})", marker.display()))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(128));
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "refused");
+        assert!(!marker.exists());
+    }
+
+    /// Windows has no `/bin/sh`: the refusal runs Git for Windows' `sh.exe`,
+    /// found from the git it would have run, wherever that git lives.
+    #[test]
+    fn the_windows_refusal_shell_is_found_beside_git() {
+        let root = Path::new("C:").join("Program Files").join("Git");
+        let sh = root.join("bin").join("sh.exe");
+        for git in [
+            root.join("cmd").join("git.exe"),
+            root.join("bin").join("git.exe"),
+            root.join("mingw64").join("bin").join("git.exe"),
+        ] {
+            assert!(sh_beside_git(&git).contains(&sh), "{}: {:?}", git.display(), sh_beside_git(&git));
+        }
+        assert_eq!(sh_beside_git(&root.join("cmd").join("git.exe"))[0], sh, "the install's own bin first");
     }
 
     #[test]
