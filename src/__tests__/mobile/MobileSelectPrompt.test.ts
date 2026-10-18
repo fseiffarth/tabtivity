@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
+import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
@@ -228,6 +229,7 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
       { index: 1, number: 2, label: "Green", description: "Calm, and it matches the logo we already ship" },
       { index: 2, number: 3, label: "Blue", description: undefined },
       { index: 3, number: 4, label: "Type something.", description: undefined },
+      { index: 4, number: 5, label: "Chat about this" },
     ]);
     // The highlight walked down: the same dialog, read the same way.
     expect(readSelectPrompt(lines("  1. Red", "     Warm and loud", "❯ 2. Green", "     Calm"))?.current).toBe(1);
@@ -289,6 +291,7 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(prompt?.options).toEqual([
       { index: 0, number: 1, label: "Full-screen library (Recommended)", description: undefined },
       { index: 1, number: 2, label: "Keep the side drawer", description: undefined },
+      { index: 2, number: UNNUMBERED, label: "Chat about this" },
     ]);
     // Narrower, the panel's own frame wraps too; the rows read the same.
     expect(readSelectPrompt(lines(
@@ -299,6 +302,86 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     ), "Claude Code", 56)?.options.map((option) => option.label)).toEqual(["Full-screen library (Recommended)", "Keep the side drawer"]);
     // Text a column shallower without a panel beside it is still not a row's.
     expect(readSelectPrompt(lines("❯ 1. Red", "    (said twice)", "  2. Green"))).toBeNull();
+  });
+
+  it("offers a preview question's unnumbered Chat about this row", () => {
+    // Claude Code 2.1.300's AskUserQuestion with previews, captured off a
+    // 60-column tmux pane and read through `readableScreen`. Only the answers
+    // are numbered; `Chat about this` sits under a rule below the notes line,
+    // and the phone's chat offered no way to talk the question over.
+    const rule = "─".repeat(60);
+    const frame = (row: 1 | 2 | "chat") => {
+      const rows = [
+        " ☐ Colour",
+        "",
+        "Which colour?",
+        "",
+        `${row === 1 ? "❯" : " "} 1. Red                         ┌────────────────────────┐`,
+        `${row === 1 ? " " : "❯"} 2. Green                       │ ---                    │`,
+        "                                 │  |GREEN|               │",
+        "                                 │   ^^^^^^               │",
+        "                                 └────────────────────────┘",
+        "",
+        "                                 Notes: press n to add notes",
+        "",
+        rule,
+        // The answer above keeps its `❯` while this row has the highlight:
+        // the panel still previews it.
+        `${row === "chat" ? "❯" : " "} Chat about this`,
+        "",
+        "Enter to select · ↑/↓ to navigate · n to add notes · Esc to",
+        "cancel",
+      ];
+      return readableScreen({ length: rows.length, getLine: (index) => ({ translateToString: () => rows[index] }) }).lines;
+    };
+    const first = readSelectPrompt(frame(1), "Claude Code", 60);
+    expect(first?.title).toBe("Which colour?");
+    expect(first?.current).toBe(0);
+    expect(first?.options).toEqual([
+      { index: 0, number: 1, label: "Red", description: undefined },
+      { index: 1, number: 2, label: "Green", description: undefined },
+      { index: 2, number: UNNUMBERED, label: "Chat about this" },
+    ]);
+    // Walked onto from the first row: two ↓, one past each answer.
+    expect(selectKeys(first!.current, 2)).toEqual([`${ESC}[B`, `${ESC}[B`, "\r"]);
+    expect(readSelectPrompt(frame(2), "Claude Code", 60)?.current).toBe(1);
+    const chat = frame("chat");
+    expect(readSelectPrompt(chat, "Claude Code", 60)?.current).toBe(2);
+    // Highlighted, it opens with the input line's `❯`: still the question.
+    expect(inputFrameStart(chat, "Claude Code")).toBe(chat.length);
+    // A question without previews numbers it, still under its own rule —
+    // and highlighted, it is the one row marked.
+    const plain = (chatRow: boolean) => {
+      const rows = [
+        "Which size?",
+        "",
+        `${chatRow ? " " : "❯"} 1. Small`,
+        "     A small size option.",
+        "  2. Large",
+        "     A large size option.",
+        "  3. Type something.",
+        rule,
+        `${chatRow ? "❯" : " "} 4. Chat about this`,
+        "",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+      ];
+      return readableScreen({ length: rows.length, getLine: (index) => ({ translateToString: () => rows[index] }) }).lines;
+    };
+    const plainFirst = readSelectPrompt(plain(false), "Claude Code", 60);
+    expect(plainFirst?.current).toBe(0);
+    expect(plainFirst?.options.slice(2)).toEqual([
+      { index: 2, number: 3, label: "Type something.", description: undefined },
+      { index: 3, number: 4, label: "Chat about this" },
+    ]);
+    expect(readSelectPrompt(plain(true), "Claude Code", 60)?.current).toBe(3);
+    // A dialog that draws it among its rows has it once.
+    expect(readSelectPrompt(lines(
+      "❯ 1. Red",
+      "  2. Green",
+      "  3. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ))?.options.map((option) => option.label)).toEqual(["Red", "Green", "Chat about this"]);
   });
 
   it("shows a fenced plan from its top, blanks and all", () => {

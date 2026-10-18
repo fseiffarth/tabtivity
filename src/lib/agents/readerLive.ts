@@ -12,6 +12,7 @@ import {
   readSelectPrompt,
   selectKeys,
   selectSignature,
+  UNNUMBERED,
   type QuestionStepKeys,
   type QuestionTab,
   type SelectOption,
@@ -184,7 +185,7 @@ export function answerTextKeys(question: SelectPrompt, option: SelectOption, tex
   return freeTextRow(option) ? freeTextWrites(question.current, option, text) : [];
 }
 
-export { freeTextRow };
+export { freeTextRow, UNNUMBERED };
 
 /** The keys that move `live`'s several-question dialog from step `from` to
  * step `to` — Claude Code's ←/→, Codex's PageUp/PageDown; the answers given

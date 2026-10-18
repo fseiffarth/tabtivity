@@ -12,7 +12,7 @@ import {
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
-import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { onSentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
@@ -259,7 +259,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
                 disabled={busy}
                 onClick={() => (freeText ? setTyping(open ? null : option.index) : onAnswer(option.index))}
               >
-                <span className="terminal-reader-option-number">{option.number}</span>
+                <span className="terminal-reader-option-number">{option.number !== UNNUMBERED && option.number}</span>
                 <span className="terminal-reader-option-label">
                   <span>
                     {recommended ? option.label.slice(0, recommended.index) : label}

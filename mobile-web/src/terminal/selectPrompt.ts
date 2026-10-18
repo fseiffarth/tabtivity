@@ -129,6 +129,25 @@ const RADIO_AGENT = /gemini|qwen/iu;
 const ACTION_ROW = /^\s*([❯▸▶›>→])?\s*(Submit|Next)$/u;
 const CHECKBOX_LABEL = /^\[[^\]]\]\s/u;
 const CHECKBOX_ROW = /^\s*[❯▸▶›>→]?\s*\d{1,2}[.)]\s+\[[^\]]\]\s/u;
+/** Claude Code's agent question (2.1.300) draws `Chat about this` under a rule,
+ * apart from the answers — numbered on a plain question, unnumbered and below
+ * the panel's notes line on one with previews. One ↓ past the last answer
+ * highlights it; with previews that answer keeps its own `❯`, since the panel
+ * still shows its preview:
+ *
+ *       3. Type something.
+ *     ──────────────────────────────
+ *     ❯ 4. Chat about this
+ *
+ *     ❯ 2. Green              │ ---       │
+ *                             └───────────┘
+ *                             Notes: press n to add notes
+ *     ──────────────────────────────
+ *     ❯ Chat about this
+ *
+ * The rule ends the answers' run, and the phone could only pick an answer,
+ * never talk the question over. */
+const CHAT_ROW = /^\s*([❯▸▶›>→])?\s*(?:(\d{1,2})[.)]\s+)?Chat about this$/u;
 /** `SelectOption.number` of a row the dialog printed no number beside. */
 export const UNNUMBERED = 0;
 
@@ -146,6 +165,24 @@ export function isActionRow(lines: readonly { text: string }[], index: number): 
 export function isUnnumberedRow(lines: readonly { text: string }[], index: number): boolean {
   const prompt = readUnnumberedPrompt(lines, Math.max(0, lines.length - SEARCH_WINDOW));
   return prompt !== null && index >= prompt.start;
+}
+
+/** Whether `lines[index]` is an agent question's `Chat about this` row
+ * (`CHAT_ROW`) — highlighted, it too opens with the input line's `❯`. */
+export function isChatRow(lines: readonly { text: string }[], index: number): boolean {
+  return CHAT_ROW.test(lines[index].text) && dialogFooterShown(lines);
+}
+
+/** The `Chat about this` row (`CHAT_ROW`) between the answers' run, which
+ * starts at `start`, and the dialog's footer — or `null`. */
+function readChatRow(lines: readonly SelectLineLike[], start: number): { marked: boolean; number: number } | null {
+  for (let index = start; index < lines.length; index += 1) {
+    const text = lines[index].text;
+    if (DIALOG_FOOTER.test(text)) return null;
+    const chat = CHAT_ROW.exec(text);
+    if (chat) return { marked: chat[1] !== undefined, number: chat[2] ? Number(chat[2]) : UNNUMBERED };
+  }
+  return null;
 }
 
 /** Whether the tab's agent marks a dialog's highlighted row with `●` — and so
@@ -520,10 +557,17 @@ export function readSelectPrompt(
     // edge marker. Its heading and the caller's agent identify that slice.
     const codexModelSlice = /codex/iu.test(agentLabel ?? "") && title?.startsWith("Select Model") === true;
     if (candidate.options[0].number !== 1 && !windowed && !codexModelSlice) continue;
-    if (candidate.options.length >= MIN_OPTIONS && candidate.marked.length === 1) {
+    // Read once: a dialog that draws it in the run has it among the rows.
+    const chat = candidate.options.some((entry) => CHAT_ROW.test(entry.label)) ? null : readChatRow(lines, candidate.start);
+    // Highlighted, it may be the one row marked.
+    const marks = candidate.marked.length + (chat?.marked && candidate.marked.length === 0 ? 1 : 0);
+    if (candidate.options.length >= MIN_OPTIONS && marks === 1) {
+      const options = chat
+        ? [...candidate.options, { index: candidate.options.length, number: chat.number, label: "Chat about this" }]
+        : candidate.options;
       return {
-        options: candidate.options,
-        current: candidate.marked[0],
+        options,
+        current: chat?.marked ? candidate.options.length : candidate.marked[0],
         title,
         start: candidate.start,
         ...readContext(lines, candidate.start),
