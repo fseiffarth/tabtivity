@@ -9,7 +9,8 @@ import {
   openCodePickKeys,
   readOpenCodePicker,
 } from "../../../mobile-web/src/terminal/openCodeMini";
-import type { ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { readableScreen, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { readModelPicker } from "../../lib/agents/readerLive";
 import { BRAND } from "../../lib/brand";
 
 /**
@@ -402,6 +403,46 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     expect(read?.options[0].description).toBe("Free");
     // The transcript's `>` far left of the labels is not the highlight.
     expect(read?.current).toBe(0);
+  });
+
+  it("reads the rows beside the composer box at the dialog's own column", () => {
+    // The phone's narrow pane, as a capture showed it (2026-10-18): the full
+    // TUI's composer box sits three columns in behind the dialog, so the rows
+    // beside it start with its `┃`. `readableScreen` takes that edge off the
+    // front of a row, and the picker read those rows five columns short:
+    // `Recent` as `t`, `Muse Spark 1.3 Free…` as `Spark 1.3 Free…`.
+    const rows = [
+      "              Select model                          esc",
+      "",
+      "              Search",
+      "",
+      "   ┃  Ask     Recent",
+      "   ┃        ● Muse Spark 1.3 Free OpenCode Zen     Free",
+      "   ┃  Build   MiMo-V2.6-Flash Free OpenCode Zen    Free",
+      "",
+      "              OpenCode Zen",
+      "              Ling 3.0 Flash Fin Free               Free",
+      "",
+      "              Connect provider ctrl+a  Favorite ctrl+f",
+    ];
+    const buffer: ReadableBufferLike = {
+      length: rows.length,
+      getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }),
+    };
+    const labels = [
+      "Recent",
+      "Muse Spark 1.3 Free OpenCode Zen",
+      "MiMo-V2.6-Flash Free OpenCode Zen",
+      "OpenCode Zen",
+      "Ling 3.0 Flash Fin Free",
+    ];
+    // The phone reads the screen through `readableScreen`, the desktop's
+    // Chat view through `readModelPicker`: both get the whole labels.
+    const phone = readOpenCodePicker(readableScreen(buffer).lines);
+    expect(phone?.options.map((option) => option.label)).toEqual(labels);
+    expect(phone?.current).toBe(1);
+    expect(phone?.options[1].description).toBe("Free");
+    expect(readModelPicker(buffer, "OpenCode")?.options.map((option) => option.label)).toEqual(labels);
   });
 
   it("is no picker for a conversation that only mentions one", () => {

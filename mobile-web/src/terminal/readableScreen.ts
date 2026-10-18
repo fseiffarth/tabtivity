@@ -30,6 +30,10 @@ export interface ReadableLine {
   spans: ReadableSpan[];
   /** Original labelled rule, for detecting the input frame after stripping it. */
   frameText?: string;
+  /** Columns the left frame edge (`LEFT_EDGE`) took off the front of `text`.
+   * A reader that goes by screen column — a dialog drawn over a box whose `┃`
+   * sits a few columns in — puts them back; everything else reads the text. */
+  edge?: number;
   /** A frame-only row was dropped right above this line. No paragraph break
    * stands in for it, so this is what still says the program drew a divider
    * here (`selectPrompt`'s heading stops at one). */
@@ -277,7 +281,7 @@ function spanText(spans: ReadableSpan[]) {
  * the text, a row made only of frame is `"border"`, and an empty row is
  * `"blank"` — the two are not the same, because a dropped border must not open
  * a paragraph break where the program drew none. */
-function undecorate(spans: ReadableSpan[]): ReadableSpan[] | "blank" | "border" {
+function undecorate(spans: ReadableSpan[]): { spans: ReadableSpan[]; edge: number } | "blank" | "border" {
   const text = spanText(spans);
   if (!text.trim()) return "blank";
   if (BORDER_ONLY.test(text)) return "border";
@@ -285,7 +289,7 @@ function undecorate(spans: ReadableSpan[]): ReadableSpan[] | "blank" | "border" 
   if (left) trimSpansLeft(spans, left[0].length);
   const right = RIGHT_EDGE.exec(spanText(spans));
   if (right) trimSpansRight(spans, right[0].length);
-  return spans.length ? spans : "blank";
+  return spans.length ? { spans, edge: left ? left[0].length : 0 } : "blank";
 }
 
 /** A rule that runs to the end of its row, with a gutter of blanks before it —
@@ -433,14 +437,14 @@ export function readableRange(
   const lines: ReadableLine[] = [];
   let ruled = false;
   for (const line of joined) {
-    const spans = undecorate(line.spans);
-    if (spans === "border") {
+    const undecorated = undecorate(line.spans);
+    if (undecorated === "border") {
       ruled = true;
       continue;
     }
     const afterRule = ruled;
     ruled = false;
-    if (spans === "blank") {
+    if (undecorated === "blank") {
       // Collapse a run of blank rows — a repainting TUI leaves plenty — into a
       // single paragraph break, and never open the range with one unless the
       // caller says real text stands directly above it.
@@ -450,13 +454,14 @@ export function readableRange(
       }
       continue;
     }
+    const { spans, edge } = undecorated;
     const text = spanText(spans);
     if (LABELLED_RULE.test(text)) {
       trimSpansRight(spans, RULE_RIGHT.exec(text)![0].length);
       trimSpansLeft(spans, RULE_LEFT.exec(text)![0].length);
       lines.push(capLine({ key: line.key, text: spanText(spans), spans, frameText: text, ...(afterRule && { afterRule }) }));
     } else {
-      lines.push(capLine({ key: line.key, text, spans, ...(afterRule && { afterRule }) }));
+      lines.push(capLine({ key: line.key, text, spans, ...(afterRule && { afterRule }), ...(edge > 0 && { edge }) }));
     }
   }
   return lines;

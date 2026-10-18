@@ -466,11 +466,22 @@ const MIN_PICKER_WIDTH = 24;
 const COLUMN_SPLIT = /\s{2,}/u;
 const MAX_LABEL = 80;
 
-export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPrompt | null {
+/** A row as the screen has it, column for column. `readableScreen` takes a
+ * frame edge off the front of a row (`edge`), which is right for a box's own
+ * rows but not for a dialog drawn over one: on a narrow pane the composer's
+ * `┃` sits three columns in, and the dialog rows beside it came out five
+ * columns short — `Muse Spark 1.3 Free` read as `Spark 1.3 Free`, `Recent` as
+ * `t`. The edge is put back as blanks, so every row lines up with the title. */
+function screenText(line: { text: string; edge?: number }): string {
+  return line.edge ? " ".repeat(line.edge) + line.text : line.text;
+}
+
+export function readOpenCodePicker(lines: readonly { text: string; edge?: number }[]): SelectPrompt | null {
   let title = -1;
   let heading: RegExpExecArray | null = null;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    heading = PICKER_TITLE.exec(lines[index].text) ?? PICKER_TITLE_OVER.exec(lines[index].text);
+    const text = screenText(lines[index]);
+    heading = PICKER_TITLE.exec(text) ?? PICKER_TITLE_OVER.exec(text);
     if (heading) {
       title = index;
       break;
@@ -494,7 +505,7 @@ export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPr
   let index = title + 1;
   // Blank within the dialog's own band: over a conversation, the rows the
   // dialog leaves empty still carry the transcript beside it.
-  const skipBlank = () => { while (index < lines.length && !cell(lines[index].text)) index += 1; };
+  const skipBlank = () => { while (index < lines.length && !cell(screenText(lines[index]))) index += 1; };
   skipBlank();
   // The search field, whether it holds the placeholder or a typed query.
   if (index >= lines.length) return null;
@@ -504,7 +515,7 @@ export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPr
   let current = -1;
   let gap = 0;
   for (; index < lines.length && options.length < MAX_PICKER_ROWS; index += 1) {
-    const text = lines[index].text;
+    const text = screenText(lines[index]);
     const row = cell(text);
     // Nothing in the dialog's band — a blank row, or the screen behind the
     // overlay showing past its left edge: between two groups of the same
