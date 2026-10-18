@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1711,7 +1711,11 @@ function SplitView(props: TreeProps & { node: Extract<LayoutNode, { type: "split
       if (rafId != null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        props.onResized();
+        // Commit the new pane rects before this frame paints. A plain state
+        // write is scheduled after the paint, so the flex-sized chrome (tab
+        // bars, borders) moved a frame ahead of the flat pane layer and the two
+        // overdrew each other for as long as the drag lasted.
+        flushSync(() => props.onResized());
       });
     };
 
