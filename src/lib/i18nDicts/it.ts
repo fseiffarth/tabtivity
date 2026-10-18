@@ -978,6 +978,7 @@ export const dict: Dict = {
   "mobile.markup.changed": "Questo file è cambiato da quando l’hai annotato.",
   "mobile.markup.limit": "È il massimo che un invio può portare.",
   "mobile.markup.loading": "Apertura delle pagine…",
+  "mobile.markup.downloading": "Caricamento del file… {got} di {size}",
   "mobile.markup.page": "Pagina {n}",
   "mobile.markup.pageLoading": "Pagina {n}…",
   "mobile.markup.pageFailed": "Impossibile disegnare la pagina {n}.",

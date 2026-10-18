@@ -1042,6 +1042,7 @@ export const enSource = {
   "mobile.markup.changed": "This file changed since you marked it.",
   "mobile.markup.limit": "That is as much as one submit can carry.",
   "mobile.markup.loading": "Opening the pages…",
+  "mobile.markup.downloading": "Loading the file… {got} of {size}",
   "mobile.markup.page": "Page {n}",
   "mobile.markup.pageLoading": "Page {n}…",
   "mobile.markup.pageFailed": "Page {n} could not be drawn.",

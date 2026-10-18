@@ -299,6 +299,56 @@ describe("MarkupView", () => {
     Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
   });
 
+  it("shows a slow PDF's download as it comes in and gives up only when it stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const PDF = { name: "paper.pdf", kind: "application/pdf", size: 6, modified: 1_790_000_000 };
+      // The PDF's latest fetch is the one fed.
+      let feed!: ReadableStreamDefaultController<Uint8Array>;
+      vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => (String(input).endsWith("/outbox/paper.pdf")
+        ? new Response(new ReadableStream<Uint8Array>({ start: (controller) => { feed = controller; } }), { status: 200, headers: { "content-length": "6" } })
+        : new Response(JSON.stringify({ error: "not_found" }), { status: 404 }))));
+      store.loadLayer.mockResolvedValue(null);
+      const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} reader={{ actions: null }} />);
+      const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
+      const posted = vi.spyOn(frame, "postMessage").mockImplementation(() => {});
+      await act(async () => { window.dispatchEvent(new MessageEvent("message", { data: { type: "ready" }, origin: "null", source: frame })); await vi.advanceTimersByTimeAsync(0); });
+      // A minute of bytes trickling in, one piece every 20 s: never too long.
+      for (const piece of [[37, 80], [68, 70]]) {
+        await act(async () => { feed.enqueue(new Uint8Array(piece)); await vi.advanceTimersByTimeAsync(20_000); });
+      }
+      expect(screen.getByText("Loading the file… 4 B of 6 B")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+      await act(async () => { feed.enqueue(new Uint8Array([45, 49])); feed.close(); await vi.advanceTimersByTimeAsync(0); });
+      const open = posted.mock.calls.find(([message]) => (message as { type?: string }).type === "open");
+      expect([...new Uint8Array((open![0] as { bytes: ArrayBuffer }).bytes)]).toEqual([37, 80, 68, 70, 45, 49]);
+      expect(screen.getByText("Opening the pages…")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a PDF up once its download has stalled", async () => {
+    vi.useFakeTimers();
+    try {
+      const PDF = { name: "paper.pdf", kind: "application/pdf", size: 6, modified: 1_790_000_000 };
+      vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          controller.enqueue(new Uint8Array([37, 80]));
+          init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        },
+      }), { status: 200 })));
+      store.loadLayer.mockResolvedValue(null);
+      render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} reader={{ actions: null }} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+      expect(screen.queryByRole("alert")).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(screen.getByRole("alert").textContent).toBe("The file could not be loaded from the desktop.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps Submit off while nothing is marked", async () => {
     desktop();
     store.loadLayer.mockResolvedValue(null);
