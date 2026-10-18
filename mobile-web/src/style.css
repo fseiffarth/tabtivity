@@ -649,7 +649,9 @@ button.mobile-alert-row { cursor:pointer; }
 .mobile-calendar-event div,.mobile-calendar-manage-row div { display:grid; gap:3px; min-width:0; }
 .mobile-calendar-event span { color:#aeb3c6; overflow-wrap:anywhere; }
 .mobile-calendar-event.cancelled { opacity:.58; text-decoration:line-through; }
-.mobile-calendar-manage-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid #303545; }
+.mobile-calendar-manage-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid #303545; }
+.mobile-calendar-manage-row strong { overflow-wrap:anywhere; }
+.mobile-calendar-manage-actions { grid-column:2 / -1; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
 .calendar-new { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:end; margin-top:14px; }
 .calendar-new input[type="color"] { min-width:54px; padding:5px; }
 .mobile-calendar-screen header { margin-bottom:-4px; }
