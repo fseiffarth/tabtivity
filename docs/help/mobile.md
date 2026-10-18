@@ -256,12 +256,14 @@ marking. It opens that tab's own model list.
 
 Switch on **Project files on the phone** under **Project access** (off by
 default) and a project's screen on the phone opens its files when you swipe
-from left to right across it, the screen's left edge included — a drawer
-slides in from the left (swipe back, or tap beside it, to close it). Inside a
-tab's Chat (or a shell tab's Reader) the same swipe opens them when it starts in the left third of
-the screen; further right it shows the agent's status line (a shell tab has
-none, so there any left→right swipe opens the files); the ☰ in the header
-opens them too, in either view. Walk the folders and
+from right to left across it, the screen's right edge included — a drawer
+slides in from the right (swipe back, or tap beside it, to close it). A swipe
+from left to right goes back, like the ‹ in the header. Inside a tab's Chat
+(or a shell tab's Reader) right to left opens the files too (if the agent's
+status line is showing, the first such swipe puts it away); left to right goes
+back when it starts in the left third of the screen, and further right shows
+the agent's status line (a shell tab has none, so there any left→right swipe
+goes back); the ☰ in the header opens the files too, in either view. Walk the folders and
 open a file —
 pictures and text full screen, PDFs in the browser, with Save and Share. Nothing
 can be changed, moved or deleted from there; the one write is adding a new

@@ -144,7 +144,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const [galleryOpen, setGalleryOpen] = useState(false);
   /** The file open full screen (a picture or a text preview). */
   const [fileOpen, setFileOpen] = useState<OutboxFile | null>(null);
-  /** The project's drawer, slid in from the left by a left→right swipe over
+  /** The project's drawer, slid in from the right by a right→left swipe over
    * the screen or the header's ☰: the agent's files and Git, then the
    * read-only file browser while the desktop's "Project files on the phone"
    * switch is on (`detail.files`). */
@@ -173,6 +173,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * or the root console has no repo of its own. */
   const [gitOpen, setGitOpen] = useState(false);
   const screenRef = useRef<HTMLElement | null>(null);
+  /** The latest `back`, for the swipe listener that outlives a render. */
+  const backRef = useRef(back);
+  backRef.current = back;
   /** A chat list of the assistant scope, not a project: no folder stands behind
    * it, so everything that reaches one (files, outbox, inbox, git, schedules,
    * collected prompts) stays out, and its chats are listed newest first. */
@@ -197,14 +200,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     const host = screenRef.current;
     if (drawerOpen || !host) return;
     // Not from a card's grip (its drag is its own, `touch-action:none`), and
-    // not through a sheet laid over the list. Left→right pulls the drawer in,
-    // from the left edge too; right→left over a card closes it.
+    // not through a sheet laid over the list. Left→right goes back, as the
+    // header's ‹ does; right→left pulls the drawer in, from the right edge too.
     return installFocusSwipe(host, {
-      onSwipeRight: () => { if (drawerOffered) setDrawerOpen(true); },
-      // A leftward drag over a card closes it (`installCardSwipe`, below), so a
-      // leftward flick has nothing left to do here.
-      onSwipeLeft: () => {},
-    }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: drawerOffered });
+      onSwipeRight: () => backRef.current(),
+      // A leftward drag over a card closes it (`installCardSwipe`, below), not
+      // the drawer.
+      onSwipeLeft: (_start, target) => { if (drawerOffered && !target?.closest("[data-swipe-close]")) setDrawerOpen(true); },
+    }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: true, rightEdge: drawerOffered });
   }, [drawerOffered, drawerOpen]);
   useEffect(() => {
     const host = screenRef.current;
@@ -620,7 +623,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       <div className="project-header-tools">
         {/* What this project has besides its tabs — the agent's files (the
             🖼 the Focus screen carries), Git and the file browser — lives in
-            the drawer a left→right swipe also pulls in. */}
+            the drawer a right→left swipe also pulls in. */}
         {drawerOffered && <button
           className="drawer-open"
           onClick={() => setDrawerOpen(true)}

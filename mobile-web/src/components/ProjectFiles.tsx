@@ -10,8 +10,8 @@ import type { MarkupNewTab, MarkupTarget } from "./OutboxViewer";
 export { FileGlyph, asViewerFile } from "./FilesLibrary";
 
 /**
- * The project's drawer from the left edge: the project screen opens it on a
- * left→right swipe or its header's ☰, and a right→left swipe over it (or a
+ * The project's drawer from the right edge: the project screen opens it on a
+ * right→left swipe or its header's ☰, and a left→right swipe over it (or a
  * tap beside it) puts it away. It holds the project's menu (`menu`: 🖼 the
  * agent's files, ⎇ Git) and, while the desktop's "Project files on the phone"
  * switch is on (`browse`), a **Files** row that opens the full-screen
@@ -59,7 +59,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
     // Remounted with the drawer after the library closed, hence `libraryShown`.
     const host = drawer.current;
     if (libraryShown || !host) return;
-    return installFocusSwipe(host, { onSwipeRight: () => {}, onSwipeLeft: onClose });
+    return installFocusSwipe(host, { onSwipeRight: onClose, onSwipeLeft: () => {} });
   }, [libraryShown, onClose]);
 
   if (libraryShown) {

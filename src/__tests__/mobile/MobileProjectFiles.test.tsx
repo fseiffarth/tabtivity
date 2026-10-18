@@ -1,6 +1,6 @@
 /**
  * The project screen's read-only file browser (#31bo): the drawer a
- * left→right swipe or the header's ☰ opens (`ProjectFiles`) holds, below its
+ * right→left swipe or the header's ☰ opens (`ProjectFiles`) holds, below its
  * own rows and while the desktop's "Project files on the phone" switch is on,
  * a Files row that opens the full-screen library (`FilesLibrary`) — folders
  * walked by the sealed tokens the sidecar hands out, never a path, and files
@@ -156,7 +156,7 @@ describe("Mobile project — read-only file browser", () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
-      swipe(heading, 100, 300);
+      swipe(heading, 300, 100);
       expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
     const sheet = screen.getByRole("dialog", { name: "Alpha" });
@@ -486,14 +486,26 @@ describe("Mobile project — read-only file browser", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("opens from the screen's left edge, where a drawer is pulled from", async () => {
+  it("opens from the screen's right edge, where the drawer is pulled from", async () => {
     vi.stubGlobal("fetch", hostWith(true));
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
-      swipe(heading, 4, 200);
+      swipe(heading, window.innerWidth - 4, window.innerWidth - 200);
       expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
+  });
+
+  it("goes back on a left→right swipe, the screen's left edge included", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    const back = vi.fn();
+    render(<Project id="p1" back={back} terminal={() => {}} />);
+    const heading = await screen.findByRole("heading", { name: "Alpha" });
+    swipe(heading, 100, 300);
+    expect(back).toHaveBeenCalledTimes(1);
+    swipe(heading, 4, 200);
+    expect(back).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
   });
 
   it("opens from the header's ☰ beside the ＋ too, its own rows above Files", async () => {
@@ -509,16 +521,19 @@ describe("Mobile project — read-only file browser", () => {
     expect(await screen.findByRole("dialog", { name: "Git · Alpha" })).toBeTruthy();
   });
 
-  it("puts the drawer away on a right-to-left swipe over it", async () => {
+  it("puts the drawer away on a left-to-right swipe over it", async () => {
     vi.stubGlobal("fetch", hostWith(true));
-    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const back = vi.fn();
+    render(<Project id="p1" back={back} terminal={() => {}} />);
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
-      swipe(heading, 100, 300);
+      swipe(heading, 300, 100);
       expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
     const drawer = screen.getByRole("dialog", { name: "Alpha" });
-    swipe(drawer, 300, 100);
+    swipe(drawer, 100, 300);
+    // The drawer takes that swipe; the screen does not also go back.
+    expect(back).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
   });
 

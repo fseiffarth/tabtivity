@@ -1288,9 +1288,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .option-list button.current small { color:#7ea3dd; }
 .option-list svg { width:21px; height:21px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 /* The files drawer (`ProjectFiles`): the sheet's own look, stood up along the
-   left edge instead of the bottom, slid in by transform + opacity only. */
-.files-drawer-backdrop { align-items:stretch; justify-content:flex-start; }
-.project-files { align-content:start; width:min(88vw, 420px); max-height:none; height:100%; padding:max(22px, calc(12px + env(safe-area-inset-top))) 10px calc(16px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left)); border-top:0; border-right:1px solid #383c4d; border-radius:0 20px 20px 0; animation:files-drawer-in .18s ease-out; }
+   right edge instead of the bottom, slid in by transform + opacity only. */
+.files-drawer-backdrop { align-items:stretch; justify-content:flex-end; }
+.project-files { align-content:start; width:min(88vw, 420px); max-height:none; height:100%; padding:max(22px, calc(12px + env(safe-area-inset-top))) calc(10px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) 10px; border-top:0; border-left:1px solid #383c4d; border-radius:20px 0 0 20px; animation:files-drawer-in .18s ease-out; }
 /* Its head: a real row with room above it, the close a round cross (the
    composer's clear button) rather than a bare ✕ glyph; the empty twin on the
    right keeps the title centred. */
@@ -1298,7 +1298,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .files-close { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#2a2e3e; color:#c8cdda; }
 span.files-close { background:transparent; }
 .files-close svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
-@keyframes files-drawer-in { from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:none; } }
+@keyframes files-drawer-in { from { opacity:0; transform:translateX(24px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion:reduce) { .project-files,.files-library { animation:none; } }
 /* The drawer's Files row: a menu row with a folder's chevron. */
 .drawer-files .untested { margin-left:6px; }

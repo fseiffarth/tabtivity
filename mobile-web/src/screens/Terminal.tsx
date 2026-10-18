@@ -211,8 +211,8 @@ const STARTING_GRACE = 30_000;
 /** Turns fetched at first, and added per "Show earlier turns" tap. */
 const TRANSCRIPT_STEP = 120;
 /** A left→right swipe starting in this share of the screen, from the left,
- * opens the project's files; one starting further right, the status line. */
-const FILES_SWIPE_ZONE = 1 / 3;
+ * goes back; one starting further right shows the status line. */
+const BACK_SWIPE_ZONE = 1 / 3;
 
 /** An agent TUI parses one stdin chunk as one key event: a chunk that opens with
  * a control byte is read as that keypress and the remainder is dropped, so
@@ -842,6 +842,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const host = useRef<HTMLDivElement>(null);
   const wideHint = useRef<HTMLDivElement>(null);
   const readableHost = useRef<HTMLElement>(null);
+  /** The latest `back`, for the swipe listener that outlives a render. */
+  const backRef = useRef(back);
+  backRef.current = back;
   const composerInput = useRef<HTMLTextAreaElement>(null);
   /** A pen writes here: the composer opens a few lines tall, so the system's
    * handwriting-to-text (iPad Scribble) has room to write in. */
@@ -1225,15 +1228,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * says why it cannot be read — a phone shows no tooltip. */
   const [focusMenu, setFocusMenu] = useState(false);
   /** Whether Focus shows the strip with the rows the agent draws under its
-   * input box (cwd, model, mode, context…). A left→right swipe opens it, a
-   * right→left swipe or its ✕ closes it; never persisted. */
+   * input box (cwd, model, mode, context…). A left→right swipe outside the
+   * left third opens it, a right→left swipe or its ✕ closes it; never
+   * persisted. */
   const [statusStrip, setStatusStrip] = useState(false);
   /** The project's name while the desktop's "Project files on the phone"
    * switch is on for it (`detail.files`) — null while off, or unknown. */
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
-  /** The files drawer, the project screen's own, opened here by a left→right
-   * swipe that starts in the left third of the output (or anywhere on it
-   * when there is no status line to show). */
+  /** The files drawer, the project screen's own, opened here by a right→left
+   * swipe over the output (once the status line is put away). */
   const [filesOpen, setFilesOpen] = useState(false);
   const closeFiles = useCallback(() => setFilesOpen(false), []);
   /** Turns asked for; grows with "Show earlier turns". */
@@ -3634,15 +3637,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const readableShown = view === "focus" && (!altScreen || sessionShown);
   useEffect(() => {
     const stream = readableHost.current;
-    if ((!statusSwipe && !filesSwipe) || filesOpen || !stream) return;
+    if (filesOpen || !stream) return;
+    // Left→right goes back, as the header's ‹ does, from the left edge too;
+    // further right it shows the status line, where there is one. Right→left
+    // puts the status line away, else pulls the files in from the right.
     return installFocusSwipe(stream, {
       onSwipeRight: (start) => {
-        if (filesSwipe && (!statusSwipe || start.x < window.innerWidth * FILES_SWIPE_ZONE)) setFilesOpen(true);
-        else setStatusStrip(true);
+        if (statusSwipe && start.x >= window.innerWidth * BACK_SWIPE_ZONE) setStatusStrip(true);
+        else backRef.current();
       },
-      onSwipeLeft: () => setStatusStrip(false),
-    }, { leftEdge: filesSwipe });
-  }, [statusSwipe, filesSwipe, filesOpen, readableShown]);
+      onSwipeLeft: () => {
+        if (statusStrip && statusSwipe) setStatusStrip(false);
+        else if (filesSwipe) setFilesOpen(true);
+      },
+    }, { leftEdge: true, rightEdge: filesSwipe });
+  }, [statusSwipe, statusStrip, filesSwipe, filesOpen, readableShown]);
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
@@ -4122,7 +4131,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   </>;
   return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>
       {/* The project's drawer, the ☰ the project screen carries too: what a
-          left→right swipe over the output pulls in, offered while the
+          right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}
       {project && filesLabel !== null && <button
         className="drawer-open"
