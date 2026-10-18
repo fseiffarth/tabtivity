@@ -144,8 +144,10 @@ describe("a chat whose CLI quit", () => {
     expect(useOverlayAgentStore.getState().assistantStartedKeys.has(key)).toBe(true);
 
     emit("terminal-exit", key);
-    fireEvent.click(screen.getByText("Restart chat"));
+    // Found, not got: a slow runner (Windows CI, ci-cd #437) can commit the
+    // card a moment after the exit's act.
+    fireEvent.click(await screen.findByText("Restart chat"));
     expect(relaunchSeq(key)).toBe(1);
-    expect(screen.queryByText("Restart chat")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Restart chat")).toBeNull());
   });
 });
