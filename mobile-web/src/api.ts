@@ -460,38 +460,46 @@ export function connectTrace(): readonly string[] {
  * is worse than a failed request. */
 export async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT, retried = false): Promise<T> {
   let signal: AbortSignal | undefined;
-  const send = () => {
+  // The body is read inside the send: a connection that drops, or a deadline
+  // that fires, while the answer is still streaming in is the same stall or
+  // drop as one before the headers — it used to be reported as a malformed
+  // answer ("the desktop answered in a form this app doesn't know") and was
+  // never resent. Only a body that arrived and isn't JSON is malformed.
+  const send = async () => {
     signal = withTimeout(init?.signal, timeoutMs);
-    return fetch(path, {
+    const answer = await fetch(path, {
       ...init,
       credentials: "same-origin",
       cache: "no-store",
       signal,
       headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
+    let parsed: { error?: string } | undefined;
+    try {
+      parsed = await answer.json() as { error?: string };
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      parsed = undefined;
+    }
+    return { response: answer, body: parsed };
   };
   let response: Response;
+  let body: { error?: string } | undefined;
   try {
-    response = await send();
+    ({ response, body } = await send());
   } catch (error) {
     if (aborted(error, signal)) throw new ApiError(0, "timeout");
-    // A read the network dropped before any answer — the browser abandons
+    // A read the network dropped before or during its answer — the browser abandons
     // what is in flight when the phone's network changes, which is what the
     // Tailscale app bringing its tunnel back after a wake looks like — goes
     // out once more. Only a read: a write may have landed before the drop.
     if ((init?.method ?? "GET").toUpperCase() !== "GET" || init?.signal?.aborted) throw new ApiError(0, "offline");
     await new Promise((resolve) => { setTimeout(resolve, READ_RETRY_DELAY); });
     try {
-      response = await send();
+      ({ response, body } = await send());
     } catch (again) {
       throw new ApiError(0, aborted(again, signal) ? "timeout" : "offline");
     }
-  }
-  let body: { error?: string } | undefined;
-  try {
-    body = await response.json() as { error?: string };
-  } catch {
-    body = undefined;
   }
   if (response.status === 401 && !path.startsWith("/api/v1/auth/") && path !== "/api/v1/pair") {
     // Once: a 401 on the retry means the renewed session is refused too.
