@@ -512,7 +512,7 @@ button.mobile-alert-row { cursor:pointer; }
 /* The last card must not end under the button the way it must not end under the
    tab bar; this replaces `.tabbed > .screen`'s allowance rather than adding to
    it, so the two never double up. */
-.tabbed > .todo-screen,.tabbed > .project-screen { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom))); }
+.tabbed > .todo-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom))); }
 /* The search sits on its own, directly under the header: it is the first thing
    reached for on a board of forty cards, so it is not one cell of the filter
    grid below it. */

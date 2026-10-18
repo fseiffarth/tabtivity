@@ -28,6 +28,7 @@ import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
+import { AssistantGlyph } from "../../../src/components/header/HeaderGlyphs";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
 
@@ -111,6 +112,10 @@ export function Home({ open, openTab, todo, mail }: {
   }, []);
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<ProjectRow[]>([]);
+  /** The assistant scope's id, for the chat FAB. The active list always holds
+   * it while the Mobile switch for it is on, so that list says whether it is
+   * gone; a search result that misses it says nothing either way. */
+  const [assistantId, setAssistantId] = useState<string | null>(null);
   /** Whether any list has come back yet. Until it has, an empty `rows` is
    * "still loading", not "nothing here" — and a first open with no active
    * project drew nothing at all under the heading, which read as broken. */
@@ -145,7 +150,12 @@ export function Home({ open, openTab, todo, mail }: {
     const timer = window.setTimeout(() => {
       const suffix = view === "search" ? `?view=search&q=${encodeURIComponent(query)}` : "?view=active";
       void api<{ projects: ProjectRow[] }>(`/api/v1/projects${suffix}`, { signal: controller.signal })
-        .then((body) => { for (const project of body.projects) rememberScopeKind(project.id, project.kind); setRows(body.projects); setOffline(null); setLoaded(true); })
+        .then((body) => {
+          for (const project of body.projects) rememberScopeKind(project.id, project.kind);
+          const assistant = body.projects.find((project) => project.kind === "assistant");
+          if (assistant || view === "active") setAssistantId(assistant?.id ?? null);
+          setRows(body.projects); setOffline(null); setLoaded(true);
+        })
         .catch((error: unknown) => { if (!controller.signal.aborted) setOffline(classifyUnavailable(error)); });
     }, view === "search" ? 180 : 0);
     return () => {
@@ -230,7 +240,7 @@ export function Home({ open, openTab, todo, mail }: {
    *  the projects the list last loaded — no poll of its own. */
   const asking = rows.reduce((sum, project) => sum + (project.agents?.question ?? 0), 0);
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
-  return <main className="screen home-screen">
+  return <main className={assistantId ? "screen home-screen has-fab" : "screen home-screen"}>
     {/* A slim bar: the mark and name, the link's lamp — worded only when the
         link is down, where it is news — and the gear for this phone's own
         settings. The global views live in the tab bar at the bottom. */}
@@ -354,6 +364,15 @@ export function Home({ open, openTab, todo, mail }: {
         <p className="sheet-note device-version">{BRAND.display} {BUNDLE_VERSION}{isUntested("mobile.version.commit") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>
       </section>
     </div>}
+    {/* The assistant one tap from anywhere on Home, in the place the project
+        screen keeps its ＋: its row sits wherever the list put it, often
+        below the fold under Needs you. */}
+    {assistantId && <button
+      className="primary fab fab-round fab-chat"
+      onClick={() => open(assistantId)}
+      aria-label={t("assistant.button")}
+      title={t("assistant.button")}
+    ><AssistantGlyph className="fab-chat-icon" />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}

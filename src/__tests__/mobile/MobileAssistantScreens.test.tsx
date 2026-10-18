@@ -97,6 +97,32 @@ describe("Mobile assistant — the home row", () => {
     fireEvent.click(row);
     expect(open).toHaveBeenCalledWith("scope");
   });
+
+  it("floats a chat button that opens the assistant in one tap, and only while it is listed", async () => {
+    let listed = true;
+    fetchMock.mockImplementation((url: string) => json(String(url).includes("alerts") ? { alerts: { enabled: false, items: [] } } : { projects: [
+      ...(listed ? [{ id: "scope", label: "Tabby", status: "active", kind: "assistant", live_sessions: 2 }] : []),
+      { id: "p", label: "Alpha", status: "active", live_sessions: 1 },
+    ] }));
+    const open = vi.fn();
+    const { container } = render(<Home open={open} openTab={() => {}} todo={() => {}} mail={() => {}} />);
+    const fab = await screen.findByRole("button", { name: /Open Tabby/ });
+    expect(fab.classList.contains("fab-round")).toBe(true);
+    expect(container.querySelector(".home-screen.has-fab")).toBeTruthy();
+    fireEvent.click(fab);
+    expect(open).toHaveBeenCalledWith("scope");
+    // A search that misses the row keeps the button: it answers a query, not
+    // whether the assistant is on.
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.change(container.querySelector("input.search") as HTMLInputElement, { target: { value: "alp" } });
+    listed = false;
+    await waitFor(() => expect(urls().some((url) => url.includes("view=search"))).toBe(true));
+    expect(screen.getByRole("button", { name: /Open Tabby/ })).toBeTruthy();
+    // The active list without it means the switch went off.
+    fireEvent.click(screen.getByRole("button", { name: "Active" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Open Tabby/ })).toBeNull());
+    expect(container.querySelector(".home-screen.has-fab")).toBeNull();
+  });
 });
 
 describe("Mobile assistant — the chat list", () => {
