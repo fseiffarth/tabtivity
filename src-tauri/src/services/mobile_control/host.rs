@@ -689,7 +689,9 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
             headers.insert(header::CONTENT_SECURITY_POLICY, value);
         }
     } else if !framed {
-        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+        // `img-src blob:`: the files library's covers are drawn on the phone
+        // and shown as object URLs (`mobile-web/src/thumbs.ts`).
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
     }
     response
 }
