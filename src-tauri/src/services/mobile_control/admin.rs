@@ -907,6 +907,7 @@ mod frame_tests {
             project_id: "p".into(),
             tmux_session: concat!(crate::app_slug!(), "-p").into(),
             message: "x".repeat(MAX_CONTROL_MESSAGE + 1),
+            device_id: None,
         };
         let mut wire: Vec<u8> = Vec::new();
         let err = write_frame(&mut wire, &request).await.unwrap_err();

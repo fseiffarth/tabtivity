@@ -1116,7 +1116,8 @@ pub fn is_session_command(prompt: &str) -> bool {
 /// project's prompt history as delivered, the way the desktop records them
 /// (`recordTabPrompt`). A session command is not a prompt and is not
 /// recorded. `Ok(false)` when nothing was recorded.
-pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str) -> Result<bool, String> {
+/// `phone`: the paired device that sent it.
+pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str, phone: Option<&str>) -> Result<bool, String> {
     let text = message.trim();
     // The chat assistant's scope keeps no prompt history (`agent_prompts`).
     if text.is_empty() || is_session_command(text) || storage::is_assistant_scope(project_id) {
@@ -1141,6 +1142,8 @@ pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, mess
                 result: Some("delivered".to_string()),
                 scheduled_for: None,
                 sent_at: None,
+                phone_device: phone.map(str::to_string),
+                phone_name: None,
             },
         },
     )
@@ -1362,6 +1365,8 @@ pub fn prompt_mutate(
                     result: None,
                     scheduled_for: None,
                     sent_at: None,
+                    phone_device: phone.map(str::to_string),
+                    phone_name: None,
                 },
             )
         }
@@ -1776,16 +1781,49 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut gemini = tab("gemini", None);
         gemini.schedule_target_id = Some("target-gemini".into());
-        assert!(record_prompt(dir.path(), "p1", &gemini, "look at the logs").unwrap());
+        assert!(record_prompt(dir.path(), "p1", &gemini, "look at the logs", None).unwrap());
         let mut claude = tab("claude", Some("launch-1"));
         claude.schedule_target_id = Some("target-claude".into());
-        assert!(record_prompt(dir.path(), "p1", &claude, "run the tests").unwrap());
+        assert!(record_prompt(dir.path(), "p1", &claude, "run the tests", None).unwrap());
         let file: serde_json::Value = crate::storage::read_json(&agent_prompts::file_path(dir.path())).unwrap();
         let rows = file["history"]["p1"].as_array().unwrap();
         let row = |message: &str| rows.iter().find(|row| row["message"] == message).unwrap().clone();
         // The window's `historyTabId`: the launch id, else the binding.
         assert_eq!(row("look at the logs")["tab_id"], "target-gemini");
         assert_ne!(row("run the tests")["tab_id"], "target-claude");
+    }
+
+    /// A phone's prompt names the phone, and the phone's name as it was then:
+    /// renaming or unpairing it later leaves the row saying which phone it was.
+    #[test]
+    fn a_phone_prompt_names_the_phone_that_sent_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        std::fs::create_dir_all(&control).unwrap();
+        let devices = control.join("devices.json");
+        let phone = |name: &str| serde_json::json!({ "schema": 1, "devices": [
+            { "id": "phone-a", "name": name, "public_key": "k", "created_at": 1, "last_seen_at": null }
+        ] });
+        std::fs::write(&devices, serde_json::to_vec(&phone("Pixel\n 9 ")).unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&devices, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut claude = tab("claude", Some("launch-1"));
+        claude.schedule_target_id = Some("target-claude".into());
+        assert!(record_prompt(dir.path(), "p1", &claude, "from the phone", Some("phone-a")).unwrap());
+        assert!(record_prompt(dir.path(), "p1", &claude, "from a revoked phone", Some("phone-gone")).unwrap());
+        assert!(record_prompt(dir.path(), "p1", &claude, "from the desktop", None).unwrap());
+        let file: serde_json::Value = crate::storage::read_json(&agent_prompts::file_path(dir.path())).unwrap();
+        let rows = file["history"]["p1"].as_array().unwrap();
+        let row = |message: &str| rows.iter().find(|row| row["message"] == message).unwrap().clone();
+        assert_eq!(row("from the phone")["phone_device"], "phone-a");
+        assert_eq!(row("from the phone")["phone_name"], "Pixel 9", "folded to one line");
+        assert_eq!(row("from a revoked phone")["phone_device"], "phone-gone");
+        assert!(row("from a revoked phone").get("phone_name").is_none());
+        assert!(row("from the desktop").get("phone_device").is_none());
+        assert!(row("from the desktop").get("phone_name").is_none());
     }
 
     #[test]

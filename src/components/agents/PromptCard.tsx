@@ -6,9 +6,10 @@ import { localWallClock } from "../../lib/agents/agentSchedule";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
-import type { PromptLink } from "../../stores/agents/agentPrompts";
+import type { PromptLink, SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { Dropdown } from "../common/Dropdown";
 import { MarkdownPromptField } from "../common/MarkdownPromptField";
+import { UntestedTag } from "../common/UntestedTag";
 
 /** Inside a card, keys aimed at these belong to them, not to the card. */
 export const CARD_OWN_KEYS = "input, textarea, select, button, [contenteditable]";
@@ -251,9 +252,10 @@ export function PromptCard({
         <span className={`agent-prompt-lamp is-${card.history?.result ?? card.state}`} aria-hidden="true" />
       </div>
       {projectId && card.targetId && card.schedule?.origin && <AgentScheduleProposal projectId={projectId} targetId={card.targetId} schedule={card.schedule} />}
-      {card.history?.schedule_origin && <div className="agent-schedule-attribution">
-        <span className="agent-schedule-pill" title={card.history.schedule_origin.session}>{t("scheduleMcp.authored")}</span>
-        {card.history.schedule_origin.from_delivery && <small>{t("scheduleMcp.lineage", { id: card.history.schedule_origin.from_delivery })}</small>}
+      {(card.history?.schedule_origin || card.history?.phone_device) && <div className="agent-schedule-attribution">
+        {card.history.schedule_origin && <span className="agent-schedule-pill" title={card.history.schedule_origin.session}>{t("scheduleMcp.authored")}</span>}
+        {card.history.schedule_origin?.from_delivery && <small>{t("scheduleMcp.lineage", { id: card.history.schedule_origin.from_delivery })}</small>}
+        <PromptPhoneChip row={card.history} />
       </div>}
       <div className="agent-prompt-card-agent" onClick={(event) => event.stopPropagation()}>
         {readOnly || pickOptions.length === 0
@@ -373,4 +375,13 @@ export function PromptCard({
       )}
     </article>
   );
+}
+
+/** The paired phone a sent prompt came from, as the row named it when it was
+ * written; nothing for a prompt from the desktop. */
+export function PromptPhoneChip({ row }: { row?: SentAgentPrompt }) {
+  const t = useT();
+  if (!row?.phone_device) return null;
+  const name = row.phone_name ?? t("promptChart.fromUnpairedPhone");
+  return <span className="agent-schedule-pill" data-testid="prompt-phone-chip" title={t("promptChart.fromPhoneTitle", { name })}>📱 {name} <UntestedTag id="promptChart.fromPhoneTitle" /></span>;
 }

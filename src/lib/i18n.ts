@@ -2876,6 +2876,8 @@ export const enSource = {
   "promptChart.chainClosed": "Chain stopped · target tab is closed",
   "promptChart.paused": "Nothing armed",
   "promptChart.closed": "closed",
+  "promptChart.fromUnpairedPhone": "Unpaired phone",
+  "promptChart.fromPhoneTitle": "Sent from the paired phone {name}",
   "promptChart.collectAgain": "Collect again",
   "promptChart.fiveMinutesEarlier": "5 min earlier",
   "promptChart.fiveMinutesLater": "5 min later",

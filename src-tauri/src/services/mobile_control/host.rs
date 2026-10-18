@@ -3230,6 +3230,7 @@ async fn sent_prompt(
             project_id: project_id.clone(),
             tmux_session,
             message: message.to_string(),
+            device_id: Some(phone.device_id().to_string()),
         },
     )
     .await;
@@ -3239,7 +3240,7 @@ async fn sent_prompt(
         let Ok((_, tab)) = agent_tab(&state, &phone, &tab_id) else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
-        return match headless::record_prompt(&state.config.state_dir, &project_id, &tab, message) {
+        return match headless::record_prompt(&state.config.state_dir, &project_id, &tab, message, Some(phone.device_id())) {
             Ok(recorded) => {
                 if recorded {
                     poke_window(&state, Some(&project_id), &["prompts"]);

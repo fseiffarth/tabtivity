@@ -118,6 +118,17 @@ pub struct SentAgentPrompt {
     /// and on rows written before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The paired phone the prompt came from (its device id, as #2348's
+    /// rules name it): the phone that sent it, or that wrote the collected
+    /// prompt or the schedule it went out as. Absent for a prompt from the
+    /// desktop, and on rows written before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone_device: Option<String>,
+    /// That phone's name when the row was written, so the row still says
+    /// which phone once it is renamed or unpaired. Absent when the id named
+    /// no paired phone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone_name: Option<String>,
 }
 
 /// Send-time facts the frontend supplies; the service owns `sent_at` and
@@ -149,6 +160,13 @@ pub struct SentAgentPromptInput {
     /// with the transcript's own timestamp. Absent, the service stamps now.
     #[serde(default)]
     pub sent_at: Option<String>,
+    /// The paired phone the prompt came from (`SentAgentPrompt::phone_device`).
+    #[serde(default)]
+    pub phone_device: Option<String>,
+    /// The phone's name, looked up by the service in the paired-device list
+    /// at write time — never taken from a caller.
+    #[serde(skip)]
+    pub phone_name: Option<String>,
 }
 
 /// A prompt written straight onto the history without ever having been a

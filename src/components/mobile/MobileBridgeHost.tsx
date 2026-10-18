@@ -284,7 +284,7 @@ type DesktopRequest =
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
-  | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string }
+  | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
@@ -2314,7 +2314,7 @@ function markTabSeen(projectId: string, tmuxSession: string): DesktopResponse {
  * not a prompt, and is not recorded. A Claude or Codex prompt recorded here is
  * not recorded again when its transcript is adopted (same words, near in time:
  * `lib/agents/prompt/adopt`). */
-async function recordTabPrompt(projectId: string, tmuxSession: string, message: string): Promise<DesktopResponse> {
+async function recordTabPrompt(projectId: string, tmuxSession: string, message: string, phoneDevice?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
@@ -2328,7 +2328,7 @@ async function recordTabPrompt(projectId: string, tmuxSession: string, message: 
   await useAgentPromptsStore.getState().record(scope.id, {
     id: crypto.randomUUID(),
     message: text,
-    sent: { tabLabel: tab.label, sessionId: tab.sessionId, tabId: tab.scheduleTargetId, agent: tab.cmd, result: "delivered" },
+    sent: { tabLabel: tab.label, sessionId: tab.sessionId, tabId: tab.scheduleTargetId, agent: tab.cmd, result: "delivered", phoneDevice },
   }).catch(() => []);
   return { status: "seen" };
 }
@@ -2700,7 +2700,7 @@ async function handleRequest(
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
     case "tab_input": return markTabInput(request.project_id, request.tmux_session);
-    case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message);
+    case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);

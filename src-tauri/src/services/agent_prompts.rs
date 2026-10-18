@@ -267,6 +267,9 @@ fn validate_sent(input: SentAgentPromptInput) -> Result<SentAgentPromptInput, St
             return Err(format!("invalid sent time: {sent_at}"));
         }
     }
+    if let Some(device) = &input.phone_device {
+        validate_id("phone device", device)?;
+    }
     Ok(SentAgentPromptInput {
         // `ScheduleOrigin` keeps unknown fields in a flattened map so an older
         // build writes `agent_tasks.json` back whole; that map holds only what
@@ -284,7 +287,23 @@ fn validate_sent(input: SentAgentPromptInput) -> Result<SentAgentPromptInput, St
         result: input.result,
         scheduled_for: input.scheduled_for,
         sent_at: input.sent_at,
+        phone_device: input.phone_device,
+        phone_name: None,
     })
+}
+
+/// Name the phone the prompt came from as the paired-device list knows it
+/// now, so the row keeps saying which phone after a rename or an unpairing.
+/// An id no paired phone holds (revoked in between) keeps no name; an
+/// unreadable list costs the name, never the record.
+fn resolve_phone_name(state_dir: &std::path::Path, mut input: SentAgentPromptInput) -> SentAgentPromptInput {
+    input.phone_name = input.phone_device.as_deref().and_then(|device| {
+        let paired = crate::services::mobile_control::auth::read_paired_devices(&state_dir.join("mobile-control")).ok()?;
+        let name = paired.into_iter().find(|phone| phone.id == device)?.name;
+        let name = sanitize_message(&name).split_whitespace().collect::<Vec<_>>().join(" ");
+        Some(name.chars().take(64).collect::<String>()).filter(|name| !name.is_empty())
+    });
+    input
 }
 
 /// Push one entry onto a project's history, replacing an entry with the same
@@ -359,6 +378,8 @@ fn apply_archive(
         files: Vec::new(),
         files_at: None,
         model: None,
+        phone_device: input.phone_device.clone(),
+        phone_name: input.phone_name.clone(),
     };
     push_history(file, project_id, sent.clone());
     link_session_roll(file, project_id, &sent, roll);
@@ -428,6 +449,12 @@ fn apply_record(
             .map(|item| item.files.clone())
             .unwrap_or_default(),
         model: existing.as_ref().and_then(|item| item.model.clone()),
+        // A delivery that names no phone keeps the one its send recorded.
+        phone_device: input.phone_device.clone().or_else(|| existing.as_ref().and_then(|item| item.phone_device.clone())),
+        phone_name: match &input.phone_device {
+            Some(_) => input.phone_name.clone(),
+            None => existing.as_ref().and_then(|item| item.phone_name.clone()),
+        },
         files_at: existing.and_then(|item| item.files_at),
     };
     push_history(file, project_id, sent.clone());
@@ -798,7 +825,7 @@ pub fn archive_at(
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
-    let input = validate_sent(input)?;
+    let input = resolve_phone_name(state_dir, validate_sent(input)?);
     let (input, roll) = resolve_live_session(project_id, input);
     let head = prompt_blame::head(project_id);
     let path = file_path(state_dir);
@@ -878,7 +905,7 @@ pub fn archive(
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
-    let input = validate_sent(input)?;
+    let input = resolve_phone_name(&storage::state_dir(), validate_sent(input)?);
     let (input, roll) = resolve_live_session(project_id, input);
     // Read before the lock: it spawns git (local projects only), and nothing
     // in the file depends on it.
@@ -914,7 +941,7 @@ pub fn record(
     if records_nothing_for(project_id) {
         return Ok(Vec::new());
     }
-    let (entry, input, head, roll) = prepare_record(project_id, entry)?;
+    let (entry, input, head, roll) = prepare_record(&storage::state_dir(), project_id, entry)?;
     let _guard = lock()?;
     let mut file = read()?;
     apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
@@ -935,7 +962,7 @@ pub fn record_at(
     if records_nothing_for(project_id) {
         return Ok(Vec::new());
     }
-    let (entry, input, head, roll) = prepare_record(project_id, entry)?;
+    let (entry, input, head, roll) = prepare_record(state_dir, project_id, entry)?;
     let path = file_path(state_dir);
     let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
@@ -965,7 +992,7 @@ type PreparedRecord = (RecordedAgentPromptInput, SentAgentPromptInput, Option<Re
 
 /// The validation and the reads outside the lock that [`record`] and
 /// [`record_at`] share.
-fn prepare_record(project_id: &str, entry: RecordedAgentPromptInput) -> Result<PreparedRecord, String> {
+fn prepare_record(state_dir: &std::path::Path, project_id: &str, entry: RecordedAgentPromptInput) -> Result<PreparedRecord, String> {
     validate_id("project id", project_id)?;
     validate_id("history entry id", &entry.id)?;
     let message = sanitize_message(&entry.message);
@@ -975,7 +1002,7 @@ fn prepare_record(project_id: &str, entry: RecordedAgentPromptInput) -> Result<P
     if message.len() > MAX_MESSAGE_BYTES {
         return Err(format!("prompt exceeds {MAX_MESSAGE_BYTES} bytes"));
     }
-    let input = validate_sent(entry.sent.clone())?;
+    let input = resolve_phone_name(state_dir, validate_sent(entry.sent.clone())?);
     let (input, roll) = resolve_live_session(project_id, input);
     let entry = RecordedAgentPromptInput { message, ..entry };
     let head = prompt_blame::head(project_id);
@@ -1456,6 +1483,24 @@ mod tests {
         assert!(!file.projects.contains_key("q"));
     }
 
+    /// A phone's send-now is archived naming the phone; the scheduler's
+    /// delivery of it, from a rule that predates the field, must not wipe
+    /// that, while a delivery that names a phone is the one that counts.
+    #[test]
+    fn a_delivery_keeps_the_phone_its_send_named() {
+        let mut file = AgentPromptsFile::default();
+        let from_phone = SentAgentPromptInput { phone_device: Some("phone-a".into()), phone_name: Some("Pixel".into()), ..sent("Claude") };
+        let entry = RecordedAgentPromptInput { sent: from_phone.clone(), ..recorded("q", "go", "delivered") };
+        apply_record(&mut file, "p", &entry, &from_phone, None, None, "t1");
+        let silent = sent("Claude");
+        let row = apply_record(&mut file, "p", &entry, &silent, None, None, "t2");
+        assert_eq!((row.phone_device.as_deref(), row.phone_name.as_deref()), (Some("phone-a"), Some("Pixel")));
+        let other = SentAgentPromptInput { phone_device: Some("phone-b".into()), ..sent("Claude") };
+        let row = apply_record(&mut file, "p", &entry, &other, None, None, "t3");
+        assert_eq!((row.phone_device.as_deref(), row.phone_name.as_deref()), (Some("phone-b"), None));
+        assert!(validate_sent(SentAgentPromptInput { phone_device: Some(String::new()), ..sent("Claude") }).is_err());
+    }
+
     fn sent(label: &str) -> SentAgentPromptInput {
         SentAgentPromptInput {
             schedule_origin: None,
@@ -1467,6 +1512,8 @@ mod tests {
             result: None,
             scheduled_for: None,
             sent_at: None,
+            phone_device: None,
+            phone_name: None,
         }
     }
 

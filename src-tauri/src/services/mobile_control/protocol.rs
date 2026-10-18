@@ -1157,6 +1157,10 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
         message: String,
+        /// The paired phone that sent it, which its history row names
+        /// (`SentAgentPrompt::phone_device`). Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// The phone's composer sent `message` while this agent tab was at work.
     /// Instead of the words going into the CLI's own queue, the desktop holds
@@ -2240,11 +2244,16 @@ mod tests {
             project_id: "raw-project".into(),
             tmux_session: concat!(crate::app_slug!(), "-project-0--agent-123456789").into(),
             message: "fix the tests".into(),
+            device_id: Some("device-1".into()),
         };
         assert_eq!(request.request_id(), "request-prompt");
         let json = serde_json::to_value(&request).expect("serialize prompt report");
         assert_eq!(json["type"], "tab_prompt");
         assert_eq!(json["message"], "fix the tests");
+        assert_eq!(json["device_id"], "device-1");
+        let mut older = json.clone();
+        older.as_object_mut().unwrap().remove("device_id");
+        assert!(matches!(serde_json::from_value(older), Ok(DesktopRequest::TabPrompt { device_id: None, .. })), "an older sidecar names no phone");
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize prompt report");
         assert!(matches!(restored, DesktopRequest::TabPrompt { .. }));

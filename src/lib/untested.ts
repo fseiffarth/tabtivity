@@ -59,6 +59,7 @@ export const UNTESTED = {
   "calendar.alarms.headless": { area: "agents", what: "AgentScheduleDialog · note that calendar reminders reach a subscribed phone with no window open; the mechanism: reminders are claimed in `calendar-alarms-fired.json` before they show (window and sidecar), the sidecar pushes due ones through Web Push while no window holds the timer lease", tested: "2026-10-02" },
   "agentSchedule.leaseElsewhere": { area: "agents", what: "AgentScheduleDialog · note that another Tabtivity window holds the timer lease (schedules, auto-continue, reminders, CalDAV sync fire there); the lease itself: one window per state dir fires timers, heartbeat-renewed, 30 s TTL", tested: "2026-10-02" },
   "promptChart.heading": { area: "agents", what: "PromptChart · Prompt chart" },
+  "promptChart.fromPhoneTitle": { area: "agents", what: "Prompt chart · 📱 chip and device: tag naming the paired phone a sent prompt came from" },
   "assistant.overlay": { area: "agents", what: "Header assistant button and overlay · chat list, the chat in Reader mode, first-run sign-in card; the chat sees no file, project or MCP server (docs/assistant_plan.md)" },
   "assistant.newChat": { area: "agents", what: "Assistant overlay · New chat with the CLI/model picker (Claude, Codex, OpenCode · local model, Claude · local model)" },
   "assistant.search": { area: "agents", what: "Settings · assistant · search backend (SearXNG URL or Ollama web search key) and the setup card local models show; web_search answers search_not_configured without one" },

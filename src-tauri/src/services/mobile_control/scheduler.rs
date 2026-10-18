@@ -554,6 +554,8 @@ fn retire(state_dir: &Path, target: &Target, schedule: &ScheduledAgentPrompt, oc
                 result: Some(result_word.to_string()),
                 scheduled_for: Some(occurrence.to_string()).filter(|s| !s.is_empty()),
                 sent_at: None,
+                phone_device: schedule.phone_device.clone(),
+                phone_name: None,
             },
         },
     );

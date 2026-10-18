@@ -34,6 +34,10 @@ card on a tab's lane to schedule it there, or onto the now band to send it.
 Select several cards to move them together, tag and filter them, and link
 them: an **After** link makes one prompt follow another.
 
+A prompt that came from a paired phone (sent from it, or written or scheduled
+there) wears a 📱 chip with the phone's name, and a `device:` tag you can
+filter by. Prompts from the desktop carry none.
+
 ## Schedule a prompt
 
 On an agent tab, **Schedule prompt…** (in the tab's menu, or **Schedules** in

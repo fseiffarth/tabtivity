@@ -209,6 +209,7 @@ export function buildPromptChart(input: PromptChartInput): PromptChartCard[] {
         files: row.files,
         result: row.result,
         recurring: row.id.includes("@"),
+        phone: row.phone_device ? row.phone_name ?? "" : undefined,
       }),
       strandId,
       at: new Date(row.sent_at),

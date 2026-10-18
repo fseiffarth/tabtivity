@@ -4,7 +4,7 @@ import { useI18nStore, useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
-import { CARD_OWN_KEYS } from "./PromptCard";
+import { CARD_OWN_KEYS, PromptPhoneChip } from "./PromptCard";
 
 interface Props {
   /** The session's sent prompts inside the window, oldest first. */
@@ -156,6 +156,7 @@ export function PromptSessionCard({
                 <div className="agent-prompt-session-row-head">
                   <span className={`agent-prompt-lamp is-${card.history?.result ?? "delivered"}`} aria-hidden="true" />
                   <small>{t(`promptChart.result.${card.history?.result ?? "delivered"}` as "promptChart.result.delivered")} · {when(card.at)}</small>
+                  <PromptPhoneChip row={card.history} />
                 </div>
                 <p className="agent-prompt-card-full">{card.message}</p>
                 {(card.history?.files?.length ?? 0) > 0 && (

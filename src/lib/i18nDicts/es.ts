@@ -2867,6 +2867,8 @@ export const dict: Dict = {
   "promptChart.chainClosed": "Cadena detenida · pestaña cerrada",
   "promptChart.paused": "Nada activo",
   "promptChart.closed": "cerrado",
+  "promptChart.fromUnpairedPhone": "Móvil desvinculado",
+  "promptChart.fromPhoneTitle": "Enviado desde el móvil vinculado {name}",
   "promptChart.collectAgain": "Recopilar de nuevo",
   "promptChart.fiveMinutesEarlier": "5 min antes",
   "promptChart.fiveMinutesLater": "5 min después",

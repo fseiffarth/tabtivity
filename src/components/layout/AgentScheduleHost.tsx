@@ -177,6 +177,7 @@ async function retire(
       result: last.result,
       scheduledFor: last.occurrence || undefined,
       scheduleOrigin: schedule.origin,
+      phoneDevice: schedule.phone_device,
     },
   );
   if (schedule.rule.type !== "once") return;

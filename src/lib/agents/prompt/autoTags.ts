@@ -1,4 +1,5 @@
 import { splitPreface } from "../agentPrefaces";
+import { normalizeTag } from "./tags";
 
 export interface PromptAutoTagInput {
   message: string;
@@ -12,6 +13,9 @@ export interface PromptAutoTagInput {
   recurring?: boolean;
   queued?: boolean;
   chained?: boolean;
+  /** The paired phone the prompt came from, by its name (`device:pixel-9`);
+   *  `""` for one no longer paired. Absent from the desktop. */
+  phone?: string;
 }
 
 /** Tags that can be reconstructed from a card are deliberately never stored. */
@@ -38,6 +42,7 @@ export function agentPromptAutoTags(input: PromptAutoTagInput): string[] {
     add(`file:${parts[parts.length - 1]}`);
     if (parts.length > 1) add(`dir:${parts[0]}`);
   }
+  if (input.phone !== undefined) add(`device:${normalizeTag(input.phone) || "phone"}`);
   if (input.result === "missed" || input.result === "failed") add(`result:${input.result}`);
   if (input.recurring) add("recurring");
   if (input.queued) add("queued");
