@@ -117,14 +117,12 @@ describe("Mobile home — project list states", () => {
     await waitFor(() => expect(within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
   });
 
-  it("opens the project from a row's git mark like from the rest of the row", async () => {
+  it("shows no git state on a project row, even when the desktop has one", async () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1, git: "unpushed" }]);
-    const open = vi.fn();
-    render(<Home open={open} openTab={noop} todo={noop} mail={noop} />);
-    fireEvent.click(await screen.findByText("not pushed"));
-    expect(open).toHaveBeenCalledWith("p1");
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/projects/p1/git")).toBe(false);
+    const { container } = render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    expect(screen.queryByText("not pushed")).toBeNull();
+    expect(container.querySelector(".git-mark")).toBeNull();
   });
 
   it("loads the list again on its own once the page is shown after a failed load", async () => {
