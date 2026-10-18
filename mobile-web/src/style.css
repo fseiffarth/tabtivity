@@ -36,8 +36,10 @@ nav button,.keys button { flex:1; }
 .search { margin-bottom:16px; }
 /* The Agents list's order, above the cards: a label and the pick on one line,
    the select taking the width the label leaves. */
-.activity-sort { display:flex; align-items:center; gap:10px; margin:-8px 0 12px; color:#9aa0b4; font-size:.9rem; }
-.activity-sort select { flex:1; width:auto; padding:8px 30px 8px 10px; background-position:right 10px center; }
+/* The order picker: a compact, right-aligned select above the first card
+   (its name is the select's aria-label, no visible label). */
+.activity-sort { display:flex; justify-content:flex-end; margin:4px 0 10px; color:#9aa0b4; font-size:.9rem; }
+.activity-sort select { flex:0 0 auto; width:auto; max-width:100%; padding:7px 30px 7px 12px; background-position:right 10px center; }
 /* One sticky row: ‹, the name over its order (it ellipsizes), ☰ — 44px
    each. The screen's one blur, over a fill that reads without it. */
 .project-header-tools { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-width:0; }
@@ -67,6 +69,14 @@ nav button,.keys button { flex:1; }
 .card { width:100%; text-align:left; justify-content:space-between; padding:16px; background:rgba(28,31,43,.92); }
 .card span:first-child { display:grid; gap:4px; min-width:0; overflow-wrap:anywhere; }
 .card-trailing { flex:0 0 auto; gap:10px; }
+/* The Agents list's row: title and the status cluster share the first line, the
+   project/model caption and the asked prompt take the card's full width below
+   (a side-by-side cluster left them a half-width column that wrapped to four
+   lines). */
+.card.activity-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:10px; row-gap:4px; }
+.card.activity-card > span:first-child { display:contents; }
+.card.activity-card > span:first-child > small { grid-column:1 / -1; }
+.card.activity-card > .card-trailing { grid-row:1; grid-column:2; }
 .tab-card { position:relative; display:grid; border:1px solid #383c4d; border-radius:11px; background:rgba(28,31,43,.92); }
 .tab-card .card { border:0; background:transparent; }
 /* #264 — a tab the user has coloured spends its left edge on the colour
