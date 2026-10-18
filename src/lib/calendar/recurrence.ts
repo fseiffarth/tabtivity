@@ -365,6 +365,20 @@ export function sortOccurrences(occurrences: Occurrence[]): Occurrence[] {
   });
 }
 
+/** Day by day, all-day first within each day: the order to cut a capped list
+ * in. `sortOccurrences` puts every all-day row of the whole window first, so a
+ * cap on it kept a daily all-day series and dropped the timed events of the
+ * window's later weeks. */
+export function sortOccurrencesByDay(occurrences: Occurrence[]): Occurrence[] {
+  return [...occurrences].sort((a, b) => {
+    const dayA = a.start.slice(0, 10), dayB = b.start.slice(0, 10);
+    if (dayA !== dayB) return dayA < dayB ? -1 : 1;
+    if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+    if (a.start !== b.start) return a.start < b.start ? -1 : 1;
+    return a.title.localeCompare(b.title);
+  });
+}
+
 /** The occurrences of a given day, in display order. */
 export function occurrencesOn(occurrences: Occurrence[], date: string): Occurrence[] {
   return occurrences.filter((o) =>

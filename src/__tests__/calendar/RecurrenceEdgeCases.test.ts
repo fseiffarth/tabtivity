@@ -16,6 +16,7 @@ import {
   occurrencesOn,
   overrideOccurrence,
   sortOccurrences,
+  sortOccurrencesByDay,
 } from "../../lib/calendar/recurrence";
 import { translate, type TranslationKey } from "../../lib/i18n";
 import type { CalendarEvent, Rrule } from "../../types";
@@ -199,6 +200,16 @@ describe("expandEvents and ordering", () => {
       event({ id: "a", start: "2026-07-08", end: "2026-07-09", all_day: true, title: "a" }),
     ], "2026-07-08", "2026-07-09"));
     expect(out.map((o) => o.title)).toEqual(["a", "b", "early"]);
+  });
+
+  it("orders day by day for a cap, so a daily all-day series no longer outranks later timed events", () => {
+    const out = sortOccurrencesByDay(expandEvents([
+      event({ id: "d", start: "2026-07-08", end: "2026-07-09", all_day: true, title: "daily", rrule: rule() }),
+      event({ id: "t", start: "2026-07-09T08:00", end: "2026-07-09T09:00", title: "dentist" }),
+    ], "2026-07-08", "2026-07-11"));
+    expect(out.map((o) => `${o.start.slice(0, 10)} ${o.title}`)).toEqual([
+      "2026-07-08 daily", "2026-07-09 daily", "2026-07-09 dentist", "2026-07-10 daily",
+    ]);
   });
 
   it("occurrencesOn covers every day of a multi-day all-day block but not its exclusive end", () => {

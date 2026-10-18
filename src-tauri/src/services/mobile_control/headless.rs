@@ -45,7 +45,7 @@ use crate::services::{agent_prompts, agent_tasks, schedule_mcp};
 use crate::storage;
 
 /// The desktop's cap on one month answer (`MOBILE_CALENDAR_EVENTS`).
-const MOBILE_CALENDAR_EVENTS: usize = 80;
+const MOBILE_CALENDAR_EVENTS: usize = 400;
 
 /// The category keys with a colour of their own (`calendarCategories.ts`).
 const CATEGORY_KEYS: &[&str] = &["work", "personal", "meeting", "travel", "birthday", "holiday", "important"];
@@ -183,7 +183,18 @@ pub fn calendar_month(state_dir: &Path, host_key: &[u8], month: &str) -> Result<
     let week_start = calendar_week_start(state_dir);
     let (window_start, window_end) = month_window(year, mon, u32::from(week_start), 6);
     let visible: HashSet<String> = data.calendars.iter().filter(|c| c.visible).map(|c| c.id.clone()).collect();
-    let occurrences = expand_events(&data.events, &window_start, &window_end, Some(&visible));
+    let mut occurrences = expand_events(&data.events, &window_start, &window_end, Some(&visible));
+    // Cut day by day (`sortOccurrencesByDay`): `expand_events` puts every
+    // all-day row of the window first, so a cap on it dropped later weeks'
+    // timed events.
+    occurrences.sort_by(|a, b| {
+        a.start
+            .get(..10)
+            .cmp(&b.start.get(..10))
+            .then_with(|| b.all_day.cmp(&a.all_day))
+            .then_with(|| a.start.cmp(&b.start))
+            .then_with(|| a.title.cmp(&b.title))
+    });
     let shown = &occurrences[..occurrences.len().min(MOBILE_CALENDAR_EVENTS)];
     let id = |domain: &str, value: &str| key_id(host_key, domain, &[value]);
     let optional = |value: &str, max: usize| (!value.is_empty()).then(|| bounded(value, max));
@@ -1694,6 +1705,39 @@ mod tests {
         assert!(!hidden_row.visible);
         assert_eq!(hidden_row.id, key_id(&KEY, "calendar", &[&hidden.id]));
         assert_eq!(calendar_month(dir.path(), &KEY, "2026-13").unwrap_err(), "invalid_month");
+    }
+
+    #[test]
+    fn a_capped_month_drops_its_last_days_not_its_timed_events() {
+        let dir = state_dir();
+        let calendar = dir.path().join("calendar.json");
+        // Ten daily all-day series fill more than the cap over six weeks.
+        for n in 0..10 {
+            create_event_at(
+                &calendar,
+                CalendarEvent {
+                    title: format!("daily {n}"),
+                    start: "2026-09-01".into(),
+                    end: "2026-09-02".into(),
+                    all_day: true,
+                    rrule: Some(Rrule { freq: Freq::Daily, interval: 1, ..Default::default() }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        create_event_at(
+            &calendar,
+            CalendarEvent { title: "dentist".into(), start: "2026-10-16T08:00".into(), end: "2026-10-16T09:00".into(), ..Default::default() },
+        )
+        .unwrap();
+
+        let month = calendar_month(dir.path(), &KEY, "2026-10").unwrap();
+        assert!(month.truncated);
+        assert_eq!(month.events.len(), MOBILE_CALENDAR_EVENTS);
+        assert!(month.events.iter().any(|e| e.title == "dentist"), "a mid-month timed event survives the cap");
+        let days: Vec<&str> = month.events.iter().map(|e| &e.start[..10]).collect();
+        assert!(days.windows(2).all(|w| w[0] <= w[1]), "day by day");
     }
 
     #[test]

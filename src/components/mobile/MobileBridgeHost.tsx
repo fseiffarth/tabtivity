@@ -41,7 +41,7 @@ import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
 import { addDays, monthGrid, toStamp } from "../../lib/calendar/calendarTime";
 import { eventColor } from "../../lib/calendar/calendarCategories";
-import { expandEvents } from "../../lib/calendar/recurrence";
+import { expandEvents, sortOccurrencesByDay } from "../../lib/calendar/recurrence";
 import {
   formatAddress,
   formatMailDate,
@@ -1887,7 +1887,9 @@ async function resolveAlertRow(feed: AlertsFeed, alertId: string): Promise<Deskt
   };
 }
 
-const MOBILE_CALENDAR_EVENTS = 80;
+/** The most occurrences one month answer carries (six weeks: a daily series
+ * alone is 42 of them). The headless twin is `headless::MOBILE_CALENDAR_EVENTS`. */
+const MOBILE_CALENDAR_EVENTS = 400;
 
 /** The mobile view is materialized by the desktop, so it uses exactly the same
  * recurrence expansion, checked calendars, colors and local wall-clock rules
@@ -1905,12 +1907,13 @@ async function calendarSnapshot(month: string): Promise<MobileCalendar> {
   const grid = monthGrid(Number(month.slice(0, 4)), Number(month.slice(5, 7)), weekStart, 6);
   const windowStart = grid[0][0];
   const windowEnd = addDays(grid[5][6], 1);
-  const occurrences = expandEvents(
+  // Cut day by day, so whatever a cap drops is the window's last days.
+  const occurrences = sortOccurrencesByDay(expandEvents(
     calendar.events,
     windowStart,
     windowEnd,
     visibleCalendarIds(calendar.calendars),
-  );
+  ));
   const shown = occurrences.slice(0, MOBILE_CALENDAR_EVENTS);
   return {
     month,
