@@ -413,6 +413,9 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
   const [loadingMore, setLoadingMore] = useState(false);
   /** Cleared when a page fails, so the observer stops retrying on every scroll. */
   const [autoPage, setAutoPage] = useState(true);
+  // Remote-tracking branches (`origin/dependabot/…`) can outnumber the local
+  // ones by far, so they stay folded until asked for.
+  const [showRemoteBranches, setShowRemoteBranches] = useState(false);
   // Read inside `loadMore` rather than closed over, so paging never re-creates
   // (and re-fires) the callback the scroll sentinel is watching with.
   const commitsRef = useRef<GitCommit[]>([]);
@@ -1339,7 +1342,17 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
               </button>,
             ];
           })}
-          {remoteBranches.map((b) => (
+          {remoteBranches.length > 0 && (
+            <button
+              className="git-branch-pill git-branch-remote-toggle"
+              onClick={() => setShowRemoteBranches((v) => !v)}
+              aria-expanded={showRemoteBranches}
+              title={t(showRemoteBranches ? "gitHistory.hideRemoteBranches" : "gitHistory.showRemoteBranches")}
+            >
+              {showRemoteBranches ? "▾" : "▸"} {t("gitHistory.remoteBranches", { count: remoteBranches.length })}
+            </button>
+          )}
+          {showRemoteBranches && remoteBranches.map((b) => (
             <button
               key={b.name}
               className="git-branch-pill remote"

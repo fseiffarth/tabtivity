@@ -1436,6 +1436,12 @@
   border-style: dashed;
 }
 
+/* Folds the remote-tracking pills away; same dashed look, but not dimmed. */
+.git-branch-pill.git-branch-remote-toggle {
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+
 /* "↓N" after a branch that is behind its upstream: opens the pull preview. */
 .git-branch-pill.git-branch-pull {
   border-color: var(--info);
