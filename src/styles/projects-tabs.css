@@ -1197,11 +1197,15 @@
 .tab-bar {
   display: flex;
   align-items: flex-end;
-  /* Small inset on the top + sides so the tab cards (top), the drag grip / first
+  /* Inset on the top + sides so the tab cards (top), the drag grip / first
      tab (left) and the sticky close/hide/files cluster (right) all clear the
      active subwindow's focus-frame outline (2px, drawn just inside the frame
-     edge) instead of colliding with it — notably the × button and the tab tops. */
-  padding: 4px 5px 0;
+     edge) instead of colliding with it — notably the × button, the tab tops
+     and their 2px status rings. The top inset is exactly that 2px and the bar's
+     height is nothing else: inset + the 30px tab (`.tab`, `.tab-new-btn`,
+     `.tab-drop-placeholder`, all the tallest things in the row) + the 1px
+     border. Every other control is shorter and centred, so none stretches it. */
+  padding: 2px 5px 0;
   gap: 2px;
   /* The bar itself no longer scrolls; only the inner `.tab-strip` does. The bar
      stays a fixed row holding the scroll chevrons, the strip, the + button
@@ -1212,7 +1216,6 @@
      pane's vertical space and float the tabs to mid-window. */
   flex: 0 0 auto;
   min-width: 0;
-  min-height: 32px;
   /* The shared secondary-chrome surface (themes.css): a subwindow's own header,
      so it must read apart from BOTH the window's top bar and the pane under it
      — --bg-subheader is a step up the elevation ladder from --bg-panel with a
