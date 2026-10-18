@@ -3,6 +3,7 @@ import { getLaunchOptions, type AssistantLaunchOptions, type AssistantLaunchRow 
 import { describeFailure } from "../connection";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
+import { useBackLayer } from "../backStack";
 
 /**
  * What the Tabby screen's ＋ opens: the CLIs the desktop can start a chat with,
@@ -22,6 +23,7 @@ export function NewChatSheet({ projectId, busy, onPick, onClose }: {
   onPick: (launchId: string) => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [options, setOptions] = useState<AssistantLaunchOptions | null>(null);
   const [failure, setFailure] = useState("");

@@ -9,6 +9,7 @@ import { phoneUse24h } from "../terminal/chatTimes";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
 import { COLUMN_FOLLOWS_DATE, intakeColumn, localDate, moveAccepted } from "../todoDates";
 import { ConfirmSheet, NameSheet, type Confirm, type NameAsk } from "../components/ConfirmSheet";
+import { useBackLayer } from "../backStack";
 
 type Editing = TodoCard | "new" | null;
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -303,6 +304,7 @@ function TaskEditor({ board, task, busy, close, save, remove }: {
   board: TodoBoard; task: TodoCard | null; busy: boolean; close: () => void;
   save: (task: TodoTaskInput) => Promise<void>; remove?: () => Promise<void>;
 }) {
+  useBackLayer(close);
   const t = useT();
   const [draft, setDraft] = useState<TodoTaskInput>(() => task ? inputOf(task) : blankTask(board));
   const [tagInput, setTagInput] = useState("");

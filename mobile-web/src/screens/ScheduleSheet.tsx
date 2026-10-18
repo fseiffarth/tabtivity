@@ -17,6 +17,7 @@ type Translate = (key: TranslationKey, vars?: Record<string, string | number>) =
 import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
+import { useBackLayer } from "../backStack";
 
 /** Per-tab scheduled prompts, opened from the project tab overview — the phone's
  * counterpart to the desktop Agents view, and deliberately not from inside the
@@ -70,6 +71,7 @@ function scheduleRuleLabel(rule: ScheduleRule, t: Translate): string {
 }
 
 export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId: string; label?: string; onClose: () => void; initialMessage?: string }) {
+  useBackLayer(onClose);
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
   const [schedules, setSchedules] = useState<ScheduledPrompt[]>([]);

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ApiError, MAX_TAB_LABEL, renameTab, type TabRow } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { useBackLayer } from "../backStack";
 
 /** Rename one agent tab from the phone. The label is the only thing that
  * crosses: the tab is named by its opaque id, and the desktop resolves that
@@ -12,6 +13,7 @@ export function RenameSheet({ tab, onClose, onRenamed }: {
   onClose: () => void;
   onRenamed: (label: string) => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [label, setLabel] = useState(tab.label);
   const [busy, setBusy] = useState(false);

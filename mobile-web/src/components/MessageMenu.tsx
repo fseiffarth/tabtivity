@@ -3,6 +3,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { speechTag } from "../speechLang";
 import { currentSpeechId, speak, speechOutputSupported, spokenText, stopSpeaking, subscribeSpeech } from "../speechOutput";
+import { useBackLayer } from "../backStack";
 
 /** How long a finger rests on a bubble before its menu opens. Long enough
  * that a flick of the chat is never a press, short enough to feel like the
@@ -37,6 +38,7 @@ function selectedIn(host: HTMLElement | null): string {
  * what was said and nothing else; a click-hold on it asks what to do with it.
  */
 function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; onEdit?: () => void; onClose: () => void }) {
+  useBackLayer(onClose);
   const t = useT();
   const speaking = useSyncExternalStore(subscribeSpeech, currentSpeechId) === id;
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);

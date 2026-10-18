@@ -3,6 +3,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { chatLinkUrl } from "../terminal/answerMarkdown";
 import { HOLD_MS } from "./MessageMenu";
+import { useBackLayer } from "../backStack";
 
 /**
  * The question a tapped chat link asks before anything opens: the agent wrote
@@ -13,6 +14,7 @@ import { HOLD_MS } from "./MessageMenu";
  * opener nor its address as the referrer.
  */
 function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
+  useBackLayer(onClose);
   const t = useT();
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
   const host = new URL(url).host;

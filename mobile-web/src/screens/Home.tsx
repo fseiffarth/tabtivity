@@ -29,6 +29,7 @@ import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
+import { useBackLayer } from "../backStack";
 
 /** A reorder hint with the drag grip drawn where its `{grip}` stands, so the
  * sentence stays one translatable string. The project screen's hint too. */
@@ -98,6 +99,7 @@ export function Home({ open, openTab, todo, mail }: {
   const [pushSheet, setPushSheet] = useState(false);
   /** The header gear's sheet: the phone's own settings, kept off the page. */
   const [deviceSheet, setDeviceSheet] = useState(false);
+  useBackLayer(() => setDeviceSheet(false), deviceSheet);
   /** The Projects heading's ＋: a new project, made by name in the desktop's
    * projects folder (`NewProjectSheet`). */
   const [newProject, setNewProject] = useState(false);

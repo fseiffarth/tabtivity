@@ -10,6 +10,7 @@ import type { AgentSignal } from "../markup/submitState";
 import type { FileTabFile } from "../filesPlace";
 import { openingOutsideStrands } from "../platform";
 import { canPrint, clearPrint, printContent } from "../print";
+import { useBackLayer } from "../backStack";
 
 /** How a markup prompt left: into the agent's queue (it was working), typed
  * straight in, or not at all. */
@@ -352,6 +353,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   }, [row?.token, row?.name, row?.kind, row?.size, row?.modified, row?.place, row?.folder, inFiles, target, file.name]);
   /** What Mark up (and a PDF's reader) shows: the project file, or the file. */
   const marked = shared ?? { scope, file, place: markup?.place ?? fresh?.place, folder: markup?.folder ?? fresh?.folder, refresh: markup?.refresh ?? fresh?.refresh, adoptFrom: undefined };
+  // Mark up and a PDF's reader are a `MarkupView`, which takes Back itself.
+  useBackLayer(onClose, !(marking && (markup || fresh)) && !isPdf);
   if (marking && (markup || fresh)) {
     return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
       onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;

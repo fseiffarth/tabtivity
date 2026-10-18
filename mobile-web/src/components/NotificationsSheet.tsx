@@ -12,6 +12,7 @@ import {
   type HostPushState,
   type PushPrefs,
 } from "../push";
+import { useBackLayer } from "../backStack";
 
 /** A summary line for the Home row: what this phone is told about. */
 export function pushSummary(host: HostPushState | null, t: ReturnType<typeof useT>): string {
@@ -50,6 +51,7 @@ const AGENT_CHOICES: { key: AgentNotices; label: TranslationKey }[] = [
  * same as off, and unsubscribes the browser.
  */
 export function NotificationsSheet({ onClose, onChange }: { onClose: () => void; onChange?: (host: HostPushState) => void }) {
+  useBackLayer(onClose);
   const t = useT();
   const support = pushSupport();
   const [host, setHost] = useState<HostPushState | null>(null);

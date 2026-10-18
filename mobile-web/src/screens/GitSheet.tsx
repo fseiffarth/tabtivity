@@ -4,6 +4,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { getGitOverview, type GitOverview, type GitWorktreeView } from "../api";
 import { describeFailure } from "../connection";
 import { GitMark } from "../components/GitMark";
+import { useBackLayer } from "../backStack";
 
 /** `↑2 ↓1`, either half only when non-zero; "" when level. */
 function track(ahead: number, behind: number): string {
@@ -19,6 +20,7 @@ function track(ahead: number, behind: number): string {
  * here checks out, switches or creates anything.
  */
 export function GitSheet({ projectId, label, onClose }: { projectId: string; label: string; onClose: () => void }) {
+  useBackLayer(onClose);
   const t = useT();
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [outdated, setOutdated] = useState(false);

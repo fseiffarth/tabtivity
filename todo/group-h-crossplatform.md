@@ -3730,6 +3730,34 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31ch — Back steps back inside the phone app** (2026-10-18;
+  ✅ code-complete, `MobileBackStack.test.tsx` passing; ⚠️ never run on a
+  phone). `mobile-web/src/backStack.ts`: while a sheet, viewer, library,
+  editor, tab, project or other section is open, one history guard entry is
+  kept, so Android's back gesture / button steps back one layer (top sheet or
+  viewer → library folder → tab → project → Projects list) instead of
+  closing the PWA; at the Projects list Back leaves the app. Mail's message →
+  folder → accounts stack also walks back on an in-app right swipe. The
+  project drawer's and Focus view's right swipes are unchanged — a swipe in
+  from the very left edge is Android's back now, one starting further in
+  opens the drawer. No UI to carry an untested pill.
+  - Needs the PWA rebuilt (`npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, phone — (1) Projects list → a project → a tab: Back
+    returns to the project, again to the list, again leaves the app. (2) In a
+    tab open the gallery, a picture, then Mark up: Back leaves Mark up
+    (keeping an open note), then the picture, then the gallery. (3) Files
+    library three folders deep: Back goes up one folder each press, then out.
+    (4) A sheet (⋯ on a tab card): Back closes only the sheet. (5) Mail →
+    folder → message: Back and a right swipe both step back to the folder,
+    then the accounts; at Mail's root Back goes to Projects. (6) Close a
+    sheet with ✕, then Back on the list: the app leaves at the first press
+    (no dead press). (7) Mark up → Chat (tucked away): Back does not close
+    the hidden markup view. (8) Pull to refresh while a sheet is open, then
+    Back at the list: no dead press.
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS (Safari tab; a home-screen app has no Back)
+    - [ ] ❌ Doesn't work on iOS
 - [~] **31bp — The phone's host updates itself at launch** (2026-09-28;
   ✅ code-complete, unit test `a_launch_updates_a_host_that_is_behind_…`;
   ⚠️ never seen live). `start_host_on_launch` reinstalls the sidecar copy

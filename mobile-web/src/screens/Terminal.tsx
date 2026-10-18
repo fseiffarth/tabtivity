@@ -82,6 +82,7 @@ import { inputFrameStart, sessionStatus, statusFrameLines, statusModelTag, type 
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { sessionLimits } from "../terminal/sessionUsage";
 import { installFocusSwipe } from "../terminal/focusSwipe";
+import { BackNest } from "../backStack";
 import {
   answerRowKeys,
   freeTextRow,
@@ -4603,20 +4604,20 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {/* A markup view's Chat tucks its viewer away (`markupAway`) without
         unmounting it; the host is always there, so the switch never remounts. */}
-    {outboxOpen && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
+    {outboxOpen && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
       <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupFor}
         newTab={markupNewTab} />
-    </div>}
+    </BackNest></div>}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}
     {inboxOpen && (!outboxOpen || markupAway !== null) && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
-    {askedFile && askedScope && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
+    {askedFile && askedScope && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
       <OutboxViewer key={`asked/${askedFile.file.ref}`} scope={askedScope} file={askedFile.file} onClose={() => setAskedFile(null)}
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
-    </div>}
-    {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
+    </BackNest></div>}
+    {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
       <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
         markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, pickModel: markupFor.pickModel, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
-    </div>}
+    </BackNest></div>}
 
   </main>;
 }

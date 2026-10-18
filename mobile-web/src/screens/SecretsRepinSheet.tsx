@@ -2,12 +2,14 @@ import { useState } from "react";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { repinWithCode } from "../secrets";
+import { useBackLayer } from "../backStack";
 
 /** The server's identity key is not the one this phone pinned (it was lost
  * and made anew, or something in the middle answers): the phone releases
  * nothing to it until the recovery code, checked here on the phone,
  * confirms the new key (`secretsCore.checkRepin`). The code is not sent. */
 export function SecretsRepinSheet({ onClose }: { onClose: () => void }) {
+  useBackLayer(onClose);
   const t = useT();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);

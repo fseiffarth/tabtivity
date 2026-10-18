@@ -5,6 +5,7 @@ import { finishSignIn } from "../api";
 import { describeFailure } from "../connection";
 import { selectSignature, type SelectOption, type SelectPrompt } from "../terminal/selectPrompt";
 import { pastedCallback, type SignIn } from "../terminal/signIn";
+import { useBackLayer } from "../backStack";
 
 type Outcome = { text: string; error?: boolean };
 
@@ -64,6 +65,7 @@ export function SignInSheet({ tabId, agent, signIn, done = false, ended = false,
   onFinish?: () => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   // The link the sheet opened on, kept while the session repaints; a new
   // link (a retry) replaces it.

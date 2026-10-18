@@ -6,6 +6,7 @@ import { describeFailure } from "../connection";
 import { limitMeters, noteParts, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { resetCountdown, resetText } from "../terminal/limitResets";
 import type { SessionStatus } from "../terminal/statusLine";
+import { useBackLayer } from "../backStack";
 
 export { resetCountdown, resetText };
 
@@ -56,6 +57,7 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
    * sheet then offers Sign in. */
   signIn?: { hint: string; start: () => void } | null;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
   /** A count in the phone's language, under the key its number calls for. */

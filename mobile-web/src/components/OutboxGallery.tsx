@@ -4,6 +4,7 @@ import { type OutboxFile, type OutboxScope } from "../api";
 import { OutboxGrid } from "./OutboxGrid";
 import { isUntested } from "../../../src/lib/untested";
 import { sizeLabel } from "../terminal/fileLabels";
+import { useBackLayer } from "../backStack";
 
 /** The sidecar's listing cap (`outbox::MAX_LISTED`): a full list means the
  * folder may hold more than the sum shown. */
@@ -35,6 +36,7 @@ export function OutboxGallery({ scope, files, onOpen, onDetails, onDelete, onDel
   onDeleteAll?: () => Promise<void>;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [askingAll, setAskingAll] = useState(false);
   const [clearing, setClearing] = useState(false);

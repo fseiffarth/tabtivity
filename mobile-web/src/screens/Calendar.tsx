@@ -7,6 +7,7 @@ import { useI18nStore, useT, type Language, type TranslationKey } from "../../..
 import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
+import { useBackLayer } from "../backStack";
 
 const NAMES: TranslationKey[] = ["agentSchedule.sun", "agentSchedule.mon", "agentSchedule.tue", "agentSchedule.wed", "agentSchedule.thu", "agentSchedule.fri", "agentSchedule.sat"];
 const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };
@@ -145,6 +146,7 @@ function DayView({ date, dayEvents, open, truncated, canWrite, onCreateAt }: { d
 }
 
 function EventEditor({ editing, calendars, busy, close, save, remove }: { editing: Exclude<Editing, null>; calendars: MobileCalendarInfo[]; busy: boolean; close: () => void; save: (value: MobileCalendarEventInput) => Promise<void>; remove?: () => void }) {
+  useBackLayer(close);
   const t = useT();
   const [draft, setDraft] = useState(editing.draft); const [endTouched, setEndTouched] = useState(false); const patch = (change: Partial<MobileCalendarEventInput>) => setDraft((v) => ({ ...v, ...change }));
   const startDay = datePart(draft.start), startTime = draft.start.slice(11, 16) || "09:00", endTime = draft.end.slice(11, 16) || "10:00";
@@ -170,6 +172,7 @@ function EventEditor({ editing, calendars, busy, close, save, remove }: { editin
  * place of two `window.prompt`s — which a phone draws as the browser's own
  * dialog, with no way to pick a colour. Nothing is sent until Save. */
 function CalendarEditSheet({ calendar, busy, save, onClose }: { calendar: MobileCalendarInfo; busy: boolean; save: (name: string, color: string) => Promise<boolean>; onClose: () => void }) {
+  useBackLayer(onClose);
   const t = useT();
   const [name, setName] = useState(calendar.name); const [color, setColor] = useState(calendar.color); const [error, setError] = useState("");
   const trimmed = name.trim();
@@ -193,6 +196,7 @@ function CalendarEditSheet({ calendar, busy, save, onClose }: { calendar: Mobile
 }
 
 function CalendarManager({ calendars, busy, mutate, confirm, close }: { calendars: MobileCalendarInfo[]; busy: boolean; mutate: (action: CalendarAction) => Promise<boolean>; confirm: (confirm: Confirm) => void; close: () => void }) {
+  useBackLayer(close);
   const t = useT();
   const [name, setName] = useState(""); const [color, setColor] = useState("#4aa3df");
   const [editing, setEditingCalendar] = useState<MobileCalendarInfo | null>(null);

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getLaunchOptions, type AgentRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
+import { useBackLayer } from "../backStack";
 
 /** How the tap wants the agent started, beyond which agent and mode. */
 export interface NewTabLaunch {
@@ -68,6 +69,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
   onSendFile: () => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [options, setOptions] = useState<LaunchOptions>({ worktrees: [], cloud: [], sign_in: [] });
   const [signingIn, setSigningIn] = useState(false);

@@ -14,6 +14,7 @@ import {
 import { describeFailure } from "../connection";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { useBackLayer } from "../backStack";
 
 /** The project's collected prompts — text kept without a tab. Sending aims
  * one at an agent tab now (the desktop queues a one-time schedule at its own
@@ -27,6 +28,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
    * tabs cannot be scheduled (no tmux), and the Schedule button with it. */
   onSchedule?: (tab: TabRow, message: string) => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const agentTabs = tabs.filter((tab) => tab.kind === "agent" && tab.available);
   const [prompts, setPrompts] = useState<ProjectPrompt[]>([]);

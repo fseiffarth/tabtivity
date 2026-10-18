@@ -33,6 +33,7 @@ import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./Mar
 import { EraserIcon } from "../markup/EraserIcon";
 import { OptionSheet } from "./OptionSheet";
 import { bitmapDataUrl, canPrint, MAX_PRINT_PAGES, PRINT_WIDTH, printContent } from "../print";
+import { useBackLayer } from "../backStack";
 
 type Tool = PenTool;
 
@@ -1311,6 +1312,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (note && loaded) void saveLayer(key, next, fingerprint, undefined, next === history.present ? history.past : [...history.past, history.present]).finally(onClose);
     else onClose();
   };
+  // Back is Done, which keeps an open note; a reader not marking closes.
+  useBackLayer(reading && !marking ? onClose : done);
 
   // --- Submit ----------------------------------------------------------------
   /** Print in the reader: every page drawn afresh by the frame at paper

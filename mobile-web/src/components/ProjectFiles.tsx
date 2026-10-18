@@ -6,6 +6,7 @@ import type { TabRow } from "../api";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { FilesLibrary } from "./FilesLibrary";
 import type { MarkupNewTab, MarkupTarget } from "./OutboxViewer";
+import { useBackLayer } from "../backStack";
 
 export { FileGlyph, asViewerFile } from "./FilesLibrary";
 
@@ -47,6 +48,8 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   const closeLibrary = useCallback(() => setLibrary(false), []);
   const drawer = useRef<HTMLElement | null>(null);
   const libraryShown = library && browse;
+  // The library takes Back while it is up (`FilesLibrary`).
+  useBackLayer(onClose, !libraryShown);
 
   useEffect(() => {
     if (libraryShown) return;

@@ -14,6 +14,7 @@ import { useThumb } from "../thumbs";
 import { OptionSheet } from "./OptionSheet";
 import { OutboxViewer, type MarkupNewTab, type MarkupTarget } from "./OutboxViewer";
 import { usePhonePicks, type PickedFile } from "./phonePicks";
+import { useBackLayer } from "../backStack";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
@@ -461,6 +462,13 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     if (atRoot) onClose();
     else setTrail((current) => current.length > 1 ? current.slice(0, -1) : current);
   }, [atRoot, onClose]);
+  // Back: the sheet over the list first, then a search, then up like ‹. The
+  // viewer over the library takes Back itself (`OutboxViewer`).
+  useBackLayer(() => {
+    if (sheet) setSheet(null);
+    else if (searching) setQuery("");
+    else up();
+  });
 
   useEffect(() => {
     // The viewer opens over the library and a sheet over its list, so Escape
