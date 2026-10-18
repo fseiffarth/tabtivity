@@ -402,6 +402,25 @@ export function statusModelTag(status: SessionStatus | null | undefined): string
   return status.effort ? `${status.model} · ${status.effort}` : status.model;
 }
 
+/** Claude Code's notice under `/model` (`⎿ Set model to Sonnet 5.5 and saved
+ * as your default…`). */
+const MODEL_SET_NOTICE = /\bSet model to\s+(.+?)(?:\s+(?:and|with|for)\b|\s*[(·]|$)/iu;
+
+/** The model `/model` has just switched to, when that notice is the last thing
+ * printed above the input box (only blank rows and frame strokes between). A
+ * custom statusline refreshes on a timer or the next message, so for a moment
+ * after the switch its row still names the old model; the notice is newer.
+ * Once anything else is printed the footer is the reading again. */
+function modelJustSet(lines: readonly StatusLineLike[], inputIndex: number): string | undefined {
+  for (let index = inputIndex - 1; index >= 0; index -= 1) {
+    const text = lines[index].text.trim();
+    if (!text || /^[─━═\-\s]+$/u.test(text)) continue;
+    const named = MODEL_SET_NOTICE.exec(text)?.[1];
+    return named ? MODEL.exec(named)?.[1] : undefined;
+  }
+  return undefined;
+}
+
 /**
  * The status the session is showing right now, or `null` when the bottom of
  * the screen is not a TUI input frame (mid-scroll output, a full-screen
@@ -417,10 +436,12 @@ export function sessionStatus(
   if (antigravity) return antigravity.status;
   let inputIndex = -1;
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
-    if (isInputLine(lines, index)) {
-      inputIndex = index;
-      break;
-    }
+    if (!isInputLine(lines, index)) continue;
+    // A highlighted dialog row opens with the input line's `❯`; the rows under
+    // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
+    if (OPTION_ROW.test(lines[index].text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return null;
+    inputIndex = index;
+    break;
   }
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
@@ -443,6 +464,8 @@ export function sessionStatus(
     if (mode) status.mode = mode;
   }
   if (!status.mode) status.mode = codexUpdatedMode(lines, inputIndex, agentLabel);
+  const switched = modelJustSet(lines, inputIndex);
+  if (switched && switched !== status.model) status.model = switched;
   return status;
 }
 

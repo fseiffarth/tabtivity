@@ -22,6 +22,34 @@ describe(`${BRAND.display} Mobile session status line`, () => {
     });
   });
 
+  it("takes the model from a fresh /model notice over a statusline not yet redrawn", () => {
+    const below = `~/p (main) · Haiku 4.5 · auto mode on (shift+tab to cycle) · 5h 94%`;
+    expect(sessionStatus(lines(
+      "> /model",
+      "  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions",
+      "",
+      ">",
+      below,
+    ))?.model).toBe("Sonnet 5.5");
+    // Anything printed after the notice hands the reading back to the footer.
+    expect(sessionStatus(lines(
+      "  ⎿  Set model to Sonnet 5.5 and saved as your default for new sessions",
+      "⏺ Done.",
+      ">",
+      below,
+    ))?.model).toBe("Haiku 4.5");
+  });
+
+  it("reads no status from the rows of an open /model picker", () => {
+    expect(sessionStatus(lines(
+      "  Select model",
+      "    1. Default (recommended)  Opus 5.5",
+      "  ❯ 2. Sonnet 5.5 ✔  Everyday tasks",
+      "    3. Haiku 5.5  Fastest for quick answers",
+      "  Enter to confirm · Esc to exit",
+    ))).toBeNull();
+  });
+
   it("reads the default Claude Code footer without inventing fields", () => {
     const status = sessionStatus(lines("> ", "? for shortcuts · 85% context left"));
     expect(status).toEqual({ context: "85%" });
