@@ -9,7 +9,7 @@ button { color:inherit; }
 :root { --screen-measure:720px; }
 /* Home and the project screen's scale: type, 4pt spacing, group surfaces,
    the 44px hit box, octagon cuts (docs/mobile_home_redesign_plan.md). */
-:root { --fs-large:1.75rem; --fs-title:1.25rem; --fs-headline:1.0625rem; --fs-body:.9375rem; --fs-sub:.875rem; --fs-foot:.8125rem; --fs-caption:.75rem; --fs-micro:.6875rem; --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --surface-group:#1a1d2b; --surface-raised:#222637; --hairline:#2b3040; --edge:#363c50; --ink-muted:#98a0b4; --hit:44px; --oct-sm:6px; --oct-md:10px; --oct-lg:14px; --oct-fab:17px; }
+:root { --fs-large:1.75rem; --fs-title:1.25rem; --fs-headline:1.0625rem; --fs-body:.9375rem; --fs-sub:.875rem; --fs-foot:.8125rem; --fs-caption:.75rem; --fs-micro:.6875rem; --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --surface-group:#1a1d2b; --surface-raised:#222637; --hairline:#2b3040; --edge:#363c50; --ink-muted:#98a0b4; --hit:44px; --oct-sm:6px; --oct-md:10px; --oct-lg:14px; }
 @media (min-width:900px) { :root { --screen-measure:100vw; } }
 .screen { max-width:var(--screen-measure); min-height:100dvh; margin:auto; padding:max(22px,env(safe-area-inset-top)) 18px max(24px,env(safe-area-inset-bottom)); }
 @media (min-width:900px) { .screen { padding-inline:max(28px,env(safe-area-inset-left)) max(28px,env(safe-area-inset-right)); } }
@@ -325,6 +325,12 @@ small { color:#9498aa; }
 .new-tab-sheet .new-tab-file small,.project-files .new-tab-file small { color:#aeb4c8; font-size:.76rem; }
 .new-tab-sheet .new-tab-file svg,.project-files .new-tab-file svg { flex:0 0 20px; width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .new-tab-agents .agent-create > .mode { flex:1 1 auto; min-height:36px; padding:6px 8px; font-size:.8rem; }
+/* The ★ that makes an agent the ＋'s tap: in the headline's corner, so a tile
+   with no modes grows no second row for it. */
+.new-tab-agents .agent-create { position:relative; }
+.new-tab-agents .agent-create > button:first-child { padding-right:44px; }
+.new-tab-default { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; background:none; color:#9da3b6; font-size:1.15rem; }
+.new-tab-default[aria-pressed="true"] { color:#f5c451; }
 .new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
 .new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
@@ -417,7 +423,7 @@ small { color:#9498aa; }
 .project-activate { margin-bottom:var(--sp-3); }
 .project-activate > button { --o:var(--oct-md); width:100%; min-height:var(--hit); border:0; }
 /* The octagon these screens cut their pieces to, each its own `--o`. */
-.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button,.fab-round::before,.fab-round::after { clip-path:polygon(var(--o) 0,calc(100% - var(--o)) 0,100% var(--o),100% calc(100% - var(--o)),calc(100% - var(--o)) 100%,var(--o) 100%,0 calc(100% - var(--o)),0 var(--o)); }
+.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { clip-path:polygon(var(--o) 0,calc(100% - var(--o)) 0,100% var(--o),100% calc(100% - var(--o)),calc(100% - var(--o)) 100%,var(--o) 100%,0 calc(100% - var(--o)),0 var(--o)); }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -491,13 +497,17 @@ button.mobile-alert-row { cursor:pointer; }
    as `.screen` so it keeps the board's right edge on a wide window. */
 .todo-fab,.fab { position:fixed; z-index:9; right:max(18px,calc((100vw - var(--screen-measure)) / 2 + 18px)); bottom:calc(86px + max(24px,env(safe-area-inset-bottom))); }
 .todo-fab { width:58px; height:58px; padding:0; border-radius:50%; font-size:1.9rem; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
-/* ＋ New tab: the to-do FAB's place and octagon, icon only (its name is the
-   aria-label). Face and shadow are clipped layers, the shadow a static offset
-   copy. */
-.fab-round { --o:var(--oct-fab); display:grid; place-items:center; width:58px; height:58px; padding:0; border:0; background:none; isolation:isolate; }
-.fab-round::before,.fab-round::after { content:""; position:absolute; inset:0; z-index:-1; background:#6c5ce7; }
+/* ＋ New tab and Home's Tabby chat: the to-do FAB's place, a circle, icon only
+   (its name is the aria-label). Face and shadow are round layers, the shadow a
+   static offset copy. */
+.fab-round { display:grid; place-items:center; width:58px; height:58px; padding:0; border:0; border-radius:50%; background:none; isolation:isolate; }
+.fab-round::before,.fab-round::after { content:""; position:absolute; inset:0; z-index:-1; border-radius:50%; background:#6c5ce7; }
 .fab-round::after { z-index:-2; inset:5px 0 -5px; background:rgba(4,5,9,.5); }
 .fab-plus { font-size:2rem; line-height:1; }
+/* ＋ is held for its sheet: no text selection or system callout under the finger. */
+.fab-round { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+.fab-chat-icon { width:28px; height:28px; }
+.fab-chat-icon path { stroke-width:1.35; }
 .fab-round > .untested { position:absolute; top:-14px; right:0; margin:0; }
 /* The last card must not end under the button the way it must not end under the
    tab bar; this replaces `.tabbed > .screen`'s allowance rather than adding to

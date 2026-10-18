@@ -8,12 +8,12 @@
  * the same kinds, the same agents, the same modes, and the new tab still hands
  * itself to the terminal.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { NewTabSheet } from "../../../mobile-web/src/screens/NewTabSheet";
 import type { TabRow } from "../../../mobile-web/src/api";
-import { BRAND, NAMES } from "../../lib/brand";
+import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 const fetchMock = vi.fn();
 
@@ -36,6 +36,7 @@ const DETAIL = {
 };
 
 beforeEach(() => {
+  localStorage.clear();
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -54,7 +55,7 @@ describe("Mobile project screen — the ＋", () => {
     expect(screen.queryByRole("button", { name: "New shell" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Claude" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
     const sheet = await screen.findByRole("dialog", { name: "New tab" });
     expect(sheet.querySelector(".create")).toBeTruthy();
     expect(screen.getByRole("button", { name: "New shell" })).toBeTruthy();
@@ -68,7 +69,7 @@ describe("Mobile project screen — the ＋", () => {
     const opened: TabRow[] = [];
     render(<Project id="p" back={() => {}} terminal={(tab) => opened.push(tab)} />);
     await screen.findByText("claude 1");
-    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
     fireEvent.click(await screen.findByRole("button", { name: "plan" }));
 
     await waitFor(() => expect(opened).toHaveLength(1));
@@ -91,7 +92,7 @@ describe("Mobile project screen — the ＋", () => {
       : base?.(url, init));
     render(<Project id="p" back={() => {}} terminal={() => {}} />);
     await screen.findByText("claude 1");
-    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
     fireEvent.click(await screen.findByRole("button", { name: /Send a file from this phone/ }));
     // The picker opened on the tap; the sheet is out of the way of its answer.
     expect(screen.queryByRole("dialog", { name: "New tab" })).toBeNull();
@@ -114,7 +115,7 @@ describe("Mobile project screen — the ＋", () => {
     await screen.findByText(/Desktop unavailable/);
     const open = screen.getByRole("button", { name: "New tab" }) as HTMLButtonElement;
     expect(open.disabled).toBe(false);
-    fireEvent.click(open);
+    fireEvent.contextMenu(open);
     // The host starts these itself (headless owner plan, H1b) …
     expect((screen.getByRole("button", { name: "New shell" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(false);
@@ -132,7 +133,7 @@ describe("Mobile project screen — the ＋", () => {
   it("puts the phone file at the sheet's foot and asks for any file, not just media", async () => {
     serve(DETAIL);
     render(<Project id="p" back={() => {}} terminal={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "New tab" }));
     const file = screen.getByRole("button", { name: /Send a file from this phone/ });
     // Last in the sheet, under every agent tile.
     expect(file.parentElement?.lastElementChild).toBe(file);
@@ -144,7 +145,7 @@ describe("Mobile project screen — the ＋", () => {
     for (const detail of [{ ...DETAIL, shells: false }, { ...DETAIL, shells: undefined }]) {
       serve(detail);
       render(<Project id="p" back={() => {}} terminal={() => {}} />);
-      fireEvent.click(await screen.findByRole("button", { name: "New tab" }));
+      fireEvent.contextMenu(await screen.findByRole("button", { name: "New tab" }));
       const sheet = await screen.findByRole("dialog", { name: "New tab" });
       expect(screen.queryByRole("button", { name: "New shell" })).toBeNull();
       // The agents lead the sheet instead; the file row stays at its foot.
@@ -152,6 +153,81 @@ describe("Mobile project screen — the ＋", () => {
       expect(screen.getByRole("button", { name: "Claude" })).toBeTruthy();
       cleanup();
     }
+  });
+});
+
+describe("Mobile project screen — the ＋'s tap and hold", () => {
+  const AGENTS = { ...DETAIL, agents: [{ id: "claude", label: "Claude", modes: ["plan"] }, { id: "codex", label: "Codex", modes: [], default: true }] };
+  const posted = () => fetchMock.mock.calls
+    .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+
+  it("opens the desktop's default agent on a tap, with no sheet and no mode", async () => {
+    serve(AGENTS);
+    const opened: TabRow[] = [];
+    render(<Project id="p" back={() => {}} terminal={(tab) => opened.push(tab)} />);
+    await screen.findByText("claude 1");
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await waitFor(() => expect(opened).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: "New tab" })).toBeNull();
+    expect(posted()).toHaveLength(1);
+    expect(posted()[0]).toMatchObject({ kind: "agent", agent_id: "codex" });
+    expect(posted()[0]?.mode).toBeUndefined();
+  });
+
+  it("opens the sheet on a hold, and the click that ends the hold creates nothing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      serve(AGENTS);
+      render(<Project id="p" back={() => {}} terminal={() => {}} />);
+      await screen.findByText("claude 1");
+      const fab = screen.getByRole("button", { name: "New tab" });
+      fireEvent.pointerDown(fab, { button: 0, clientX: 5, clientY: 5 });
+      await act(() => vi.advanceTimersByTimeAsync(500));
+      fireEvent.pointerUp(fab);
+      fireEvent.click(fab);
+      expect(await screen.findByRole("dialog", { name: "New tab" })).toBeTruthy();
+      expect(posted()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stars another agent in the sheet, on this phone, for the next tap", async () => {
+    serve(AGENTS);
+    render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("claude 1");
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
+    const sheet = await screen.findByRole("dialog", { name: "New tab" });
+    // The desktop's default wears the star until the phone picks its own.
+    expect(within(sheet).getByRole("button", { name: "Codex opens when ＋ is tapped" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Open Claude when ＋ is tapped" }));
+    expect(within(sheet).getByRole("button", { name: "Claude opens when ＋ is tapped" }).getAttribute("aria-pressed")).toBe("true");
+    // Starring is not a pick: the sheet stays and nothing was created.
+    expect(posted()).toHaveLength(0);
+    fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await waitFor(() => expect(posted()).toHaveLength(1));
+    expect(posted()[0]).toMatchObject({ kind: "agent", agent_id: "claude" });
+    // Kept on the phone, never sent to the desktop.
+    expect(fetchMock.mock.calls.some(([url]) => /settings|default/.test(String(url)))).toBe(false);
+  });
+
+  it("falls back to the desktop's default once the starred agent is gone, and to the sheet with no agent", async () => {
+    localStorage.setItem(`${storageKey("mobile.")}newTabAgent`, "gemini");
+    serve(AGENTS);
+    render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("claude 1");
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await waitFor(() => expect(posted()).toHaveLength(1));
+    expect(posted()[0]).toMatchObject({ agent_id: "codex" });
+    cleanup();
+    fetchMock.mockReset();
+    serve({ ...DETAIL, agents: [] });
+    render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("claude 1");
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    expect(await screen.findByRole("dialog", { name: "New tab" })).toBeTruthy();
   });
 });
 

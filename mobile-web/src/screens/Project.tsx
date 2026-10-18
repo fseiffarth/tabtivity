@@ -10,6 +10,7 @@ import { applyServerOrder, placeBeside } from "../tabReorder";
 import { ColorSheet } from "./ColorSheet";
 import { NewTabSheet, type NewTabLaunch } from "./NewTabSheet";
 import { NewChatSheet } from "./NewChatSheet";
+import { newTabAgent, readNewTabAgent, useTapHold, writeNewTabAgent } from "../newTabDefault";
 import { isAssistantScope, rememberScopeKind } from "../scopeKind";
 import { useProjectInbox } from "../components/ProjectInbox";
 import { PromptsSheet } from "./PromptsSheet";
@@ -125,6 +126,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   /** The header's ＋: what to open next — a shell, or one of the desktop's
    * agents in one of its modes. */
   const [newTabOpen, setNewTabOpen] = useState(false);
+  /** The agent this phone starred in that sheet for a tap on ＋ ("" none). */
+  const [starredAgent, setStarredAgent] = useState(readNewTabAgent);
   /** Which finished / interrupted tabs this phone has opened: their card
    *  badge goes, as the desktop's lamp does (`seenDone.ts`). */
   const [seenDone, setSeenDone] = useState(() => readSeenDone());
@@ -427,6 +430,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       terminal(body.tab, launch?.sign_in ? { signIn: true } : undefined);
     } catch (reason) { setError(describeFailure(reason)); void load(); } finally { setCreating(false); }
   };
+  /** A tap on ＋ starts the default agent here at once (`newTabDefault.ts`);
+   * a hold opens the sheet of every choice, which is also where the default
+   * is starred. With no agent to start — the assistant scope's chats, a host
+   * without tmux, a desktop listing none — the tap opens that sheet as before. */
+  const quickAgent = !assistantScope && terminalsOffered ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
+  const fabPress = useTapHold(
+    () => { if (!quickAgent) setNewTabOpen(true); else if (!creating) void create("agent", quickAgent); },
+    () => setNewTabOpen(true),
+  );
   /** The tab being started, by tab id: a chat restored with the desktop that
    * has no process yet (the assistant scope starts its chats on demand), or an
    * agent tab the desktop is restarting so the phone can attach to it. */
@@ -739,12 +751,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     <button
       className="primary fab fab-round"
       disabled={!detail}
-      onClick={() => setNewTabOpen(true)}
+      {...fabPress}
       aria-haspopup="dialog"
       aria-expanded={newTabOpen}
+      aria-busy={creating}
       aria-label={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
-      title={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
-    ><span aria-hidden="true" className="fab-plus">＋</span>{isUntested("mobile.project.fab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>
+      title={assistantScope ? t("mobile.assistant.newChat") : quickAgent ? t("mobile.project.fabQuick", { agent: quickAgent.label }) : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickAgent && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""
@@ -766,6 +779,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       busy={creating}
       headless={!detail.desktop_available}
       creates={terminalsOffered}
+      defaultAgent={quickAgent?.id}
+      onDefault={(agent) => { writeNewTabAgent(agent.id); setStarredAgent(agent.id); }}
       onClose={() => setNewTabOpen(false)}
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
