@@ -10,7 +10,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteInput } from "../../lib/agents/promptCount";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -42,6 +42,7 @@ import type { LoginTarget } from "../../lib/remote/loginTarget";
 import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
+import { confirmFreshSubmit, isClaude } from "../../lib/agents/freshSubmit";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
@@ -856,6 +857,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // keeps the settledness its parked stand-in carried.
     const takesPrompts = !attachOnly || isDetachedWindow();
     let settledOnce = waking && !!parked?.settled;
+    // A hook turn begun before this lifecycle is an earlier CLI's (a relaunch
+    // keeps the PTY id and the activity store's turn).
+    const lifecycleAt = Date.now();
+    const settle = () => {
+      if (settledOnce) return;
+      settledOnce = true;
+      wakePhoneHolds();
+    };
     const armScheduledReady = () => {
       if (!scheduleTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
@@ -866,10 +875,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       scheduledSettleTimer.current = setTimeout(() => {
         if (cancelled) return;
         scheduledReady.current = true;
-        if (!settledOnce) {
-          settledOnce = true;
-          wakePhoneHolds();
-        }
+        settle();
       }, SCHEDULED_SETTLE_MS);
     };
     /**
@@ -895,18 +901,27 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (scheduledReady.current) return true;
       if (!terminalReadySeen.current) return false;
       const last = lastPtyOutputAt(id);
-      return last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
+      const quiet = last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
+      // Every quiet reading counts toward `started`, not only one taken by
+      // `started` itself: a hidden pane never runs the arming timer, and the
+      // idle gate asks this, so its first delivery used to leave the pane
+      // "not started" for the whole turn it began.
+      if (quiet) settle();
+      return quiet;
     };
     /**
      * Whether a phone prompt may be typed while the agent works
-     * (`queueableWhileBusy`): the CLI has drawn and gone quiet once. Not the
-     * bare terminal-ready event — a brand-new tab is ready before its CLI has
-     * started, and what is typed into a CLI still starting is lost (the phone
-     * markup's new-tab Submit held its prompt into exactly that window). Once
-     * settled it stays so: a working agent redraws without pause.
+     * (`queueableWhileBusy`), so the CLI's own queue decides when the agent
+     * takes it: the CLI has drawn and gone quiet once, or its hooks report a
+     * turn begun in this lifecycle — a CLI mid-turn is up, though a hidden
+     * pane may never have seen it quiet. Not the bare terminal-ready event — a
+     * brand-new tab is ready before its CLI has started, and what is typed
+     * into a CLI still starting is lost (the phone markup's new-tab Submit
+     * held its prompt into exactly that window). Once settled it stays so: a
+     * working agent redraws without pause.
      */
     const scheduledInputStarted = () => {
-      if (!settledOnce && scheduledInputReady()) settledOnce = true;
+      if (!settledOnce && ((agentDeliveryTurn(id)?.startedAt ?? 0) >= lifecycleAt || scheduledInputReady())) settle();
       return settledOnce;
     };
     const unregisterScheduled = scheduleTargetId && takesPrompts
@@ -1404,7 +1419,18 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           ).catch(console.error);
           initialEnterTimer.current = setTimeout(() => {
             initialInputPending.current = false;
+            const enteredAt = Date.now();
             writePtyInput(id, new Uint8Array([0x0d])).catch(console.error);
+            // A Claude still starting can drop this Enter (`freshSubmit.ts`).
+            // A slash command (`/rename`) begins no turn for a hook to confirm.
+            if (kind === "agent" && isClaude(cmd) && !initialInput.trimStart().startsWith("/")) {
+              void confirmFreshSubmit(
+                id,
+                enteredAt,
+                () => writePtyInput(id, new Uint8Array([0x0d])).then(() => true),
+                () => !cancelled,
+              );
+            }
             // What the user typed meanwhile goes into the prompt the submitted
             // line leaves behind, not onto its end.
             initialEnterTimer.current = setTimeout(() => releaseHeldInput(true), HELD_INPUT_FLUSH_MS);
@@ -2004,7 +2030,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
               ? registerScheduledAgentInput(scheduleTargetId, {
                   ptyId: id,
                   ready: () => ready && quiet(),
-                  started: () => settledOnce || (ready && quiet()),
+                  started: () => settledOnce || (agentDeliveryTurn(id)?.startedAt ?? 0) >= lifecycleAt || (ready && quiet()),
                   bracketedPaste: () => bracketed,
                   agent: cmd,
                   recordAuthorizedInput: () => {

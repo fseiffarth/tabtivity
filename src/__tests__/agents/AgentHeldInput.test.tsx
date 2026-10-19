@@ -94,6 +94,7 @@ vi.mock("../../stores/settings", () => ({
 
 import { TerminalView } from "../../components/terminal/TerminalView";
 import { claudeLaunchName, clearClaimedInitialInputsForTest } from "../../lib/terminal/terminalControl";
+import { _clearPtyActivityForTest, noteAgentTurn } from "../../stores/activity";
 
 /** Everything written to the PTY, in order, as text. */
 function written(): string {
@@ -130,6 +131,7 @@ describe("keystrokes typed before an agent tab's launch line", () => {
     bus.output.clear();
     keys.onData = null;
     clearClaimedInitialInputsForTest();
+    _clearPtyActivityForTest();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -249,6 +251,48 @@ describe("keystrokes typed before an agent tab's launch line", () => {
       await vi.advanceTimersByTimeAsync(8000);
     });
     expect(written()).toBe("");
+  });
+
+  // A Claude still starting can drop the Enter after an opening prompt (the
+  // help agent's, a scaffold's): it goes again until a hook turn begins.
+  describe("an opening prompt's Enter", () => {
+    async function openWithPrompt(id: string) {
+      invoke.mockImplementation((cmd: unknown) =>
+        Promise.resolve(cmd === "claude_folder_trusted" ? true : cmd === "pty_spawn" ? { named: false } : undefined),
+      );
+      await act(async () => {
+        render(<TerminalView id={id} cmd="claude" cwd="/p" kind="agent" initialInput="Read notes.md" visible focused />);
+      });
+      await act(async () => {
+        bus.ready.get(id)?.();
+        bus.output.get(id)?.("\x1b[?25l");
+        await vi.advanceTimersByTimeAsync(1_500);
+      });
+      expect(written()).toBe("Read notes.md\r");
+    }
+
+    it("goes again while no turn begins, up to three times", async () => {
+      await openWithPrompt("p9:t1");
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(written()).toBe("Read notes.md\r\r\r\r");
+    });
+
+    it("stops once the hooks report the turn", async () => {
+      const id = "p10:t1";
+      await openWithPrompt(id);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+      noteAgentTurn(id, "working");
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(written()).toBe("Read notes.md\r\r");
+    });
+
+    it("leaves the words to the user once they type", async () => {
+      const id = "p11:t1";
+      await openWithPrompt(id);
+      await type("x");
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(written()).toBe("Read notes.md\rx");
+    });
   });
 
   it("leaves a shell tab's typing alone", async () => {

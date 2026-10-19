@@ -132,6 +132,15 @@ export async function submitScheduledAgentCommand(scheduleTargetId: string, comm
   return input.ptyId;
 }
 
+/** Enter alone, for a submit the CLI dropped (`AgentScheduleHost`'s
+ *  `confirmFreshSubmit`). False when the tab's input is gone. */
+export async function pressScheduledAgentSubmit(scheduleTargetId: string): Promise<boolean> {
+  const input = inputs.get(scheduleTargetId);
+  if (!input) return false;
+  await writePtyInput(input.ptyId, ENCODER.encode("\r"));
+  return true;
+}
+
 export function _clearScheduledAgentInputsForTest(): void {
   inputs.clear();
 }

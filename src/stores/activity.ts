@@ -554,6 +554,11 @@ export function agentDeliveryTurn(ptyId: string) {
   return turn;
 }
 
+/** When {@link noteUserInput} last saw input to the tab, if ever. */
+export function lastUserInputAt(ptyId: string): number | undefined {
+  return inputByPty[ptyId];
+}
+
 /** Whether automation may type a prompt into the tab. With a hook verdict on
  * record, only the agent's own stable completion opens the gate. Without one —
  * an agent that fires no hooks, or a tab nothing has been asked of yet — the
