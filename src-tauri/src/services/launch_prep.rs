@@ -411,7 +411,7 @@ fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: b
 
 /// Build the chat's `cmd`, `args` and `env` from its launch
 /// ([`assistant::launch_line`](crate::services::assistant::launch_line)),
-/// after `grant_lanes` put the web lane's variables in `opts.env`, and resolve
+/// after `grant_lanes` put the web and help lanes' variables in `opts.env`, and resolve
 /// the session the way every agent tab does. `home` is the prepared assistant
 /// home; `provider` the local OpenCode provider config.
 ///
@@ -438,8 +438,9 @@ fn assemble_assistant_launch_with(
     provider: Option<&str>,
     resolve: &dyn Fn(PtyOptions) -> PtyOptions,
 ) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
-    use crate::services::assistant::{launch_line, AssistantCli, LaneGrant, LaunchCtx};
+    use crate::services::assistant::{help_url_from_env, launch_line, AssistantCli, LaneGrant, LaunchCtx};
     let lane = LaneGrant::from_env(&opts.env);
+    let help = help_url_from_env(&opts.env);
     // The home as the process sees it: the fence binds the agent home at the
     // user's home path on Linux; elsewhere `HOME` points at the home itself.
     let visible_home = if cfg!(target_os = "linux") { crate::paths::home_dir() } else { home.to_path_buf() };
@@ -448,6 +449,7 @@ fn assemble_assistant_launch_with(
         chat_dir_existed: plan.chat_dir_existed,
         home,
         lane: lane.as_ref(),
+        help: help.as_deref(),
         visible_home: &visible_home,
         opencode_provider: provider,
     };
@@ -1882,16 +1884,16 @@ mod tests {
         assert!(ensure_chat_dir(file_state.path(), CHAT).is_err());
     }
 
-    /// Row 5: whatever the caller sent, an assistant spawn gets the web lane
-    /// or nothing — never the root, schedule, push, markup or help lane.
+    /// Row 5: whatever the caller sent, an assistant spawn gets the web and
+    /// help lanes or nothing — never the root, schedule, push or markup lane.
     #[test]
-    fn a_chat_is_granted_no_lane_but_the_web_one() {
-        use crate::services::root_mcp::{self, Runtime, WEB_TOKEN_ENV, WEB_URL_ENV};
+    fn a_chat_is_granted_no_lane_but_the_web_and_help_ones() {
+        use crate::services::root_mcp::{self, Runtime, HELP_TOKEN_ENV, HELP_URL_ENV, WEB_TOKEN_ENV, WEB_URL_ENV};
         let state = tempfile::tempdir().unwrap();
         // Everything on, and a project record that borrows the scope's id.
         std::fs::write(
             state.path().join("settings.json"),
-            r#"{"help_mcp":true,"markup_mcp":true,"root_mcp":true,"git_push_mcp":true}"#,
+            r#"{"assistant":true,"help_mcp":true,"markup_mcp":true,"root_mcp":true,"git_push_mcp":true}"#,
         )
         .unwrap();
         std::fs::write(
@@ -1908,17 +1910,18 @@ mod tests {
             for sandbox in [false, true] {
                 let mut opts = chat_opts(AssistantCli::OpenCodeLocal, Some("m"));
                 opts.sandbox = sandbox;
-                let root_agent = root_mcp::grant_lanes(&mut opts, true, runtime, root_mcp::tokens(), state.path());
+                let root_agent = root_mcp::grant_lanes(&mut opts, true, runtime, &root_mcp::TokenStore::default(), state.path());
                 assert!(!root_agent);
                 let granted: Vec<&String> =
                     opts.env.keys().filter(|k| k.ends_with("_MCP_TOKEN") || k.ends_with("_MCP_URL")).collect();
                 assert!(
-                    granted.iter().all(|k| k.as_str() == WEB_TOKEN_ENV || k.as_str() == WEB_URL_ENV),
+                    granted.iter().all(|k| [WEB_TOKEN_ENV, WEB_URL_ENV, HELP_TOKEN_ENV, HELP_URL_ENV].contains(&k.as_str())),
                     "lanes granted: {granted:?}"
                 );
+                assert_eq!(granted.len(), if runtime.is_some() { 4 } else { 0 }, "lanes granted: {granted:?}");
                 // The schedule binding the caller sent rides along unused: the
                 // gate clears it, and no schedule token exists to bind it to.
-                assert!(!opts.env.contains_key(root_mcp::SCHEDULE_TOKEN_ENV) && !opts.env.contains_key(root_mcp::HELP_TOKEN_ENV));
+                assert!(!opts.env.contains_key(root_mcp::SCHEDULE_TOKEN_ENV) && !opts.env.contains_key(root_mcp::MARKUP_TOKEN_ENV));
             }
         }
     }

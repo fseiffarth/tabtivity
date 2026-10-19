@@ -46,6 +46,8 @@ match and answers from it.
   console, sandboxed or not. Tabtivity adds the server to their command line.
 - **Local Model** tabs whose model has the **MCP** chip on in the Models &
   agents menu (the model must support tool calling).
+- **Tabby** chats, with every CLI it offers (see assistant). A local model's
+  chat may call the help tools without asking, as it may its web tools.
 - Other agent CLIs receive the server's address and token in their
   environment (`TABTIVITY_HELP_MCP_URL`, `TABTIVITY_HELP_MCP_TOKEN`) but are not
   configured to use it automatically.

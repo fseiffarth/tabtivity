@@ -5,10 +5,11 @@ keywords: [tabby, assistant, chat, chatbot, web search, search the web, searxng,
 related: [agent-clis, local-models, mobile, claude-code, codex, troubleshooting]
 ---
 
-Tabby is a chat assistant that can search and read the web and cannot see
-anything on your computer: no files, no projects, no mail or calendar, no MCP
-servers. Use it for questions that need no project ("what does this error
-mean", "find me the paper on X"). It is experimental and off by default.
+Tabby is a chat assistant that can search and read the web and look things up
+in Tabtivity's own help, and cannot see anything on your computer: no files, no
+projects, no mail or calendar, no MCP servers of yours. Use it for questions
+that need no project ("what does this error mean", "find me the paper on X",
+"how do I sync a remote project?"). It is experimental and off by default.
 
 ## Turn it on
 
@@ -61,6 +62,10 @@ Without either, a local chat can still read pages you name but cannot search.
   terminals or other agents' conversations. Each chat starts in its own empty
   folder with a home that holds only the CLI logins.
 - It cannot use your MCP servers, skills or the settings you gave other agents.
+- It can read Tabtivity's help (the `tabtivity-help` tools, see ask-tabtivity):
+  the same read-only user docs every agent tab gets, built into Tabtivity and
+  holding nothing of yours. It follows the same switch as for other tabs; a
+  chat started before the switch changed picks it up when it restarts.
 - It can read public web pages through Tabtivity: only addresses that resolve to
   the public internet. `localhost`, addresses on your network, this computer's
   own addresses and redirects into them are refused (`not_public`). It reads

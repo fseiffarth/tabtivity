@@ -25,6 +25,9 @@ Why it is shaped this way:
   mcp_servers.…`) on their own command line; tool-tagged Vibe local models via
   env, merged after the root/schedule wiring; other CLIs the env pair only.
   Never another app's config file.
+- **Tabby too.** Assistant chats get it through their own grant
+  (`root_mcp::grant_assistant`) and their pinned launch line, never through
+  `wire_named_cli_args` (`docs/context/assistant.md`, "The help lane").
 - **Local only.** Remote, worker, VM and container tabs are not wired: their
   loopback is not Tabtivity's, and a tunnel would expose the listener. The VM
   `guestfwd` address stays `Reader`-only.

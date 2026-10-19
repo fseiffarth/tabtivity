@@ -4,8 +4,9 @@ Tabby (`crate::brand::ASSISTANT_NAME`, `NAMES.assistant`; a word of its own, not
 derived from the slug) is a chat on the desktop and in the phone PWA. The user
 picks the CLI that runs the model: Claude Code or Codex on their own login, or
 a local Ollama model through OpenCode or Claude Code. Tabby can search and read
-the web. It cannot see a file on the computer, a project, an MCP server or
-anything Tabtivity holds. Experimental (`useExperimental("assistant")`, off by
+the web and read Tabtivity's own user docs (the help lane, below). It cannot see
+a file on the computer, a project, the user's MCP servers or anything else
+Tabtivity holds. Experimental (`useExperimental("assistant")`, off by
 default); the backend reads the same flag (`Settings::assistant_enabled`).
 Plan and the step-by-step build record: `docs/assistant_plan.md`,
 `docs/assistant_handoff.md` (untracked in the main checkout).
@@ -24,7 +25,7 @@ every web page the model reads a path to more than the question needs.
 - **The pinned CLI.** `services::assistant::launch_line` builds the argv from a
   validated `AssistantLaunch { cli, model }`; the renderer's and the phone's
   `cmd`/`args` are ignored. The tool set is cut to the web ones and no MCP
-  server loads except the web lane.
+  server loads except the web lane and the help lane.
 
 Neither is enough alone. The fence cannot hide the CLI's own login from the
 CLI, so a file or shell tool would let a prompt injection read the login and
@@ -90,7 +91,8 @@ own beside root, help and the rest.
   its own pool of request slots, so a stuck fetch cannot starve the other lanes.
 - The token is minted per tab (`grant_assistant`), only for profiles with
   `AssistantCli::uses_lane()` (Codex has native search and no lane), revoked
-  with the tab, and is the only `*_MCP_TOKEN` an assistant spawn holds. It lives
+  with the tab. Beside the help token (below) it is the only `*_MCP_TOKEN` an
+  assistant spawn holds. It lives
   in the spawn env, never on a command line. The lane is served by the window and
   by a desktop's Mobile host (`Runtime.serves_web`), never by a server daemon.
 - Search backend: the user's choice. A SearXNG URL (`web_lane::validate_searxng_url`:
@@ -100,6 +102,29 @@ own beside root, help and the rest.
   answers `search_not_configured` and the chat shows a setup card. Cloud CLIs
   search natively and do not need one.
 
+## The help lane
+
+Every profile also gets the help server (`services::help_mcp`, `Caller::Helper`,
+`/mcp/help`) while `help_mcp` is on: `grant_assistant` mints the token beside the
+web one, `assistant::help_url_from_env` reads the url back, and `launch_line`
+wires it (`LaunchCtx.help`, dropped unless it is a loopback `/mcp/help` url).
+Why it is allowed: the corpus is compiled in and public, read-only, and holds
+nothing of the user's; a page that steers the model into the help tools can
+learn the docs, the version and the OS family (`tabtivity_help_status`), which
+the fetch-URL leak below could send out and which are not secret. It is not a
+way around the pinned tool set: the help tools read no file and run nothing.
+
+- Claude: a second entry in the one `--mcp-config` (name `help_mcp::SERVER_NAME`,
+  as every tab sees it). Cloud Claude still gets no allow rule; local Claude's
+  `--allowedTools` names `mcp__<help server>` after `mcp__web` (decision 14's
+  reason), and `claude_local_tail_ok` pins the help url as it pins the lane's.
+- OpenCode: a second remote `mcp` entry named `help` (plain, like `web`), its
+  tools on by `help_<slug>_help_*`, last in `tools`.
+- Codex: `-c mcp_servers.<help server>.url` and `.bearer_token_env_var`, its one
+  MCP entry (the home's `[mcp_servers]` is still stripped).
+- The system prompt tells the model to use its help tools "if you have them",
+  so a chat with `help_mcp` off is not told about tools it lacks.
+
 ## The profiles, as built
 
 Pinned against Claude Code 2.1.300, Codex 0.162.1, OpenCode 1.19.1 and
@@ -107,10 +132,10 @@ Ollama 0.40.3 (A0). All four are offered.
 
 | Profile | What `launch_line` sets | Web |
 |---|---|---|
-| Claude (cloud) | `--session-id <uid>` (turned into `--resume` for an existing chat) · `--model=` · `--tools WebSearch` · `--strict-mcp-config` (without it the user's MCP servers and the claude.ai connectors load) · `--mcp-config` with the lane, token by env expansion · `--disable-slash-commands` · `--append-system-prompt` | native `WebSearch`, lane `web_fetch` |
-| Codex (cloud) | `-c features.shell_tool=false` · `view_image`, `goals`, `apps`, `plugins`, `browser_use`, `computer_use`, `image_generation` off · `-c model_catalog_json=<home>/.codex/assistant_models.json` · `-c web_search="live"` · `-c developer_instructions=…`; no MCP entry, no `-s` | native `web_search` |
-| OpenCode (local) | `OPENCODE_CONFIG_CONTENT`: `tools` false for bash, edit, write, read, grep, glob, list, patch, webfetch, websearch, task, todowrite, todoread, skill, lsp; `mcp.web` remote with `Bearer {env:…}`; the system prompt as the build agent's; merged with the `provider.ollama` block; `--model ollama/<m>`, `--continue` iff the chat folder existed | lane `web_search` + `web_fetch` |
-| Claude (local, via Ollama) | `ollama launch claude --model <m> -- --session-id <uid>` (or `--continue` once a transcript exists) `--tools "" --strict-mcp-config --mcp-config <lane> --disable-slash-commands --append-system-prompt … --allowedTools mcp__web` | lane `web_search` + `web_fetch` |
+| Claude (cloud) | `--session-id <uid>` (turned into `--resume` for an existing chat) · `--model=` · `--tools WebSearch` · `--strict-mcp-config` (without it the user's MCP servers and the claude.ai connectors load) · `--mcp-config` with the lane and the help server, tokens by env expansion · `--disable-slash-commands` · `--append-system-prompt` | native `WebSearch`, lane `web_fetch` |
+| Codex (cloud) | `-c features.shell_tool=false` · `view_image`, `goals`, `apps`, `plugins`, `browser_use`, `computer_use`, `image_generation` off · `-c model_catalog_json=<home>/.codex/assistant_models.json` · `-c web_search="live"` · `-c developer_instructions=…`; the help server as its one MCP entry, no `-s` | native `web_search` |
+| OpenCode (local) | `OPENCODE_CONFIG_CONTENT`: `tools` false for bash, edit, write, read, grep, glob, list, patch, webfetch, websearch, task, todowrite, todoread, skill, lsp; `mcp.web` and `mcp.help` remote with `Bearer {env:…}`; the system prompt as the build agent's; merged with the `provider.ollama` block; `--model ollama/<m>`, `--continue` iff the chat folder existed | lane `web_search` + `web_fetch` |
+| Claude (local, via Ollama) | `ollama launch claude --model <m> -- --session-id <uid>` (or `--continue` once a transcript exists) `--tools "" --strict-mcp-config --mcp-config <lane + help> --disable-slash-commands --append-system-prompt … --allowedTools mcp__web mcp__<help server>` | lane `web_search` + `web_fetch` |
 
 - **Codex catalog (decisions 13 and 16).** Codex has no switch for `apply_patch`,
   so at every spawn the catalog is built from the home's `models_cache.json`
@@ -128,7 +153,7 @@ Ollama 0.40.3 (A0). All four are offered.
   (Codex merges tables; probed), so the spawn removes `[mcp_servers]` from the
   home's `config.toml` (`agent_home::with_codex_trust`).
 - **Local Claude pre-allows the lane (decision 14).** `--allowedTools mcp__web`
-  is a permission rule for Tabby's two tools, not a mode, because the auto-mode
+  (and the help server's tools) is a permission rule for Tabby's own tools, not a mode, because the auto-mode
   check runs on the local model and timed out. Cloud Claude gets no allow rule.
 - **AGENTS.md exception (decision 10).** "Tabtivity injects no mode flag" still
   holds; pinning the tool set is new and holds for this scope only. The home
@@ -136,7 +161,8 @@ Ollama 0.40.3 (A0). All four are offered.
   skills and hooks.
 - A fixed system prompt (`assistant::SYSTEM_PROMPT`, `{assistant}`-templated):
   you have no access to the user's computer or files, you can search and read
-  the web, cite your pages. Not user-editable.
+  the web, cite your pages, look up Tabtivity itself with the help tools if you
+  have them. Not user-editable.
 - The home is trusted up front: `.claude.json` gets the folder-trust entry and
   `hasCompletedOnboarding`, Codex's `config.toml` a `[projects."<dir>"]
   trust_level`, so a fresh home shows no dialog (Claude live-checked; Codex's

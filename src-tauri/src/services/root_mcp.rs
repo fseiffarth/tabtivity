@@ -907,7 +907,8 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// - every other local **project** agent: the schedule lane (a schedule target,
 ///   `schedule_mcp` on and the project's level not off) and the push lane
 ///   (`git_push_mcp` on, the trusted entry's directory);
-/// - every local agent: the **help** lane while `help_mcp` is on;
+/// - every local agent, assistant chats included: the **help** lane while
+///   `help_mcp` is on;
 /// - those project agents with a schedule target: the **markup** lane while
 ///   `markup_mcp` is on (the window, or a server daemon).
 ///
@@ -917,8 +918,8 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// [`Runtime::serves_markup`]. Tokens go into `store`, the one that
 /// listener authenticates against. Returns whether the spawn is a root agent.
 pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) -> bool {
-    // An assistant chat gets the web lane and nothing else (plan "Call
-    // sites" row 5): no root, reader, schedule, push, help or markup lane.
+    // An assistant chat gets the web and help lanes and nothing else (plan
+    // "Call sites" row 5): no root, reader, schedule, push or markup lane.
     if opts.assistant.is_some() {
         grant_assistant(opts, runtime, store, state);
         return false;
@@ -971,25 +972,40 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     root_agent
 }
 
-/// The assistant scope's one lane: the web lane's token and URL in the spawn
-/// env ([`WEB_TOKEN_ENV`] / [`WEB_URL_ENV`], which
-/// `assistant::LaneGrant::from_env` reads back). Granted only when this
-/// process serves the lane (`runtime.serves_web`: the window and the desktop's
-/// Mobile host, never a server daemon), the `assistant` flag is on in the
-/// trusted `settings.json` under `state`, and the profile wants it
-/// ([`AssistantCli::uses_lane`](super::assistant::AssistantCli::uses_lane)). Otherwise the spawn gets no env and `launch_line`
-/// runs a cloud profile on native search alone / refuses a local one
-/// (`Refusal::NoLane`). The token is bound to the tab, so the existing
-/// revoke-with-the-tab paths end it; it is the only MCP token such a spawn holds.
+/// The assistant scope's lanes: the web lane's token and URL in the spawn env
+/// ([`WEB_TOKEN_ENV`] / [`WEB_URL_ENV`], which `assistant::LaneGrant::from_env`
+/// reads back), and the help lane's ([`HELP_TOKEN_ENV`] / [`HELP_URL_ENV`],
+/// `assistant::help_url_from_env`). Granted only when this process serves the
+/// web lane (`runtime.serves_web`: the window and the desktop's Mobile host,
+/// never a server daemon) and the `assistant` flag is on in the trusted
+/// `settings.json` under `state`. The web lane goes to a profile that wants
+/// it ([`AssistantCli::uses_lane`](super::assistant::AssistantCli::uses_lane));
+/// without it `launch_line` runs a cloud profile on native search alone and
+/// refuses a local one (`Refusal::NoLane`). The help lane goes to every
+/// profile while `help_mcp` is on: the compiled-in user docs, nothing of the
+/// user's. Only the env is set; `launch_line` wires the CLI. Both tokens are
+/// bound to the tab, so the existing revoke-with-the-tab paths end them; they
+/// are the only MCP tokens such a spawn holds.
 fn grant_assistant(opts: &mut PtyOptions, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) {
     let Some(runtime) = runtime.filter(|r| r.serves_web) else { return };
-    let Some(launch) = opts.assistant.as_ref() else { return };
-    if !launch.cli.uses_lane() { return; }
-    if !crate::storage::read_json::<crate::schema::Settings>(&state.join("settings.json")).is_ok_and(|s| s.assistant_enabled()) { return; }
-    let Some(token) = mint_token() else { return };
-    opts.env.insert(WEB_TOKEN_ENV.into(), token.clone());
-    opts.env.insert(WEB_URL_ENV.into(), web_endpoint_url(runtime.port));
-    store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Web, project: None, schedule_target: None, push: None, endpoint: None, model: None }, false);
+    let Some(uses_lane) = opts.assistant.as_ref().map(|launch| launch.cli.uses_lane()) else { return };
+    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&state.join("settings.json")) else { return };
+    if !settings.assistant_enabled() { return; }
+    let tab = opts.id.clone();
+    let identity = |caller| Identity { tab: tab.clone(), caller, project: None, schedule_target: None, push: None, endpoint: None, model: None };
+    let mut grants = Vec::new();
+    if uses_lane {
+        grants.push((Caller::Web, WEB_TOKEN_ENV, WEB_URL_ENV, web_endpoint_url(runtime.port)));
+    }
+    if settings.help_mcp() {
+        grants.push((Caller::Helper, HELP_TOKEN_ENV, HELP_URL_ENV, help_endpoint_url(runtime.port)));
+    }
+    for (caller, token_env, url_env, url) in grants {
+        let Some(token) = mint_token() else { continue };
+        store.register(token.clone(), identity(caller), false);
+        opts.env.insert(token_env.into(), token);
+        opts.env.insert(url_env.into(), url);
+    }
 }
 
 pub fn web_endpoint_url(port: u16) -> String {
@@ -3916,11 +3932,12 @@ mod tests {
     }
 
     /// The assistant arm of [`grant_lanes`] (plan "Call sites" row 5): the web
-    /// lane's token and URL, and no other lane, whatever the caller sent — and
-    /// only while this process serves the lane, the `assistant` flag is on and
-    /// the profile wants it (Codex searches natively and gets none).
+    /// lane's token and URL and the help lane's, and no other lane, whatever
+    /// the caller sent — and only while this process serves the lane and the
+    /// `assistant` flag is on; the web lane only for a profile that wants it
+    /// (Codex searches natively), the help lane only while `help_mcp` is on.
     #[test]
-    fn an_assistant_spawn_gets_the_web_lane_alone_and_only_when_everything_allows_it() {
+    fn an_assistant_spawn_gets_the_web_and_help_lanes_alone_and_only_when_everything_allows_it() {
         use super::super::assistant::{AssistantCli, AssistantLaunch};
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path();
@@ -3945,10 +3962,13 @@ mod tests {
             let store = TokenStore::default();
             let mut spawn = chat(cli);
             assert!(!grant_lanes(&mut spawn, true, Some(&serving), &store, state), "never a root agent");
-            let mut want = vec![WEB_TOKEN_ENV.to_string(), WEB_URL_ENV.to_string()];
+            let mut want = [WEB_TOKEN_ENV, WEB_URL_ENV, HELP_TOKEN_ENV, HELP_URL_ENV].map(str::to_string).to_vec();
             want.sort();
             assert_eq!(lane_tokens(&spawn), want, "{cli:?}");
             assert_eq!(spawn.env[WEB_URL_ENV], "http://127.0.0.1:4321/mcp/web");
+            assert_eq!(spawn.env[HELP_URL_ENV], "http://127.0.0.1:4321/mcp/help");
+            let help = store.authenticate(Some(&format!("Bearer {}", spawn.env[HELP_TOKEN_ENV]))).expect("registered");
+            assert_eq!((help.identity.caller, help.identity.tab.as_str(), help.identity.project.as_deref()), (Caller::Helper, "root:t", None), "{cli:?}");
             assert_eq!(spawn.args, ["--sent-by-the-renderer"], "the grant never touches argv: launch_line owns it");
             assert_eq!(spawn.env["KEPT"], "1");
             let session = store.authenticate(Some(&format!("Bearer {}", spawn.env[WEB_TOKEN_ENV]))).expect("registered");
@@ -3956,11 +3976,22 @@ mod tests {
             assert!(session.identity.schedule_target.is_none() && session.identity.push.is_none());
             assert_eq!(session.access, Access::initial(Caller::Web));
         }
-        // Codex: native search, no lane, still no other lane.
+        // Codex: native search, no web lane, the help lane and no other.
         let store = TokenStore::default();
         let mut codex = chat(AssistantCli::Codex);
         assert!(!grant_lanes(&mut codex, true, Some(&serving), &store, state));
+        assert_eq!(lane_tokens(&codex), [HELP_TOKEN_ENV, HELP_URL_ENV], "{:?}", codex.env.keys());
+        // `help_mcp` off: the web lane alone, and Codex nothing.
+        let mut help_off = on.clone();
+        help_off["help_mcp"] = json!(false);
+        settings(help_off);
+        let mut spawn = chat(AssistantCli::Claude);
+        grant_lanes(&mut spawn, true, Some(&serving), &store, state);
+        assert_eq!(lane_tokens(&spawn), [WEB_TOKEN_ENV, WEB_URL_ENV]);
+        let mut codex = chat(AssistantCli::Codex);
+        grant_lanes(&mut codex, true, Some(&serving), &store, state);
         assert!(lane_tokens(&codex).is_empty(), "{:?}", codex.env.keys());
+        settings(on.clone());
         // A runtime that does not serve the lane (a server daemon's), none at all.
         for runtime in [Some(Runtime { serves_web: false, ..serving.clone() }), None] {
             let mut spawn = chat(AssistantCli::Claude);

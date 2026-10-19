@@ -60,7 +60,7 @@ export const UNTESTED = {
   "agentSchedule.leaseElsewhere": { area: "agents", what: "AgentScheduleDialog · note that another Tabtivity window holds the timer lease (schedules, auto-continue, reminders, CalDAV sync fire there); the lease itself: one window per state dir fires timers, heartbeat-renewed, 30 s TTL", tested: "2026-10-02" },
   "promptChart.heading": { area: "agents", what: "PromptChart · Prompt chart" },
   "promptChart.fromPhoneTitle": { area: "agents", what: "Prompt chart · 📱 chip and device: tag naming the paired phone a sent prompt came from" },
-  "assistant.overlay": { area: "agents", what: "Header assistant button and overlay · chat list, the chat in Reader mode, first-run sign-in card; the chat sees no file, project or MCP server (docs/assistant_plan.md)" },
+  "assistant.overlay": { area: "agents", what: "Header assistant button and overlay · chat list, the chat in Reader mode, first-run sign-in card; the chat sees no file, project or MCP server of the user's, only the web lane and the help docs (docs/assistant_plan.md, docs/context/assistant.md, The help lane)" },
   "assistant.newChat": { area: "agents", what: "Assistant overlay · New chat with the CLI/model picker (Claude, Codex, OpenCode · local model, Claude · local model)" },
   "assistant.search": { area: "agents", what: "Settings · assistant · search backend (SearXNG URL or Ollama web search key) and the setup card local models show; web_search answers search_not_configured without one" },
   "howToStart.greeting": { area: "shell", what: "HowToStart Welcome · first-run greeting types itself out (~2.4 s, click/key completes, reduced motion shows it whole); a re-open from Settings shows it complete" },

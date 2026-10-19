@@ -8928,11 +8928,12 @@ mod tests {
         assert!(!here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
         assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
 
-        // The assistant's web lane: a phone-made chat with no window gets the
-        // lane from this host's listener (the `assistant` flag on, a profile
-        // that wants it), and the token is good on `/mcp/web` alone. A
-        // runtime that does not serve the lane (a server daemon's) and a
-        // profile that does not want it (Codex: native search) get none.
+        // The assistant's web and help lanes: a phone-made chat with no window
+        // gets them from this host's listener (the `assistant` flag on, a
+        // profile that wants the web lane, `help_mcp` on), and each token is
+        // good on its own route alone. A runtime that does not serve the lane
+        // (a server daemon's) gets none; a profile that does not want the web
+        // lane (Codex: native search) gets the help lane only.
         let mut settings: Value = serde_json::from_slice(&std::fs::read(state_dir.join("settings.json")).expect("settings")).expect("json");
         settings["assistant"] = json!(true);
         std::fs::write(state_dir.join("settings.json"), settings.to_string()).expect("settings");
@@ -8947,8 +8948,15 @@ mod tests {
         root_mcp::grant_lanes(&mut chat, true, root_mcp::runtime(), root_mcp::tokens(), &state_dir);
         let web = chat.env.get(root_mcp::WEB_TOKEN_ENV).cloned().expect("the host hands a phone chat the web lane");
         assert_eq!(chat.env[root_mcp::WEB_URL_ENV], format!("http://127.0.0.1:{port}/mcp/web"));
-        let tokens: Vec<_> = chat.env.keys().filter(|k| k.ends_with("_MCP_TOKEN")).collect();
-        assert_eq!(tokens, [root_mcp::WEB_TOKEN_ENV], "the web token is the only one an assistant chat holds");
+        let mut tokens: Vec<_> = chat.env.keys().filter(|k| k.ends_with("_MCP_TOKEN")).collect();
+        tokens.sort();
+        let mut want = [root_mcp::HELP_TOKEN_ENV, root_mcp::WEB_TOKEN_ENV];
+        want.sort();
+        assert_eq!(tokens, want, "the web and help tokens are the only ones an assistant chat holds");
+        assert_eq!(chat.env[root_mcp::HELP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/help"));
+        let chat_help = chat.env[root_mcp::HELP_TOKEN_ENV].clone();
+        assert_ne!(mcp_status(port, "/mcp/help", &chat_help).await, 401, "the host's listener serves the chat /mcp/help");
+        assert_eq!(mcp_status(port, "/mcp/web", &chat_help).await, 401, "the help token is refused on /mcp/web");
         assert_ne!(mcp_status(port, "/mcp/web", &web).await, 401, "the host's listener serves /mcp/web");
         assert_eq!(mcp_status(port, "/mcp/web", &schedule).await, 401, "another lane's token is refused on /mcp/web");
         for path in ["/mcp/schedule", "/mcp/git", "/mcp/help"] {
@@ -8962,7 +8970,8 @@ mod tests {
         assert!(!none.env.contains_key(root_mcp::WEB_TOKEN_ENV), "a daemon does not serve the web lane");
         let mut codex = assistant("headless:web-codex", "codex");
         root_mcp::grant_lanes(&mut codex, true, root_mcp::runtime(), other, &state_dir);
-        assert!(!codex.env.keys().any(|k| k.ends_with("_MCP_TOKEN")), "Codex searches natively: no lane");
+        let codex_tokens: Vec<_> = codex.env.keys().filter(|k| k.ends_with("_MCP_TOKEN")).collect();
+        assert_eq!(codex_tokens, [root_mcp::HELP_TOKEN_ENV], "Codex searches natively: no web lane, the help lane only");
         root_mcp::revoke_tab("headless:web");
 
         // d) The phone's close with no window takes the tokens with the tab.
