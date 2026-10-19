@@ -336,7 +336,8 @@ pub fn agent_session_transcript(
     }
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, project_id, tab_dir, since, subagent, version, limit);
+        let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
+        return opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -718,9 +719,10 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 }
 
 /// An OpenCode tab's conversation, from OpenCode's session store
-/// (`services::opencode_store`): the newest session of the tab's folder —
-/// created since `since` for a tab opened fresh, so it never shows the
-/// folder's previous conversation — or, with `subagent`, one of the child
+/// (`services::opencode_store`): its `own` recorded session
+/// (`services::opencode_session`), else the newest session of the tab's
+/// folder — created since `since` for a tab opened fresh, so it never shows
+/// the folder's previous conversation — or, with `subagent`, one of the child
 /// sessions it spawned. A remote tab's OpenCode writes a store on
 /// the remote host, so it has none here to read.
 /// A local-model OpenCode tab's conversation (`ollama launch opencode`): what
@@ -738,14 +740,16 @@ pub fn local_opencode_transcript(
         return AgentTranscript::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    opencode_transcript(&db, project_id, tab_dir, since, subagent, version, limit.clamp(1, MAX_LIMIT))
+    opencode_transcript(&db, project_id, tab_dir, since, None, subagent, version, limit.clamp(1, MAX_LIMIT))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn opencode_transcript(
     db: &Path,
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
+    own: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -759,7 +763,7 @@ fn opencode_transcript(
     if !db.is_file() {
         return AgentTranscript::unavailable("no_transcript");
     }
-    crate::services::opencode_store::session_transcript(db, dir, since, subagent, version, limit)
+    crate::services::opencode_store::session_transcript(db, dir, since, own, subagent, version, limit)
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
 }
 

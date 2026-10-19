@@ -205,9 +205,10 @@ terminal.
 
 ## Resume after a restart
 
-Claude, Codex and Mistral tabs reopen their exact conversation. Gemini, Qwen,
-Grok, Cursor, Copilot, OpenCode and Antigravity continue the project's most
-recent conversation. Others start fresh.
+Claude, Codex, Mistral and OpenCode tabs reopen their exact conversation (an
+OpenCode tab that never got a prompt starts fresh). Gemini, Qwen, Grok,
+Cursor, Copilot and Antigravity continue the project's most recent
+conversation. Others start fresh.
 
 ## Permission modes
 

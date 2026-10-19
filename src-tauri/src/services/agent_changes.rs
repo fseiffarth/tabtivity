@@ -149,7 +149,8 @@ pub fn agent_session_changes(
     }
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit);
+        let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
+        return opencode_changes(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -180,7 +181,7 @@ pub fn local_opencode_changes(
         return AgentChanges::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit)
+    opencode_changes(&db, project_id, tab_dir, since, None, subagent, version, limit)
 }
 
 /// Every file a tab's conversation changed, by the path its CLI named — the
@@ -335,11 +336,13 @@ fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
 
 /// An OpenCode tab's changes, from the session the Reader reads for it in
 /// the store `db`.
+#[allow(clippy::too_many_arguments)]
 fn opencode_changes(
     db: &Path,
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
+    own: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -353,7 +356,7 @@ fn opencode_changes(
     if !db.is_file() {
         return AgentChanges::empty();
     }
-    crate::services::opencode_store::session_changes(db, dir, since, subagent, version, limit)
+    crate::services::opencode_store::session_changes(db, dir, since, own, subagent, version, limit)
         .unwrap_or_else(|| AgentChanges::unavailable("read_failed"))
 }
 

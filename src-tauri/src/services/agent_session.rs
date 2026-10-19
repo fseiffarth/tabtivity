@@ -46,6 +46,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "claude" => resolve_claude_session(opts),
         "codex" => resolve_codex_session(opts),
         "vibe" => resolve_vibe_session(opts),
+        "opencode" => crate::services::opencode_session::resolve(opts),
         _ => opts,
     }
 }
@@ -1841,6 +1842,7 @@ pub fn codex_binder_enabled(scope_id: Option<&str>) -> bool {
 /// hook's stdin JSON — both CLIs use that schema.
 pub fn install_session_start_hook() -> std::io::Result<()> {
     write_hook_script()?;
+    crate::services::opencode_session::write_plugin()?;
     crate::services::agent_hint::write_script()
 }
 
@@ -1876,6 +1878,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
             eprintln!("agent_session: register vibe hook in {}: {e}", home.display());
         }
     }
+    // OpenCode's session plugin (`services::opencode_session`).
+    crate::services::opencode_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);

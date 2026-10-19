@@ -53,8 +53,8 @@ Your layout is saved automatically per project.
 ## What comes back after a restart
 
 Shell and Files tabs always return. Agent tabs return when their CLI can
-resume: Claude, Codex and Mistral reopen their exact prior conversation;
-Gemini, Qwen, Grok, Cursor, Copilot, OpenCode and Antigravity continue the
+resume: Claude, Codex, Mistral and OpenCode reopen their exact prior
+conversation; Gemini, Qwen, Grok, Cursor, Copilot and Antigravity continue the
 project's most recent one. Agents without a resume path (Aider, for one) start
 fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
 

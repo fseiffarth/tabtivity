@@ -6,14 +6,13 @@
 //! body a JSON `data` column), shared by every OpenCode on the machine —
 //! fenced and containerized tabs included, which mount the same directory.
 //!
-//! OpenCode has no session hook, so a tab cannot be told which session is its
-//! own. What it launches into is the one this reads: an OpenCode tab is
-//! restored with `--continue`, "the most recent session of this directory",
-//! so the newest top-level session in the tab's folder *is* the tab's
-//! conversation — with the same caveat the restore has: two OpenCode tabs in
-//! one folder read the same (newest) session. A tab opened fresh (no
-//! `--continue`) starts a new session, so only sessions created since its
-//! launch are its own: before its first prompt it has none, and the folder's
+//! Which session is a tab's own is recorded by Tabtivity's OpenCode plugin
+//! (`services::opencode_session`): the session its OpenCode last took a
+//! prompt in, read first while the store still has it as a top-level,
+//! unarchived session. A tab with no such record reads the newest top-level
+//! session of its folder — what a tab from before the plugin was restored
+//! into with `--continue` — and a tab opened fresh only the sessions created
+//! since its launch: before its first prompt it has none, and the folder's
 //! older conversation is somebody else's.
 //!
 //! A subagent OpenCode spawns (its `task` tool) runs as a child session —
@@ -69,23 +68,26 @@ fn db_in_home(home: &Path) -> PathBuf {
     home.join(".local").join("share").join("opencode").join("opencode.db")
 }
 
-/// The conversation of the newest top-level, unarchived session OpenCode ran
-/// in `directory` — created at or after `since` (epoch ms) when given: the
-/// last `limit` turns, or `unchanged` when `version` still names it as it is.
+/// The conversation of the tab's `own` session (its plugin's record) while
+/// the store has it, else of the newest top-level, unarchived session
+/// OpenCode ran in `directory` — created at or after `since` (epoch ms) when
+/// given: the last `limit` turns, or `unchanged` when `version` still names it as it is.
 /// A folder with no such session yet is an available, empty transcript — a
 /// tab before its first prompt. `subagent` reads, instead, the descendant of
 /// that session whose handle it is. `None` when the store cannot be read at
 /// all.
+#[allow(clippy::too_many_arguments)]
 pub fn session_transcript(
     db: &Path,
     directory: &str,
     since: Option<i64>,
+    own: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let session = match tab_session(&conn, directory, since, subagent)? {
+    let session = match tab_session(&conn, directory, since, own, subagent)? {
         TabSession::Id(id) => id,
         TabSession::NoSubagent => return Some(AgentTranscript::unavailable("no_subagent")),
         TabSession::None => {
@@ -146,25 +148,11 @@ enum TabSession {
 
 /// The tab's session — or, with `subagent`, its descendant of that handle.
 /// `None` when the store cannot be queried.
-fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, subagent: Option<&str>) -> Option<TabSession> {
-    let mut dirs = vec![directory.to_string()];
-    if let Ok(real) = std::fs::canonicalize(directory) {
-        let real = real.to_string_lossy().into_owned();
-        if real != directory {
-            dirs.push(real);
-        }
-    }
-    let session: Option<String> = conn
-        .query_row(
-            "SELECT id FROM session
-              WHERE directory IN (?1, ?2) AND parent_id IS NULL AND time_archived IS NULL
-                AND time_created >= ?3
-              ORDER BY time_updated DESC LIMIT 1",
-            rusqlite::params![&dirs[0], dirs.last().unwrap_or(&dirs[0]), since.unwrap_or(i64::MIN)],
-            |row| row.get(0),
-        )
-        .optional()
-        .ok()?;
+fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, own: Option<&str>, subagent: Option<&str>) -> Option<TabSession> {
+    let session = match own.and_then(|id| top_level(conn, id)) {
+        Some(id) => Some(id),
+        None => newest_in(conn, directory, since)?,
+    };
     let Some(session) = session else {
         return Some(if subagent.is_some() { TabSession::NoSubagent } else { TabSession::None });
     };
@@ -177,19 +165,63 @@ fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, subagent:
     })
 }
 
+/// Whether the store holds `id` as a top-level, unarchived session: one a
+/// tab can be restored into (`--session`) and read as its own. False when the
+/// store cannot be read.
+pub fn resumable_session(db: &Path, id: &str) -> bool {
+    Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .ok()
+        .and_then(|conn| top_level(&conn, id))
+        .is_some()
+}
+
+fn top_level(conn: &Connection, id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT id FROM session WHERE id = ?1 AND parent_id IS NULL AND time_archived IS NULL",
+        [id],
+        |row| row.get(0),
+    )
+    .optional()
+    .ok()?
+}
+
+/// The newest top-level, unarchived session of `directory` created at or
+/// after `since`; `None` when the store cannot be queried.
+fn newest_in(conn: &Connection, directory: &str, since: Option<i64>) -> Option<Option<String>> {
+    let mut dirs = vec![directory.to_string()];
+    if let Ok(real) = std::fs::canonicalize(directory) {
+        let real = real.to_string_lossy().into_owned();
+        if real != directory {
+            dirs.push(real);
+        }
+    }
+    conn.query_row(
+        "SELECT id FROM session
+          WHERE directory IN (?1, ?2) AND parent_id IS NULL AND time_archived IS NULL
+            AND time_created >= ?3
+          ORDER BY time_updated DESC LIMIT 1",
+        rusqlite::params![&dirs[0], dirs.last().unwrap_or(&dirs[0]), since.unwrap_or(i64::MIN)],
+        |row| row.get(0),
+    )
+    .optional()
+    .ok()
+}
+
 /// The files the tab's session — or `subagent`'s — changed, from its
 /// completed edit tool parts (`services::agent_changes`): the newest
 /// [`CHANGE_TAIL`] such parts, the last `limit` changes of those.
+#[allow(clippy::too_many_arguments)]
 pub fn session_changes(
     db: &Path,
     directory: &str,
     since: Option<i64>,
+    own: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentChanges> {
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let session = match tab_session(&conn, directory, since, subagent)? {
+    let session = match tab_session(&conn, directory, since, own, subagent)? {
         TabSession::Id(id) => id,
         TabSession::NoSubagent => return Some(AgentChanges::unavailable("no_subagent")),
         TabSession::None => return Some(AgentChanges::read(format!("new:{directory}"), Vec::new(), false, limit)),
@@ -499,7 +531,7 @@ mod tests {
         part(&conn, "p6", "m2", "ses_new", 2_200, serde_json::json!({"type": "tool", "state": {"output": "huge"}}));
         part(&conn, "p7", "m2", "ses_new", 3_000, serde_json::json!({"type": "text", "text": "Fixed.", "time": {"start": 3_000, "end": 3_100}}));
 
-        let t = session_transcript(&db, dir, None, None, None, 120).unwrap();
+        let t = session_transcript(&db, dir, None, None, None, None, 120).unwrap();
         assert!(t.available);
         assert_eq!(kinds(&t), vec![("prompt", "fix the tests"), ("answer", "Let me look."), ("answer", "Fixed.")]);
         assert_eq!(t.entries[0].at.as_deref(), Some("1970-01-01T00:00:01.000Z"));
@@ -514,7 +546,7 @@ mod tests {
         message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "assistant", "time": {"created": 1_000}}));
         part(&conn, "p1", "m1", "s", 1_001, serde_json::json!({"type": "text", "text": "Done part.", "time": {"start": 1_001, "end": 1_050}}));
         part(&conn, "p2", "m1", "s", 1_100, serde_json::json!({"type": "text", "text": "Still wri", "time": {"start": 1_100}}));
-        let t = session_transcript(&db, "/p", None, None, None, 120).unwrap();
+        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
         assert_eq!(kinds(&t), vec![("answer", "Done part.")]);
     }
 
@@ -526,7 +558,7 @@ mod tests {
         part(&conn, "p1", "m1", "s", 1_000, serde_json::json!({"type": "compaction"}));
         message(&conn, "m2", "s", 2_000, serde_json::json!({"role": "assistant", "summary": true, "time": {"completed": 3}}));
         part(&conn, "p2", "m2", "s", 2_001, serde_json::json!({"type": "text", "text": "Summary of everything", "time": {"start": 1, "end": 2}}));
-        let t = session_transcript(&db, "/p", None, None, None, 120).unwrap();
+        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
         assert!(t.available);
         assert!(t.entries.is_empty());
     }
@@ -534,9 +566,9 @@ mod tests {
     #[test]
     fn a_folder_with_no_session_is_a_fresh_empty_chat_and_a_missing_store_is_none() {
         let (db, _conn) = store();
-        let t = session_transcript(&db, "/nothing/here", None, None, None, 120).unwrap();
+        let t = session_transcript(&db, "/nothing/here", None, None, None, None, 120).unwrap();
         assert!(t.available && t.entries.is_empty());
-        assert!(session_transcript(&db.with_file_name("absent.db"), "/p", None, None, None, 120).is_none());
+        assert!(session_transcript(&db.with_file_name("absent.db"), "/p", None, None, None, None, 120).is_none());
     }
 
     #[test]
@@ -545,13 +577,37 @@ mod tests {
         session(&conn, "ses_before", None, "/p", 100, None);
         message(&conn, "m0", "ses_before", 100, serde_json::json!({"role": "user"}));
         part(&conn, "p0", "m0", "ses_before", 100, serde_json::json!({"type": "text", "text": "yesterday's chat"}));
-        let fresh = session_transcript(&db, "/p", Some(500), None, None, 120).unwrap();
+        let fresh = session_transcript(&db, "/p", Some(500), None, None, None, 120).unwrap();
         assert!(fresh.available && fresh.entries.is_empty());
         session(&conn, "ses_mine", None, "/p", 600, None);
         message(&conn, "m1", "ses_mine", 600, serde_json::json!({"role": "user"}));
         part(&conn, "p1", "m1", "ses_mine", 600, serde_json::json!({"type": "text", "text": "new question"}));
-        let mine = session_transcript(&db, "/p", Some(500), None, fresh.version.as_deref(), 120).unwrap();
+        let mine = session_transcript(&db, "/p", Some(500), None, None, fresh.version.as_deref(), 120).unwrap();
         assert_eq!(kinds(&mine), vec![("prompt", "new question")]);
+    }
+
+    #[test]
+    fn a_tab_reads_its_recorded_session_not_its_siblings_newer_one() {
+        let (db, conn) = store();
+        session(&conn, "ses_mine", None, "/p", 100, None);
+        session(&conn, "ses_sibling", None, "/p", 900, None);
+        session(&conn, "ses_kid", Some("ses_mine"), "/p", 950, None);
+        session(&conn, "ses_shelved", None, "/p", 50, Some(60));
+        for (m, s, text) in [("m1", "ses_mine", "my prompt"), ("m2", "ses_sibling", "their prompt")] {
+            message(&conn, m, s, 100, serde_json::json!({"role": "user"}));
+            part(&conn, &format!("{m}p"), m, s, 100, serde_json::json!({"type": "text", "text": text}));
+        }
+        let mine = session_transcript(&db, "/p", None, Some("ses_mine"), None, None, 120).unwrap();
+        assert_eq!(kinds(&mine), vec![("prompt", "my prompt")]);
+        // A record naming a child, an archived or a vanished session falls
+        // back to the folder's newest.
+        for stale in ["ses_kid", "ses_shelved", "ses_gone"] {
+            let t = session_transcript(&db, "/p", None, Some(stale), None, None, 120).unwrap();
+            assert_eq!(kinds(&t), vec![("prompt", "their prompt")], "{stale}");
+        }
+        assert!(resumable_session(&db, "ses_mine"));
+        assert!(!resumable_session(&db, "ses_kid") && !resumable_session(&db, "ses_shelved") && !resumable_session(&db, "ses_gone"));
+        assert!(!resumable_session(&db.with_file_name("absent.db"), "ses_mine"));
     }
 
     #[test]
@@ -560,11 +616,11 @@ mod tests {
         session(&conn, "s", None, "/p", 1, None);
         message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "user"}));
         part(&conn, "p1", "m1", "s", 1_000, serde_json::json!({"type": "text", "text": "hi"}));
-        let first = session_transcript(&db, "/p", None, None, None, 120).unwrap();
-        let again = session_transcript(&db, "/p", None, None, first.version.as_deref(), 120).unwrap();
+        let first = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
+        let again = session_transcript(&db, "/p", None, None, None, first.version.as_deref(), 120).unwrap();
         assert!(again.unchanged && again.entries.is_empty());
         part(&conn, "p2", "m1", "s", 1_500, serde_json::json!({"type": "text", "text": "more"}));
-        let moved = session_transcript(&db, "/p", None, None, first.version.as_deref(), 120).unwrap();
+        let moved = session_transcript(&db, "/p", None, None, None, first.version.as_deref(), 120).unwrap();
         assert!(!moved.unchanged);
         assert_eq!(kinds(&moved), vec![("prompt", "hi\nmore")]);
     }
@@ -578,7 +634,7 @@ mod tests {
             message(&conn, &m, "s", 1_000 * (i + 1), serde_json::json!({"role": "user"}));
             part(&conn, &p, &m, "s", 1_000 * (i + 1), serde_json::json!({"type": "text", "text": format!("prompt {i}")}));
         }
-        let t = session_transcript(&db, "/p", None, None, None, 2).unwrap();
+        let t = session_transcript(&db, "/p", None, None, None, None, 2).unwrap();
         assert_eq!(kinds(&t), vec![("prompt", "prompt 3"), ("prompt", "prompt 4")]);
         assert!(t.truncated);
     }
@@ -602,16 +658,16 @@ mod tests {
         message(&conn, "k2", "kid", 160, serde_json::json!({"role": "assistant", "time": {"completed": 165}}));
         part(&conn, "kp2", "k2", "kid", 160, serde_json::json!({"type": "text", "text": "src holds the app.", "time": {"start": 160, "end": 165}}));
 
-        let t = session_transcript(&db, "/p", None, None, None, 120).unwrap();
+        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
         assert_eq!(kinds(&t), vec![("prompt", "map it"), ("agent", "Explore the repo"), ("answer", "Mapped.")]);
         assert_eq!(t.entries[1].role.as_deref(), Some("explore"));
         let token = t.entries[1].subagent.clone().expect("handle");
 
-        let sub = session_transcript(&db, "/p", None, Some(&token), None, 120).unwrap();
+        let sub = session_transcript(&db, "/p", None, None, Some(&token), None, 120).unwrap();
         assert_eq!(kinds(&sub), vec![("prompt", "look at src"), ("answer", "src holds the app.")]);
         // Deeper descendants read too; another folder's are not this tab's.
-        assert!(session_transcript(&db, "/p", None, Some(&subagent_token("grandkid")), None, 120).unwrap().available);
-        let foreign = session_transcript(&db, "/p", None, Some(&subagent_token("strangers-kid")), None, 120).unwrap();
+        assert!(session_transcript(&db, "/p", None, None, Some(&subagent_token("grandkid")), None, 120).unwrap().available);
+        let foreign = session_transcript(&db, "/p", None, None, Some(&subagent_token("strangers-kid")), None, 120).unwrap();
         assert_eq!(foreign.reason.as_deref(), Some("no_subagent"));
     }
 

@@ -756,6 +756,16 @@ release moves the token, fenced tabs go back to asking for a login each time
 -E 'authTokens|storeTokenPlaintext'` and
 `cargo test --manifest-path src-tauri/Cargo.toml copilot_auth`.
 
+**OpenCode's session plugin** (`services/opencode_session.rs`) assumes, of
+the plugin API (`@opencode-ai/plugin` 1.18.32 types, not run live): a
+`file://` entry in `opencode.json` `plugin` is imported as a module whose
+exported functions are plugins; the `chat.message` hook gets `{sessionID}`
+for every prompt, a `task` subagent's too; `session.*` events carry
+`properties.info.{id,parentID}`; `opencode --session <id>` opens that
+session. If a release breaks one, tabs record nothing and fall back to
+`--continue` / a fresh start (no error). Check: prompt in two OpenCode tabs
+of one folder, then `cat <state_dir>/live_sessions/<project>/<uid>` per tab.
+
 **OpenCode's minimal interface** is read by the phone since 2026-09-18
 (`mobile-web/src/terminal/openCodeMini.ts`, verified against 1.18.31 by live
 capture). It assumes, of `opencode --mini`: the status row ` BUILD  223.0K

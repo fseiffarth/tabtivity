@@ -115,6 +115,21 @@ session logging must be enabled for either flag. Fenced/container tabs receive
 a per-project shadow of `hooks.toml`, like Claude/Codex hook config, so they can
 record their live ID without editing the host hook registration.
 
+OpenCode mints its own ids (`ses_…`) and has no session hook, and its old
+`--continue` put every OpenCode tab of one folder into the same newest
+session. `services::opencode_session` writes a plugin to
+`<state_dir>/hooks/` and lists it (`file://`) in each home's
+`.config/opencode/opencode.json` `plugin`; its `chat.message` hook records
+the session each prompt goes to under the tab's `TABTIVITY_TAB_UID`
+(`TABTIVITY_TAB_AGENT=opencode` only, a nested OpenCode claimed out, `task`
+child sessions skipped). A restored tab with a recorded, still-present,
+top-level session gets `--session <id>`; one noted at an earlier launch
+(host-only `live_sessions/<uid>.opencode`) without a record never took a
+prompt and starts fresh; a tab from before the plugin keeps `--continue`. The
+Reader reads the same record (`opencode_store`), else the folder's newest
+since the last fresh launch. Remote and local-model OpenCode tabs are as
+before.
+
 ### The phone send hint
 
 An accepted Claude or Codex `SessionStart` prints a one-line
