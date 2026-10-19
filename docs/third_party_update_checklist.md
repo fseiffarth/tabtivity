@@ -258,6 +258,16 @@ Claude's `/fast` — different thing.
   `timestamp`, or `toolUseResult`), so none counts a blob as a turn; the
   model tag's 512 KiB tail is unaffected (the records precede the answer),
   the prompt reader's growing tail just reaches further.
+  Re-checked against 2.1.303 (2026-10-19, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.300 run of the same dump: keys
+  identical on all 9 payloads, `session_id` equal to the `--session-id`
+  passed, `sed` matching `jq` throughout; the transcript's record types and
+  counts identical to 2.1.300's; `-p --resume` of a `plan` session still
+  reports the default; `/usage` three meters, every reset resolved; `--help`
+  unchanged, the notification-type and mode-label strings count the same).
+  2.1.302 starts `-p` with no mode in `default` only on third-party
+  providers, and caps *prompt and agent* hooks at 12 running per event;
+  Tabtivity registers `command` hooks only, so neither reaches it.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
