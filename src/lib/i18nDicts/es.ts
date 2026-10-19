@@ -5001,6 +5001,7 @@ export const dict: Dict = {
   "terminal.reader.clearBusy": "Codex sigue trabajando y no puede empezar una conversación nueva ahora. Detenlo con Esc y vuelve a enviar.",
   "terminal.reader.question": "Esperando tu respuesta",
   "terminal.reader.moreChoices": "Hay más opciones en el terminal.",
+  "terminal.reader.modelListing": "Leyendo el resto de la lista…",
   "terminal.reader.recommended": "Recomendada",
   "terminal.reader.questionSteps": "Preguntas",
   "terminal.reader.questionPrevious": "Pregunta anterior",

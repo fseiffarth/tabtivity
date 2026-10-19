@@ -5184,6 +5184,7 @@ export const enSource = {
   "terminal.reader.clearBusy": "Codex is still working and can’t start a new conversation now. Stop it with Esc, then send again.",
   "terminal.reader.question": "Waiting for your answer",
   "terminal.reader.moreChoices": "More choices are listed in the terminal.",
+  "terminal.reader.modelListing": "Reading the rest of the list…",
   "terminal.reader.recommended": "Recommended",
   "terminal.reader.questionSteps": "Questions",
   "terminal.reader.questionPrevious": "Previous question",

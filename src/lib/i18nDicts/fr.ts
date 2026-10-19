@@ -5003,6 +5003,7 @@ export const dict: Dict = {
   "terminal.reader.clearBusy": "Codex travaille encore et ne peut pas démarrer une nouvelle conversation maintenant. Arrêtez-le avec Échap, puis renvoyez.",
   "terminal.reader.question": "En attente de votre réponse",
   "terminal.reader.moreChoices": "D'autres choix sont listés dans le terminal.",
+  "terminal.reader.modelListing": "Lecture du reste de la liste…",
   "terminal.reader.recommended": "Recommandé",
   "terminal.reader.questionSteps": "Questions",
   "terminal.reader.questionPrevious": "Question précédente",

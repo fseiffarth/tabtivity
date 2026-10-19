@@ -18,7 +18,7 @@ import {
   type SelectOption,
   type SelectPrompt,
 } from "../../../mobile-web/src/terminal/selectPrompt";
-import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker } from "../../../mobile-web/src/terminal/openCodeMini";
+import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
 import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
@@ -160,10 +160,18 @@ export function readModelPicker(buffer: ReadableBufferLike, agentLabel: string):
   return isOpenCodeTab(agentLabel) ? readOpenCodePicker(lines) : readSelectPrompt(lines, agentLabel);
 }
 
+/** The frame of OpenCode's picker on screen, rows and headings as drawn:
+ * what `OpenCodePickerWalk` puts the whole list together from. */
+export function readOpenCodeModelPage(buffer: ReadableBufferLike): OpenCodePickerPage | null {
+  return readOpenCodePickerPage(readableScreen(buffer, READER_ROWS).lines);
+}
+
 /** The keys that answer the picker with `option`: OpenCode's is answered by
- * typing into its search field, every other one by walking its highlight. */
+ * typing into its search field (the row's own query, provider and all), every
+ * other one by walking its highlight. */
 export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentLabel: string): string[] {
-  return isOpenCodeTab(agentLabel) ? openCodePickKeys(option.label) : selectKeys(picker.current, option.index);
+  if (isOpenCodeTab(agentLabel)) return option.keys ? [...option.keys] : openCodePickKeys(option.label);
+  return selectKeys(picker.current, option.index);
 }
 
 /** The keystrokes that answer `question` with `option`: arrows from the

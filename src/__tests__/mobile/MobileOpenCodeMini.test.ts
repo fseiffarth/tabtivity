@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatTurns } from "../../../mobile-web/src/terminal/chatTurns";
 import { inputFrameStart, sessionStatus, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
 import { currentMode, modeChoices, modeFixed } from "../../../mobile-web/src/terminal/agentModes";
@@ -6,11 +6,16 @@ import { agentWorking } from "../../../mobile-web/src/terminal/agentBusy";
 import {
   joinOpenCodeWraps,
   openCodeDialogCloseKeys,
+  mergeOpenCodePage,
   openCodePickKeys,
+  OpenCodePickerWalk,
   readOpenCodePicker,
+  readOpenCodePickerPage,
+  type OpenCodePickerPage,
+  type OpenCodePickerRow,
 } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readableScreen, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
-import { readModelPicker } from "../../lib/agents/readerLive";
+import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../../lib/agents/readerLive";
 import { BRAND } from "../../lib/brand";
 
 /**
@@ -28,6 +33,12 @@ const line = (text: string): ReadableLine => ({
 });
 const lines = (...texts: string[]) => texts.map((text) => line(text));
 const texts = (rows: readonly { text: string }[]) => rows.map((row) => row.text);
+/** A group heading as OpenCode paints it: bold, on the dialog's own
+ * background (here none, like the title's). */
+const heading = (text: string): ReadableLine => {
+  const indent = /^\s*/u.exec(text)![0];
+  return { key: `l${seq += 1}`, text, spans: [{ text: indent }, { text: text.slice(indent.length), className: "b" }] };
+};
 
 /** The live area at the bottom of every mini frame: the empty input box, then
  * the status row. */
@@ -294,43 +305,69 @@ describe(`${BRAND.display} Mobile OpenCode mode chip`, () => {
 });
 
 describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
-  const picker = lines(
-    "  Select model 25                                                          esc",
-    "",
-    "  Search",
-    "",
-    "  OpenCode Zen",
-    "  Big Pickle                                                              Free",
-    "  Muse Spark 1.3 Free                                                     Free",
-  );
+  const picker = [
+    ...lines(
+      "  Select model 25                                                          esc",
+      "",
+      "  Search",
+      "",
+    ),
+    heading("  OpenCode Zen"),
+    ...lines(
+      "  Big Pickle                                                              Free",
+      "  Muse Spark 1.3 Free                                                     Free",
+    ),
+  ];
 
   it("reads the rows of OpenCode's own picker", () => {
     const read = readOpenCodePicker(picker);
     expect(read?.title).toBe("Select model");
-    expect(read?.options.map((option) => option.label))
-      .toEqual(["OpenCode Zen", "Big Pickle", "Muse Spark 1.3 Free"]);
-    expect(read?.options[1].description).toBe("Free");
+    // The heading is the provider of the rows under it, not a row to pick.
+    expect(read?.options.map((option) => option.label)).toEqual(["Big Pickle", "Muse Spark 1.3 Free"]);
+    expect(read?.options[0].description).toBe("OpenCode Zen · Free");
     // Mini draws its highlight in colour alone, which is not read: no row is
     // reported as the session's current one.
     expect(read?.current).toBe(-1);
   });
 
+  it("answers a row with its name and its provider, which the search matches together", () => {
+    // One name can stand under two providers; typed alone, Enter took the
+    // first. A heading typed into the field picked its group's first model.
+    const read = readOpenCodePicker(picker);
+    expect(read?.options[0].keys).toEqual(["\u0015", "Big Pickle OpenCode Zen", "\r"]);
+    expect(modelPickKeys(read!, read!.options[0], "OpenCode")).toEqual(["\u0015", "Big Pickle OpenCode Zen", "\r"]);
+  });
+
+  it("tells a heading at a frame's top from the highlighted row, which is bold too", () => {
+    const read = readOpenCodePicker([
+      ...lines("  Select model                                                 esc", "", "  Search", ""),
+      { key: "active", text: "  Big Pickle                         Free", spans: [{ text: "  " }, { text: "Big Pickle                         Free", className: "b", background: "#fab283" }] },
+      ...lines("  Muse Spark 1.3 Free                Free"),
+    ]);
+    expect(read?.options.map((option) => option.label)).toEqual(["Big Pickle", "Muse Spark 1.3 Free"]);
+  });
+
   it("keeps a provider group that the blank row under the list opens", () => {
     // Mini's list is one block per provider, blank-separated like the full
     // TUI's. Ending the list at the first blank stopped it at the first group.
-    const read = readOpenCodePicker(lines(
-      "  Select model 25                                                          esc",
-      "",
-      "  Search",
-      "",
-      "  OpenCode Zen",
-      "  Big Pickle                                                              Free",
-      "",
-      "  GitHub Copilot",
-      "  Grok 4.6",
-    ));
-    expect(read?.options.map((option) => option.label))
-      .toEqual(["OpenCode Zen", "Big Pickle", "GitHub Copilot", "Grok 4.6"]);
+    const read = readOpenCodePicker([
+      ...lines(
+        "  Select model 25                                                          esc",
+        "",
+        "  Search",
+        "",
+      ),
+      heading("  OpenCode Zen"),
+      ...lines(
+        "  Big Pickle                                                              Free",
+        "",
+        // The blank row above it is what says this is a heading.
+        "  GitHub Copilot",
+        "  Grok 4.6",
+      ),
+    ]);
+    expect(read?.options.map((option) => option.label)).toEqual(["Big Pickle", "Grok 4.6"]);
+    expect(read?.options.map((option) => option.description)).toEqual(["OpenCode Zen · Free", "GitHub Copilot"]);
   });
 
   /** The same overlay as the *full* TUI draws it — the interface an `opencode`
@@ -341,12 +378,15 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
    * groups are blank-separated, its rows carry the provider in the label, and
    * it is painted over the composer box and the status bar — whose `┃`, whose
    * text and whose `ctrl+p commands` show up on either side of it. */
-  const fullPicker = lines(
-    "            Select model                         esc",
-    "",
-    "            Search",
-    "",
-    "            Recent",
+  const fullPicker = [
+    ...lines(
+      "            Select model                         esc",
+      "",
+      "            Search",
+      "",
+    ),
+    heading("            Recent"),
+    ...lines(
     "          ● Muse Spark 1.3 Free OpenCode Zen    Free",
     "            MAI-Code-1.1-Flash GitHub Copilot",
     "",
@@ -358,27 +398,35 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     "            Gemini 3.8 Flash",
     "",
     "            Connect provider ctrl+a  Favorite ctrl+f",
-  );
+    ),
+  ];
 
   it("reads the full TUI's centred picker, its groups and its highlight", () => {
     const read = readOpenCodePicker(fullPicker);
     expect(read?.title).toBe("Select model");
+    // A Recent row prints its provider after its name: split off wherever a
+    // provider's heading names it.
     expect(read?.options.map((option) => option.label)).toEqual([
-      "Recent",
-      "Muse Spark 1.3 Free OpenCode Zen",
-      "MAI-Code-1.1-Flash GitHub Copilot",
-      "OpenCode Zen",
+      "Muse Spark 1.3 Free",
+      "MAI-Code-1.1-Flash",
       "Ling 3.0 Flash Fin Free",
       "Nemotron 3.5 Lightning Free",
-      "GitHub Copilot",
       "Gemini 3.8 Flash",
     ]);
     // The row the dialog is on, which mini never says.
-    expect(read?.current).toBe(1);
+    expect(read?.current).toBe(0);
     // What the screen behind the overlay left on either side is not the row's:
     // not the composer box's `┃ Build`, not the status bar's `commands`.
-    expect(read?.options[4].description).toBe("Free");
-    expect(read?.options[6].description).toBeUndefined();
+    expect(read?.options.map((option) => option.description)).toEqual([
+      "OpenCode Zen · Free",
+      "GitHub Copilot",
+      "OpenCode Zen · Free",
+      "OpenCode Zen · Free",
+      "GitHub Copilot",
+    ]);
+    // A Recent row is typed as printed; a group's row with its group's name.
+    expect(read?.options[0].keys?.[1]).toBe("Muse Spark 1.3 Free OpenCode Zen");
+    expect(read?.options[2].keys?.[1]).toBe("Ling 3.0 Flash Fin Free OpenCode Zen");
   });
 
   it("reads the picker over a conversation the dimmed screen still shows", () => {
@@ -429,7 +477,7 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
       length: rows.length,
       getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }),
     };
-    const labels = [
+    const drawn = [
       "Recent",
       "Muse Spark 1.3 Free OpenCode Zen",
       "MiMo-V2.6-Flash Free OpenCode Zen",
@@ -437,12 +485,15 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
       "Ling 3.0 Flash Fin Free",
     ];
     // The phone reads the screen through `readableScreen`, the desktop's
-    // Chat view through `readModelPicker`: both get the whole labels.
-    const phone = readOpenCodePicker(readableScreen(buffer).lines);
-    expect(phone?.options.map((option) => option.label)).toEqual(labels);
-    expect(phone?.current).toBe(1);
-    expect(phone?.options[1].description).toBe("Free");
-    expect(readModelPicker(buffer, "OpenCode")?.options.map((option) => option.label)).toEqual(labels);
+    // Chat view through `readOpenCodeModelPage`: both get the whole rows.
+    const phone = readOpenCodePickerPage(readableScreen(buffer).lines);
+    expect(phone?.rows.map((row) => row.text)).toEqual(drawn);
+    expect(phone?.rows[1]).toMatchObject({ marked: true, tag: "Free" });
+    expect(readOpenCodeModelPage(buffer)?.rows.map((row) => row.text)).toEqual(drawn);
+    // Unstyled, the top heading has nothing to tell it by; `OpenCode Zen` has
+    // the blank row above it, and the rows above it carry its name.
+    expect(readModelPicker(buffer, "OpenCode")?.options.map((option) => option.label))
+      .toEqual(["Recent", "Muse Spark 1.3 Free", "MiMo-V2.6-Flash Free", "Ling 3.0 Flash Fin Free"]);
   });
 
   it("is no picker for a conversation that only mentions one", () => {
@@ -489,5 +540,149 @@ describe(`${BRAND.display} Mobile OpenCode dialogs over the composer`, () => {
     expect(openCodeDialogCloseKeys([" ~/projects/app                 esc exit shell mode"])).toEqual([]);
     expect(openCodeDialogCloseKeys(["  press esc to close it"])).toEqual([]);
     expect(openCodeDialogCloseKeys([])).toEqual([]);
+  });
+});
+
+/**
+ * OpenCode's model dialog as 1.18.31 scrolls it (`ui/dialog-select.tsx`): a
+ * window `height` lines tall over the list, a blank line above every heading
+ * but the first, the highlight starting on the session's model, ↓ moving it
+ * one model on — from the last to the first — and the window centred on it.
+ */
+function openCodeDialog(groups: [string, string[]][], height: number, currentModel: string) {
+  const layout: (OpenCodePickerRow | null)[] = [];
+  groups.forEach(([name, models], index) => {
+    if (index > 0) layout.push(null);
+    layout.push({ text: name, heading: true, marked: false });
+    for (const model of models) layout.push({ text: model, heading: false, marked: model === currentModel });
+  });
+  const models = layout.flatMap((row, at) => (row && !row.heading ? [at] : []));
+  let selected = models.findIndex((at) => layout[at]?.text === currentModel);
+  let top = 0;
+  const centre = () => {
+    top = Math.max(0, Math.min(layout.length - height, models[selected] - Math.floor(height / 2)));
+  };
+  centre();
+  return {
+    page: (): OpenCodePickerPage => ({
+      title: "Select model",
+      start: 0,
+      rows: layout.slice(top, top + height).flatMap((row) => (row ? [row] : [])),
+    }),
+    press: (key: string) => {
+      if (key !== "\u001b[B") throw new Error(`a walk only presses ↓, not ${JSON.stringify(key)}`);
+      selected = (selected + 1) % models.length;
+      centre();
+    },
+  };
+}
+
+describe(`${BRAND.display} Mobile OpenCode model picker walk`, () => {
+  afterEach(() => vi.useRealTimers());
+
+  const zen = Array.from({ length: 12 }, (_, index) => `Zen model ${index + 1}`);
+  const copilot = Array.from({ length: 14 }, (_, index) => `Copilot model ${index + 1}`);
+  const groups: [string, string[]][] = [
+    ["Recent", ["Muse Spark 1.3 Free OpenCode Zen"]],
+    ["OpenCode Zen", zen],
+    ["GitHub Copilot", copilot],
+    ["Anthropic", ["Claude Sonnet 4.5"]],
+  ];
+  const everyModel = ["Muse Spark 1.3 Free", ...zen, ...copilot, "Claude Sonnet 4.5"];
+
+  /** Runs the walk to its end against `dialog`, as a caller does: every key
+   * it types reaches the dialog, and every frame after one is read. */
+  function walkThrough(dialog: ReturnType<typeof openCodeDialog>) {
+    vi.useFakeTimers();
+    const typed: string[] = [];
+    const walk = new OpenCodePickerWalk((keys) => typed.push(...keys));
+    let pressed = 0;
+    walk.read(dialog.page());
+    for (let turn = 0; turn < 1_000 && walk.walking(); turn += 1) {
+      if (pressed < typed.length) {
+        typed.slice(pressed).forEach((key) => dialog.press(key));
+        pressed = typed.length;
+        walk.read(dialog.page());
+      } else {
+        vi.advanceTimersByTime(600);
+      }
+    }
+    return { walk, typed };
+  }
+
+  it("lists the whole list from a frame that opened in its middle", () => {
+    // Nine lines of a 33-line list, opened on a Copilot model: the frame
+    // shows neither the top of the list nor its end.
+    const { walk } = walkThrough(openCodeDialog(groups, 9, "Copilot model 4"));
+    expect(walk.walking()).toBe(false);
+    const prompt = walk.prompt()!;
+    expect(prompt.options.map((option) => option.label)).toEqual(everyModel);
+    expect(prompt.hidden).toBeUndefined();
+    expect(prompt.current).toBe(everyModel.indexOf("Copilot model 4"));
+    expect(prompt.options[prompt.options.length - 1].description).toBe("Anthropic");
+    expect(prompt.options[0].description).toBe("OpenCode Zen");
+  });
+
+  it("lists it from a frame at the top, and from one at the end", () => {
+    for (const current of ["Zen model 1", "Claude Sonnet 4.5"]) {
+      const { walk } = walkThrough(openCodeDialog(groups, 7, current));
+      expect(walk.prompt()?.options.map((option) => option.label)).toEqual(everyModel);
+    }
+  });
+
+  it("presses a few keys and stops when the list fits its frame", () => {
+    const small: [string, string[]][] = [["OpenCode Zen", ["Big Pickle", "Muse Spark 1.3 Free"]]];
+    const { walk, typed } = walkThrough(openCodeDialog(small, 20, "Big Pickle"));
+    expect(walk.walking()).toBe(false);
+    expect(typed.length).toBeLessThanOrEqual(3);
+    expect(walk.prompt()?.options.map((option) => option.label)).toEqual(["Big Pickle", "Muse Spark 1.3 Free"]);
+  });
+
+  it("says the list is still being read while it is", () => {
+    vi.useFakeTimers();
+    const dialog = openCodeDialog(groups, 9, "Zen model 2");
+    const walk = new OpenCodePickerWalk(() => {});
+    walk.read(dialog.page());
+    expect(walk.walking()).toBe(true);
+    expect(walk.prompt()?.hidden).toBe(1);
+  });
+
+  it("types nothing more once a row is tapped, and nothing at all for no picker", () => {
+    vi.useFakeTimers();
+    const typed: string[] = [];
+    const walk = new OpenCodePickerWalk((keys) => typed.push(...keys));
+    walk.read(openCodeDialog(groups, 9, "Zen model 2").page());
+    const sent = typed.length;
+    walk.hold();
+    vi.advanceTimersByTime(10_000);
+    expect(typed.length).toBe(sent);
+    walk.read(null);
+    expect(walk.prompt()).toBeNull();
+    vi.advanceTimersByTime(10_000);
+    expect(typed.length).toBe(sent);
+  });
+
+  it("starts over for the dialog's next step", () => {
+    vi.useFakeTimers();
+    const walk = new OpenCodePickerWalk(() => {});
+    walk.read(openCodeDialog(groups, 9, "Zen model 2").page());
+    walk.hold();
+    walk.read({ title: "Select variant", start: 0, rows: [
+      { text: "low", heading: false, marked: false },
+      { text: "high", heading: false, marked: true },
+    ] });
+    expect(walk.walking()).toBe(true);
+    expect(walk.prompt()?.options.map((option) => option.label)).toEqual(["low", "high"]);
+  });
+
+  it("puts a frame that wrapped to the top before the rows it opened on", () => {
+    const row = (text: string): OpenCodePickerRow => ({ text, heading: false, marked: false });
+    const opened = mergeOpenCodePage(null, ["c", "d", "e"].map(row));
+    const end = mergeOpenCodePage(opened, ["d", "e", "f"].map(row));
+    const wrapped = mergeOpenCodePage(end, ["a", "b"].map(row));
+    expect(wrapped.done).toBe(false);
+    const met = mergeOpenCodePage(wrapped, ["b", "c", "d"].map(row));
+    expect(met.done).toBe(true);
+    expect(met.main.map((entry) => entry.text)).toEqual(["a", "b", "c", "d", "e", "f"]);
   });
 });

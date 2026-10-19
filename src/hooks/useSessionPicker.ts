@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OPENCODE_MODEL_KEYS, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
+import { OPENCODE_MODEL_KEYS, OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
 import { sameSelectStep, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
-import { modelPickKeys, readModelPicker } from "../lib/agents/readerLive";
+import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../lib/agents/readerLive";
 import { submitScheduledAgentCommand } from "../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import type { TabEntry } from "../stores/tabs";
@@ -40,6 +40,8 @@ export interface SessionPicker {
   shownStep: SelectStep | null;
   /** No answer can go in right now. */
   busy: boolean;
+  /** OpenCode's list is still being scrolled through and put together. */
+  listing: boolean;
   open: (command?: SessionPickerCommand) => void;
   choose: (index: number) => void;
   /** Close it here and, when it is up, in the session (its own Escape). */
@@ -64,17 +66,37 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const [picker, setPicker] = useState<SelectPrompt | null>(null);
   const [answered, setAnswered] = useState<SelectStep | null>(null);
   const sawPicker = useRef(false);
+  const typeKeysNow = useRef(typeKeys);
+  useEffect(() => { typeKeysNow.current = typeKeys; });
+  /** OpenCode's list is a scroll box that shows a slice of itself: the walk
+   * scrolls it and lists the slices put together (`OpenCodePickerWalk`). */
+  const walk = useRef<OpenCodePickerWalk | null>(null);
+  if (!walk.current) walk.current = new OpenCodePickerWalk((keys) => { void typeKeysNow.current(keys).catch(() => {}); });
+  useEffect(() => () => walk.current?.reset(), []);
 
   useEffect(() => {
     if (!picking) return;
+    const openCode = isOpenCodeTab(agentLabel);
     const read = () => {
       const term = terminalFor(ptyId);
-      const next = term ? readModelPicker(term.buffer.active, agentLabel) : null;
-      setPicker((previous) => (previous && next && sameSelectStep(previous, next) && previous.current === next.current ? previous : next));
+      let next: SelectPrompt | null;
+      if (openCode) {
+        walk.current?.read(term ? readOpenCodeModelPage(term.buffer.active) : null);
+        next = walk.current?.prompt() ?? null;
+      } else {
+        next = term ? readModelPicker(term.buffer.active, agentLabel) : null;
+      }
+      setPicker((previous) => (previous && next && sameSelectStep(previous, next)
+        && previous.current === next.current
+        && previous.options.length === next.options.length
+        && previous.hidden === next.hidden ? previous : next));
     };
     read();
     const timer = setInterval(read, PICKER_POLL_MS);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      walk.current?.reset();
+    };
   }, [picking, ptyId, agentLabel]);
 
   const finish = useCallback(() => {
@@ -85,8 +107,6 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   /** OpenCode's picker is opened by keys, not a command: one this never read
    * is still up in the session, where the next prompt would land in it
    * (`openCodeDialogCloseKeys`). Closed there; nothing is sent without one. */
-  const typeKeysNow = useRef(typeKeys);
-  useEffect(() => { typeKeysNow.current = typeKeys; });
   const closeUnread = useCallback(() => {
     const term = terminalFor(ptyId);
     if (!term || !isOpenCodeTab(agentLabel)) return;
@@ -146,10 +166,13 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     if (!step) return;
     const option = step.options.find((entry) => entry.index === index);
     if (!option) return;
+    // No walk key may follow the answer's into the session.
+    walk.current?.hold();
     setAnswered({ title: step.title, options: step.options });
     void typeKeys(modelPickKeys(step, option, agentLabel)).catch(() => setAnswered(null));
   };
   const close = () => {
+    walk.current?.hold();
     // The picker is the session's own: close it there too.
     if (picker) void typeKeys(["\u001b"]).catch(() => {});
     else closeUnread();
@@ -163,6 +186,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     step,
     shownStep: step ?? (answered && picker ? answered : null),
     busy: !!answered || !step,
+    listing: isOpenCodeTab(agentLabel) && !!step?.hidden,
     open,
     choose,
     close,

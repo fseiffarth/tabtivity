@@ -8,6 +8,7 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
+import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
@@ -110,7 +111,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   // --- The session's model / permission picker -------------------------------
   const session = useSessionPicker({ tab, ptyId, agentLabel, typeKeys });
-  const { picking, picker, step, shownStep, busy, choose, close } = session;
+  const { picking, picker, step, shownStep, busy, listing, choose, close } = session;
   const permissionPicking = picking && session.command === "/permissions";
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
@@ -289,6 +290,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         >
           <div className="terminal-reader-picker-head">
             <strong>{shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}</strong>
+            {isOpenCodeTab(agentLabel) && <UntestedTag id="agents.opencode.modelList" />}
             <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")} title={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")}>✕</button>
           </div>
           {shownStep ? (
@@ -312,7 +314,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           ) : (
             <small className="terminal-reader-question-more">{t(permissionPicking ? "terminal.reader.permissionsWaiting" : "terminal.reader.modelWaiting")}</small>
           )}
-          {step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
+          {listing
+            ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
+            : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
         </div>
       )}
       {effortOpen && (

@@ -108,7 +108,8 @@ import {
   isOpenCodeTab,
   openCodeDialogCloseKeys,
   openCodePickKeys,
-  readOpenCodePicker,
+  OpenCodePickerWalk,
+  readOpenCodePickerPage,
   OPENCODE_MODEL_KEYS,
 } from "../terminal/openCodeMini";
 import {
@@ -3150,22 +3151,52 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * believes in. None of OpenCode's, Antigravity's or Cursor's is the numbered
    * dialog the others draw, so each is read by its own shape (`openCodeMini`,
    * `antigravity`, `cursorAgent`). */
+  const openCodePage = useMemo(
+    () => (modelSheet && openCode ? readOpenCodePickerPage(liveScreen) : null),
+    [modelSheet, openCode, liveScreen],
+  );
+  /** OpenCode's list is a scroll box that draws a slice of itself: the walk
+   * scrolls it with ↓ and lists the slices put together. Fed every frame;
+   * `walked` re-reads it when it ends without one. */
+  const deliverNow = useRef(deliver);
+  deliverNow.current = deliver;
+  const [walked, setWalked] = useState(0);
+  const openCodeWalk = useRef<OpenCodePickerWalk | null>(null);
+  if (!openCodeWalk.current) {
+    openCodeWalk.current = new OpenCodePickerWalk(
+      (keys) => { deliverNow.current(keys); },
+      () => setWalked((count) => count + 1),
+    );
+  }
+  useEffect(() => () => openCodeWalk.current?.reset(), []);
+  const [walkedPicker, setWalkedPicker] = useState<SelectPrompt | null>(null);
+  useEffect(() => {
+    const walk = openCodeWalk.current;
+    if (!walk) return;
+    if (!modelSheet || !openCode) {
+      walk.reset();
+      setWalkedPicker(null);
+      return;
+    }
+    walk.read(openCodePage);
+    setWalkedPicker(walk.prompt());
+  }, [modelSheet, openCode, openCodePage, walked]);
   const picker = useMemo(
     () => {
       if (!modelSheet) return null;
-      if (openCode) return readOpenCodePicker(liveScreen);
+      if (openCode) return walkedPicker;
       if (antigravity) return readAntigravityPicker(liveScreen);
       if (cursorAgent) return readCursorPicker(liveScreen);
       return readSelectPrompt(liveScreen, agentLabel);
     },
-    [modelSheet, openCode, antigravity, cursorAgent, liveScreen, agentLabel],
+    [modelSheet, openCode, walkedPicker, antigravity, cursorAgent, liveScreen, agentLabel],
   );
   /** The step the sheet is showing: the picker on screen, unless it is the one
    * a tap just answered and the session has not redrawn yet. */
   const pickerStep = picker && answered && sameSelectStep(answered, picker) ? null : picker;
   /** The step as far as it is known: the rows on screen plus those an earlier
-   * slice of the same picker drew. OpenCode's list is never windowed, and a
-   * tapped group heading narrows it into a list of its own. */
+   * slice of the same picker drew. OpenCode's slices are put together by its
+   * own walk (`openCodeWalk`), which already is the whole list. */
   const listedStep = useMemo<SelectStep | null>(
     () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep)),
     [pickerStep, openCode, knownStep],
@@ -3327,9 +3358,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setEffortFor({ number: picked.number, label: picked.label });
       return;
     }
+    // No walk key may follow the answer's into the session.
+    if (openCode) openCodeWalk.current?.hold();
     // Walked by printed number: a windowed picker's rows on screen are a slice.
     const writes = openCode
-      ? openCodePickKeys(picked.label)
+      ? picked.keys ?? openCodePickKeys(picked.label)
       : pickerAt === undefined ? [] : selectKeys(pickerAt, picked.number);
     if (writes.length === 0 || !deliver(writes)) return;
     setAnswered(listedStep);
@@ -3411,6 +3444,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     back();
   };
   const closeModelSheet = () => {
+    openCodeWalk.current?.hold();
     // The dialog is the session's own and still open: close it there too,
     // rather than leaving a modal behind that the reader can no longer see.
     if (picker) type("\u001b");
@@ -4520,7 +4554,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       />
       : <OptionSheet
         title={shownStep?.title ?? t("terminal.reader.modelTitle")}
-        note={cursorAgent && isUntested("mobile.model.cursor") ? { text: t("mobile.focus.untested") } : undefined}
+        note={cursorAgent && isUntested("mobile.model.cursor")
+          ? { text: t("mobile.focus.untested") }
+          : openCode && (picker?.hidden || isUntested("agents.opencode.modelList"))
+            ? { text: [
+              ...(picker?.hidden ? [t("terminal.reader.modelListing")] : []),
+              ...(isUntested("agents.opencode.modelList") ? [t("mobile.focus.untested")] : []),
+            ].join(" · ") }
+            : undefined}
         options={pickerOptions}
         waiting={t(!connected
           ? "mobile.model.waitingConnection"
