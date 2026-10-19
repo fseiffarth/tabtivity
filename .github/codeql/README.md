@@ -1,6 +1,6 @@
 # Reviewed CodeQL findings
 
-`reviewed.json` records the false positives reviewed for PR #42. Each entry
+`reviewed.json` records the false positives reviewed for PRs #42 and #47. Each entry
 names one rule, source line and SHA-256 of the **entire** file, with a reason.
 Any edit to that file expires its reviews: the findings are reported again
 until their assumptions, locations and hashes are reviewed anew. Never update
@@ -14,7 +14,8 @@ artifact for 30 days, and logged by rule and location. No source files or
 queries are excluded from analysis.
 
 The reviewed cases are the app's startup-selected state directory (not a phone
-request path), the public HKDF domain label for file tokens (key material is
+request path), tmux launch code that logs only a session name or touches no
+log at all, the public HKDF domain label for file tokens (key material is
 the random host key), and MD5 required by the PDF revision-2 **test fixture**.
 Changing the token label would invalidate existing tokens; replacing MD5
 would stop the fixture being a valid encrypted PDF. Neither is a password

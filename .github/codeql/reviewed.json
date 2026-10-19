@@ -1,67 +1,195 @@
 [
   {
     "path": "src-core/src/brand.rs",
-    "line": 363,
+    "line": 379,
     "source": "names! {",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "82dcf74e7f5c4249da3bf0d534189811839673520b2abc0d83e313ee97699929",
+    "sha256": "3da3d85e949e833aac829011fcb76b61801abdb516d5159080b24886875f6707",
     "reason": "MOBILE_FILES_SALT is a public HKDF domain label, not a password salt. files::token_key_with derives from the random host key and uses a fresh XChaCha20 nonce per token. The label must remain stable for existing tokens."
   },
   {
+    "path": "src-tauri/src/commands/assistant.rs",
+    "line": 403,
+    "source": "assert!(crate::services::agent_session::is_uuid_shaped(&chat.uid), \"{}\", chat.uid);",
+    "rule": "rust/cleartext-logging",
+    "sha256": "0f624f7e5c8ad53a9597cf8c80228fe592c2c7753be494de8cf2164333b5e616",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated chat uid when the uuid-shape assertion fails; a uid is not a credential."
+  },
+  {
+    "path": "src-tauri/src/commands/projects.rs",
+    "line": 5179,
+    "source": "assert!(crate::services::agent_session::is_uuid_shaped(&a), \"{a}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "bb7eb099d64d920571a8b6d85cac7e74a1753da736a1ba9312461d2b4515aee9",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its shape assertion fails."
+  },
+  {
+    "path": "src-tauri/src/commands/projects.rs",
+    "line": 5181,
+    "source": "assert!(matches!(&a[19..20], \"8\" | \"9\" | \"a\" | \"b\"), \"{a}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "bb7eb099d64d920571a8b6d85cac7e74a1753da736a1ba9312461d2b4515aee9",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its variant assertion fails."
+  },
+  {
     "path": "src-tauri/src/services/agent_tasks.rs",
-    "line": 62,
+    "line": 63,
     "source": "if !path.exists() {",
     "rule": "rust/path-injection",
-    "sha256": "a4d4e2c8add89e29679ac36e4f3252c93931e01cf56c96662db1fd4b24c32a70",
+    "sha256": "c91388347b3c914015e63adccf015223b2c3e668831acce5ad240c8322a79422",
     "reason": "read_at receives only the schedule file under the startup-selected state directory, through file_path or trusted scheduler paths. The environment override belongs to the process owner; phone input never selects this path."
   },
   {
+    "path": "src-tauri/src/services/home_io.rs",
+    "line": 936,
+    "source": "assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, \"mkfifo {}\", path.display());",
+    "rule": "rust/cleartext-logging",
+    "sha256": "8254db5f8c3dee96f21af927c966ead40175d7a8d02e5b964f9fea5725e51a60",
+    "reason": "#[cfg(all(test, unix))] helper: the mkfifo assertion prints the temp path of the FIFO it plants; no credential is involved."
+  },
+  {
+    "path": "src-tauri/src/services/launch_prep.rs",
+    "line": 1821,
+    "source": "assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), \"{uid:?}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "f5d65d70353e8ff0b393bdf9aca655cd9ee1e32ed9658c89512c2af483e3f90d",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the malformed fixture uid being refused."
+  },
+  {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 872,
+    "line": 654,
+    "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_open reads only the fixed settings.json leaf to check the assistant opt-in."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 928,
     "source": "fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "3616c488e92feb1f6b8434d0b582b73993b03765c8e8a8145d01f1eebd2c1e69",
+    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed settings.json leaf to check the shell-tab opt-in."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 907,
+    "line": 963,
     "source": "fs::read(state_dir.join(\"projects.json\")).map_err(|e| format!(\"read projects: {e}\"))?;",
     "rule": "rust/path-injection",
-    "sha256": "3616c488e92feb1f6b8434d0b582b73993b03765c8e8a8145d01f1eebd2c1e69",
+    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed projects.json registry, never a project-folder file."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 913,
+    "line": 969,
     "source": "let boxes: Vec<BoxRecord> = fs::read(state_dir.join(\"boxes.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "3616c488e92feb1f6b8434d0b582b73993b03765c8e8a8145d01f1eebd2c1e69",
+    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed boxes.json registry."
   },
   {
     "path": "src-tauri/src/services/mobile_control/headless.rs",
-    "line": 361,
+    "line": 372,
     "source": "std::fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "a16df124f38be20985703cee4de69faf6b094a63ac9d3fa2e8950980bf973bc6",
+    "sha256": "f10d15171b4aee92b224127df3791d6cac4d8828e702d05dc6302953a6537a92",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only settings.json to filter installed agent choices."
   },
   {
     "path": "src-tauri/src/services/mobile_control/headless.rs",
-    "line": 376,
+    "line": 387,
     "source": "std::fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "a16df124f38be20985703cee4de69faf6b094a63ac9d3fa2e8950980bf973bc6",
+    "sha256": "f10d15171b4aee92b224127df3791d6cac4d8828e702d05dc6302953a6537a92",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only settings.json for the default agent."
   },
   {
     "path": "src-tauri/src/services/mobile_control/headless.rs",
-    "line": 1388,
+    "line": 1541,
     "source": "std::fs::read_to_string(state_dir.join(\"mobile-control\").join(\"seen\").join(uid))",
     "rule": "rust/path-injection",
-    "sha256": "a16df124f38be20985703cee4de69faf6b094a63ac9d3fa2e8950980bf973bc6",
+    "sha256": "f10d15171b4aee92b224127df3791d6cac4d8828e702d05dc6302953a6537a92",
     "reason": "state_dir is startup configuration. uid is rejected unless nonempty and every character is ASCII alphanumeric or hyphen, so it cannot contain separators, dots, drive prefixes or traversal. It names a stamp under mobile-control/seen only."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/web_client.rs",
+    "line": 1793,
+    "source": "let url = login_url_at(8742, token, now, \"n1\");",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "678ffb3adc17a7613eef3b2427385f3bd50c668ff22ffe68a66454ee583c974b",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixed nonce in a login-link test; production nonces are random."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/web_client.rs",
+    "line": 1802,
+    "source": "assert!(!sessions.redeem_link(token, exp, \"n2\", sig, now), \"a changed nonce breaks the signature\");",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "678ffb3adc17a7613eef3b2427385f3bd50c668ff22ffe68a66454ee583c974b",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A changed fixed nonce proves the signature breaks; production nonces are random."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/web_client.rs",
+    "line": 1806,
+    "source": "assert!(!sessions.redeem_link(token, far, \"n\", &login_signature(token, far, \"n\"), now), \"a link cannot be minted longer than the TTL\");",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "678ffb3adc17a7613eef3b2427385f3bd50c668ff22ffe68a66454ee583c974b",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixed nonce in the over-TTL link test; production nonces are random."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/web_client.rs",
+    "line": 1810,
+    "source": "let url2 = login_url_at(8742, token, now, \"n2\");",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "678ffb3adc17a7613eef3b2427385f3bd50c668ff22ffe68a66454ee583c974b",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixed nonce in a login-link test; production nonces are random."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/web_client.rs",
+    "line": 1812,
+    "source": "assert!(sessions.redeem_link(token, exp, \"n2\", sig2, now + 6));",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "678ffb3adc17a7613eef3b2427385f3bd50c668ff22ffe68a66454ee583c974b",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixed nonce in a login-link test; production nonces are random."
+  },
+  {
+    "path": "src-tauri/src/services/openvpn.rs",
+    "line": 3240,
+    "source": "assert_eq!(write_userpass(&stem, \"alice\", \"pw\").unwrap(), auth);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "52ba627dccf1cf5410d5bdc3d9c88df4cbfb3435bf2c18a43ec5471511e6f65f",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixture password written to a temp auth-user-pass file."
+  },
+  {
+    "path": "src-tauri/src/services/openvpn.rs",
+    "line": 3242,
+    "source": "let pass = write_askpass(&stem, \"secret\").unwrap();",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "52ba627dccf1cf5410d5bdc3d9c88df4cbfb3435bf2c18a43ec5471511e6f65f",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixture password written to a temp askpass script."
+  },
+  {
+    "path": "src-tauri/src/services/terminal_service.rs",
+    "line": 681,
+    "source": "eprintln!(\"terminal_service: persisted tab '{}' set {keys} in its env — dropped\", tab.label);",
+    "rule": "rust/cleartext-logging",
+    "sha256": "6ee0ed72c3fd544ecd6dc127dff25e90f14ab098bdf754daf21e2d9344c70f53",
+    "reason": "Logs the tab label and the names of the denied env keys it dropped, never their values. The finding's \"uid\" source is the tab id, not a credential."
+  },
+  {
+    "path": "src-tauri/src/services/tmux_local.rs",
+    "line": 795,
+    "source": "eprintln!(\"tmux_local: could not write launcher for '{session}': {e}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "7ddc0a694919ea562d8078f73593ada00ff0eaa5beb3ada6605c1b28032f2a02",
+    "reason": "Logs the tmux session name and an io::Error from writing the launcher script. The session name is a tab-derived identifier, not a credential; the script (which may hold env values) is never logged."
+  },
+  {
+    "path": "src-tauri/src/services/tmux_local.rs",
+    "line": 814,
+    "source": "args.insert(at + 1, \"-d\".into());",
+    "rule": "rust/cleartext-logging",
+    "sha256": "7ddc0a694919ea562d8078f73593ada00ff0eaa5beb3ada6605c1b28032f2a02",
+    "reason": "Vec::insert of the literal \"-d\" into the tmux argv; nothing here is logged. The argv carries injected API-key env to the spawned tmux client only, and no caller prints PtyOptions, its args or env."
   },
   {
     "path": "src/__tests__/helpers/pdfFixture.ts",
@@ -70,5 +198,13 @@
     "rule": "js/insufficient-password-hash",
     "sha256": "2848fcc1cdffd87884ca4d1395e2ece821d7e68adfe8e90b5caaeb624dbe83e4",
     "reason": "This helper creates only encrypted PDF test fixtures. ISO 32000-1 revision 2 requires MD5 and RC4; a stronger password hash would produce an invalid fixture. It never stores real credentials and is not imported by production code."
+  },
+  {
+    "path": "src/__tests__/shell/BrandMirror.test.ts",
+    "line": 135,
+    "source": "const script = /<script>([\\s\\S]*?)<\\/script>/.exec(html)![1];",
+    "rule": "js/bad-tag-filter",
+    "sha256": "f820ff88cc5363395394e30b0ae1f133859f429769ee496ed05815550a5248e8",
+    "reason": "Test-only: extracts the inline script from the app's own built index.html, which it wrote itself with a lowercase tag. Not a sanitizer and never runs on untrusted HTML."
   }
 ]

@@ -677,11 +677,8 @@ pub(crate) fn strip_persisted_env(tab: &mut TabEntry, custom: &HashMap<String, C
     });
     if !dropped.is_empty() {
         dropped.sort();
-        eprintln!(
-            "terminal_service: persisted tab '{}' set {} in its env — dropped",
-            tab.label,
-            dropped.join(", ")
-        );
+        let keys = dropped.join(", ");
+        eprintln!("terminal_service: persisted tab '{}' set {keys} in its env — dropped", tab.label);
     }
 }
 
