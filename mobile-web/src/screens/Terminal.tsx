@@ -11,7 +11,7 @@ import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
-import { OutboxViewer, type MarkupNewTab, type MarkupSend, type MarkupTarget } from "../components/OutboxViewer";
+import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupSend, type MarkupTarget } from "../components/OutboxViewer";
 import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
@@ -816,7 +816,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
  * model picker already up — once, as soon as the session has drawn.
  * `subagent`: one was picked off the tab card's subagent list, so the session
  * opens in Focus on that subagent's own conversation. */
-export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab }: {
+export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, markupBack }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
@@ -829,7 +829,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * (`TabRow.sign_in`), for a sign-in tab reached any other way. */
   signInTab?: boolean;
   /** Shows another tab of the same project in place of this one. */
-  openTab?: (tab: TabRow, opts?: { signIn?: boolean }) => void;
+  openTab?: (tab: TabRow, opts?: { signIn?: boolean; markupBack?: MarkupBack }) => void;
+  /** Opened from a markup view's Open tab: that view, marking, is kept here
+   * tucked away under the bar over the composer, which brings it back. */
+  markupBack?: MarkupBack;
 }) {
   // From the tab list, or after the PWA reloaded on the way back from the
   // sign-in page, only the row knows — and without it the sheet lost its
@@ -1148,11 +1151,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** A project file the agent's markup question is about, opened from the
    * Focus banner: its row, its folder trail (the layer's key) and its
    * folder's token (Reload lists it again). */
-  const [askedFile, setAskedFile] = useState<{ file: OutboxFile; place: string; folder?: string } | null>(null);
+  const [askedFile, setAskedFile] = useState<{ file: OutboxFile; place?: string; folder?: string; scope?: ViewerScope; marking?: boolean } | null>(
+    () => (markupBack ? { ...markupBack, marking: true } : null),
+  );
   /** The markup view tucked away behind the chat (its **Chat** button, while a
    * round is with this tab): still mounted — layer, round pill, scroll — and
    * brought back by the bar over the composer. Holds the file's name. */
-  const [markupAway, setMarkupAway] = useState<string | null>(null);
+  const [markupAway, setMarkupAway] = useState<string | null>(() => (markupBack ? sentName(markupBack.file) : null));
   /** The stored session behind an agent tab (`getTranscript`): `null` until
    * the first read answers. Focus reads from it whenever it is available and
    * the reader has not switched the view to the screen. */
@@ -2448,8 +2453,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [outboxOpen, gallery, inboxOpen, markupAway]);
-  // Another file opened, or the viewer closed: nothing stays tucked away.
+  // Another file opened, or the viewer closed: nothing stays tucked away —
+  // past the mount, where a `markupBack` view starts out tucked away.
+  const awayMounted = useRef(false);
   useEffect(() => {
+    if (!awayMounted.current) {
+      awayMounted.current = true;
+      return;
+    }
     setMarkupAway(null);
   }, [outboxOpen, askedFile, filesOpen]);
   /** A picture, a text or a PDF opens full-screen here; in an agent tab the
@@ -3763,9 +3774,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const askedScope = useMemo<ViewerScope | undefined>(() => (project ? { files: project } : undefined), [project]);
   /** Mark up's Reload for that file: its folder listed again, for a fresh row. */
   const askedFolder = askedFile?.folder;
+  const askedInFiles = !askedFile?.scope || "files" in askedFile.scope;
   const refreshAskedFile = useMemo(
-    () => (project ? refreshProjectFile(project, askedFolder) : async () => null),
-    [project, askedFolder],
+    () => (project && askedInFiles ? refreshProjectFile(project, askedFolder) : undefined),
+    [project, askedFolder, askedInFiles],
   );
   const openAskedRow = (row: PhoneMarkupFile) => setAskedFile({
     file: { name: row.name, kind: row.kind, size: row.size, modified: row.modified, ref: row.token },
@@ -3776,7 +3788,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * tab of the desktop's default agent; its Open tab shows that tab in place
    * of this one. */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
-    () => (tab.kind !== "agent" && project && openTab ? { projectId: project, show: (row: TabRow) => openTab(row) } : undefined),
+    () => (tab.kind !== "agent" && project && openTab ? { projectId: project, show: (row: TabRow, back?: MarkupBack) => openTab(row, { markupBack: back }) } : undefined),
     [tab.kind, project, openTab],
   );
   /** The dialog's own question — the block right above its rows, which the
@@ -4651,8 +4663,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     </BackNest></div>}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}
     {inboxOpen && (!outboxOpen || markupAway !== null) && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
-    {askedFile && askedScope && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <OutboxViewer key={`asked/${askedFile.file.ref}`} scope={askedScope} file={askedFile.file} onClose={() => setAskedFile(null)}
+    {askedFile && (askedFile.scope ?? askedScope) && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
+      <OutboxViewer key={`asked/${askedFile.file.ref ?? askedFile.file.name}`} scope={(askedFile.scope ?? askedScope)!} file={askedFile.file} onClose={() => setAskedFile(null)} startMarking={askedFile.marking}
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>

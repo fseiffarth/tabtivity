@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { FolderIcon } from "../../../src/components/common/icons/Icon";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import type { TabRow } from "../api";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { FilesLibrary } from "./FilesLibrary";
 import type { MarkupNewTab, MarkupTarget } from "./OutboxViewer";
@@ -32,7 +31,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   markup?: Omit<MarkupTarget, "projectId" | "place" | "folder" | "refresh">;
   /** With no `markup`, Mark up's Submit opens a new agent tab, and the
    * view's Open tab button shows it through this (`MarkupNewTab`). */
-  showTab?: (tab: TabRow) => void;
+  showTab?: MarkupNewTab["show"];
   /** The agent tab a file's card sends its marks to (`MarkupNewTab`). */
   linked?: MarkupNewTab["linked"];
   /** The project screen's own rows (＋ New tab, the agent's files, Git),

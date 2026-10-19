@@ -22,7 +22,7 @@ import { OptionSheet } from "../components/OptionSheet";
 import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
 import { markDoneSeen, markInterruptedSeen, readSeenDone, readSeenInterrupted, showsStatusBadge, withoutResumed, writeSeenInterrupted } from "../seenDone";
 import { OutboxGallery } from "../components/OutboxGallery";
-import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
+import { OutboxViewer, type MarkupBack, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles, asViewerFile } from "../components/ProjectFiles";
 import { closeFileTab, findFileTab, onFileTabs, readFileTabs, refreshFileTab, type FileTab } from "../filesPlace";
 import { markCount } from "../markup/layer";
@@ -111,7 +111,7 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
     ?? { name: file.name, kind: file.kind, size: file.size, modified: file.modified, ...(file.label ? { original: file.label } : {}) };
 }
 
-export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep }) => void }) {
+export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [creating, setCreating] = useState(false);
@@ -411,7 +411,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
     () => detail?.agents.length && terminalsOffered ? {
       projectId: id,
-      show: (tab: TabRow) => terminal(tab),
+      // The tab opens with the view tucked away under its bar: the way back.
+      show: (tab: TabRow, markupBack?: MarkupBack) => terminal(tab, { markupBack }),
       linked: (file) => {
         const tabId = findFileTab(id, file)?.tab;
         return tabId ? tabRows.current.find((row) => row.id === tabId && row.kind === "agent") : undefined;

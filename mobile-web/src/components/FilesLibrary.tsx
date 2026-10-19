@@ -3,7 +3,7 @@ import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type TabRow, type ViewerScope } from "../api";
+import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
@@ -289,7 +289,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
   markup?: Omit<MarkupTarget, "projectId" | "place" | "folder" | "refresh">;
   /** With no `markup`, Mark up's Submit opens a new agent tab, and the
    * view's Open tab button shows it through this (`MarkupNewTab`). */
-  showTab?: (tab: TabRow) => void;
+  showTab?: MarkupNewTab["show"];
   /** The agent tab a file's card sends its marks to (`MarkupNewTab`). */
   linked?: MarkupNewTab["linked"];
 }) {

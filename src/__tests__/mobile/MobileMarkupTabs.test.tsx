@@ -137,7 +137,7 @@ describe("MarkupView · the file's card", () => {
     expect(screen.getByText("Marks go to the Paper review tab.")).toBeTruthy();
     expect(screen.queryByText(/Submit opens a new tab of your default agent/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open tab" }));
-    expect(show).toHaveBeenCalledWith(LINKED);
+    expect(show).toHaveBeenCalledWith(LINKED, expect.objectContaining({ file: PICTURE }));
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     await waitFor(() => expect(calls.some((call) => call.url === "/api/v1/tabs/tab-old/held")).toBe(true));

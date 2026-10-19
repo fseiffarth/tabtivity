@@ -49,7 +49,7 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
 import type { OutboxFile } from "../../../mobile-web/src/api";
-import type { MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
+import type { MarkupBack, MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
 import type { AgentSignal } from "../../../mobile-web/src/markup/submitState";
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { NAMES, storageKey } from "../../lib/brand";
@@ -624,13 +624,16 @@ describe("Terminal · sendMarkup", () => {
     onopen: (() => void) | null = null;
     onclose: (() => void) | null = null;
     onmessage: ((event: MessageEvent) => void) | null = null;
+    /** What the chat typed into the session, decoded, in order. */
+    static typed: string[] = [];
     constructor() { queueMicrotask(() => this.onopen?.()); }
-    send() {}
+    send(data: unknown) { if (typeof data !== "string") FakeWebSocket.typed.push(new TextDecoder().decode(data as Uint8Array)); }
     close() { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
   }
 
   /** The chat of an agent tab whose outbox lists `files()` at each read. */
-  function chat(files: () => unknown[], agentStatus?: "working") {
+  function chat(files: () => unknown[], agentStatus?: "working", markupBack?: MarkupBack) {
+    FakeWebSocket.typed = [];
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("WebSocket", FakeWebSocket);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
@@ -642,7 +645,7 @@ describe("Terminal · sendMarkup", () => {
       return Promise.resolve(jsonResponse(200, { files: files() }));
     }));
     const tab = { id: "tab-7", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", agent_status: agentStatus, available: true, viewer_busy: false };
-    render(<Terminal tab={tab} back={() => {}} />);
+    render(<Terminal tab={tab} back={() => {}} markupBack={markupBack} />);
     return calls;
   }
 
@@ -660,6 +663,52 @@ describe("Terminal · sendMarkup", () => {
     expect(JSON.parse(String(held.body))).toEqual({ message: "Round 1" });
     expect(await screen.findByText("Queued — the agent takes it after its current step")).toBeTruthy();
     // The view it was sent from is still open, marking.
+    expect(screen.getByRole("dialog", { name: "Mark up plot.png" })).toBeTruthy();
+    expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
+  });
+
+  it("types the prompt and presses Enter when the agent is idle", async () => {
+    chat(() => [{ name: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000, from_tab: true }]);
+    fireEvent.click(await screen.findByRole("button", { name: "Files from the agent (1)" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Files from the agent" })).getByRole("button", { name: "Open plot.png" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
+    showPicture();
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+
+    await waitFor(() => expect(FakeWebSocket.typed.join("")).toContain("Round 1"), { timeout: 2_000 });
+    // The submit is its own write after the text, and it does arrive.
+    await waitFor(() => expect(FakeWebSocket.typed[FakeWebSocket.typed.length - 1]).toBe("\r"), { timeout: 2_000 });
+    expect(screen.getByRole("dialog", { name: "Mark up plot.png" })).toBeTruthy();
+  });
+
+  it("tucks the view away on Chat and brings it back from the bar over the composer", async () => {
+    chat(() => [{ name: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000, from_tab: true }], "working");
+    fireEvent.click(await screen.findByRole("button", { name: "Files from the agent (1)" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Files from the agent" })).getByRole("button", { name: "Open plot.png" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
+    showPicture();
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(document.querySelector(".markup-chat")).toBeTruthy());
+    fireEvent.click(document.querySelector(".markup-chat")!);
+
+    const host = () => screen.getByRole("dialog", { name: "Mark up plot.png", hidden: true }).closest(".markup-host")!;
+    await waitFor(() => expect(host().classList.contains("away")).toBe(true));
+    fireEvent.click(within(document.querySelector(".markup-away-notice") as HTMLElement).getByRole("button"));
+    await waitFor(() => expect(host().classList.contains("away")).toBe(false));
+    expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
+  });
+
+  it("opened from a markup view's Open tab, offers the way back to it from the chat", async () => {
+    chat(() => [], undefined, { scope: { project: "p1" }, file: PICTURE });
+    // The chat is up, the view tucked away under the bar over the composer.
+    const bar = await screen.findByText(/plot\.png/, { selector: ".markup-away-notice span" });
+    const host = () => document.querySelector(".markup-host")!;
+    expect(host().classList.contains("away")).toBe(true);
+    fireEvent.click(within(bar.closest(".markup-away-notice") as HTMLElement).getByRole("button"));
+    await waitFor(() => expect(host().classList.contains("away")).toBe(false));
+    // Back marking, on the same file.
     expect(screen.getByRole("dialog", { name: "Mark up plot.png" })).toBeTruthy();
     expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
   });

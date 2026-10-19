@@ -2227,7 +2227,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {openedTab === linkedTab
           ? t("mobile.markup.linkedTab", { label: openedTab.label })
           : t("mobile.markup.newTabOpened", { label: openedTab.label })}
-        <button className={asking ? "markup-submit" : "outbox-action"} onClick={() => newTab.show(openedTab)}>{t("mobile.markup.openNewTab")}</button>
+        <button className={asking ? "markup-submit" : "outbox-action"} onClick={() => newTab.show(openedTab, { scope, file, place, folder })}>{t("mobile.markup.openNewTab")}</button>
         {(openedTab === linkedTab ? isUntested("mobile.markup.tabs") : isUntested("mobile.markup.newTab")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
       </p>}
       {marking && leftOut > 0 && <p role="status">{t(leftOut === 1 ? "mobile.markup.leftOutOne" : "mobile.markup.leftOut", { count: leftOut })}</p>}

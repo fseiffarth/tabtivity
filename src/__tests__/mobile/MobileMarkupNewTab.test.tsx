@@ -144,7 +144,8 @@ describe("MarkupView · Submit with no agent tab", () => {
     await waitFor(() => expect(hasSent(store.saveLayer.mock.calls[store.saveLayer.mock.calls.length - 1][1] as Layer)).toBe(true));
 
     fireEvent.click(screen.getByRole("button", { name: "Open tab" }));
-    expect(show).toHaveBeenCalledWith(NEW_TAB);
+    // With the file, so the tab's chat keeps the way back to this view.
+    expect(show).toHaveBeenCalledWith(NEW_TAB, { scope: { project: "p1" }, file: PICTURE, place: undefined, folder: undefined });
   });
 
   it("follows the opened tab's turn in the round's pill", async () => {

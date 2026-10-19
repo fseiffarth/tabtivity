@@ -135,7 +135,10 @@ is refused. Works with the desktop window closed.
   newest first, with who sent it; tap one to open it. It sits beside
   **Subagents (n)**; one list opens at a time.
 - A PDF or picture in an agent tab's viewer has **Mark up**: draw on it and
-  **Submit** sends the marks to that tab. The view stays open — the sent marks
+  **Submit** sends the marks to that tab. Marked from the project screen's
+  files, Submit opens a new tab of your default agent; its **Open tab** shows
+  that tab's chat with a bar over the text box that brings your marks back.
+  The view stays open — the sent marks
   dim, a pill says what the agent is doing, you can keep marking (the next
   Submit sends only the new marks), and once the agent is done and the PDF
   changed, the rebuilt file loads under your marks on its own (turn that off

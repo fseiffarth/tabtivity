@@ -52,11 +52,16 @@ export type MarkupTarget = {
  * `projectId` and hands it the prompt; the view stays open, and its Open tab
  * button `show`s that tab (`markup/newTab.ts`).
  * `place`, `folder` and `refresh` are a project file's, as in `MarkupTarget`. */
+/** The file a markup view was on when its Open tab showed the tab its Submit
+ * went to: the tab's chat opens with that view tucked away under its bar,
+ * so the way back to the marks is there (`Terminal`'s `markupBack`). */
+export type MarkupBack = { scope: ViewerScope; file: OutboxFile; place?: string; folder?: string };
+
 export type MarkupNewTab = {
   projectId: string;
   place?: string;
   folder?: string;
-  show: (tab: TabRow) => void;
+  show: (tab: TabRow, back?: MarkupBack) => void;
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
   /** The open agent tab the file's card says its earlier rounds went to
    * (`filesPlace.ts`): Submit sends there rather than opening another. */
