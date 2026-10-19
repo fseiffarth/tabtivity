@@ -818,7 +818,6 @@ fn read_transcript_in(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
-    use std::io::{Read, Seek, SeekFrom};
     // The agent writes its transcript: never a link, a FIFO or another special
     // file (threat model gap 29).
     let mut file = crate::services::home_io::open_regular(path)?;
@@ -839,19 +838,8 @@ fn read_transcript_in(
             ..Default::default()
         });
     }
-    let len = meta.len();
-    let start = len.saturating_sub(tail_bytes(limit));
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::with_capacity((len - start) as usize);
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<&str> = text.lines().collect();
-    let mut truncated = false;
-    if start > 0 {
-        // Whatever came before the seek point is missing from the first line.
-        lines.remove(0);
-        truncated = true;
-    }
+    let (text, mut truncated) = agent_session::read_conversation_tail(&mut file, meta.len(), tail_bytes(limit))?;
+    let lines: Vec<&str> = text.lines().collect();
     let usage = match kind {
         TranscriptKind::Codex => codex_usage(&lines),
         TranscriptKind::Claude => None,
@@ -2034,6 +2022,30 @@ mod tests {
         let earlier = read_transcript(&path, TranscriptKind::Claude, None, 2 * TAIL_STEP_ENTRIES).unwrap();
         assert!(!earlier.truncated);
         assert_eq!(kinds(&earlier), vec![("prompt", "older prompt"), ("prompt", "newer prompt")]);
+    }
+
+    #[test]
+    fn request_replay_records_neither_fill_the_tail_nor_reach_the_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        // Claude 2.1.300 copies every API request into the transcript: twice
+        // the first tail of them between two prompts, as a blob that also
+        // holds a user message.
+        let blob = format!(
+            "{{\"type\":\"api-request-blob\",\"message\":{{\"role\":\"user\",\"content\":\"{}\"}}}}\n",
+            "r".repeat(64 * 1024)
+        );
+        let replay = blob.repeat(2 * TAIL_BYTES as usize / blob.len());
+        let text = format!(
+            "{}{replay}{}",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"older prompt\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"newer prompt\"}}\n",
+        );
+        std::fs::write(&path, text).unwrap();
+
+        let read = read_transcript(&path, TranscriptKind::Claude, None, TAIL_STEP_ENTRIES).unwrap();
+        assert!(!read.truncated);
+        assert_eq!(kinds(&read), vec![("prompt", "older prompt"), ("prompt", "newer prompt")]);
     }
 
     #[test]

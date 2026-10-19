@@ -367,7 +367,6 @@ pub enum Store {
 /// The changes in the transcript at `path`: its tail, the last `limit`
 /// changes in it. `None` only when the file cannot be read.
 pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usize) -> Option<AgentChanges> {
-    use std::io::{Read, Seek, SeekFrom};
     // The agent writes its transcript: never a link, a FIFO or another special
     // file (threat model gap 29).
     let mut file = crate::services::home_io::open_regular(path)?;
@@ -376,19 +375,9 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
     if version == Some(current.as_str()) {
         return Some(AgentChanges::unchanged(current));
     }
-    let len = meta.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::with_capacity((len - start) as usize);
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.lines();
-    if start > 0 {
-        // Whatever came before the seek point is missing from the first line.
-        lines.next();
-    }
+    let (text, cut) = crate::services::agent_session::read_conversation_tail(&mut file, meta.len(), TAIL_BYTES)?;
     let mut changes = Vec::new();
-    for line in lines {
+    for line in text.lines() {
         // Most records are no change: only parse the ones that may be.
         let candidate = match kind {
             Store::Claude => line.contains("\"toolUseResult\"") && line.contains("\"filePath\""),
@@ -405,7 +394,7 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
             Store::Codex => codex_changes(&value, &mut changes),
         }
     }
-    Some(AgentChanges::read(current, changes, start > 0, limit))
+    Some(AgentChanges::read(current, changes, cut, limit))
 }
 
 /// The change a Claude tool result records: an edit's applied hunks, or a

@@ -676,22 +676,107 @@ fn with_transcript_tail<T>(
     tail: u64,
     read: impl FnOnce(&[&str]) -> Option<T>,
 ) -> Option<T> {
-    use std::io::{Read, Seek, SeekFrom};
     // The agent writes its transcript: never a link, a FIFO or another
     // special file.
     let mut file = crate::services::home_io::open_regular(path)?;
     let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(tail);
+    let (text, _) = read_conversation_tail(&mut file, len, tail)?;
+    let lines: Vec<&str> = text.lines().collect();
+    read(&lines)
+}
+
+/// The start of every request-replay record Claude Code writes into its
+/// transcripts since 2.1.300 (`api-request`, `api-request-blob`,
+/// `api-request-shape`): the system prompt, tools and messages of each API
+/// request, copied again. They are most of a busy session's bytes (two thirds
+/// and more) and no reader here wants one.
+const REPLAY_RECORD: &[u8] = br#"{"type":"api-request"#;
+
+/// Whether a transcript line is a request-replay record ([`REPLAY_RECORD`]).
+fn is_replay_record(line: &[u8]) -> bool {
+    line.starts_with(REPLAY_RECORD)
+}
+
+/// How far back past `budget` a tail read scans for conversation: the replay
+/// records it skips may make up all but a quarter of the file.
+const REPLAY_SCAN_FACTOR: u64 = 4;
+const SCAN_CHUNK: u64 = 1024 * 1024;
+
+/// The tail of a transcript that holds `budget` bytes of conversation, with
+/// the request-replay records skipped both in the count and in the text: a
+/// byte window alone would hold a third of the turns it held before 2.1.300.
+/// Whole lines, in file order; a line the window starts inside is dropped. The
+/// flag says the window starts after the file's first byte. The scan reaches
+/// back at most [`REPLAY_SCAN_FACTOR`] times `budget`.
+pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget: u64) -> Option<(String, bool)> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    let start = conversation_tail_start(file, len, budget)?;
     file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::with_capacity((len - start) as usize);
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<&str> = text.lines().collect();
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut text = String::new();
     if start > 0 {
         // Whatever came before the seek point is missing from the first line.
-        lines.remove(0);
+        reader.read_until(b'\n', &mut line).ok()?;
     }
-    read(&lines)
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            break;
+        }
+        if !is_replay_record(&line) {
+            text.push_str(&String::from_utf8_lossy(&line));
+        }
+    }
+    Some((text, start > 0))
+}
+
+/// Where [`read_conversation_tail`]'s window starts: walking back line by line
+/// from the end, `budget` bytes of lines that are not replay records. Without
+/// replay records it is `len - budget`, the plain byte window.
+fn conversation_tail_start(file: &mut std::fs::File, len: u64, budget: u64) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let floor = len.saturating_sub(budget.saturating_mul(REPLAY_SCAN_FACTOR));
+    let mut counted = 0u64;
+    // End of the line being walked back over; its newline is found next.
+    let mut line_end = len;
+    let mut pos = len;
+    // The first bytes after `pos`: how a line starting in this chunk goes on.
+    let mut head: Vec<u8> = Vec::new();
+    let mut chunk = Vec::new();
+    while pos > floor {
+        let lo = pos.saturating_sub(SCAN_CHUNK).max(floor);
+        chunk.resize((pos - lo) as usize, 0);
+        file.seek(SeekFrom::Start(lo)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        for index in (0..chunk.len()).rev() {
+            if chunk[index] != b'\n' {
+                continue;
+            }
+            let newline = lo + index as u64;
+            let mut opening = chunk[index + 1..].iter().take(REPLAY_RECORD.len()).copied().collect::<Vec<u8>>();
+            opening.extend(head.iter().take(REPLAY_RECORD.len() - opening.len()));
+            if !is_replay_record(&opening) {
+                // The line with its newline in front.
+                let size = line_end - newline;
+                if counted + size >= budget {
+                    return Some(line_end - (budget - counted));
+                }
+                counted += size;
+            }
+            line_end = newline;
+        }
+        let mut next = chunk.iter().take(REPLAY_RECORD.len()).copied().collect::<Vec<u8>>();
+        next.extend(head.iter().take(REPLAY_RECORD.len() - next.len()));
+        head = next;
+        pos = lo;
+    }
+    // The file's first line has no newline in front to be found by: the
+    // window starts inside it, or takes the whole file.
+    if floor == 0 && !is_replay_record(&head) && counted + line_end > budget {
+        return Some(line_end - (budget - counted));
+    }
+    Some(floor)
 }
 
 // ── The prompts a tab was given, with their times ────────────────────────────
@@ -4447,6 +4532,43 @@ mod tests {
         assert_eq!(last_prompt_in_transcript(&path, TranscriptKind::Codex).as_deref(), Some("Implement these"));
         let recent = recent_prompts_in_transcript(&path, TranscriptKind::Codex).unwrap();
         assert_eq!(recent.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Implement these"]);
+    }
+
+    #[test]
+    fn a_conversation_tail_counts_and_keeps_no_request_replay_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let read = |budget: u64| {
+            let mut file = std::fs::File::open(&path).unwrap();
+            let len = file.metadata().unwrap().len();
+            read_conversation_tail(&mut file, len, budget).unwrap()
+        };
+
+        // Without replay records it is the plain byte window, across chunks.
+        let line = format!("{{\"type\":\"user\",\"n\":\"{}\"}}\n", "u".repeat(1000));
+        std::fs::write(&path, line.repeat(3000)).unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        for budget in [10, line.len() as u64, 5 * SCAN_CHUNK / 2, len - 1, len, len + 9] {
+            let (text, cut) = read(budget);
+            let mut plain = std::fs::read_to_string(&path).unwrap();
+            let start = len.saturating_sub(budget) as usize;
+            plain.drain(..start);
+            if start > 0 {
+                plain.drain(..=plain.find('\n').unwrap());
+            }
+            assert_eq!((text.len(), cut), (plain.len(), start > 0), "budget {budget}");
+        }
+
+        // Replay records are skipped, even one split over a chunk boundary:
+        // two prompts with three times their size of replay between and after
+        // them both fit a window of the two.
+        let line = format!("{{\"type\":\"user\",\"n\":\"{}\"}}\n", "u".repeat(400_000));
+        let replay = format!("{{\"type\":\"api-request\",\"body\":\"{}\"}}\n", "r".repeat(SCAN_CHUNK as usize / 3));
+        std::fs::write(&path, format!("{line}{}{line}{}", replay.repeat(3), replay.repeat(3))).unwrap();
+        assert_eq!(read(2 * line.len() as u64), (line.repeat(2), false));
+        assert_eq!(read(line.len() as u64 + 5), (line.clone(), true));
+        // Past the scan's reach the window is cut where the reach ends.
+        assert_eq!(read(1024), (String::new(), true));
     }
 
     #[test]
