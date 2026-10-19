@@ -60,10 +60,10 @@ import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
 import { RootOverlayHost } from "./RootOverlay";
 import { AssistantScopeHost } from "./AssistantScopeHost";
-import { useAssistantOverlayStore } from "../../stores/assistantOverlay";
 import { LocalLossDialog } from "../common/LocalLossDialog";
 import {
   RailAgentsIcon,
+  RailAssistantIcon,
   RailAppsIcon,
   RailChevronIcon,
   RailFilesIcon,
@@ -98,7 +98,7 @@ import { listenSyncProgress } from "../../stores/remote/sync";
 import { autoConnectVpnOnLaunch } from "../../lib/remote/vpn/vpnAutoConnect";
 import { initRemoteAutoReconnect } from "../../lib/remote/remoteAutoReconnect";
 import { initExperimentalSweep } from "../../lib/experimentalSweep";
-import { migrateExperimentalOnce } from "../../lib/experimental";
+import { migrateExperimentalOnce, useExperimental } from "../../lib/experimental";
 import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
@@ -195,9 +195,6 @@ const HpcPipelineWizardHost = lazy(() =>
 const ModelsOverlayHost = lazy(() =>
   import("../models/ModelsOverlay").then((m) => ({ default: m.ModelsOverlayHost })),
 );
-const AssistantOverlayHost = lazy(() =>
-  import("../assistant/AssistantOverlay").then((m) => ({ default: m.AssistantOverlayHost })),
-);
 // First-run and on-demand pages, mounted only while this shell's own state
 // shows them.
 const HowToStart = lazy(() => import("./HowToStart").then((m) => ({ default: m.HowToStart })));
@@ -234,15 +231,6 @@ function LazyHpcPipelineWizardHost() {
   return (
     <LazyWhen when={open}>
       <HpcPipelineWizardHost />
-    </LazyWhen>
-  );
-}
-
-function LazyAssistantOverlayHost() {
-  const open = useAssistantOverlayStore((s) => s.open);
-  return (
-    <LazyWhen when={open}>
-      <AssistantOverlayHost />
     </LazyWhen>
   );
 }
@@ -288,6 +276,13 @@ const EDGE_VIEWS: ReadonlyArray<{
   { view: "windows", labelKey: "projectFilesView.tabApps", Icon: RailAppsIcon },
   { view: "agents", labelKey: "projectFilesView.tabAgents", Icon: RailAgentsIcon },
 ];
+// Tabby's tab, after the four and only with the experimental `assistant`
+// switch on (the panel's switcher gates its own button the same way).
+const ASSISTANT_EDGE_VIEW: (typeof EDGE_VIEWS)[number] = {
+  view: "assistant",
+  labelKey: "assistant.title",
+  Icon: RailAssistantIcon,
+};
 
 // Side-panel width bounds. The default matches the historical fixed 280px so
 // existing installs (no stored width) look unchanged; the max is capped against
@@ -404,6 +399,7 @@ export function AppShell() {
   const autoHide = useSettingsStore((s) => s.settings?.side_panel_auto_hide ?? false);
   const viewByScope = useSettingsStore((s) => s.settings?.side_panel_view_by_project);
   const lastPanelView = useSettingsStore((s) => s.settings?.side_panel_view ?? "files");
+  const edgeViews = useExperimental("assistant") ? [...EDGE_VIEWS, ASSISTANT_EDGE_VIEW] : EDGE_VIEWS;
   const widthSetting = useSettingsStore(
     (s) => s.settings?.side_panel_width ?? s.settings?.right_panel_width ?? SIDE_PANEL_DEFAULT,
   );
@@ -451,6 +447,8 @@ export function AppShell() {
   const [railMenu, setRailMenu] = useState<{ x: number; y: number } | null>(null);
   // Latest `setSidePanelOpen`, for the mount-only event listeners below.
   const setSidePanelOpenRef = useRef<(open: boolean) => void>(() => {});
+  // Latest `openPanelOnView`, for the same listeners.
+  const openPanelOnViewRef = useRef<(view: FilesPanelView) => void>(() => {});
   const [panelWidth, setPanelWidth] = useState(SIDE_PANEL_DEFAULT);
   const [resizingPanel, setResizingPanel] = useState(false);
   const latestPanelWidth = useRef(SIDE_PANEL_DEFAULT);
@@ -619,10 +617,14 @@ export function AppShell() {
 
   // Open the lessons picker on demand, and let a tour/lesson step force the
   // (otherwise hover-revealed) file panel open so it has something to spotlight.
+  // An event naming a view (`showAssistant`: a jump to a Tabby chat) opens the
+  // panel on that view.
   useEffect(() => {
     const openLessons = () => setShowLessons(true);
-    const revealPanel = () => {
-      setSidePanelOpenRef.current(true);
+    const revealPanel = (e: Event) => {
+      const view = (e as CustomEvent<{ view?: FilesPanelView } | null>).detail?.view;
+      if (view) openPanelOnViewRef.current(view);
+      else setSidePanelOpenRef.current(true);
     };
     window.addEventListener("app:open-lessons", openLessons);
     window.addEventListener("app:reveal-side-panel", revealPanel);
@@ -1348,6 +1350,7 @@ export function AppShell() {
     );
     setSidePanelOpen(true);
   };
+  openPanelOnViewRef.current = openPanelOnView;
   // A click on a rail icon, VS Code style: the icon of the view already shown
   // closes the panel, another view's icon switches to it. `view` undefined is the
   // chevron: toggle on the remembered view.
@@ -1498,7 +1501,7 @@ export function AppShell() {
                   dir={(panelSide === "left") === revealPanel ? "left" : "right"}
                 />
               </button>
-              {EDGE_VIEWS.map(({ view, labelKey, Icon }) => {
+              {edgeViews.map(({ view, labelKey, Icon }) => {
                 const label = t(labelKey);
                 const active = revealPanel && panelView === view;
                 return (
@@ -1676,11 +1679,6 @@ export function AppShell() {
           before the root console so a one-click install started from one of
           its tabs opens the console on top of it. */}
       <LazyModelsOverlayHost />
-      {/* The Tabby chat overlay: the header's chat-bubble button, in the same
-          family and after it in DOM order (the most recently opened is on top).
-          Before the root console for the Models overlay's reason: its sign-in
-          card opens a terminal tab in the console, which must land on top. */}
-      <LazyAssistantOverlayHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login

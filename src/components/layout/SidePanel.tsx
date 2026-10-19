@@ -491,6 +491,7 @@ export function SidePanel({
       hidden={hidden}
       footer={versionFooter}
       view={panelView}
+      assistant
       onViewChange={(view: FilesPanelView) => {
         // Both keys: this scope's own view, and the seed the next scope with no
         // entry of its own opens on. Same patch the closed panel's edge rail

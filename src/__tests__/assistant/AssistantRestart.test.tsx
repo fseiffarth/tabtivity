@@ -1,7 +1,7 @@
 /**
  * A Tabby chat's process ends with its CLI (the pane runs the pinned line and
  * no login shell after it, so the tmux session goes too). The window must see
- * that and start the chat again: the overlay's Restart, and the phone opening
+ * that and start the chat again: the Tabby view's Restart, and the phone opening
  * the chat (`startAssistantChat` through `activate?tab=`), respawn the same
  * pane's PTY instead of leaving `[process exited]` up forever.
  */
@@ -44,10 +44,10 @@ vi.mock("../../components/tabs/TabPane", () => ({
 }));
 
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
-import { AssistantOverlayHost } from "../../components/assistant/AssistantOverlay";
+import { AssistantView } from "../../components/assistant/AssistantView";
 import { _resetSyncBaseForTest, useTabsStore, type SavedTabEntry } from "../../stores/tabs";
 import { assistantTabs, ensureAssistantScopeHydrated, startAssistantChat } from "../../stores/assistantScope";
-import { useAssistantOverlayStore } from "../../stores/assistantOverlay";
+import { useAssistantViewStore } from "../../stores/assistantView";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
@@ -105,7 +105,7 @@ beforeEach(async () => {
     fullscreenGroupId: null,
   });
   useOverlayAgentStore.setState({ assistantShownKeys: new Set(), assistantStartedKeys: new Set(), assistantEndedKeys: new Set() });
-  useAssistantOverlayStore.setState({ open: false, selectedKey: null, composing: false });
+  useAssistantViewStore.setState({ selectedKey: null, composing: false });
   useSettingsStore.setState({ settings: { assistant: true } as unknown as Settings });
   await act(async () => {
     await ensureAssistantScopeHydrated();
@@ -135,10 +135,10 @@ describe("a chat whose CLI quit", () => {
     expect(relaunchSeq(key)).toBe(1);
   });
 
-  it("shows the overlay a note with a Restart button that respawns it", async () => {
+  it("shows the Tabby view a note with a Restart button that respawns it", async () => {
     const key = assistantTabs()[0].key;
-    useAssistantOverlayStore.getState().openOverlay(key);
-    render(<AssistantOverlayHost />);
+    useAssistantViewStore.getState().select(key);
+    render(<AssistantView />);
     await waitFor(() => expect(screen.getByTestId(`pane-attach-${key}`)).toBeTruthy());
     expect(screen.queryByText("Restart chat")).toBeNull();
     expect(useOverlayAgentStore.getState().assistantStartedKeys.has(key)).toBe(true);

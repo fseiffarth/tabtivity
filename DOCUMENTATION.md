@@ -1004,8 +1004,8 @@ else on the computer. Design, the two layers and the accepted limits:
   `searxng_url`); the Ollama key lives only in the keychain.
 - **Chats** are agent tabs in the reserved scope `assistant`
   (`<state_dir>/sessions/assistant/`), one empty working folder per chat under
-  `<state_dir>/assistant/work/<uid>`, shown in the header button's overlay
-  through the Reader. The CLIs are Claude, Codex, and OpenCode or Claude Code
+  `<state_dir>/assistant/work/<uid>`, shown in the side panel's Tabby view
+  (its edge-rail icon) through the Reader. The CLIs are Claude, Codex, and OpenCode or Claude Code
   on an Ollama model; the backend builds each argv and pins the tool set to the
   web. A restored chat starts only when it is selected (or opened from the
   phone).

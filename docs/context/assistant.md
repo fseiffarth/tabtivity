@@ -50,7 +50,7 @@ Spawn behaviour, from the security verification: the Codex catalog file is
 built from an allowlist of fields and checked again once written; when a Tabby
 CLI exits, the pane ends rather than falling to a shell (a login shell inside
 the chat would be an unpinned terminal), so a chat whose CLI quit has no
-process and no tmux session until it is started again (the overlay's Restart,
+process and no tmux session until it is started again (the Tabby view's Restart,
 or the phone opening it; see below); the tmux session name of a chat is derived
 by Tabtivity (`assistant::tmux_session_for`), not taken from the request; and
 the web token is listed in the tmux `SECRET_ENV` set so it is never put on a
@@ -198,10 +198,25 @@ fails closed like the rest of `agent_fence`).
 A restored chat does not start its CLI. `CenterPanel` mounts an assistant-scope
 pane (the PTY owner) only for keys in `useOverlayAgentStore.assistantStartedKeys`.
 `assistantScope.startAssistantChat(key)` is the one door: `mountAssistantChat`
-(a chat just made, or the phone opening one) calls it, and the overlay calls it
-for the chat it shows. Opening the overlay starts the newest chat only; an
+(a chat just made, or the phone opening one) calls it, and the Tabby view calls
+it for the chat it shows. Opening the view starts the newest chat only; an
 older one starts when selected; nothing un-starts a chat. Without this, every
-restored chat would spawn its CLI at the first overlay open.
+restored chat would spawn its CLI at the first open.
+
+## On the desktop: a side-panel view
+
+Tabby is one of the side panel's views (`FilesPanelView` `"assistant"`): an
+edge-rail icon after Files/Git/Apps/Agents and a button in the panel's own
+switcher, both only with the flag on. It replaced a header button and a
+floating overlay. Only the side panel's `ProjectFilesView` offers the view
+(`assistant` prop), never a Files (Project) tab or the docked subwindow
+viewer: a chat must be drawn by one attach-only view at a time
+(`assistantShownKeys` is a set). The view mounts only while the panel is open
+on it, so its options poll is visible-only. A jump to a chat (`jumpToTab` on
+the assistant scope) goes through `showAssistant`, which selects it and asks
+the shell (`app:reveal-side-panel` with `detail.view`) to open the panel on
+the view. With no panel target (no project, no root folder) there is no panel
+and so no Tabby on the desktop.
 
 ## The phone
 
@@ -273,6 +288,6 @@ Backend: `services/assistant.rs` (profiles, `launch_line`, `new_chat_record`),
 `services/web_lane.rs`, `commands/assistant.rs` (options, new chat, search
 setup; all `core`, refuse with `assistant_off`), `mobile_control/assistant.rs`.
 Frontend: `src/components/assistant/`, `stores/assistantScope.ts`,
-`stores/assistantOverlay.ts`, `components/layout/AttachedAgentPane.tsx`,
+`stores/assistantView.ts`, `components/layout/AttachedAgentPane.tsx`,
 `lib/assistant.ts`. Phone: `mobile-web/src/scopeKind.ts`,
 `screens/NewChatSheet.tsx`. User docs: `docs/help/assistant.md`.

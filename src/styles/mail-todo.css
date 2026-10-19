@@ -61,7 +61,6 @@
   position: relative;
 }
 .mail-indicator-btn[aria-pressed="true"],
-.assistant-indicator-btn[aria-pressed="true"],
 .todo-indicator-btn[aria-pressed="true"],
 .calendar-indicator-btn[aria-pressed="true"],
 .alerts-toggle-btn[aria-pressed="true"] {
@@ -78,7 +77,6 @@
 .calendar-indicator-btn,
 .todo-indicator-btn,
 .inbox-indicator-btn,
-.assistant-indicator-btn,
 .local-model-btn,
 .help-agent-btn,
 .global-apps-menu-btn:has(> .settings-menu-icon) {
@@ -96,7 +94,6 @@
 .calendar-indicator-icon,
 .todo-indicator-icon,
 .inbox-indicator-icon,
-.assistant-indicator-icon,
 .help-agent-icon,
 .settings-menu-icon {
   width: 20px;
@@ -466,7 +463,6 @@ svg.alerts-toggle-icon {
 .mail-overlay,
 .calendar-overlay,
 .todo-overlay,
-.assistant-overlay,
 .models-overlay,
 .machines-overlay {
   width: min(1680px, calc(100vw - 24px));
@@ -493,7 +489,6 @@ svg.alerts-toggle-icon {
 .mail-overlay-body,
 .calendar-overlay-body,
 .todo-overlay-body,
-.assistant-overlay-body,
 .models-overlay-body,
 .machines-overlay-body {
   position: relative;
@@ -947,30 +942,38 @@ svg.alerts-toggle-icon {
   color: var(--text-secondary);
   white-space: nowrap;
 }
-/* ── The Tabby overlay (assistant/AssistantOverlay) ─────────────────────────
-   The family's frame (size and body rules above); inside it a chat list on the
-   left and the chat — or the new-chat form — on the right. The list's rows wear
-   the overlay head's × (`.subwindow-hide`), the cards the settings design
+/* ── Tabby's side-panel view (assistant/AssistantView) ──────────────────────
+   One of the side panel's views, so it is stacked for the panel's width: New
+   chat and the chat list on top (capped, scrolling past a few chats), the chat
+   — or the new-chat form — filling what is left. The list's rows wear the
+   subwindow head's × (`.subwindow-hide`), the cards the settings design
    system's (`.settings-card`, `.settings-btn`), so only the layout is new. */
-.assistant-overlay-body {
+.assistant-view {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-color);
 }
 .assistant-chat-list {
-  flex: 0 0 260px;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 0;
-  border-right: 1px solid var(--border-color);
+  max-height: 32%;
+  border-bottom: 1px solid var(--border-color);
   background: var(--bg-panel);
 }
 .assistant-chat-list-head {
   flex: 0 0 auto;
-  padding: 8px;
-  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 .assistant-new-chat-btn {
-  width: 100%;
+  flex: 1 1 auto;
 }
 .assistant-chat-rows {
   flex: 1 1 auto;
@@ -1001,7 +1004,7 @@ svg.alerts-toggle-icon {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 8px 6px 8px 10px;
+  padding: 6px 6px 6px 10px;
   border: none;
   background: none;
   color: var(--text-primary);
@@ -1045,9 +1048,8 @@ svg.alerts-toggle-icon {
   flex-direction: column;
   gap: 12px;
   width: 100%;
-  max-width: 560px;
   box-sizing: border-box;
-  padding: 20px;
+  padding: 12px;
 }
 .assistant-new-chat-title {
   font-size: 16px;

@@ -14,11 +14,14 @@ that need no project ("what does this error mean", "find me the paper on X",
 ## Turn it on
 
 1. **Settings → System → Experimental**: switch **Tabby** on.
-2. A chat-bubble button appears in the top bar after the to-do button, and
+2. A chat-bubble icon appears on the side panel's edge bar, below Files, Git,
+   Apps and Agents (and as a button in the panel's own row of views), and
    **Settings → Agents** gets a **Tabby** page.
-3. Click the button to open the chat window. With no chats it shows **New chat**.
+3. Click the icon to open the side panel on Tabby: **New chat** and your chats
+   on top, the chat shown below. With no chats it shows the new-chat form.
+   Click the icon again to close the panel; the chat keeps running.
 
-Switching it off again removes the button and the phone row and stops Tabby's
+Switching it off again removes the icon and the phone row and stops Tabby's
 web access.
 
 ## Choose a CLI and model
@@ -95,7 +98,9 @@ the row. There is no phone chat on Windows (it needs tmux).
 
 ## Troubleshooting
 
-- **No button in the top bar**: the Experimental switch is off.
+- **No Tabby icon on the side panel's edge bar**: the Experimental switch is
+  off. With no project open the side panel (and its bar) is not shown at all;
+  open a project or the root folder first.
 - **A model says it cannot search**: local models need a search service set up.
 - **`not_public` on a page you can open in your browser**: the address is on
   your own network or computer, which Tabby refuses by design. Behind a

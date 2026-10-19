@@ -1,7 +1,7 @@
 /**
- * The Tabby overlay and its header button (S4b, `docs/assistant_plan.md`):
- * hidden with the experimental switch off, polling only while open, the chat
- * list newest first, a chat's CLI started when it is first shown (lazy spawn),
+ * Tabby's side-panel view (S4b, `docs/assistant_plan.md`; the rail icon that
+ * opens it is in `shell/SidePanelEdgeRail.test.tsx`): polling only while
+ * shown, the chat list newest first, a chat's CLI started when it is first shown (lazy spawn),
  * deleting a chat, the new-chat flow with the CLI/model picker, the sign-in and
  * search setup cards.
  */
@@ -69,12 +69,11 @@ vi.mock("../../lib/installCommand", async (orig) => ({
 }));
 
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
-import { AssistantButton } from "../../components/header/AssistantButton";
-import { AssistantOverlayHost } from "../../components/assistant/AssistantOverlay";
+import { AssistantView } from "../../components/assistant/AssistantView";
 import { CenterPanel } from "../../components/layout/CenterPanel";
 import { _resetSyncBaseForTest, useTabsStore, type SavedTabEntry } from "../../stores/tabs";
 import { assistantTabs } from "../../stores/assistantScope";
-import { useAssistantOverlayStore } from "../../stores/assistantOverlay";
+import { useAssistantViewStore } from "../../stores/assistantView";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -138,7 +137,7 @@ function resetStores() {
   useProjectsStore.setState({ projects: [], activeId: "p1", rootDir: "/r" });
   useOverlayAgentStore.setState({ shownKeys: new Set(), assistantShownKeys: new Set(), assistantStartedKeys: new Set() });
   useRootOverlayStore.setState({ open: false, installTabs: {} });
-  useAssistantOverlayStore.setState({ open: false, selectedKey: null, composing: false });
+  useAssistantViewStore.setState({ selectedKey: null, composing: false });
   setFlag(true);
 }
 
@@ -147,11 +146,14 @@ const own = (key: string) => document.querySelector(`[data-testid="pane-own-${ke
 const attached = () => Array.from(document.querySelectorAll('[data-testid^="pane-attach-"]'));
 const rowLabels = () => Array.from(document.querySelectorAll(".assistant-chat-label")).map((n) => n.textContent);
 
-async function openOverlay(chatKey?: string) {
-  await act(async () => {
-    useAssistantOverlayStore.getState().openOverlay(chatKey);
-  });
+/** Show the view (the side panel mounts it only while it is on show),
+ *  on `chatKey` when given. */
+async function show(chatKey?: string) {
+  if (chatKey) useAssistantViewStore.getState().select(chatKey);
+  const view = render(<AssistantView />);
   await act(async () => {});
+  await act(async () => {});
+  return view;
 }
 
 beforeEach(() => {
@@ -167,49 +169,16 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-describe("the header button", () => {
-  it("is absent with the experimental switch off and toggles the overlay with it on", async () => {
-    setFlag(false);
-    const view = render(<AssistantButton />);
-    expect(view.container.querySelector(".assistant-indicator-btn")).toBeNull();
-
-    await act(async () => setFlag(true));
-    const button = screen.getByRole("button", { name: /Tabby/ });
-    expect(button.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(button);
-    expect(useAssistantOverlayStore.getState().open).toBe(true);
-    expect(screen.getByRole("button", { name: /Tabby/ }).getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: /Tabby/ }));
-    expect(useAssistantOverlayStore.getState().open).toBe(false);
-  });
-});
-
-describe("the overlay host", () => {
-  it("renders nothing and reads nothing while closed, or while the switch is off", async () => {
-    render(<AssistantOverlayHost />);
-    await act(async () => {});
-    expect(screen.queryByRole("dialog")).toBeNull();
-    setFlag(false);
-    await openOverlay();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(optionCalls()).toBe(0);
-    expect(calls.filter(([c]) => c === "workspace_snapshot")).toEqual([]);
-  });
-
-  it("reads the options once it is open, and no more after it closes", async () => {
-    render(<AssistantOverlayHost />);
-    await openOverlay();
+describe("the view", () => {
+  it("reads the options once it is shown, and no more after it is gone", async () => {
+    const view = await show();
     await waitFor(() => expect(optionCalls()).toBe(1));
-    await act(async () => {
-      useAssistantOverlayStore.getState().close();
-    });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    view.unmount();
     expect(optionCalls()).toBe(1);
   });
 
   it("lists the chats newest first and shows the newest one", async () => {
-    render(<AssistantOverlayHost />);
-    await openOverlay();
+    await show();
     expect(rowLabels()).toEqual(["Newer chat", "Old chat"]);
     const newest = assistantTabs().find((t) => t.id === "b")!;
     expect(document.querySelector(".assistant-chat-row.active")?.textContent).toContain("Newer chat");
@@ -218,49 +187,32 @@ describe("the overlay host", () => {
     expect(views).toHaveLength(1);
     expect(views[0].getAttribute("data-testid")).toBe(`pane-attach-${newest.key}`);
     expect(views[0].getAttribute("data-reader-always")).toBe("true");
-    // Opening the overlay is not a project switch.
+    // Showing Tabby is not a project switch.
     expect(useProjectsStore.getState().activeId).toBe("p1");
     expect(useTabsStore.getState().scope).toBe("p1");
   });
 
   it("opens on the chat a jump names", async () => {
-    render(<AssistantOverlayHost />);
     await act(async () => {
       const { ensureAssistantScopeHydrated } = await import("../../stores/assistantScope");
       await ensureAssistantScopeHydrated();
     });
     const old = assistantTabs().find((t) => t.id === "a")!;
-    await openOverlay(old.key);
+    await show(old.key);
     expect(document.querySelector(".assistant-chat-row.active")?.textContent).toContain("Old chat");
     expect(attached()[0].getAttribute("data-testid")).toBe(`pane-attach-${old.key}`);
   });
 
-  it("closes on Escape and on a backdrop press, not on a press inside", async () => {
-    render(<AssistantOverlayHost />);
-    await openOverlay();
-    fireEvent.mouseDown(screen.getByRole("dialog"));
-    expect(useAssistantOverlayStore.getState().open).toBe(true);
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(useAssistantOverlayStore.getState().open).toBe(false);
-    await openOverlay();
-    fireEvent.mouseDown(document.querySelector(".app-overlay-backdrop")!);
-    expect(useAssistantOverlayStore.getState().open).toBe(false);
-  });
 });
 
 describe("lazy spawn", () => {
   it("starts a restored chat's CLI only when it is first shown", async () => {
-    render(
-      <>
-        <CenterPanel />
-        <AssistantOverlayHost />
-      </>,
-    );
+    render(<CenterPanel />);
     await act(async () => {});
-    // The overlay has not been opened: nothing hydrated, nothing spawned.
+    // Tabby has not been shown: nothing hydrated, nothing spawned.
     expect(ASSISTANT_SCOPE in useTabsStore.getState().tabsByScope).toBe(false);
 
-    await openOverlay();
+    await show();
     const [oldChat, newest] = [assistantTabs().find((t) => t.id === "a")!, assistantTabs().find((t) => t.id === "b")!];
     // Two chats were restored; only the one shown owns a pane (= a PTY).
     expect(assistantTabs()).toHaveLength(2);
@@ -277,8 +229,7 @@ describe("lazy spawn", () => {
 
 describe("deleting a chat", () => {
   it("removes the tab from the scope and falls back to the next chat", async () => {
-    render(<AssistantOverlayHost />);
-    await openOverlay();
+    await show();
     const newest = assistantTabs().find((t) => t.id === "b")!;
     const row = document.querySelector(".assistant-chat-row.active") as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: "Delete this chat" }));
@@ -292,8 +243,7 @@ describe("deleting a chat", () => {
 
 describe("a new chat", () => {
   async function openForm() {
-    render(<AssistantOverlayHost />);
-    await openOverlay();
+    await show();
     fireEvent.click(screen.getByRole("button", { name: /\+ New chat/ }));
     await act(async () => {});
   }
@@ -375,8 +325,7 @@ describe("a new chat", () => {
 
 describe("a restored chat whose CLI is signed out", () => {
   it("shows the sign-in card above the chat", async () => {
-    render(<AssistantOverlayHost />);
-    await openOverlay();
+    await show();
     // The newest chat ("b") is a Codex chat, and Codex is signed out.
     await waitFor(() => expect(screen.getByRole("button", { name: "Sign in to Codex" })).toBeTruthy());
     expect(attached()).toHaveLength(1);

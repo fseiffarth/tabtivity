@@ -9985,7 +9985,7 @@ export const dict: Dict = {
   "gitMergeView.resolving": "Risoluzione…",
   // The Tabby overlay and its settings (S4b).
   "assistant.button": "Apri {assistant}, l'assistente di chat",
-  "assistant.overlayTitle": "{assistant}",
+  "assistant.title": "{assistant}",
   "assistant.chats": "Chat",
   "assistant.newChat": "Nuova chat",
   "assistant.noChats": "Ancora nessuna chat.",

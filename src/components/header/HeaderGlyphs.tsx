@@ -64,9 +64,8 @@ export function TodoGlyph({ className }: { className: string }) {
   );
 }
 
-/** A speech bubble with a spark — the chat assistant — for its header button
- *  (`header/AssistantButton`) and its overlay's bar (`assistant/AssistantOverlay`).
- *  On the shared 16-unit grid, y=2..14. */
+/** A speech bubble with a spark — the chat assistant — for the phone's Tabby
+ *  row (`mobile-web` `screens/Home`). On the shared 16-unit grid, y=2..14. */
 export function AssistantGlyph({ className }: { className: string }) {
   return (
     <Glyph className={className}>

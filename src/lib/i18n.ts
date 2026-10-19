@@ -10114,7 +10114,7 @@ export const enSource = {
   "odt.errNoBody": "no document body found",
   // The Tabby overlay and its settings (S4b).
   "assistant.button": "Open {assistant}, the chat assistant",
-  "assistant.overlayTitle": "{assistant}",
+  "assistant.title": "{assistant}",
   "assistant.chats": "Chats",
   "assistant.newChat": "New chat",
   "assistant.noChats": "No chats yet.",

@@ -1203,7 +1203,7 @@ function CenterPanelImpl() {
         {allTabs.map(({ tab, scopeKey }) => {
           // The Tabby scope is never the panel's scope (it is no project and
           // opening Tabby never switches): its chats are mounted here only to
-          // own their PTYs, and the assistant overlay draws them attach-only.
+          // own their PTYs, and the side panel's Tabby view draws them attach-only.
           const isCurrentScope = scopeKey === scope && scopeKey !== ASSISTANT_SCOPE;
           const groupId = isCurrentScope ? groupOfKey.get(tab.key) : undefined;
           // While a group is fullscreen, only that group's active pane shows.

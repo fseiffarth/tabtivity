@@ -5,7 +5,6 @@ import { StatusCluster } from "../header/StatusCluster";
 import { MailIndicator } from "../header/MailIndicator";
 import { CalendarIndicator } from "../header/CalendarIndicator";
 import { TodoIndicator } from "../header/TodoIndicator";
-import { AssistantButton } from "../header/AssistantButton";
 import { InboxIndicator } from "../header/InboxIndicator";
 import { SettingsMenu } from "../header/SettingsMenu";
 import { HelpAgentButton } from "../header/HelpAgentButton";
@@ -75,7 +74,6 @@ export function HeaderBar() {
         <MailIndicator />
         <CalendarIndicator />
         <TodoIndicator />
-        <AssistantButton />
         <InboxIndicator />
         <span className="header-right-gap" aria-hidden="true" />
         <LocalModelMenu />

@@ -698,3 +698,14 @@ export function PlayMark() {
     </svg>
   );
 }
+
+/** Tabby, the chat assistant: a rounded speech bubble with a spark, rounder
+ *  than the Agents rail bubble so the two read apart. */
+export function AssistantIcon(props: IconProps) {
+  return (
+    <Frame {...props}>
+      <path d="M6 4.5h12a2.5 2.5 0 012.5 2.5v7.5a2.5 2.5 0 01-2.5 2.5h-6l-4.5 3.5v-3.5H6a2.5 2.5 0 01-2.5-2.5V7A2.5 2.5 0 016 4.5z" />
+      <path d="M12 7.5v5.5M9.25 10.25h5.5" />
+    </Frame>
+  );
+}

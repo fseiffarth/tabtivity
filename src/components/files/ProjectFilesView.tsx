@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -85,7 +85,7 @@ import { useExperimental } from "../../lib/experimental";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, AssistantIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -270,6 +270,11 @@ export function mtimeDivergenceCue(
 
 type View = FilesPanelView;
 
+// Tabby's view is its own chunk, loaded the first time it is opened.
+const AssistantView = lazy(() =>
+  import("../assistant/AssistantView").then((m) => ({ default: m.AssistantView })),
+);
+
 // A single shared empty array for scopes with no registered tabs. Must be a
 // stable reference — a Zustand selector that returned a fresh `[]` here would
 // make `useSyncExternalStore` see a new snapshot every render and loop forever.
@@ -355,6 +360,12 @@ export interface ProjectFilesViewProps {
    *  each of those is opened for a folder, not resumed. */
   view?: View;
   onViewChange?: (view: View) => void;
+
+  /** Offer the Tabby view (`assistant/AssistantView`). Set by the side panel
+   *  only: Tabby is not a project's, and a chat is drawn by one attach-only
+   *  view at a time (`assistantShownKeys` is a set, not a count), so a Files
+   *  tab beside the panel must not draw a second one. */
+  assistant?: boolean;
 }
 
 export function ProjectFilesView({
@@ -379,6 +390,7 @@ export function ProjectFilesView({
   compact,
   view: hostView,
   onViewChange,
+  assistant,
 }: ProjectFilesViewProps) {
   const t = useT();
   // Sessions/Jobs/workspaces ask their questions in the panel's own chrome, the
@@ -398,6 +410,7 @@ export function ProjectFilesView({
   const remarksEnabled = useExperimental("project_remarks");
   // The checkout's todo groups; only a dev build has a checkout to read.
   const devTodo = useDevTodoAvailable();
+  const assistantEnabled = useExperimental("assistant");
   // A box scope shows a multi-root file view (the box folder + every member
   // project's root) instead of one project tree; the pane renders it. Read here
   // rather than beside the tree because the view switcher below gates half its
@@ -443,6 +456,8 @@ export function ProjectFilesView({
         return !activeBox && remarksEnabled && !!projectId;
       case "todo":
         return !activeBox && devTodo;
+      case "assistant":
+        return !!assistant && assistantEnabled;
       default:
         return true;
     }
@@ -1816,6 +1831,20 @@ export function ProjectFilesView({
             <CheckIcon />
           </button>
         )}
+        {/* Tabby: the same view the edge rail's Tabby icon opens. Not tied to
+            the project, so a box scope offers it too. */}
+        {assistant && assistantEnabled && (
+          <button
+            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "assistant" ? " active" : ""}`}
+            style={{ marginLeft: 2 }}
+            aria-pressed={view === "assistant"}
+            onClick={() => setView(view === "assistant" ? "files" : "assistant")}
+            title={t("assistant.title")}
+            aria-label={t("assistant.title")}
+          >
+            <AssistantIcon />
+          </button>
+        )}
         {/* The tree's search + refresh, hoisted out of the tree itself. Files
             view only: both act on the tree, and the tree is only mounted there
             (a ↻ in the Git view would bump a counter nothing is listening to).
@@ -2784,6 +2813,14 @@ export function ProjectFilesView({
       )}
 
       {view === "todo" && <DevTodoView active={active} />}
+
+      {/* Only while shown: the view polls the CLI options and its chat counts
+          as on screen (a closed panel stays mounted). */}
+      {view === "assistant" && active && (
+        <Suspense fallback={null}>
+          <AssistantView />
+        </Suspense>
+      )}
 
       {view === "agents" && <AgentSchedulesView scope={scope} active={active} />}
 

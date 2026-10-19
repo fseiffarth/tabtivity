@@ -134,6 +134,7 @@ vi.mock("../../hooks/useKeyboard", () => ({
 }));
 
 import { AppShell } from "../../components/layout/AppShell";
+import { showAssistant, useAssistantViewStore } from "../../stores/assistantView";
 
 async function mount() {
   await act(async () => {
@@ -226,6 +227,32 @@ describe("side panel rail — docked (default)", () => {
     await click("Show the Files panel");
     await click("hide-panel");
     expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("offers no Tabby tab with the experimental switch off", async () => {
+    await mount();
+    expect(screen.queryByTitle("Show the Tabby panel")).toBeNull();
+  });
+
+  it("with the switch on, Tabby's tab opens the panel on its view", async () => {
+    reset({ assistant: true, experimental_explicit: true });
+    await mount();
+    await click("Show the Tabby panel");
+    expect(shared.updateSettings).toHaveBeenCalledWith({
+      side_panel_view: "assistant",
+      side_panel_view_by_project: { other: "git", "proj-1": "assistant" },
+    });
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
+    expect(screen.getByTitle("Show the Tabby panel").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a jump to a Tabby chat opens the panel on Tabby's view", async () => {
+    reset({ assistant: true, experimental_explicit: true });
+    await mount();
+    await act(async () => showAssistant("saved-chat"));
+    expect(useAssistantViewStore.getState().selectedKey).toBe("saved-chat");
+    expect(shared.store.settings.side_panel_view).toBe("assistant");
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
   });
 
   it("grows the gutter to panel + rail when open and never overlays", async () => {
