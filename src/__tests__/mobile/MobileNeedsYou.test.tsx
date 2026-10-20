@@ -49,7 +49,7 @@ describe("Mobile home — Needs you", () => {
       tab("busy", "working"),
       tab("asking", "question", { working_at: 1_000 }),
     ], [alert("Ship it")]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha · asking");
     const rows = within(group()).getAllByRole("button").map((row) => row.textContent ?? "");
     expect(rows[0]).toContain("Alpha · asking");
@@ -64,20 +64,20 @@ describe("Mobile home — Needs you", () => {
   it("lets a finished tab go once opened, and takes it back after its next turn", async () => {
     serve([tab("done-1", "done", { done_at: 2_000 })]);
     const opened: string[] = [];
-    const view = render(<Home open={noop} openTab={(_project, row) => opened.push(row.id)} todo={noop} mail={noop} />);
+    const view = render(<Home tabby={() => {}} open={noop} openTab={(_project, row) => opened.push(row.id)} todo={noop} mail={noop} />);
     fireEvent.click(await screen.findByText("Alpha · done-1"));
     expect(opened).toEqual(["done-1"]);
     await waitFor(() => expect(screen.queryByText("Alpha · done-1")).toBeNull());
     view.unmount();
 
     serve([tab("done-1", "done", { done_at: 3_000 })]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(await screen.findByText("Alpha · done-1")).toBeTruthy();
   });
 
   it("shows three rows, then the rest in place", async () => {
     serve([1, 2, 3, 4, 5].map((n) => tab(`ask-${n}`, "question", { working_at: n })));
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha · ask-5");
     expect(within(group()).getAllByText(/^Alpha · ask-/)).toHaveLength(3);
     fireEvent.click(within(group()).getByRole("button", { name: "Show all 5" }));
@@ -87,7 +87,7 @@ describe("Mobile home — Needs you", () => {
   it("draws nothing when nothing waits, and nothing in the Search view", async () => {
     markDoneSeen("done-1", 2_000);
     serve([tab("done-1", "done", { done_at: 2_000 })]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/v1/activity"))).toBe(true));
     expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
@@ -100,7 +100,7 @@ describe("Mobile home — Needs you", () => {
 
   it("counts the projects' asking tabs on the Agents switch without renaming it", async () => {
     serve([]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     expect(screen.getByRole("button", { name: "Agents" }).textContent).toBe("Agents2");
   });

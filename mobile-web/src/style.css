@@ -53,12 +53,14 @@ nav button,.keys button { flex:1; }
 .project-header .terminal-title small { display:block; color:var(--ink-muted); font-size:var(--fs-caption); }
 /* The name is the order's dropdown: it reads as the title, with the Focus
    switch's caret; the menu is Focus's own, pinned under the name instead. */
-.project-header .project-title { display:inline-flex; align-items:center; max-width:100%; min-width:0; padding:0; border:0; background:transparent; font:inherit; color:inherit; text-align:left; }
+.project-header .project-title,.terminal-title .project-title { display:inline-flex; align-items:center; max-width:100%; min-width:0; padding:0; border:0; background:transparent; font:inherit; color:inherit; text-align:left; }
 .project-title > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .project-title > .view-caret { flex:0 0 auto; }
 .project-menu { right:auto; left:44px; }
-.drawer-open { flex:0 0 auto; display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
-.drawer-open svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
+/* Tabby's opening screen (`TabbyOpen`): the wait, or what stands in the way. */
+.tabby-open-body { display:grid; gap:var(--sp-3); }
+.drawer-open,.tabby-relaunch { flex:0 0 auto; display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
+.drawer-open svg,.tabby-relaunch svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
 /* The drawer's own rows (the agent's files, Git), above the file
    browser and set off from it by the head's rule. */
 .drawer-menu { padding:4px 0 10px; border-bottom:1px solid #2b3040; }
@@ -500,6 +502,9 @@ button.mobile-alert-row { cursor:pointer; }
    (z-index 8) and under the editor backdrop (10), on the same `--screen-measure`
    as `.screen` so it keeps the board's right edge on a wide window. */
 .todo-fab,.fab { position:fixed; z-index:9; right:max(18px,calc((100vw - var(--screen-measure)) / 2 + 18px)); bottom:calc(86px + max(24px,env(safe-area-inset-bottom))); }
+/* The round FABs (＋ New tab, Home's Tabby) sit just clear of the tab bar
+   (≈73px tall above the safe area), not a thumb's width above it. */
+.fab { bottom:calc(80px + max(6px,env(safe-area-inset-bottom))); }
 .todo-fab { width:58px; height:58px; padding:0; border-radius:50%; font-size:1.9rem; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
 /* ＋ New tab and Home's Tabby chat: the to-do FAB's place, a circle, icon only
    (its name is the aria-label). Face and shadow are round layers, the shadow a

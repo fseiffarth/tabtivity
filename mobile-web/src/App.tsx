@@ -21,6 +21,7 @@ import { LockedHomeShell } from "./screens/LockedHomeShell";
 import { Home } from "./screens/Home";
 import { Project } from "./screens/Project";
 import { Terminal } from "./screens/Terminal";
+import { TabbyOpen } from "./screens/TabbyOpen";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
@@ -250,6 +251,9 @@ export function App() {
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
+  /** Home's Tabby FAB was tapped: the assistant scope's id while its one chat
+   * comes up (`TabbyOpen`), which then hands over to the Focus chat. */
+  const [tabby, setTabby] = useState<string | null>(null);
   /** The server's identity key is not the pinned one: ask for the recovery
    * code (`SecretsRepinSheet`). Once per sign-in; Later closes it. */
   const [secretsUntrusted, setSecretsUntrusted] = useState(false);
@@ -281,6 +285,7 @@ export function App() {
     setTab("projects");
     setProjectView({ kind: "home" });
     setTerminal(null);
+    setTabby(null);
     setTodoCard(undefined);
   }, []);
   /** Stand where `place` says, from the section's root. */
@@ -542,9 +547,10 @@ export function App() {
   // Projects, a project to the list. At the list Back leaves the app.
   useBackLayer(() => {
     if (terminal) setTerminal(null);
+    else if (tabby) setTabby(null);
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
     else setProjectView({ kind: "home" });
-  }, auth === "paired" && (terminal !== null || tab !== "projects" || projectView.kind === "project"));
+  }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
   const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
@@ -609,6 +615,12 @@ export function App() {
     openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
     back={() => setTerminal(null)}
   /></BackNest>;
+  if (tabby) return <BackNest><TabbyOpen
+    key={tabby}
+    id={tabby}
+    ready={(row) => { setTabby(null); openTerminal(tabby, row); }}
+    back={() => setTabby(null)}
+  /></BackNest>;
   return <div className="tabbed"><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
@@ -622,6 +634,7 @@ export function App() {
               // list → tab → back to the list, not a detour through the
               // project the tab happens to live in.
               openTab={(projectId, row) => openTerminal(projectId, row)}
+              tabby={setTabby}
               todo={openTodo}
               mail={() => setTab("mail")}
             />}

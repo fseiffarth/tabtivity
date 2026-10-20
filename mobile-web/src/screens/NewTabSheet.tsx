@@ -14,8 +14,6 @@ export interface NewTabLaunch {
   sign_in?: "default" | "alternate";
   /** A local-model agent: the opaque id `launch-options` listed. */
   local?: string;
-  /** A chat of the assistant scope: the opaque launch id its sheet listed. */
-  assistant?: string;
 }
 
 /**

@@ -38,7 +38,7 @@ describe("Mobile home — project list states", () => {
     fetchMock.mockImplementation((input: string | URL | Request) => String(input).startsWith("/api/v1/alerts")
       ? Promise.resolve(new Response(JSON.stringify({ alerts: { enabled: false, items: [] } }), { status: 200 }))
       : new Promise<Response>((resolve) => { release = resolve; }));
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(screen.getByRole("status").textContent).toContain("Loading projects");
     // The list request is issued from a timer, so wait for it to be in flight.
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/api/v1/projects"))).toBe(true));
@@ -52,7 +52,7 @@ describe("Mobile home — project list states", () => {
       { id: "p1", label: "Alpha", status: "active", live_sessions: 1 },
       { id: "b1", label: "Paper", status: "active", kind: "box", live_sessions: 0 },
     ]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Paper");
     expect(screen.getByText("Alpha").parentElement?.textContent).toContain("active");
     expect(screen.getByText("Paper").parentElement?.textContent).toContain("box");
@@ -63,7 +63,7 @@ describe("Mobile home — project list states", () => {
       { id: "p1", label: "Alpha", status: "active", live_sessions: 5, agents: { working: 2, question: 1, done: 0 } },
       { id: "p2", label: "Beta", status: "active", live_sessions: 1 },
     ]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     expect(screen.getByRole("img", { name: "Working: 2" }).textContent).toContain("2");
     expect(screen.getByRole("img", { name: "Waiting on a decision: 1" })).toBeTruthy();
@@ -76,13 +76,13 @@ describe("Mobile home — project list states", () => {
 
   it("explains an empty active list and points at search", async () => {
     answer([]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect((await screen.findByText(/No project is active right now/)).textContent).toContain("Search");
   });
 
   it("distinguishes an empty search from one not yet typed", async () => {
     answer([]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText(/No project is active right now/);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByText(/Type a project's name/)).toBeTruthy();
@@ -93,7 +93,7 @@ describe("Mobile home — project list states", () => {
   it("sets the voice language from the start page, in any of its views", async () => {
     Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-GB" });
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     // The phone's own settings sit behind the header's gear, not on the page.
     expect(screen.queryByRole("button", { name: /Voice language/ })).toBeNull();
@@ -119,7 +119,7 @@ describe("Mobile home — project list states", () => {
 
   it("shows no git state on a project row, even when the desktop has one", async () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1, git: "unpushed" }]);
-    const { container } = render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    const { container } = render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     expect(screen.queryByText("not pushed")).toBeNull();
     expect(container.querySelector(".git-mark")).toBeNull();
@@ -127,7 +127,7 @@ describe("Mobile home — project list states", () => {
 
   it("loads the list again on its own once the page is shown after a failed load", async () => {
     fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText(/Can't reach your desktop/);
     const failed = fetchMock.mock.calls.length;
     // The host is back; the reader brings the app to the front.
@@ -140,7 +140,7 @@ describe("Mobile home — project list states", () => {
 
   it("keeps the last list, and no empty-state copy, when the host drops", async () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
     fireEvent.click(screen.getByRole("button", { name: "Search" }));

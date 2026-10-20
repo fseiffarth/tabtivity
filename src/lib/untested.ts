@@ -433,7 +433,7 @@ export const UNTESTED = {
 
   // --- mobile — The phone PWA ---------------------------------------
   "settings.assistantPhone": { area: "mobile", what: "MobileSettings · the assistant from the phone switch (default on, shown with the experimental switch; the backend gates the phone's assistant scope on it)" },
-  "mobile.assistant": { area: "mobile", what: "Phone · Home row for the assistant, chat list, New chat sheet, Focus chat; the Mobile switch for it (on by default); works with no desktop window open" },
+  "mobile.assistant": { area: "mobile", what: "Phone · Tabby is one chat, no Home row: the FAB opens the last chat (started again if it has no process) or a new one on the desktop's default CLI; the Focus chat's head is a CLI dropdown (a pick starts a fresh chat on it and closes the others; a signed-out CLI is dimmed with why) and Relaunch (a fresh session on the same CLI); a landing on the old chat list returns Home; the Mobile switch for it (on by default); works with no desktop window open" },
   "mobile.sheet.color": { area: "mobile", what: "Color sheet · tab colour picker" },
   "mobile.sheet.rename": { area: "mobile", what: "Rename sheet · tab label change" },
   "mobile.home.newProject": { area: "mobile", what: "Projects ＋ · New project by name, in the projects folder, open to this phone only" },
@@ -692,7 +692,7 @@ export const UNTESTED = {
   "mobile.project.cardMenu": { area: "mobile", what: "Project · A tab card's ⋯ opens a sheet with Rename, Colour…, Scheduled prompts, Subagents and Close tab; the colour dot and the tap-the-name rename are gone, and ◷ shows only on a tab that has schedules" },
   "mobile.project.fab": { area: "mobile", what: "Project · a round ＋ button (new tab) floats above the tab bar (the header's ＋ is gone); \"Send a file\" on a host without tmux; the last card scrolls clear of it; a circle now, not an octagon" },
   "mobile.project.fabQuick": { area: "mobile", what: "Project · a tap on the round ＋ opens a new tab of the default agent at once (the one starred ★ in the ＋ sheet on this phone, else the desktop's default agent); a hold (or right-click) opens the ＋ sheet, where each agent tile's ★ makes it this phone's default; the assistant scope, a host without tmux and a desktop with no agents still open the sheet on a tap" },
-  "mobile.home.assistantFab": { area: "mobile", what: "Home · a round chat-bubble button floats above the tab bar while the assistant's Mobile switch is on and opens Tabby's chat list in one tap; gone with the switch off; the Desktop section scrolls clear of it" },
+  "mobile.home.assistantFab": { area: "mobile", what: "Home · a round button with the desktop's Tabby (cat) icon floats just above the tab bar while the assistant's Mobile switch is on and opens Tabby's chat in one tap; gone with the switch off; the project screen's ＋ sits as low; the Desktop section scrolls clear of it" },
   "mobile.project.hintDismiss": { area: "mobile", what: "Project · The drag and swipe hints sit in one muted line under the cards; its × hides them for good, and each also goes once its gesture has been used" },
   "mobile.setupTitle": { area: "mobile", what: "MobileSetupGuide · Set up Tabtivity Mobile" },
   "mobile.speech.language": { area: "mobile", what: "Terminal · Reader voice-language picker", tested: "2026-09-23" },

@@ -82,7 +82,7 @@ describe("Mobile home — arranging projects by hand", () => {
     .map((node) => node.querySelector("strong")?.textContent);
 
   const noop = () => {};
-  const home = () => render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+  const home = () => render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
 
   beforeEach(() => {
     localStorage.clear();
@@ -120,7 +120,7 @@ describe("Mobile home — arranging projects by hand", () => {
 
   it("still opens the project the row is for", async () => {
     const opened: string[] = [];
-    render(<Home open={(id) => opened.push(id)} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={(id) => opened.push(id)} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     fireEvent.click(screen.getByText("Alpha"));
     expect(opened).toEqual(["p1"]);

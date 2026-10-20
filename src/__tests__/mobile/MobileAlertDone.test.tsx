@@ -66,7 +66,7 @@ describe("Mobile alerts — the desktop's Done button", () => {
       { enabled: true, items: [row()] },
       { enabled: true, items: [row({ title: "Next thing", alert_id: "opaque-row-2" })] },
     );
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     fireEvent.click(await screen.findByLabelText("Mark this to-do done"));
     await waitFor(() => expect(posts.length).toBe(1));
     expect(posts[0]).toEqual({ path: "/api/v1/alerts", body: { alert_id: "opaque-row" } });
@@ -84,14 +84,14 @@ describe("Mobile alerts — the desktop's Done button", () => {
         row({ kind: "event", title: "Stand-up", alert_id: "row-event" }),
       ],
     });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(await screen.findByLabelText("Return this mail to normal")).toBeTruthy();
     expect(screen.getByLabelText("Remove this appointment from alerts")).toBeTruthy();
   });
 
   it("says the desktop refused instead of quietly dropping the row", async () => {
     serve({ enabled: true, items: [row()] });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     fireEvent.click(await screen.findByLabelText("Mark this to-do done"));
     expect((await screen.findByRole("alert")).textContent).toContain("could not be completed");
     // The row it failed on is still there to try again.
@@ -100,7 +100,7 @@ describe("Mobile alerts — the desktop's Done button", () => {
 
   it("gives no ✓ to a row the desktop minted no handle for", async () => {
     serve({ enabled: true, items: [row({ alert_id: undefined })] });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(await screen.findByText("Ship mobile alerts")).toBeTruthy();
     expect(screen.queryByLabelText("Mark this to-do done")).toBeNull();
   });

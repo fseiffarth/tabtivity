@@ -1,8 +1,10 @@
 /**
- * The chat assistant on the phone (`docs/assistant_plan.md`, S5b): its row on
- * the home list, the chat list behind it, the New chat sheet fed by the host's
- * opaque launch ids, and the Focus chat with every folder-shaped affordance
- * (files, outbox, inbox uploads, Commit, Mark up, schedules) left out.
+ * The chat assistant on the phone: one chat, opened from Home's FAB (no row on
+ * the list) — the last chat, started again when it has no process, or a new
+ * one on the desktop's default launch (`TabbyOpen`) — and the Focus chat, whose
+ * head switches the CLI or relaunches it by the host's opaque launch ids, with
+ * every folder-shaped affordance (files, outbox, inbox uploads, Commit, Mark
+ * up, schedules) left out.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,8 +43,8 @@ class FakeWebSocket {
 import { Home } from "../../../mobile-web/src/screens/Home";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { TabbyOpen } from "../../../mobile-web/src/screens/TabbyOpen";
 import { rememberScopeKind } from "../../../mobile-web/src/scopeKind";
-import { scopeCaption } from "../../../mobile-web/src/projectOrder";
 import { storageKey } from "../../lib/brand";
 
 const fetchMock = vi.fn();
@@ -83,34 +85,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Mobile assistant — the home row", () => {
-  it("is a row of its own kind, captioned as the chat assistant", async () => {
-    expect(scopeCaption({ kind: "assistant", status: "active" })).toMatch(/^✦ /);
-    fetchMock.mockImplementation((url: string) => json(String(url).includes("alerts") ? { alerts: { enabled: false, items: [] } } : { projects: [
-      { id: "scope", label: "Tabby", status: "active", kind: "assistant", live_sessions: 2 },
-      { id: "p", label: "Alpha", status: "active", live_sessions: 1 },
-    ] }));
-    const open = vi.fn();
-    render(<Home open={open} openTab={() => {}} todo={() => {}} mail={() => {}} />);
-    const row = (await screen.findByText("Tabby")).closest("button") as HTMLElement;
-    expect(within(row).getByText(/chat assistant/)).toBeTruthy();
-    fireEvent.click(row);
-    expect(open).toHaveBeenCalledWith("scope");
+const posts = () => fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST");
+const deletes = () => fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "DELETE").map(([url]) => String(url));
+
+describe("Mobile assistant — Home", () => {
+  const list = (listed: () => boolean) => fetchMock.mockImplementation((url: string) => json(String(url).includes("alerts") ? { alerts: { enabled: false, items: [] } } : { projects: [
+    ...(listed() ? [{ id: "scope", label: "Tabby", status: "active", kind: "assistant", live_sessions: 2 }] : []),
+    { id: "p", label: "Alpha", status: "active", live_sessions: 1 },
+  ] }));
+
+  it("lists no row for the assistant", async () => {
+    list(() => true);
+    const { container } = render(<Home open={() => {}} openTab={() => {}} tabby={() => {}} todo={() => {}} mail={() => {}} />);
+    await screen.findByText("Alpha");
+    expect([...container.querySelectorAll(".home-project-card strong")].map((node) => node.textContent)).toEqual(["Alpha"]);
   });
 
-  it("floats a chat button that opens the assistant in one tap, and only while it is listed", async () => {
+  it("floats Tabby's button, with the desktop's Tabby icon, that opens its chat in one tap, only while it is listed", async () => {
     let listed = true;
-    fetchMock.mockImplementation((url: string) => json(String(url).includes("alerts") ? { alerts: { enabled: false, items: [] } } : { projects: [
-      ...(listed ? [{ id: "scope", label: "Tabby", status: "active", kind: "assistant", live_sessions: 2 }] : []),
-      { id: "p", label: "Alpha", status: "active", live_sessions: 1 },
-    ] }));
+    list(() => listed);
     const open = vi.fn();
-    const { container } = render(<Home open={open} openTab={() => {}} todo={() => {}} mail={() => {}} />);
+    const tabby = vi.fn();
+    const { container } = render(<Home open={open} openTab={() => {}} tabby={tabby} todo={() => {}} mail={() => {}} />);
     const fab = await screen.findByRole("button", { name: /Open Tabby/ });
     expect(fab.classList.contains("fab-round")).toBe(true);
+    expect(fab.querySelector("svg.app-icon")).toBeTruthy();
     expect(container.querySelector(".home-screen.has-fab")).toBeTruthy();
     fireEvent.click(fab);
-    expect(open).toHaveBeenCalledWith("scope");
+    expect(tabby).toHaveBeenCalledWith("scope");
+    expect(open).not.toHaveBeenCalled();
     // A search that misses the row keeps the button: it answers a query, not
     // whether the assistant is on.
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
@@ -125,50 +128,38 @@ describe("Mobile assistant — the home row", () => {
   });
 });
 
-describe("Mobile assistant — the chat list", () => {
-  const serve = (tabs: unknown[]) => fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-    const path = String(url);
-    if (path.endsWith("/launch-options")) return json(OPTIONS);
-    if (init?.method === "POST") return json({ tab: chat("new", "Claude") });
-    return json({ ...SCOPE, tabs });
+describe("Mobile assistant — opening the chat", () => {
+  it("opens the last chat when it is running, starting nothing", async () => {
+    fetchMock.mockImplementation(() => json({ ...SCOPE, tabs: [chat("old", "first"), chat("new", "second")] }));
+    const ready = vi.fn();
+    render(<TabbyOpen id="scope" ready={ready} back={() => {}} />);
+    await waitFor(() => expect(ready).toHaveBeenCalledWith(expect.objectContaining({ id: "new" })));
+    expect(posts()).toEqual([]);
   });
 
-  it("lists the newest chat first, with no schedule, prompts, outbox or file route", async () => {
-    serve([chat("old", "first chat"), chat("mid", "second chat"), chat("new", "third chat")]);
-    const { container } = render(<Project id="scope" back={() => {}} terminal={() => {}} />);
-    await screen.findByText("third chat");
-    expect([...container.querySelectorAll(".tab-card strong")].map((node) => node.textContent)).toEqual(["third chat", "second chat", "first chat"]);
-    expect(container.querySelector(".tab-card-schedule")).toBeNull();
-    expect(container.querySelector(".tab-card-grip")).toBeNull();
-    expect(container.querySelector(".drawer-open")).toBeNull();
-    expect(screen.queryByText(/Collected prompts/)).toBeNull();
-    expect(urls().filter((url) => /outbox|files|git|prompts|schedules/.test(url))).toEqual([]);
-    // The header's ＋ is the New chat button; a close ✕ stays on each card.
-    expect(screen.getByLabelText("New chat")).toBeTruthy();
-    expect(container.querySelectorAll(".tab-card-close")).toHaveLength(3);
+  it("starts the last chat when it has no process, then opens it once its session is live", async () => {
+    let live = false;
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") { live = true; return json({ status: "activated" }); }
+      return json({ ...SCOPE, tabs: [chat("c1", "old chat", { available: live })] });
+    });
+    const ready = vi.fn();
+    render(<TabbyOpen id="scope" ready={ready} back={() => {}} />);
+    await waitFor(() => expect(ready).toHaveBeenCalledWith(expect.objectContaining({ id: "c1", available: true })), { timeout: 4000 });
+    expect(String(posts()[0]?.[0])).toBe("/api/v1/projects/scope/activate?tab=c1");
   });
 
-  it("says so when there are no chats", async () => {
-    serve([]);
-    render(<Project id="scope" back={() => {}} terminal={() => {}} />);
-    expect(await screen.findByText(/No chats yet/)).toBeTruthy();
-  });
-
-  it("starts a chat from an opaque launch id, alone in the request, and opens it", async () => {
-    serve([]);
-    const terminal = vi.fn();
-    render(<Project id="scope" back={() => {}} terminal={terminal} />);
-    await screen.findByText(/No chats yet/);
-    fireEvent.click(screen.getByLabelText("New chat"));
-    const dialog = await screen.findByRole("dialog");
-    // The local model is listed under its own group, named by the model.
-    await within(dialog).findByText("qwen3:8b");
-    // A CLI that is not signed in on the desktop is dimmed and says why.
-    expect((within(dialog).getByText("Codex") as HTMLButtonElement).disabled).toBe(true);
-    expect(within(dialog).getByText(/Codex is not signed in/)).toBeTruthy();
-    fireEvent.click(within(dialog).getByText("Claude"));
-    await waitFor(() => expect(terminal).toHaveBeenCalled());
-    const post = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "POST");
+  it("with no chat, starts one on the default launch by its opaque id, alone in the request", async () => {
+    let made = false;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/launch-options")) return json(OPTIONS);
+      if (init?.method === "POST") { made = true; return json({ tab: chat("new", "Claude") }); }
+      return json({ ...SCOPE, tabs: made ? [chat("new", "Claude")] : [] });
+    });
+    const ready = vi.fn();
+    render(<TabbyOpen id="scope" ready={ready} back={() => {}} />);
+    await waitFor(() => expect(ready).toHaveBeenCalledWith(expect.objectContaining({ id: "new" })));
+    const post = posts()[0];
     expect(String(post?.[0])).toBe("/api/v1/projects/scope/tabs");
     const body = JSON.parse(String((post?.[1] as RequestInit).body)) as Record<string, unknown>;
     expect(body).toMatchObject({ project_id: "scope", kind: "agent", assistant: "h-claude" });
@@ -176,42 +167,28 @@ describe("Mobile assistant — the chat list", () => {
     expect(body).not.toHaveProperty("agent_id");
     expect(body).not.toHaveProperty("local");
     expect(body).not.toHaveProperty("worktree");
+    expect(deletes()).toEqual([]);
   });
 
-  it("names a local launch by its opaque id too", async () => {
-    serve([]);
-    render(<Project id="scope" back={() => {}} terminal={() => {}} />);
-    await screen.findByText(/No chats yet/);
-    fireEvent.click(screen.getByLabelText("New chat"));
-    fireEvent.click(await screen.findByText("qwen3:8b"));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toBe(true));
-    const post = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "POST");
-    expect(JSON.parse(String((post?.[1] as RequestInit).body))).toMatchObject({ assistant: "h-oc-qwen" });
-  });
-
-  it("tells the reader when Ollama is down and no local model is listed", async () => {
+  it("says what stands in the way when no launch is ready, and Retry asks again", async () => {
     fetchMock.mockImplementation((url: string) => String(url).endsWith("/launch-options")
-      ? json({ ...OPTIONS, assistant: { ollama_reachable: false, launches: [OPTIONS.assistant.launches[0]] } })
+      ? json({ ...OPTIONS, assistant: { ollama_reachable: false, launches: [OPTIONS.assistant.launches[1]] } })
       : json({ ...SCOPE, tabs: [] }));
-    render(<Project id="scope" back={() => {}} terminal={() => {}} />);
-    await screen.findByText(/No chats yet/);
-    fireEvent.click(screen.getByLabelText("New chat"));
-    expect(await screen.findByText(/Ollama is not running/)).toBeTruthy();
+    const ready = vi.fn();
+    render(<TabbyOpen id="scope" ready={ready} back={() => {}} />);
+    expect(await screen.findByText(/Codex is not signed in/)).toBeTruthy();
+    const before = urls().length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(urls().length).toBeGreaterThan(before));
+    expect(ready).not.toHaveBeenCalled();
+    expect(posts()).toEqual([]);
   });
 
-  it("starts a restored chat that has no process yet, then opens it once its session is live", async () => {
-    let live = false;
-    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
-      if (init?.method === "POST") { live = true; return json({ status: "activated" }); }
-      return json({ ...SCOPE, tabs: [chat("c1", "old chat", { available: live })] });
-    });
-    const terminal = vi.fn();
-    render(<Project id="scope" back={() => {}} terminal={terminal} />);
-    await screen.findByText(/Not running/);
-    fireEvent.click(screen.getByLabelText("Open old chat"));
-    await waitFor(() => expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ id: "c1", available: true })), { timeout: 4000 });
-    const post = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "POST");
-    expect(String(post?.[0])).toBe("/api/v1/projects/scope/activate?tab=c1");
+  it("a project screen that lands on the assistant scope goes back", async () => {
+    fetchMock.mockImplementation(() => json({ ...SCOPE, tabs: [chat("c1", "chat")] }));
+    const back = vi.fn();
+    render(<Project id="scope" back={back} terminal={() => {}} />);
+    await waitFor(() => expect(back).toHaveBeenCalled());
   });
 
   it("leaves a project exactly as it was: schedules, prompts and the outbox are still read", async () => {
@@ -228,15 +205,31 @@ describe("Mobile assistant — the chat list", () => {
 });
 
 describe("Mobile assistant — the Focus chat", () => {
-  const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
+  const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false, assistant_launch: "h-claude" };
   const settle = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
 
   beforeEach(() => {
     localStorage.setItem(storageKey("mobile.view.agent"), "terminal");
-    fetchMock.mockImplementation(() => json({ error: "not_found" }, 404));
   });
 
+  /** The chat's scope: `tab-7` and an older one, the launches, and a create. */
+  const serve = () => {
+    let made: string | null = null;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/launch-options")) return json(OPTIONS);
+      if (init?.method === "POST" && path.endsWith("/tabs")) {
+        made = (JSON.parse(String(init.body)) as { assistant: string }).assistant;
+        return json({ tab: chat("fresh", "Fresh", { assistant_launch: made }) });
+      }
+      if (init?.method === "DELETE") return json({ closed: true });
+      if (path === "/api/v1/projects/scope") return json({ ...SCOPE, tabs: [chat("old", "Old"), { ...TAB }, ...(made ? [chat("fresh", "Fresh")] : [])] });
+      return json({ error: "not_found" }, 404);
+    });
+  };
+
   it("offers no attach, Commit, file drawer or outbox for a chat, and reads none of them", async () => {
+    serve();
     const { container } = render(<Terminal tab={TAB} project="scope" back={() => {}} />);
     await settle();
     expect(screen.getByLabelText("Message agent")).toBeTruthy();
@@ -244,15 +237,47 @@ describe("Mobile assistant — the Focus chat", () => {
     expect(container.querySelector(".composer-commit")).toBeNull();
     expect(container.querySelector(".drawer-open")).toBeNull();
     expect(container.querySelector(".terminal-gallery")).toBeNull();
-    expect(urls().filter((url) => /outbox|uncommitted|markup|\/projects\//.test(url))).toEqual([]);
+    expect(urls().filter((url) => /outbox|uncommitted|markup/.test(url))).toEqual([]);
+    // The one scope read is the launches, for the head's CLI dropdown.
+    expect(urls().filter((url) => /\/projects\//.test(url))).toEqual(["/api/v1/projects/scope/launch-options"]);
+  });
+
+  it("names its CLI in the head, and a pick starts a fresh chat on it in place of every other", async () => {
+    serve();
+    const openTab = vi.fn();
+    render(<Terminal tab={TAB} project="scope" back={() => {}} openTab={openTab} />);
+    const title = await screen.findByRole("button", { name: /^Claude/ });
+    fireEvent.click(title);
+    const menu = await screen.findByRole("menu");
+    // A CLI that is not signed in on the desktop is dimmed and says why.
+    const codex = within(menu).getByRole("menuitemradio", { name: /Codex/ });
+    expect(codex.getAttribute("aria-disabled")).toBe("true");
+    expect(within(menu).getByText(/Codex is not signed in/)).toBeTruthy();
+    fireEvent.click(codex);
+    expect(posts()).toEqual([]);
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /qwen3:8b/ }));
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ id: "fresh" })));
+    expect(JSON.parse(String((posts()[0]?.[1] as RequestInit).body))).toMatchObject({ kind: "agent", assistant: "h-oc-qwen" });
+    expect(deletes().sort()).toEqual(["/api/v1/tabs/old", "/api/v1/tabs/tab-7"]);
+  });
+
+  it("Relaunch starts a fresh session on the same launch", async () => {
+    serve();
+    const openTab = vi.fn();
+    render(<Terminal tab={TAB} project="scope" back={() => {}} openTab={openTab} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Relaunch" }));
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ id: "fresh" })));
+    expect(JSON.parse(String((posts()[0]?.[1] as RequestInit).body))).toMatchObject({ assistant: "h-claude" });
   });
 
   it("keeps all of them on a project's chat", async () => {
+    fetchMock.mockImplementation(() => json({ error: "not_found" }, 404));
     rememberScopeKind("p", "project");
     const { container } = render(<Terminal tab={TAB} project="p" back={() => {}} />);
     await settle();
     expect(container.querySelector(".composer-add")).toBeTruthy();
     expect(container.querySelector(".composer-commit")).toBeTruthy();
     expect(urls().some((url) => /outbox/.test(url))).toBe(true);
+    expect(container.querySelector(".tabby-relaunch")).toBeNull();
   });
 });

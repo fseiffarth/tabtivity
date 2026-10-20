@@ -17,6 +17,7 @@ import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
 import { SentFilesIndex, sentFiles, type SentFile } from "../components/SentFilesIndex";
 import { useScopeKind } from "../scopeKind";
+import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, leafName } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -4211,7 +4212,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           </div>}
         </div>}
   </>;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>
+  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button>{bare && projectOfTab
+        // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
+        ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} />
+        : <div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}

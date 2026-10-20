@@ -28,7 +28,7 @@ import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
-import { AssistantGlyph } from "../../../src/components/header/HeaderGlyphs";
+import { AssistantIcon } from "../../../src/components/common/icons/Icon";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
 
@@ -73,8 +73,10 @@ function projectTile(project: ProjectRow): string {
 type HomeView = "active" | "agents" | "search";
 const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["search", "mobile.home.viewSearch"]];
 
-export function Home({ open, openTab, todo, mail }: {
+export function Home({ open, openTab, tabby, todo, mail }: {
   open: (id: string) => void;
+  /** Opens Tabby's one chat (the FAB): the assistant scope is no row here. */
+  tabby: (id: string) => void;
   openTab: (projectId: string, tab: ActivityTab) => void;
   todo: (card?: string) => void;
   mail: () => void;
@@ -154,7 +156,8 @@ export function Home({ open, openTab, todo, mail }: {
           for (const project of body.projects) rememberScopeKind(project.id, project.kind);
           const assistant = body.projects.find((project) => project.kind === "assistant");
           if (assistant || view === "active") setAssistantId(assistant?.id ?? null);
-          setRows(body.projects); setOffline(null); setLoaded(true);
+          // Tabby is reached through the FAB, not listed as a project.
+          setRows(body.projects.filter((project) => project.kind !== "assistant")); setOffline(null); setLoaded(true);
         })
         .catch((error: unknown) => { if (!controller.signal.aborted) setOffline(classifyUnavailable(error)); });
     }, view === "search" ? 180 : 0);
@@ -309,7 +312,7 @@ export function Home({ open, openTab, todo, mail }: {
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.kind === "assistant" && isUntested("mobile.assistant") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"
@@ -365,14 +368,14 @@ export function Home({ open, openTab, todo, mail }: {
       </section>
     </div>}
     {/* The assistant one tap from anywhere on Home, in the place the project
-        screen keeps its ＋: its row sits wherever the list put it, often
-        below the fold under Needs you. */}
+        screen keeps its ＋, straight into its one chat; the list has no row
+        for it. */}
     {assistantId && <button
       className="primary fab fab-round fab-chat"
-      onClick={() => open(assistantId)}
+      onClick={() => tabby(assistantId)}
       aria-label={t("assistant.button")}
       title={t("assistant.button")}
-    ><AssistantGlyph className="fab-chat-icon" />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
+    ><AssistantIcon className="fab-chat-icon" size={28} />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}

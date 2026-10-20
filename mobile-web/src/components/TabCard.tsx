@@ -94,7 +94,7 @@ export function firstGrapheme(text: string): string {
  * doing (turn time, PLAN/GOAL, worktree, subagents), then what it was asked.
  * Rename, colour and the rest live behind ⋯ (`moreFor`).
  */
-export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, chat, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
+export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
   tab: TabRow;
   /** False once a finished or interrupted tab has been opened here. */
   statusShown: boolean;
@@ -107,11 +107,7 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
   closing: boolean;
   moreOpen: boolean;
   scheduleOpen: boolean;
-  /** Set on a chat of the assistant scope: the chat may have no process yet
-   * (`starting` = this one is being started, `busy` = some chat is), so the
-   * card opens by starting it, says so under the name, and offers no schedule. */
-  chat?: { busy: boolean; starting: boolean };
-  /** Set on an agent tab outside the assistant scope: one the desktop started
+  /** Set on an agent tab: one the desktop started
    * before the project's Mobile switch went on runs outside tmux and is listed
    * as not available, so the card still opens — by asking the desktop to
    * restart it where the phone can attach (`starting` = this one, `busy` = some
@@ -157,7 +153,7 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
             {tab.agent_model && !tab.local_model && <button className="tab-card-model" disabled={!tab.available} onClick={onModel} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
             {tab.agent_model && !tab.local_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             {scheduled && <button className="tab-card-icon accent tab-card-schedule" onClick={onSchedule} aria-haspopup="dialog" aria-expanded={scheduleOpen} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
-            {agent && !chat && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+            {agent && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </span>
           {/* What the session is doing, under its name: how long the turn has
               run, PLAN/GOAL, the worktree it (and its subagents) work in, and
@@ -190,11 +186,10 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
     {schedule && <div className="tab-card-foot">
       <small className="tab-card-when" title={tab.schedules?.next ? t("mobile.project.nextRunTitle", { when: tab.schedules.next.replace("T", " ") }) : undefined}>{schedule}</small>
     </div>}
-    {chat && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t(chat.starting ? "mobile.assistant.starting" : "mobile.assistant.notRunning")}</small></div>}
     {restart?.starting && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.restarting")}</small>{isUntested("mobile.project.restartForPhone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>}
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}
-    <button className="tab-card-open" disabled={chat ? chat.busy : restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
+    <button className="tab-card-open" disabled={restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
   </div>;
 }
 

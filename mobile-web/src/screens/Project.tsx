@@ -9,7 +9,6 @@ import { useRowDrag } from "../rowDrag";
 import { applyServerOrder, placeBeside } from "../tabReorder";
 import { ColorSheet } from "./ColorSheet";
 import { NewTabSheet, type NewTabLaunch } from "./NewTabSheet";
-import { NewChatSheet } from "./NewChatSheet";
 import { newTabAgent, readNewTabAgent, useTapHold, writeNewTabAgent } from "../newTabDefault";
 import { isAssistantScope, rememberScopeKind } from "../scopeKind";
 import { useProjectInbox } from "../components/ProjectInbox";
@@ -179,10 +178,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   /** The latest `back`, for the swipe listener that outlives a render. */
   const backRef = useRef(back);
   backRef.current = back;
-  /** A chat list of the assistant scope, not a project: no folder stands behind
-   * it, so everything that reaches one (files, outbox, inbox, git, schedules,
-   * collected prompts) stays out, and its chats are listed newest first. */
+  /** The assistant scope is no project: Tabby is one chat, opened from Home's
+   * FAB (`TabbyOpen`). A place restored or a notification that lands here on
+   * it goes back to Home. */
   const assistantScope = detail?.project.kind === "assistant";
+  useEffect(() => {
+    if (assistantScope) backRef.current();
+  }, [assistantScope]);
   const filesOffered = !!detail?.files && !assistantScope;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
@@ -272,16 +274,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const chooseSort = (next: AgentSort) => { setSort(next); writeChoice("projectTabsSort", next); };
   /** The dropdown under the project's name, which picks the order. */
   const [sortMenu, setSortMenu] = useState(false);
-  const tabs = useMemo(() => assistantScope
-    // The assistant's chats are a log, not a workspace: the scope holds them
-    // oldest first, the list shows the newest on top, in no other order.
-    ? [...(detail?.tabs ?? [])].reverse()
-    : sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
-      decision: tab.agent_status === "question",
-      working: tab.agent_status === "working",
-      workingAt: tab.working_at,
-      doneAt: tab.done_at,
-    })), [detail?.tabs, sort, assistantScope]);
+  const tabs = useMemo(() => sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
+    decision: tab.agent_status === "question",
+    working: tab.agent_status === "working",
+    workingAt: tab.working_at,
+    doneAt: tab.done_at,
+  })), [detail?.tabs, sort]);
   // A tab that ran again forgets it was seen interrupted: its next interruption
   // is news.
   useEffect(() => {
@@ -295,7 +293,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * are computed from what the agents did, so a dropped row would spring back
    * the next time one of them worked — the same rule the desktop's own drag
    * follows. */
-  const canReorder = sort === "native" && tabs.length > 1 && !assistantScope;
+  const canReorder = sort === "native" && tabs.length > 1;
   const pendingKeys = useRef(new Map<string, string>());
   const inFlight = useRef(false);
   /** A move the desktop has not answered yet. The poll is paused across it: the
@@ -422,7 +420,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   );
   const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
     setCreating(true); setError("");
-    const action = `${kind}:${agent?.id ?? ""}:${mode ?? ""}:${launch?.worktree ?? ""}:${launch?.cloud ?? ""}:${launch?.task ?? ""}:${launch?.sign_in ?? ""}:${launch?.local ?? ""}:${launch?.assistant ?? ""}`;
+    const action = `${kind}:${agent?.id ?? ""}:${mode ?? ""}:${launch?.worktree ?? ""}:${launch?.cloud ?? ""}:${launch?.task ?? ""}:${launch?.sign_in ?? ""}:${launch?.local ?? ""}`;
     const idempotencyKey = pendingKeys.current.get(action) ?? crypto.randomUUID();
     pendingKeys.current.set(action, idempotencyKey);
     try {
@@ -433,16 +431,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   };
   /** A tap on ＋ starts the default agent here at once (`newTabDefault.ts`);
    * a hold opens the sheet of every choice, which is also where the default
-   * is starred. With no agent to start — the assistant scope's chats, a host
-   * without tmux, a desktop listing none — the tap opens that sheet as before. */
-  const quickAgent = !assistantScope && terminalsOffered ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
+   * is starred. With no agent to start — a host without tmux, a desktop
+   * listing none — the tap opens that sheet as before. */
+  const quickAgent = terminalsOffered ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
   const fabPress = useTapHold(
     () => { if (!quickAgent) setNewTabOpen(true); else if (!creating) void create("agent", quickAgent); },
     () => setNewTabOpen(true),
   );
-  /** The tab being started, by tab id: a chat restored with the desktop that
-   * has no process yet (the assistant scope starts its chats on demand), or an
-   * agent tab the desktop is restarting so the phone can attach to it. */
+  /** The tab being started, by tab id: an agent tab the desktop is
+   * restarting so the phone can attach to it. */
   const [startingId, setStartingId] = useState<string | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -450,7 +447,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * the catalog's `available` — and open it. The wait is the desktop starting
    * a CLI: seconds, not a poll cycle, so it reads the list itself each second.
    *
-   * Outside the assistant scope this is an agent tab that was already running
+   * This is an agent tab that was already running
    * when the project's Mobile switch went on: it runs outside tmux, which the
    * phone attaches through, so the desktop restarts it on its resume args
    * inside its tmux session (`MobileBridgeHost`'s `wrapAgentTabForPhone`), or
@@ -460,7 +457,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     try {
       const started = await api<{ desktop_available?: boolean }>(`/api/v1/projects/${encodeURIComponent(id)}/activate?tab=${encodeURIComponent(tab.id)}`, { method: "POST" });
       // No window: nothing is left running outside tmux to bring back.
-      if (!assistantScope && started.desktop_available === false) throw new ApiError(410, "session_gone");
+      if (started.desktop_available === false) throw new ApiError(410, "session_gone");
       for (let attempt = 0; attempt < CHAT_START_TRIES && alive.current; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         if (!alive.current) return;
@@ -469,7 +466,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         const row = next.tabs.find((candidate) => candidate.id === tab.id);
         if (row?.available) { terminal(row); return; }
       }
-      setError(t(assistantScope ? "mobile.assistant.startFailed" : "mobile.project.restartFailed"));
+      setError(t("mobile.project.restartFailed"));
     } catch (reason) { if (alive.current) setError(describeFailure(reason)); } finally { if (alive.current) setStartingId(null); }
   };
   /** Drop the row here rather than reloading, and remember that it is gone: the
@@ -623,7 +620,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         text while there is only one tab to order. */}
     <header className="project-header">
       <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}>‹</button>
-      <div className="terminal-title">{tabs.length > 1 && !assistantScope
+      <div className="terminal-title">{tabs.length > 1
         ? <><h1><button
           className="project-title"
           onClick={() => setSortMenu((open) => !open)}
@@ -632,7 +629,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           title={t("mobile.project.sortAria")}
         ><span>{projectName}</span><span className="view-caret" aria-hidden="true" /></button></h1>
           <small>{t("mobile.project.sortedBy", { order: t(SORT_LABEL[sort]) })}</small></>
-        : <h1>{projectName}{assistantScope && isUntested("mobile.assistant") && <small className="untested">{t("mobile.newTab.untested")}</small>}</h1>}</div>
+        : <h1>{projectName}</h1>}</div>
       <div className="project-header-tools">
         {/* What this project has besides its tabs — the agent's files (the
             🖼 the Focus screen carries), Git and the file browser — lives in
@@ -647,7 +644,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>}
       </div>
     </header>
-    {sortMenu && tabs.length > 1 && !assistantScope && <div className="focus-menu-backdrop" role="presentation" onClick={() => setSortMenu(false)}>
+    {sortMenu && tabs.length > 1 && <div className="focus-menu-backdrop" role="presentation" onClick={() => setSortMenu(false)}>
       <div className="focus-menu project-menu" role="menu" aria-label={t("mobile.project.sortAria")} onClick={(event) => event.stopPropagation()}>
         {AGENT_SORTS.map((value) => <button key={value} role="menuitemradio" aria-checked={sort === value} onClick={() => { chooseSort(value); setSortMenu(false); }}>
           <span><strong>{t(SORT_LABEL[value])}</strong></span>
@@ -674,7 +671,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && tabs.length === 0 && shownFileTabs.length === 0 && <div className="project-empty">
       <span className="project-empty-glyph" aria-hidden="true">▭</span>
       <strong>{t("mobile.project.emptyTitle")}</strong>
-      <p>{assistantScope ? t("mobile.assistant.empty") : t(terminalsOffered ? "mobile.project.emptyHint" : "mobile.project.emptyHintFiles")}</p>
+      <p>{t(terminalsOffered ? "mobile.project.emptyHint" : "mobile.project.emptyHintFiles")}</p>
     </div>}
     <section className="cards">{tabs.map((tab) => <TabCard
       key={tab.id}
@@ -682,14 +679,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       statusShown={showsStatusBadge(seenDone, seenInterrupted, tab)}
       drag={drag}
       canReorder={canReorder}
-      terminalsOffered={terminalsOffered && !assistantScope}
-      chat={assistantScope ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
-      restart={!assistantScope && terminalsOffered && tab.kind === "agent" ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
+      terminalsOffered={terminalsOffered}
+      restart={terminalsOffered && tab.kind === "agent" ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
       swiped={swipedId === tab.id}
       closing={closingId !== null}
       moreOpen={moreTab?.id === tab.id}
       scheduleOpen={scheduleTab?.tab.id === tab.id}
-      onOpen={() => (!tab.available && (assistantScope || (terminalsOffered && tab.kind === "agent")) ? void startTab(tab) : openTab(tab))}
+      onOpen={() => (!tab.available && terminalsOffered && tab.kind === "agent" ? void startTab(tab) : openTab(tab))}
       onModel={() => terminal(tab, { pickModel: true })}
       onMore={() => setMoreTab(tab)}
       onSchedule={() => setScheduleTab({ tab })}
@@ -741,7 +737,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.reopening", { label: row.label })}{isUntested("mobile.project.reopening") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
           : <>{row.label}</>}</button>)}
       </section>}
-      {!assistantScope && <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>}
+      <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
     </div>
     {/* Opening a session is what this screen is for, so it rides above the
         list where the thumb already is, rather than in the header's corner
@@ -756,24 +752,18 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       aria-haspopup="dialog"
       aria-expanded={newTabOpen}
       aria-busy={creating}
-      aria-label={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
-      title={assistantScope ? t("mobile.assistant.newChat") : quickAgent ? t("mobile.project.fabQuick", { agent: quickAgent.label }) : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+      aria-label={t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
+      title={quickAgent ? t("mobile.project.fabQuick", { agent: quickAgent.label }) : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
     ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickAgent && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""
       busy={false}
       onClose={() => setMoreTab(null)}
-      options={tabActions(moreTab, terminalsOffered && !assistantScope).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
-      onPick={(key) => { const action = tabActions(moreTab, terminalsOffered && !assistantScope).find((row) => row === key); if (action) runAction(moreTab, action); }}
+      options={tabActions(moreTab, terminalsOffered).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
+      onPick={(key) => { const action = tabActions(moreTab, terminalsOffered).find((row) => row === key); if (action) runAction(moreTab, action); }}
     >{isUntested("mobile.project.cardMenu") && <p className="sheet-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}</OptionSheet>}
-    {newTabOpen && detail && assistantScope && <NewChatSheet
-      projectId={id}
-      busy={creating}
-      onClose={() => setNewTabOpen(false)}
-      onPick={(assistant) => { setNewTabOpen(false); void create("agent", undefined, undefined, { assistant }); }}
-    />}
-    {newTabOpen && detail && !assistantScope && <NewTabSheet
+    {newTabOpen && detail && <NewTabSheet
       projectId={id}
       agents={detail.agents}
       shells={detail.shells === true}

@@ -320,6 +320,11 @@ pub struct PublicTab {
     /// project route.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub subagent_worktrees: Vec<super::git_overview::SubagentWorktree>,
+    /// A chat of the assistant scope: the opaque id of the launch it runs
+    /// (`assistant::launch_handle`), the same id `launch-options` lists, so the
+    /// phone's CLI picker can show which one is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_launch: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1181,6 +1186,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         turn_started_at: None,
         worktree: None,
         subagent_worktrees: Vec::new(),
+        assistant_launch: None,
     };
     ResolvedProject {
         public: PublicProject {
@@ -1354,6 +1360,9 @@ fn resolve_scope(
             local_model: local_agent || chat.as_ref().is_some_and(|launch| launch.cli.is_local()),
             worktree: None,
             subagent_worktrees: Vec::new(),
+            assistant_launch: chat
+                .as_ref()
+                .map(|launch| super::assistant::launch_handle(host_key, launch.cli, launch.model.as_deref())),
         };
         tabs.push(ResolvedTab {
             public,
@@ -1946,6 +1955,17 @@ mod tests {
         let kept: Vec<_> = listed[0].tabs.iter().map(|t| (t.session_id.as_deref().unwrap(), t.cmd.as_str(), t.local_model)).collect();
         assert_eq!(kept, [(CHAT_A, "claude", false), (CHAT_A, "opencode", true), (CHAT_B, "claude", false)]);
         assert!(listed[0].tabs.iter().all(|t| t.public.kind == "agent"));
+        // Each chat names its launch by the id `launch-options` lists for it.
+        use crate::services::assistant::AssistantCli;
+        let launches: Vec<_> = listed[0].tabs.iter().map(|t| t.public.assistant_launch.clone()).collect();
+        assert_eq!(
+            launches,
+            [
+                Some(super::super::assistant::launch_handle(&[7; 32], AssistantCli::Claude, None)),
+                Some(super::super::assistant::launch_handle(&[7; 32], AssistantCli::OpenCodeLocal, Some("qwen3:8b"))),
+                Some(super::super::assistant::launch_handle(&[7; 32], AssistantCli::Claude, None)),
+            ]
+        );
         assert_eq!(listed[0].root, work(state).canonicalize().unwrap());
 
         // A symlinked chat folder that points out is not "below" the work folder.
