@@ -501,3 +501,11 @@ export function cellToneColor(value: string): string | undefined {
   const tone = cellTone(value);
   return tone ? CELL_TONE_COLOR[tone] : undefined;
 }
+
+/** A cell's text as one screen line: a quoted field's line breaks show as `↵`.
+ *  The table is windowed on a fixed row height, so a cell that wrapped onto a
+ *  second line would grow its row and throw every row below it off the scroll
+ *  arithmetic. The value itself is untouched (tooltip, editor, splice). */
+export function cellDisplayText(value: string): string {
+  return value.replace(/\r\n|\r|\n/g, "↵");
+}

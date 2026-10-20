@@ -21,6 +21,7 @@ import {
   deleteRow,
   columnWidths,
   cellToneColor,
+  cellDisplayText,
   DELIMITER_CANDIDATES,
   type ParsedTable,
 } from "../../lib/viewers/table";
@@ -806,6 +807,9 @@ export function TableView({
             flex: 1,
             minHeight: 0,
             overflow: "auto",
+            // The windowing swaps the rows above the viewport for a spacer every
+            // frame; scroll anchoring would "correct" for that and jump the view.
+            overflowAnchor: "none",
             outline: "none",
             background: "var(--bg-panel)",
             color: "var(--text-primary)",
@@ -816,6 +820,9 @@ export function TableView({
               borderCollapse: "collapse",
               tableLayout: "fixed",
               fontSize: 13,
+              // A fixed line box, so a fallback-font glyph (emoji, CJK) can't make
+              // its row taller than the `rowH` the window is computed on.
+              lineHeight: "17px",
               fontFamily: "var(--font-mono, monospace)",
               width: tableWidth,
               minWidth: "100%",
@@ -1078,7 +1085,7 @@ export function TableView({
                             onBlur={() => commitEdit()}
                           />
                         ) : (
-                          value
+                          cellDisplayText(value)
                         )}
                       </td>
                     );

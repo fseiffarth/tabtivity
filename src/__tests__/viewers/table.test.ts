@@ -17,6 +17,7 @@ import {
   columnWidths,
   cellTone,
   cellToneColor,
+  cellDisplayText,
 } from "../../lib/viewers/table";
 
 describe("parseDelimited — basics", () => {
@@ -479,5 +480,12 @@ describe("cellTone", () => {
 
   it("falls back to the cell's own colour where a theme has no document hues", () => {
     expect(cellToneColor("7")).toBe("var(--doc-yellow, currentColor)");
+  });
+});
+
+describe("cellDisplayText", () => {
+  it("keeps a quoted field's line breaks on one screen line", () => {
+    expect(cellDisplayText("a\nb\r\nc\rd")).toBe("a↵b↵c↵d");
+    expect(cellDisplayText("  padded  ")).toBe("  padded  ");
   });
 });
