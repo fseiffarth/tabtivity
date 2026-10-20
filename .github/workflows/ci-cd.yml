@@ -558,8 +558,8 @@ jobs:
   # anything older (Ubuntu 22.04, Debian 12) is deliberately dropped. A
   # `GLIBC_2.xx not found` loader report is this line, not a code bug — the fix
   # would be a container/sysroot build here, not moving the whole workflow back.
-  package:
-    name: package
+  package-linux:
+    name: package-linux
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     if: github.event_name == 'push'
@@ -631,7 +631,7 @@ jobs:
             target/release/bundle/deb/*.deb
 
   # The server's .deb (gateway, per-user daemon, admin helper, web bundles),
-  # released next to the desktop bundles. Same runner as `package` for the
+  # released next to the desktop bundles. Same runner as `package-linux` for the
   # same glibc reason; the package's Depends names the glibc it was built
   # against. x86_64 only for now.
   package-server:
