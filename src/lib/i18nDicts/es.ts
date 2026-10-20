@@ -5468,7 +5468,7 @@ export const dict: Dict = {
   "settings.sidePanelAutoHideHelp": "Desactivado: el panel lateral queda acoplado como la barra lateral de un IDE; haz clic en un icono de la barra del borde o pulsa Ctrl+B (⌘B en macOS; Alt+1 también funciona en un terminal) para mostrarlo u ocultarlo. Activado: se desliza sobre el área de trabajo cuando el puntero se detiene en la barra del borde y se cierra al salir.",
   "shortcut.toggleSidePanel": "Mostrar / ocultar el panel lateral",
   "tabBar.popOutTitle": "Separar esta subventana en su propia ventana",
-  "tabBar.dragGripTitle": "Arrastra para separar este subventana en su propia ventana",
+  "tabBar.dragGripTitle": "Arrastra para mover esta subventana: suéltala en un borde para colocarla allí, o en una barra de pestañas para fusionarla",
   "tabBar.scrollLeftTitle": "Desplazar pestañas a la izquierda",
   "tabBar.scrollRightTitle": "Desplazar pestañas a la derecha",
   "tabBar.newTabTitle": "Nueva pestaña",

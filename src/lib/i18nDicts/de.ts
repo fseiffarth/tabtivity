@@ -5471,7 +5471,7 @@ export const dict: Dict = {
   "newTabMenu.loadingLocalModelGpu": "Wird auf die GPU geladen…",
   "newTabMenu.loadLocalModelGpuFailed": "Laden auf die GPU fehlgeschlagen — erneut versuchen",
   "newTabMenu.addAgent": "Agent hinzufügen…",
-  "tabBar.dragGripTitle": "Ziehen, um dieses Subfenster in ein eigenes Fenster auszuklinken",
+  "tabBar.dragGripTitle": "Ziehen, um dieses Subfenster zu verschieben — an einem Rand ablegen, um es dort einzuordnen, auf einer Tableiste, um es zusammenzuführen",
   "tabBar.popOutTitle": "Dieses Subfenster in ein eigenes Fenster auslagern",
   "tabBar.scrollLeftTitle": "Tabs nach links scrollen",
   "tabBar.scrollRightTitle": "Tabs nach rechts scrollen",

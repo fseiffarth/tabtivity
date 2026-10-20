@@ -105,13 +105,12 @@ import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/ag
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
 
-/** Default fly-out card size when no live pane thumbnail is available (group
- *  detach via the bar drag carries no preview). */
+/** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
 const DETACH_CARD_H = 150;
 
 /** Fire the one-shot detach send-off: a card at the exit point that lifts and
- *  fades toward the edge the content left through. Used by both detach paths. */
+ *  fades toward the edge the content left through. */
 function playDetachFlyOut(
   clientX: number,
   clientY: number,
@@ -1399,8 +1398,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       // ~16 ms stale — or `null` if released before the first tick — which would
       // otherwise spawn the new window at the (−80,−8) corner.
       const phys = (await desktopCursor().catch(() => null)) ?? lastPhys;
-      // Pop the dragged tab into its own standalone OS window at the cursor,
-      // mirroring the bar-drag detach (onBarPointerDown). Reused by the Shift
+      // Pop the dragged tab into its own standalone OS window at the cursor.
+      // Reused by the Shift
       // override and the free-space (outside-the-window) release below. The new
       // window's bounds feed Rust `.position(x,y)`, which is PHYSICAL — so place it
       // at the physical cursor (the last poll reading), not DOM screen coords.
@@ -1533,15 +1532,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     bindDragRelease({ onCommit: (shiftKey) => void onCommit(shiftKey), onAbort });
   }
 
-  // #42: drag the left-edge grip to pop the group into its own OS window. Focuses
-  // on press; once the pointer crosses a small threshold a lightweight follow-ghost
-  // appears (a DOM card — no per-frame IPC, so it tracks the cursor smoothly) and
-  // the real detached OS window is created only on RELEASE, positioned where the
-  // group is dropped. This replaces the old "spawn immediately, then hand the move
-  // to the WM via `startDragging`" path, whose fragile grab after a heavy async
-  // window spawn made the detach lag and often required a SECOND drag to move the
-  // new window. Only the explicit `.tab-drag-grip` triggers this — grabbing empty
-  // bar space can't accidentally pop a subwindow out.
+  // Drag the left-edge grip to rearrange the whole subwindow, like a tab: the
+  // shared drag store drives the ghost and split preview, and `commitDrop`
+  // moves the group to the edge it is released on (or merges it into a bar or
+  // a body's center). It never pops out — that is the ⧉ button's job — so a
+  // release outside the window, or over the subwindow itself, leaves it put.
+  // Only the explicit `.tab-drag-grip` starts this; empty bar space only focuses.
   function onBarPointerDown(e: React.PointerEvent) {
     focusGroup(groupId);
     if (e.button !== 0) return;
@@ -1550,106 +1546,39 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
-    const pointerId = e.pointerId;
     const activeLabel = tabs.find((tb) => tb.key === activeKey)?.label ?? t("tabBar.subwindowFallback");
-    // Capture on the document root (not this bar): detaching removes the group's
-    // node from the layout, so a capture anchored here would drop mid-gesture.
-    const captureEl = document.documentElement;
     let dragging = false;
-    let ghost: HTMLElement | null = null;
-    let lastClient = { x: startX, y: startY };
-    let lastPhys: PhysPoint | null = null;
-    let stopPoll: (() => void) | null = null;
 
     const onMove = (ev: PointerEvent) => {
       if (!dragging) {
-        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
         dragging = true;
-        // Build the follow-ghost (reuses the drag-ghost styling: fixed, z-topped,
-        // pointer-events:none). No OS window yet — it is spawned on release.
-        ghost = document.createElement("div");
-        ghost.className = "tab-drag-ghost";
-        const lbl = document.createElement("div");
-        lbl.className = "tab-drag-ghost-label";
-        lbl.textContent = activeLabel;
-        ghost.appendChild(lbl);
-        ghost.style.left = `${ev.clientX}px`;
-        ghost.style.top = `${ev.clientY}px`;
-        document.body.appendChild(ghost);
-        // Capture the terminal pointer event on engines that stop delivering it
-        // once the cursor leaves the source window (Win/mac); WebKitGTK keeps the
-        // implicit grab, so the flag leaves capture off there.
-        if (dragPlatform.needsPointerCapture) {
-          try {
-            captureEl.setPointerCapture(pointerId);
-          } catch {
-            /* best-effort */
-          }
-        }
-        // Poll the OS cursor (physical px) so the drop position is DPI-correct and
-        // available even after the pointer leaves the main viewport.
-        stopPoll = startCursorPoll((p) => {
-          lastPhys = p;
+        useDragStore.getState().startGroupDrag({
+          fromGroup: groupId,
+          label: activeLabel,
+          pointerX: ev.clientX,
+          pointerY: ev.clientY,
         });
       }
-      lastClient = { x: ev.clientX, y: ev.clientY };
-      if (ghost) {
-        ghost.style.left = `${ev.clientX}px`;
-        ghost.style.top = `${ev.clientY}px`;
-      }
+      useDragStore.getState().move(ev.clientX, ev.clientY);
     };
 
-    const cleanup = () => {
+    // As for a tab drag, `bindDragRelease` is the release handler WebKitGTK
+    // reliably delivers; commit the target the live preview last showed.
+    const onCommit = () => {
       window.removeEventListener("pointermove", onMove);
-      stopPoll?.();
-      if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
-      ghost = null;
-      if (dragPlatform.needsPointerCapture) {
-        try {
-          captureEl.releasePointerCapture(pointerId);
-        } catch {
-          /* ignore */
-        }
-      }
+      if (!dragging) return; // a click on the grip → nothing to move.
+      commitDrop(useDragStore.getState().drag);
+      useDragStore.getState().end();
     };
 
-    const onCommit = async () => {
-      cleanup();
-      if (!dragging) return; // a click on the grip (no drag) → nothing to detach.
-      // Final physical cursor at release (fresh read; fall back to the last poll
-      // tick). Bounds feed Rust `.position(x,y)` (PHYSICAL) — offset so the grab
-      // point lands on the new window's top frame.
-      const phys = (await desktopCursor().catch(() => null)) ?? lastPhys;
-      const bounds = {
-        x: Math.round((phys?.x ?? 0) - 80),
-        y: Math.round((phys?.y ?? 0) - 8),
-        w: 900,
-        h: 640,
-      };
-      // Send-off animation at the grab point, then create the OS window at the drop
-      // (no `startDragging`: the window appears already positioned, so there is no
-      // handoff to miss and no second drag needed).
-      //
-      // `allowLastGroup` because popping out the ONLY subwindow is a thing people
-      // do — it is how a single-subwindow scope gets onto a second monitor — and
-      // without it this gesture was a silent no-op: `detachGroup` returned null
-      // while the fly-out (played one line above, before the call) still ran, so
-      // the send-off animation reported a detach that never happened. The
-      // refusal's stated reason, that the in-window layout must keep a body, is
-      // not an invariant this codebase actually holds: `hideGroup` permits the
-      // identical end state in as many words ("a valid resting state"), and the
-      // restart-respawn path already reaches it whenever a popout is the scope's
-      // only group. What is left behind is the empty subwindow's own "+" bar, or
-      // the center placeholder — both recoverable, and both what hiding the last
-      // subwindow has always produced.
-      playDetachFlyOut(lastClient.x, lastClient.y, activeLabel);
-      detachGroup(groupId, { bounds, allowLastGroup: true });
+    const onAbort = () => {
+      window.removeEventListener("pointermove", onMove);
+      if (dragging) useDragStore.getState().end();
     };
-
-    const onAbort = () => cleanup();
 
     window.addEventListener("pointermove", onMove);
-    bindDragRelease({ onCommit: () => void onCommit(), onAbort });
+    bindDragRelease({ onCommit, onAbort });
   }
 
   // This bar is the live drop target of an in-flight drag: light up the whole
@@ -1664,11 +1593,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       data-tab-count={tabs.length}
       onPointerDown={onBarPointerDown}
     >
-      {/* Explicit detach grip — the sole handle for popping this subwindow out.
-          Always pinned at the far left (outside the scrolling strip) so it stays
-          grabbable no matter how many tabs fill the bar. A plain (non-button)
-          element, so its pointerdown bubbles to `onBarPointerDown`, which now
-          fires only when the grip is the target. */}
+      {/* Move grip — the handle for rearranging this whole subwindow (⧉ pops
+          it out). Always pinned at the far left (outside the scrolling strip) so
+          it stays grabbable no matter how many tabs fill the bar. A plain
+          (non-button) element, so its pointerdown bubbles to `onBarPointerDown`,
+          which starts the move only when the grip is the target. */}
       <div
         className="tab-drag-grip"
         title={t("tabBar.dragGripTitle")}
@@ -1680,7 +1609,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         className="tab-scroll-btn tab-popout-btn"
         title={t("tabBar.popOutTitle")}
         aria-label={t("tabBar.popOutTitle")}
-        // Keep the button out of the bar's detach-drag and tab pointer flow.
+        // Keep the button out of the bar's move-drag and tab pointer flow.
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => detachGroup(groupId, { allowLastGroup: true })}
       >
@@ -1690,7 +1619,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         <button
           className="tab-scroll-btn left"
           title={t("tabBar.scrollLeftTitle")}
-          // Keep the chevron out of the bar's detach-drag and tab pointer flow.
+          // Keep the chevron out of the bar's move-drag and tab pointer flow.
           onPointerDown={(e) => e.stopPropagation()}
           onMouseEnter={() => startHoverScroll(-1)}
           onMouseLeave={stopHoverScroll}

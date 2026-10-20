@@ -5470,7 +5470,7 @@ export const dict: Dict = {
   "settings.sidePanelAutoHideHelp": "Désactivé : le panneau latéral est ancré comme la barre latérale d'un IDE ; cliquez sur une icône de la barre du bord ou appuyez sur Ctrl+B (⌘B sur macOS ; Alt+1 fonctionne aussi dans un terminal) pour l'afficher ou le masquer. Activé : il glisse sur l'espace de travail quand le pointeur s'arrête sur la barre du bord et se ferme quand il la quitte.",
   "shortcut.toggleSidePanel": "Afficher / masquer le panneau latéral",
   "tabBar.popOutTitle": "Détacher cette sous-fenêtre dans sa propre fenêtre",
-  "tabBar.dragGripTitle": "Faites glisser pour détacher cette sous-fenêtre dans sa propre fenêtre",
+  "tabBar.dragGripTitle": "Faites glisser pour déplacer cette sous-fenêtre : déposez-la sur un bord pour la placer là, sur une barre d’onglets pour la fusionner",
   "tabBar.scrollLeftTitle": "Faire défiler les onglets vers la gauche",
   "tabBar.scrollRightTitle": "Faire défiler les onglets vers la droite",
   "tabBar.newTabTitle": "Nouvel onglet",

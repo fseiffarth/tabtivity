@@ -20,6 +20,9 @@ export interface EmbedCap {
  *
  * Two drag kinds share this state:
  *  - "tab"  — an existing tab being reordered / moved / split (TabBar source).
+ *  - "group" — a whole subwindow dragged by its tab bar's grip: rearranged in
+ *             the layout like a tab (an edge moves it there, a bar or body
+ *             merges its tabs in). It never pops out — the ⧉ button does that.
  *  - "file" — a file row dragged from the side-panel FileTree to open as an
  *             embedded tab (TODO Group K #40). A tab-bar drop adds the embed tab
  *             to that group; a subwindow-body edge drop carves out a NEW
@@ -35,9 +38,9 @@ export interface FileDragItem {
 }
 
 export interface TabDrag {
-  kind: "tab" | "file" | "link" | "detached";
-  key: string; // the dragged tab's key (tab drags); "" for file/link/detached drags
-  fromGroup: string; // group the tab started in (tab drags); "" for file drags
+  kind: "tab" | "group" | "file" | "link" | "detached";
+  key: string; // the dragged tab's key (tab drags); "" for group/file/link/detached drags
+  fromGroup: string; // group the tab started in, or the dragged group; "" for file drags
   label: string; // shown in the floating ghost
   pointerX: number;
   pointerY: number;
@@ -110,6 +113,7 @@ interface DragStore {
       | "previewH"
     >,
   ) => void;
+  startGroupDrag: (d: Pick<TabDrag, "fromGroup" | "label" | "pointerX" | "pointerY">) => void;
   startFileDrag: (
     d: Pick<TabDrag, "label" | "pointerX" | "pointerY"> & {
       filePath: string;
@@ -148,6 +152,18 @@ export const useDragStore = create<DragStore>((set) => ({
     set({
       drag: {
         kind: "tab",
+        ...d,
+        overGroup: null,
+        edge: null,
+        reorderGroup: null,
+        reorderIndex: null,
+      },
+    }),
+  startGroupDrag: (d) =>
+    set({
+      drag: {
+        kind: "group",
+        key: "",
         ...d,
         overGroup: null,
         edge: null,

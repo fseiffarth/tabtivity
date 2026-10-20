@@ -1612,6 +1612,19 @@ interface TabsStore {
   // No-op if either group is missing or they are the same group.
   mergeGroups: (targetGroupId: string, sourceGroupId: string) => void;
   mergeGroupsInScope: (scope: string, targetGroupId: string, sourceGroupId: string) => void;
+  // Rearrange a whole subwindow (drag by its tab bar's grip), the group analog
+  // of `splitWithTab`/`moveTab`: a side edge moves the group, unchanged and with
+  // its id, beside `targetGroupId`; "center" merges its tabs into the target at
+  // `index` (end when omitted) and shows the moved group's active tab. No-op if
+  // either group is missing or they are the same group. Never pops out.
+  moveGroup: (groupId: string, targetGroupId: string, edge: DropEdge, index?: number) => void;
+  moveGroupInScope: (
+    scope: string,
+    groupId: string,
+    targetGroupId: string,
+    edge: DropEdge,
+    index?: number,
+  ) => void;
 
   // Per-subwindow right file viewer: open/close a group's docked file-viewer
   // column, and persist its width. Both write the flag onto the group NODE
@@ -1638,9 +1651,9 @@ interface TabsStore {
   // group (can't empty the in-window layout) UNLESS `allowLastGroup` is set.
   // Both live callers set it: the restart respawn path, where a popout may be the
   // only group left (its in-window siblings held only non-restorable tabs) yet
-  // must still re-open as its own window; and the tab bar's detach grip, because
-  // popping the only subwindow onto a second monitor is an ordinary thing to want
-  // and refusing it made the gesture a silent no-op. The refusal is kept as the
+  // must still re-open as its own window; and the tab bar's ⧉ pop-out button,
+  // because popping the only subwindow onto a second monitor is an ordinary
+  // thing to want and refusing it made the button a silent no-op. The refusal is kept as the
   // default only so a future caller has to say it means to empty the scope — the
   // resulting state is a valid resting one (`hideGroup` produces the same, and
   // says so). Returns the detached group's label, or null if refused / not found.
@@ -3820,6 +3833,38 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         activeKey: null,
       }));
       return writeScope(s, scope, tabs, next, targetGroupId);
+    });
+  },
+
+  moveGroup: (groupId, targetGroupId, edge, index) =>
+    get().moveGroupInScope(get().scope, groupId, targetGroupId, edge, index),
+
+  moveGroupInScope: (scope, groupId, targetGroupId, edge, index) => {
+    set((s) => {
+      const { tabs, layout } = scopeState(s, scope);
+      if (!layout || groupId === targetGroupId) return {};
+      const source = findGroup(layout, groupId);
+      if (!source || !findGroup(layout, targetGroupId)) return {};
+      if (edge === "center") {
+        // Splice the source's tabs into the target, then empty the source so
+        // collapse drops it (as mergeGroups does).
+        let next = mapGroup(layout, targetGroupId, (g) => {
+          const tabKeys = [...g.tabKeys];
+          const at = Math.min(Math.max(index ?? tabKeys.length, 0), tabKeys.length);
+          tabKeys.splice(at, 0, ...source.tabKeys);
+          return { ...g, tabKeys, activeKey: source.activeKey ?? g.activeKey };
+        });
+        next = mapGroup(next, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }));
+        return writeScope(s, scope, tabs, next, targetGroupId);
+      }
+      // Lift the group node out (its sibling split unwraps), then re-inject the
+      // same node beside the target, so its tabs, file viewer and id travel along.
+      const removed = removeNodeById(layout, groupId);
+      if (!removed || !findGroup(removed, targetGroupId)) return {};
+      const dir: SplitDir = edge === "left" || edge === "right" ? "row" : "column";
+      const before = edge === "left" || edge === "top";
+      const next = insertAdjacent(removed, targetGroupId, source, dir, before);
+      return writeScope(s, scope, tabs, next, groupId);
     });
   },
 

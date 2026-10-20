@@ -5468,7 +5468,7 @@ export const dict: Dict = {
   "settings.sidePanelAutoHideHelp": "Disattivato: il pannello laterale è ancorato come la barra laterale di un IDE; fai clic su un'icona della barra del bordo o premi Ctrl+B (⌘B su macOS; Alt+1 funziona anche in un terminale) per mostrarlo o nasconderlo. Attivato: scorre sopra l'area di lavoro quando il puntatore si ferma sulla barra del bordo e si chiude quando la lascia.",
   "shortcut.toggleSidePanel": "Mostra / nascondi il pannello laterale",
   "tabBar.popOutTitle": "Stacca questa sottofinestra in una finestra propria",
-  "tabBar.dragGripTitle": "Trascina per staccare questa sottofinestra nella propria finestra",
+  "tabBar.dragGripTitle": "Trascina per spostare questa sottofinestra: rilasciala su un bordo per collocarla lì, su una barra delle schede per unirla",
   "tabBar.scrollLeftTitle": "Scorri le schede a sinistra",
   "tabBar.scrollRightTitle": "Scorri le schede a destra",
   "tabBar.newTabTitle": "Nuova scheda",

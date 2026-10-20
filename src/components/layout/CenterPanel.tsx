@@ -488,9 +488,17 @@ function CenterPanelImpl() {
         }
         return end;
       };
+      // A subwindow dragged by its grip has no target on itself: no preview
+      // there, and the drop leaves it where it is.
+      const d = useDragStore.getState().drag;
+      const ownGroup = d?.kind === "group" ? d.fromGroup : null;
       const el = document.elementFromPoint(x, y);
       const tabBar = el?.closest(".tab-bar");
-      if (tabBar instanceof HTMLElement && tabBar.dataset.groupId) {
+      if (
+        tabBar instanceof HTMLElement &&
+        tabBar.dataset.groupId &&
+        tabBar.dataset.groupId !== ownGroup
+      ) {
         setTarget({
           overGroup: null,
           edge: null,
@@ -505,6 +513,7 @@ function CenterPanelImpl() {
         const px = x - base.left;
         const py = y - base.top;
         for (const [gid, r] of Object.entries(groupRects)) {
+          if (gid === ownGroup) continue;
           if (px >= r.left && px <= r.left + r.width && py >= r.top && py <= r.top + r.height) {
             setTarget({
               overGroup: gid,
