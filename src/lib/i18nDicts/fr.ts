@@ -4906,6 +4906,7 @@ export const dict: Dict = {
   "terminal.drop.notAFile": "Seuls des fichiers peuvent être déposés sur un agent, pas des dossiers.",
   "terminal.drop.failed": "Le fichier déposé n'a pas pu être transmis à cet onglet.",
   "terminal.drop.noPath": "Impossible de savoir où se trouve le fichier déposé. Déposez-le depuis un gestionnaire de fichiers ou tapez son chemin.",
+  "terminal.drop.notFound": "Certains fichiers déposés sont introuvables : déposez les fichiers d’un seul dossier à la fois.",
   "terminal.copiedLines": "{n} lignes copiées dans le presse-papiers",
   "terminal.copiedChars": "{n} caractères copiés dans le presse-papiers",
   "terminal.linkCopied": "Lien copié dans le presse-papiers",

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useImportDrop } from "../../components/files/importDrop";
+import { parseDroppedFiles, useImportDrop } from "../../components/files/importDrop";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -63,7 +63,7 @@ describe("external file import collision choices", () => {
     await waitFor(() => expect(onImported).toHaveBeenCalledOnce());
     expect(copies()).toEqual([{
       projectDir: "/tmp/project", sourcePath: "/tmp/source/notes.txt",
-      destRel: "incoming", replace: true, destName: null,
+      destRel: "incoming", replace: true, destName: null, expectedSize: null,
     }]);
   });
 
@@ -76,7 +76,7 @@ describe("external file import collision choices", () => {
     await waitFor(() => expect(onImported).toHaveBeenCalledOnce());
     expect(copies()).toEqual([{
       projectDir: "/tmp/project", sourcePath: "/tmp/source/notes.txt",
-      destRel: "incoming", replace: false, destName: "notes reviewed.txt",
+      destRel: "incoming", replace: false, destName: "notes reviewed.txt", expectedSize: null,
     }]);
   });
 
@@ -87,8 +87,8 @@ describe("external file import collision choices", () => {
     await userEvent.click(screen.getByRole("button", { name: /^keep both$/i }));
     await waitFor(() => expect(onImported).toHaveBeenCalledOnce());
     expect(copies()).toEqual([
-      { projectDir: "/tmp/project", sourcePath: "/tmp/source/notes.txt", destRel: "incoming", replace: false, destName: "reviewed.txt" },
-      { projectDir: "/tmp/project", sourcePath: "/tmp/source/data.csv", destRel: "incoming", replace: false, destName: null },
+      { projectDir: "/tmp/project", sourcePath: "/tmp/source/notes.txt", destRel: "incoming", replace: false, destName: "reviewed.txt", expectedSize: null },
+      { projectDir: "/tmp/project", sourcePath: "/tmp/source/data.csv", destRel: "incoming", replace: false, destName: null, expectedSize: null },
     ]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -129,5 +129,31 @@ describe("external file import collision choices", () => {
     expect(screen.getByText(/invalid file name/i)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /^skip$/i }));
     await waitFor(() => expect(onImported).toHaveBeenCalledOnce());
+  });
+});
+
+describe("parseDroppedFiles", () => {
+  /** WebKitGTK's drop: only the first file's `file://` URL leaks, `files`
+   *  lists every file by name and size. */
+  const drop = (html: string, files: { name: string; size: number }[]) =>
+    ({ getData: (f: string) => (f === "text/html" ? html : ""), files }) as unknown as DataTransfer;
+
+  it("infers the unleaked files as siblings of the leaked one, with their sizes", () => {
+    const dt = drop('<a href="file:///home/u/Pictures/b.png">b.png</a>', [
+      { name: "a.png", size: 1 },
+      { name: "b.png", size: 2 },
+      { name: "c d.png", size: 3 },
+    ]);
+    expect(parseDroppedFiles(dt)).toEqual([
+      { path: "/home/u/Pictures/a.png", size: 1 },
+      { path: "/home/u/Pictures/b.png", size: null },
+      { path: "/home/u/Pictures/c d.png", size: 3 },
+    ]);
+  });
+
+  it("infers nothing without a leaked path, nor from a name that is not a leaf", () => {
+    expect(parseDroppedFiles(drop("", [{ name: "a.png", size: 1 }]))).toEqual([]);
+    const dt = drop("file:///home/u/a.png", [{ name: "a.png", size: 1 }, { name: "..", size: 0 }, { name: "x/y", size: 0 }]);
+    expect(parseDroppedFiles(dt)).toEqual([{ path: "/home/u/a.png", size: null }]);
   });
 });

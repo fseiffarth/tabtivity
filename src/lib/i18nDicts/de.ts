@@ -4918,6 +4918,7 @@ export const dict: Dict = {
   "terminal.drop.notAFile": "Auf einem Agenten lassen sich nur Dateien ablegen, keine Ordner.",
   "terminal.drop.failed": "Die abgelegte Datei konnte nicht an diesen Tab übergeben werden.",
   "terminal.drop.noPath": "Der Speicherort der abgelegten Datei ist nicht erkennbar. Lege sie aus einem Dateimanager ab oder tippe ihren Pfad.",
+  "terminal.drop.notFound": "Nicht jede abgelegte Datei wurde gefunden: Lege Dateien jeweils aus nur einem Ordner ab.",
   "terminal.copiedLines": "{n} Zeilen in die Zwischenablage kopiert",
   "terminal.copiedChars": "{n} Zeichen in die Zwischenablage kopiert",
   "terminal.linkCopied": "Link in die Zwischenablage kopiert",

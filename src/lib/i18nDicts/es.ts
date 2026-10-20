@@ -4904,6 +4904,7 @@ export const dict: Dict = {
   "terminal.drop.notAFile": "Sobre un agente solo se pueden soltar archivos, no carpetas.",
   "terminal.drop.failed": "No se pudo pasar el archivo soltado a esta pestaña.",
   "terminal.drop.noPath": "No se sabe dónde está el archivo soltado. Suéltalo desde un gestor de archivos o escribe su ruta.",
+  "terminal.drop.notFound": "No se encontraron todos los archivos soltados: suelta archivos de una sola carpeta cada vez.",
   "terminal.copiedLines": "{n} líneas copiadas al portapapeles",
   "terminal.copiedChars": "{n} caracteres copiados al portapapeles",
   "terminal.linkCopied": "Enlace copiado al portapapeles",

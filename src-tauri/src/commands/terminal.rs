@@ -287,7 +287,8 @@ pub struct PtyDropped {
     /// for a shell tab the file's own path.
     pub items: Vec<String>,
     /// Why the first file that did not make it was refused — an inbox wire
-    /// code, `not_a_file` or `unreadable`. The files after it are not tried.
+    /// code, `not_a_file`, `not_found` or `unreadable`. The files after it are
+    /// not tried.
     pub error: Option<String>,
 }
 
@@ -298,12 +299,20 @@ pub struct PtyDropped {
 /// not. A shell runs on the host and gets the paths themselves, as a native
 /// terminal would. A remote tab is refused (`remote_tab`): its program cannot
 /// see this disk.
+///
+/// `sizes`, one per path, is set for a path the frontend inferred rather than
+/// read off the drag: WebKitGTK leaks only the first file's path of a
+/// multi-file drop, so the others are that file's folder plus each dropped
+/// `File`'s name. Such a path is used only if it is a regular file of the
+/// dropped `File`'s size (`not_found` otherwise — the files came from more
+/// than one folder).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_drop_files(
     ctx: Ctx,
     id: String,
     paths: Vec<String>,
     agent: bool,
+    sizes: Option<Vec<Option<u64>>>,
 ) -> Result<PtyDropped, String> {
     let dir = ctx
         .get::<RegistryState>()
@@ -311,13 +320,22 @@ pub async fn pty_drop_files(
         .drop_dir(&id)
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
-    app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, agent)).await
+    let sizes = sizes.unwrap_or_default();
+    app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await
 }
 
-fn drop_files(dir: &Path, paths: &[String], agent: bool) -> PtyDropped {
+fn drop_files(dir: &Path, paths: &[String], sizes: &[Option<u64>], agent: bool) -> PtyDropped {
     let mut dropped = PtyDropped::default();
-    for path in paths {
-        match drop_file(dir, Path::new(path), agent) {
+    for (i, path) in paths.iter().enumerate() {
+        let path = Path::new(path);
+        let expected = sizes.get(i).copied().flatten();
+        let checked = match expected {
+            Some(size) if !fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == size) => {
+                Err("not_found")
+            }
+            _ => drop_file(dir, path, agent),
+        };
+        match checked {
             Ok(item) => dropped.items.push(item),
             Err(code) => {
                 dropped.error = Some(code.to_string());
@@ -594,7 +612,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let shot = outside.path().join("shot one.png");
         fs::write(&shot, b"png bytes").unwrap();
-        let dropped = drop_files(tab.path(), &[shot.to_string_lossy().into_owned()], true);
+        let dropped = drop_files(tab.path(), &[shot.to_string_lossy().into_owned()], &[], true);
         assert_eq!(dropped.error, None);
         let reference = &dropped.items[0];
         assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
@@ -606,7 +624,7 @@ mod tests {
         let tab = tempfile::tempdir().unwrap();
         // Absolute on this OS: a leading `/` alone is relative on Windows.
         let path = if cfg!(windows) { r"C:\somewhere\a file.txt" } else { "/somewhere/a file.txt" }.to_string();
-        let dropped = drop_files(tab.path(), std::slice::from_ref(&path), false);
+        let dropped = drop_files(tab.path(), std::slice::from_ref(&path), &[], false);
         assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
         assert!(!tab.path().join(inbox::INBOX_DIR).exists());
     }
@@ -622,9 +640,31 @@ mod tests {
             outside.path().to_string_lossy().into_owned(),
             good.to_string_lossy().into_owned(),
         ];
-        let dropped = drop_files(tab.path(), &paths, true);
+        let dropped = drop_files(tab.path(), &paths, &[], true);
         assert_eq!(dropped.items.len(), 1);
         assert_eq!(dropped.error.as_deref(), Some("not_a_file"));
-        assert_eq!(drop_files(tab.path(), &["rel.txt".into()], true).error.as_deref(), Some("not_a_file"));
+        assert_eq!(drop_files(tab.path(), &["rel.txt".into()], &[], true).error.as_deref(), Some("not_a_file"));
+    }
+
+    #[test]
+    fn an_inferred_path_is_used_only_when_the_dropped_files_size_matches() {
+        let tab = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let first = outside.path().join("a.png");
+        let second = outside.path().join("b.png");
+        fs::write(&first, b"aa").unwrap();
+        fs::write(&second, b"bbb").unwrap();
+        let paths = [first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned()];
+        for agent in [true, false] {
+            let dropped = drop_files(tab.path(), &paths, &[None, Some(3)], agent);
+            assert_eq!((dropped.items.len(), dropped.error), (2, None));
+            // Same name, another file: the drop came from a second folder.
+            let dropped = drop_files(tab.path(), &paths, &[None, Some(9)], agent);
+            assert_eq!(dropped.items.len(), 1);
+            assert_eq!(dropped.error.as_deref(), Some("not_found"));
+        }
+        let missing = outside.path().join("c.png").to_string_lossy().into_owned();
+        let dropped = drop_files(tab.path(), &[missing], &[Some(1)], false);
+        assert_eq!(dropped.error.as_deref(), Some("not_found"));
     }
 }

@@ -31,7 +31,7 @@ import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
-import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
+import { isExternalFileDrag, parseDroppedFiles } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../../mobile-web/src/terminal/openCodeMini";
@@ -2254,8 +2254,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     const onDrop = (e: DragEvent) => {
       setDropActive(false);
       if (!e.dataTransfer) return;
-      const paths = parseDroppedFilePaths(e.dataTransfer);
-      if (paths.length === 0) {
+      const files = parseDroppedFiles(e.dataTransfer);
+      if (files.length === 0) {
         if (Array.from(e.dataTransfer.types ?? []).includes("Files")) {
           e.preventDefault();
           toast("terminal.drop.noPath");
@@ -2263,7 +2263,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         return;
       }
       e.preventDefault();
-      void deliverDrop(id, paths, agentPane).then(({ text, error }) => {
+      void deliverDrop(id, files, agentPane).then(({ text, error }) => {
         if (text && !(readerOnRef.current && insertIntoReader(id, text))) {
           termRef.current?.paste(text);
           termRef.current?.focus();

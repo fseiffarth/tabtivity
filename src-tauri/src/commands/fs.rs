@@ -1174,6 +1174,11 @@ pub fn move_path_blocking(
 /// it can redirect the copy within the dropped-on folder and nowhere else; and
 /// it still goes through `unique_dest` unless `replace`, so a chosen name that
 /// also collides is suffixed rather than overwriting something.
+///
+/// `expected_size` is set for a source path an OS drop's frontend inferred
+/// (`parseDroppedFiles`: WebKitGTK leaks only the first path of a multi-file
+/// drop): it is imported only if it is a regular file of the dropped `File`'s
+/// size, so a same-named file in the wrong folder is never copied.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_external_file(
     project_dir: String,
@@ -1181,11 +1186,22 @@ pub async fn import_external_file(
     dest_rel: String,
     replace: bool,
     dest_name: Option<String>,
+    expected_size: Option<u64>,
 ) -> Result<String, String> {
     app_core::rt::try_blocking("fs", move || {
+        if let Some(size) = expected_size {
+            check_inferred_drop(&source_path, size)?;
+        }
         import_external_file_blocking(project_dir, source_path, dest_rel, replace, dest_name)
     })
     .await
+}
+
+fn check_inferred_drop(source_path: &str, size: u64) -> Result<(), String> {
+    match fs::metadata(source_path) {
+        Ok(meta) if meta.is_file() && meta.len() == size => Ok(()),
+        _ => Err("the dropped file is not where it was inferred to be".to_string()),
+    }
 }
 
 pub fn import_external_file_blocking(
@@ -3340,6 +3356,18 @@ mod tests {
     }
 
     // ── import_external_file ───────────────────────────────────────────────
+
+    #[test]
+    fn an_inferred_drop_path_must_match_the_dropped_files_size() {
+        let ext = tempfile::tempdir().unwrap();
+        let file = ext.path().join("b.png");
+        std::fs::write(&file, "img").unwrap();
+        let path = file.to_string_lossy().to_string();
+        assert!(check_inferred_drop(&path, 3).is_ok());
+        assert!(check_inferred_drop(&path, 4).is_err());
+        assert!(check_inferred_drop(&ext.path().to_string_lossy(), 0).is_err());
+        assert!(check_inferred_drop(&ext.path().join("c.png").to_string_lossy(), 3).is_err());
+    }
 
     #[test]
     fn import_external_file_copies_into_subfolder() {

@@ -4904,6 +4904,7 @@ export const dict: Dict = {
   "terminal.drop.notAFile": "Su un agente si possono rilasciare solo file, non cartelle.",
   "terminal.drop.failed": "Non è stato possibile passare il file rilasciato a questa scheda.",
   "terminal.drop.noPath": "Non si capisce dove si trovi il file rilasciato. Rilascialo da un file manager o digita il suo percorso.",
+  "terminal.drop.notFound": "Non tutti i file rilasciati sono stati trovati: rilascia file da una sola cartella alla volta.",
   "terminal.copiedLines": "{n} righe copiate negli appunti",
   "terminal.copiedChars": "{n} caratteri copiati negli appunti",
   "terminal.linkCopied": "Link copiato negli appunti",

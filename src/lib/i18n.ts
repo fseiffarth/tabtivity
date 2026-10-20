@@ -5087,6 +5087,7 @@ export const enSource = {
   "terminal.drop.notAFile": "Only files can be dropped onto an agent, not folders.",
   "terminal.drop.failed": "The dropped file couldn't be handed to this tab.",
   "terminal.drop.noPath": "Couldn't tell where the dropped file is. Drop it from a file manager, or type its path.",
+  "terminal.drop.notFound": "Not every dropped file could be found: drop files from one folder at a time.",
   "terminal.copiedLines": "Copied {n} lines to the clipboard",
   "terminal.copiedChars": "Copied {n} characters to the clipboard",
   "terminal.linkCopied": "Link copied to the clipboard",
