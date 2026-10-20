@@ -918,6 +918,57 @@ export function ProjectFilesView({
       .catch(() => {});
   };
 
+  // A session is "closed" when no tab of this scope owns it and no client is
+  // attached to it — a run whose tab is gone, not one open in another window.
+  const isClosedSession = (hostId: string, s: SessionRow["session"]) =>
+    !s.attached && !sessionOwners.has(`${hostId} ${s.name}`);
+
+  // Kill every session a machine group lists, or only its closed ones (confirmed
+  // once). Exactly the rows shown — this project's, or the whole host's under
+  // "All host sessions" — and each kill settles on its own, so one failure
+  // leaves only its row behind.
+  const killHostSessions = async (
+    hostId: string,
+    hostLabel: string,
+    rows: SessionRow[],
+    closedOnly: boolean,
+  ) => {
+    if (!projectId || rows.length === 0) return;
+    const ok = await confirmAction({
+      title: t(
+        closedOnly
+          ? "projectFilesView.killClosedSessionsDialogTitle"
+          : "projectFilesView.killAllSessionsDialogTitle",
+      ),
+      body: t(
+        closedOnly
+          ? rows.length === 1
+            ? "projectFilesView.confirmKillClosedSessionsOne"
+            : "projectFilesView.confirmKillClosedSessionsMany"
+          : rows.length === 1
+            ? "projectFilesView.confirmKillAllSessionsOne"
+            : "projectFilesView.confirmKillAllSessionsMany",
+        { count: rows.length, host: hostLabel },
+      ),
+      confirmLabel: t(
+        closedOnly ? "projectFilesView.killClosedSessionsAction" : "projectFilesView.killAllSessionsAction",
+      ),
+      danger: true,
+    });
+    if (!ok) return;
+    await Promise.all(
+      rows.map(({ session: s }) => {
+        const ownerKey = sessionOwners.get(`${hostId} ${s.name}`);
+        return invoke("remote_tmux_kill", { projectId, hostId, session: s.name })
+          .then(() => {
+            useHostSessionsStore.getState().dropRow(projectId, hostId, s.name);
+            if (ownerKey) useTabsStore.getState().removeTab(ownerKey);
+          })
+          .catch(() => {});
+      }),
+    );
+  };
+
   // Rename a host session (per-row). The name must be tmux-safe; on success the
   // owning tab's persisted name is updated too, so it reattaches to the renamed
   // session after a restart (the live client stays attached — rename never drops it).
@@ -2526,13 +2577,42 @@ export function ProjectFilesView({
               )}
             </div>
           ) : (
-            sessionGroups.map(({ hostId, hostLabel, kindGroups }) => (
+            sessionGroups.map(({ hostId, hostLabel, rows: hostRows, kindGroups }) => (
               <section
                 className="tmux-machine-group"
                 key={hostId}
                 aria-label={t("projectFilesView.persistentSessionsOnHostAria", { host: hostLabel })}
               >
-                <div className="tmux-machine-group-title">{hostLabel}</div>
+                <div className="tmux-machine-group-title">
+                  <span className="tmux-machine-group-name">{hostLabel}</span>
+                  <UntestedTag id="projectFilesView.8" />
+                  <button
+                    type="button"
+                    className="orange-file-act"
+                    title={t("projectFilesView.killClosedSessionsTitle")}
+                    aria-label={t("projectFilesView.killClosedSessionsAria", { host: hostLabel })}
+                    disabled={!hostRows.some((r) => isClosedSession(hostId, r.session))}
+                    onClick={() =>
+                      void killHostSessions(
+                        hostId,
+                        hostLabel,
+                        hostRows.filter((r) => isClosedSession(hostId, r.session)),
+                        true,
+                      )
+                    }
+                  >
+                    {t("projectFilesView.killClosedSessions")}
+                  </button>
+                  <button
+                    type="button"
+                    className="orange-file-act"
+                    title={t("projectFilesView.killAllSessionsTitle")}
+                    aria-label={t("projectFilesView.killAllSessionsAria", { host: hostLabel })}
+                    onClick={() => void killHostSessions(hostId, hostLabel, hostRows, false)}
+                  >
+                    {t("projectFilesView.killAllSessions")}
+                  </button>
+                </div>
                 {kindGroups.map(({ kind, rows }) => (
                   <div className="tmux-kind-group" key={kind}>
                     <div className="tmux-kind-group-title">{t(SESSION_KIND_LABEL[kind])}</div>
