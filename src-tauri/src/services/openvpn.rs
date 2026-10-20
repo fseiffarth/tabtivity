@@ -149,11 +149,16 @@ fn interactive_state(config: &str) -> Interactive {
     };
     match pidfile_pid(&pidfile) {
         Some(pid) if pid_alive(pid) => Interactive::Alive(pid),
-        Some(_) => {
+        Some(dead) => {
             // The pid was written and is now gone: the tunnel died (or the user
-            // closed its terminal). Reap the entry and its stale pidfile.
-            interactive_registry().lock_ok().remove(config);
-            let _ = std::fs::remove_file(&pidfile);
+            // closed its terminal). Reap the entry and its stale pidfile under one
+            // lock, so a concurrent caller never sees the entry gone but the file
+            // still there. A re-arm since our read owns a fresh claim: leave it.
+            let mut reg = interactive_registry().lock_ok();
+            if reg.get(config) == Some(&pidfile) && pidfile_pid(&pidfile) == Some(dead) {
+                reg.remove(config);
+                let _ = std::fs::remove_file(&pidfile);
+            }
             Interactive::None
         }
         None => Interactive::Pending,

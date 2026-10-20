@@ -153,18 +153,18 @@
   },
   {
     "path": "src-tauri/src/services/openvpn.rs",
-    "line": 3240,
+    "line": 3245,
     "source": "assert_eq!(write_userpass(&stem, \"alice\", \"pw\").unwrap(), auth);",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "52ba627dccf1cf5410d5bdc3d9c88df4cbfb3435bf2c18a43ec5471511e6f65f",
+    "sha256": "5922e781022190ef02c8b828f269ec5d043008f821f93d08aee4bbefe3bfed8b",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixture password written to a temp auth-user-pass file."
   },
   {
     "path": "src-tauri/src/services/openvpn.rs",
-    "line": 3242,
+    "line": 3247,
     "source": "let pass = write_askpass(&stem, \"secret\").unwrap();",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "52ba627dccf1cf5410d5bdc3d9c88df4cbfb3435bf2c18a43ec5471511e6f65f",
+    "sha256": "5922e781022190ef02c8b828f269ec5d043008f821f93d08aee4bbefe3bfed8b",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixture password written to a temp askpass script."
   },
   {
