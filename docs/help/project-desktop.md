@@ -1,7 +1,7 @@
 ---
 id: project-desktop
 title: Project desktops — windows, default apps and time tracking
-keywords: [desktop, window, windows, park, parking, hide, switch project, virtual desktop, workspace, kde, wayland, x11, gnome, macos, windows, external app, open with, default app, file type apps, apps view, tracked windows, time, time tracking, hours, global apps, sticky]
+keywords: [desktop, window, windows, park, parking, hide, switch project, virtual desktop, workspace, kde, wayland, x11, gnome, macos, windows, external app, open with, default app, file type apps, apps view, tracked windows, time, time tracking, hours, global apps, sticky, ide, open in ide, pycharm, vs code, jetbrains, android studio]
 related: [projects, tabs-and-panels, workspace-apps, settings-and-appearance]
 ---
 
@@ -31,6 +31,30 @@ Popped-out subwindows of a project park and come back with it too. Global apps
 | Linux, other Wayland (GNOME, …) | No parking: the compositor does not allow it. Tabs and files work |
 | Windows | Hidden and shown again; virtual-desktop pinning where possible |
 | macOS | Whole **applications** are hidden and shown: one window of a multi-window app cannot be parked alone |
+
+## Open a project in its IDE
+
+When a project's folder shows that an IDE has been used on it, you can open the
+whole project in that IDE: use the code-brackets button in the file panel's
+header, or **Open in <IDE>** in the project pill's right-click menu or the file
+tree's root menu. Tabtivity recognises:
+
+| In the project folder | Opens in |
+|---|---|
+| `.idea/` | The JetBrains IDE it belongs to — PyCharm, WebStorm, PhpStorm, CLion, GoLand, RustRover, RubyMine, Rider or IntelliJ IDEA — or Android Studio |
+| `.vscode/` or a `*.code-workspace` | Visual Studio Code (also Insiders, VSCodium, Cursor) |
+| `.cursor/`, `.windsurf/`, `.zed/` | Cursor, Windsurf, Zed |
+| `.vs/` or a `*.sln` | Visual Studio, or Rider |
+| `*.xcodeproj` / `*.xcworkspace` | Xcode (macOS) |
+| `.project` with `.classpath` or `.settings/` | Eclipse |
+| `*.sublime-project`, `*.Rproj`, `.spyproject/` | Sublime Text, RStudio, Spyder |
+
+With one IDE found, the header button opens it straight away; with several, it
+lists them. If an IDE is not found on your computer, its row says **(not
+found)**: click it to pick the program. Right-click a row (or the button) to
+choose a different program. A JetBrains project without its own IDE installed
+opens in IntelliJ IDEA when that is installed. The IDE's window counts as one
+of the project's windows.
 
 ## Windows a project opened
 

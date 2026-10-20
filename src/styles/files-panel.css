@@ -796,6 +796,12 @@
   background: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
+/* The IDE button shares the Mobile button's shape and takes the row's
+   right-push (`margin-left: auto`); the Mobile button then sits beside it. */
+.side-panel-ide-btn ~ .side-panel-mobile-btn {
+  margin-left: 2px;
+}
+
 .side-panel-mobile-btn-icon {
   width: 13px;
   height: 13px;

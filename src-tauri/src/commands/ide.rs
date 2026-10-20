@@ -153,7 +153,7 @@ pub async fn open_project_in_ide(
         do_launch(
             &registry,
             &launcher.exec,
-            &[],
+            &launcher.args_for(&target),
             Some(&target.to_string_lossy()),
             Some(&project_id),
             Some("ide"),

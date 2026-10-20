@@ -213,6 +213,7 @@ export const UNTESTED = {
   "projectFilesView.6": { area: "files", what: "ProjectFilesView · Side panel, Jobs view" },
   "projectFilesView.7": { area: "files", what: "ProjectFilesView · Side panel, Windows view" },
   "projectFilesView.8": { area: "files", what: "ProjectFilesView · Sessions view, Kill all / Kill closed per machine" },
+  "projectFilesView.openInIde": { area: "files", what: "ProjectFilesView · Side panel header, Open in IDE button" },
   "devTodo.title": { area: "files", what: "ProjectFilesView · Todo view (dev build): todo/*.md groups, task boxes write back to the file" },
   "projectRemarks.addMenu": { area: "files", what: "FileTree · Add file remark…" },
   "projectRemarks.addTitle": { area: "files", what: "AddRemarkDialog · Add file remark" },

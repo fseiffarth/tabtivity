@@ -37,6 +37,7 @@ import {
 import { basename, dirname } from "../../lib/paths";
 import { projectTypeTags } from "../projects/projectTypeTags";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
+import { IdeHeaderButton } from "../projects/IdeMenuItems";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
@@ -1642,6 +1643,11 @@ export function ProjectFilesView({
             switch, and a chip that looked like them would invite reading it as
             another fact about the project. It is the header's own icon-button
             family instead — square, hover-lit, phone slashed while off. */}
+        {/* "Open in <IDE>": only for a project whose tree carries IDE
+            markers; the same rows as the pill menu's View group. */}
+        {!activeBox && project && projectId && !isRootScope && (
+          <IdeHeaderButton projectId={projectId} projectName={project.name} />
+        )}
         {mobileHostConnected && mobileEligible && (
           <button
             type="button"
