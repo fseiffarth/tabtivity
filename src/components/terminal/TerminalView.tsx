@@ -194,9 +194,8 @@ interface Props {
   promptTargetId?: string;
   /** Bumped to respawn the PTY in place (`relaunchTabInScope`). */
   relaunchSeq?: number;
-  /** Show the Reader always, even in an attach-only mirror, and without its
-   *  on/off toggle (the Tabby overlay's chats). Not the per-CLI preference:
-   *  that one is left as it is. */
+  /** Show the Reader always, without its on/off toggle (the Tabby overlay's
+   *  chats). Not the per-CLI preference: that one is left as it is. */
   readerAlways?: boolean;
 }
 
@@ -2188,13 +2187,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   }, [id, viewerId, attachOnly]);
 
   // The Reader over an agent pane (`TerminalReaderView`): offered only for a
-  // CLI whose transcript Tabtivity reads, and only in the tab's own pane.
-  // `usePaneTab`: a popout's tabs store holds no tabs.
+  // CLI whose transcript Tabtivity reads. `usePaneTab`: a popout's tabs store
+  // holds no tabs. Every view of the tab offers it: an attach-only one (a
+  // popout, the root console, an overlay's docked column, Tabby) is where the
+  // tab is drawn while its owning pane stands down, and the composer types
+  // through the owner's input registration (`scheduledAgentInput`).
   const readerIds = splitPtyId(id);
   const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
-  // A popout's pane is that tab's own pane in its window; the main window's
-  // attach-only mirrors of a tab shown elsewhere are not.
-  const readerAvailable = readerOffered(readerTab) && (!attachOnly || isDetachedWindow() || readerAlways);
+  const readerAvailable = readerOffered(readerTab);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
   const readerOn = readerAlways ? readerAvailable : readerPreferred;

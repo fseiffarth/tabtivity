@@ -2,8 +2,9 @@
  * A popped-out agent tab has Chat and Diffs like a docked one. The popout's
  * tabs store holds no tabs, so the pane reads the one `TabPane` handed it
  * (`PaneTabContext`), and its attach-only view registers the composer's input
- * in the popout's own heap. Attach-only mirrors inside the main window (root
- * console, overlay column) still get neither.
+ * in the popout's own heap. Attach-only views inside the main window (root
+ * console, overlay column) show the Reader too, but register no input: their
+ * composer types through the owning pane's registration in the same heap.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, cleanup } from "@testing-library/react";
@@ -102,9 +103,9 @@ describe("TerminalView — Chat and Diffs in a popout", () => {
     expect(scheduledAgentInput("sched-t1")?.ptyId).toBe("p:t1");
   });
 
-  it("keeps a main-window mirror of a tab without them", async () => {
+  it("offers the Reader in a main-window mirror, which registers no input", async () => {
     const view = await renderPane();
-    expect(view.queryByTestId("reader")).toBeNull();
+    expect(view.queryByTestId("reader")).not.toBeNull();
     expect(scheduledAgentInput("sched-t1")).toBeUndefined();
   });
 });
