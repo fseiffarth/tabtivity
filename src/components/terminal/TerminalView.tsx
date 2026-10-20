@@ -2345,6 +2345,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           open: readerOn,
           onToggle: () => setReader(!readerOn),
           changes: { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) },
+          cwd,
         } : undefined}
       />
     )}

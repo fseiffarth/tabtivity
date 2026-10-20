@@ -227,7 +227,7 @@ fn codex_session_exists_in<'a>(
 }
 
 /// The rollout log behind [`codex_session_exists`], when there is one.
-fn codex_session_log(root: &std::path::Path, uuid: &str) -> Option<PathBuf> {
+pub(crate) fn codex_session_log(root: &std::path::Path, uuid: &str) -> Option<PathBuf> {
     fn walk(dir: &std::path::Path, uuid: &str, depth: u8) -> Option<PathBuf> {
         if depth > 5 {
             return None;
@@ -633,6 +633,58 @@ pub fn last_model_in_transcript(path: &std::path::Path, kind: TranscriptKind) ->
 /// only its tail — see [`agent_session_last_prompt`] for what counts as one.
 pub fn last_prompt_in_transcript(path: &std::path::Path, kind: TranscriptKind) -> Option<String> {
     with_prompt_tail(path, |lines| lines.iter().rev().find_map(|line| prompt_in_record(line, kind)))
+}
+
+/// How far into a transcript the first prompt is looked for: a session's
+/// opening records are small, but Claude's request replays and Codex's
+/// instructions come before a slow first prompt.
+const CHAT_HEAD_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The first prompt of the transcript at `path`, with its moment when the
+/// record has one, and the last prompt in its tail (the model's window: a
+/// menu row, not the chart, so no wider read) — a stored chat's row in the
+/// Reader's Resume menu (`services::agent_chats`). The first prompt is `None`
+/// for a session no prompt went into.
+pub(crate) fn chat_prompts(
+    path: &std::path::Path,
+    kind: TranscriptKind,
+) -> (Option<TranscriptPrompt>, Option<String>) {
+    use std::io::{BufRead, Read};
+    let Some(file) = crate::services::home_io::open_regular(path) else {
+        return (None, None);
+    };
+    let mut reader = std::io::BufReader::new(file.take(CHAT_HEAD_BYTES));
+    let mut line = Vec::new();
+    let mut first = None;
+    while first.is_none() {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        // A line the head cut short parses as nothing, which is what it holds.
+        if is_replay_record(&line) || !line.ends_with(b"\n") {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&line) else { continue };
+        first = timed_prompt_in_record(text, kind).or_else(|| {
+            prompt_in_record(text, kind).map(|text| TranscriptPrompt { text, at: String::new() })
+        });
+    }
+    if first.is_none() {
+        return (None, None);
+    }
+    (first, last_in_transcript_tail(path, |line| prompt_in_record(line, kind)))
+}
+
+/// The Claude session log `<uuid>.jsonl` in the one folder `folder`, when it
+/// is a regular file (the agent writes it: never a link).
+pub(crate) fn claude_chat_log(folder: &std::path::Path, uuid: &str) -> Option<PathBuf> {
+    if !is_uuid_shaped(uuid) {
+        return None;
+    }
+    let path = folder.join(format!("{uuid}.jsonl"));
+    std::fs::symlink_metadata(&path).ok()?.is_file().then_some(path)
 }
 
 /// Read the last `MODEL_TAIL_BYTES` of `path` and return `pick`'s answer for
@@ -1540,6 +1592,31 @@ pub fn undo_clear_plan(agent: &str, project_id: Option<&str>, uid: &str) -> Opti
 fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::io::Result<()> {
     std::fs::write(dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}")), "resume")?;
     write_live_session_in(dir, uid, cleared)
+}
+
+/// How the window takes the tab keyed `uid` onto `chat`, an earlier
+/// conversation of its folder picked in the Reader's Resume menu
+/// (`services::agent_chats`, which has checked that `chat` is one): the undo's
+/// two ways. Claude types `/resume <chat>` into the running session; Codex has
+/// its record pointed at `chat` — in the root that holds it, else the scope's
+/// own — and is relaunched onto it. `None` for any other agent, or a `chat`
+/// that is no id.
+pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
+    if !is_uuid_shaped(chat) || !is_uuid_shaped(uid) {
+        return None;
+    }
+    match agent {
+        "claude" => Some(UndoClearPlan::Type { command: format!("/resume {chat}") }),
+        "codex" => {
+            let dir = live_record_dir(project_id, uid).unwrap_or_else(|| match project_id {
+                Some(pid) => project_live_sessions_dir(pid),
+                None => live_sessions_dir(),
+            });
+            restore_cleared_in(&dir, uid, chat).ok()?;
+            Some(UndoClearPlan::Relaunch)
+        }
+        _ => None,
+    }
 }
 
 /// Testable core of [`cleared_session_for`] against the record's directory.

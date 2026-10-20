@@ -39,6 +39,8 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS } from "./TerminalReaderStatus";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
+import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
+import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
 import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
@@ -790,6 +792,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * row names its model. A prompt written there goes to that subagent on a
  * Claude tab (`ReaderComposer`); anywhere else prompts go to the session, and
  * sending one goes back to it.
+ *
+ * An earlier chat of the tab's folder picked in the prompt strip's Resume menu
+ * (`lib/agents/agentChats`) is shown in place of the session's, read-only: a
+ * bar names it, steps to the chats beside it and goes back (Esc), and where
+ * the composer stands a footer offers to resume it in the tab. Its subagents
+ * open as the session's do; nothing live — the screen's dialogs, the working
+ * row, sending prompts — is drawn under it, since none of that is its.
  */
 export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused }: {
   host: HTMLElement;
@@ -830,6 +839,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [subLimit, setSubLimit] = useState(READER_STEP);
   /** Where to scroll once the conversation just gone back up to is drawn. */
   const restoreScroll = useRef<number | null>(null);
+  /** The earlier chat shown instead of the session's, if one is. */
+  const browsed = useReaderChatsStore((state) => state.byPty[ptyId]);
+  const chatId = browsed?.chat.id;
+  const regionRef = useRef<HTMLDivElement>(null);
 
   const [live, setLive] = useState<ReaderLive>(NO_LIVE);
   /** When a read last saw the agent at work: a sent prompt waits from then. */
@@ -1059,13 +1072,20 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     if (el && pathLinkAt(event.relatedTarget) !== el) setPathHover(null);
   };
   // A new session (a restart, a `/clear` the hook followed) is a new chat,
-  // with subagents of its own.
+  // with subagents of its own — and so is an earlier chat opened, or left.
   useEffect(() => {
     version.current = undefined;
     setTranscript(null);
     setSubagentPath([]);
     setSubagentListOpen(false);
-  }, [sessionId]);
+    setLimit(READER_STEP);
+    stuck.current = true;
+  }, [sessionId, chatId]);
+  // An earlier chat takes the keyboard for its bar (Esc goes back): the
+  // composer is not there to hold it.
+  useEffect(() => {
+    if (chatId && visible) regionRef.current?.focus({ preventScroll: true });
+  }, [chatId, visible]);
 
   // Read at once, then whenever the backend's watch on the transcript says it
   // changed (`watchedReads`), with a slow backstop — or every 2 s while the
@@ -1076,7 +1096,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const stop = watchedReads(async (watch) => {
       const current = tabRef.current;
       if (!current) return false;
-      const args = readerRequest(scope, current, cwd, version.current, limit);
+      const args = readerRequest(scope, current, cwd, version.current, limit, undefined, chatId);
       if (!args) {
         setTranscript({ available: false, reason: "no_session", entries: [], truncated: false });
         return false;
@@ -1093,7 +1113,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       cancelled = true;
       stop();
     };
-  }, [visible, scope, cwd, limit, sessionId, readTick, learnPaths]);
+  }, [visible, scope, cwd, limit, sessionId, chatId, readTick, learnPaths]);
 
   // The open subagent's conversation, read as the session is: at once, then
   // on each change while shown — a subagent still at work keeps writing.
@@ -1104,7 +1124,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const stop = watchedReads(async (watch) => {
       const current = tabRef.current;
       if (!current) return false;
-      const args = readerRequest(scope, current, cwd, subVersion, subLimit, subToken);
+      const args = readerRequest(scope, current, cwd, subVersion, subLimit, subToken, chatId);
       if (!args) return false;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
@@ -1121,7 +1141,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       cancelled = true;
       stop();
     };
-  }, [visible, scope, cwd, subToken, subLimit, sessionId, learnPaths]);
+  }, [visible, scope, cwd, subToken, subLimit, sessionId, chatId, learnPaths]);
 
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card
@@ -1131,12 +1151,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const clearOffered = useAgentClearUndoStore((state) => !!state.cleared[ptyId]);
   const clearedAt = useAgentClearUndoStore((state) => state.marks[ptyId]);
   useEffect(() => {
-    if (clearOffered && clearedAt === undefined && transcript) {
+    if (clearOffered && clearedAt === undefined && transcript && !chatId) {
       useAgentClearUndoStore.getState().setMark(ptyId, clearMark(storedEntries));
     }
-  }, [clearOffered, clearedAt, transcript, storedEntries, ptyId]);
+  }, [clearOffered, clearedAt, transcript, storedEntries, ptyId, chatId]);
   /** The new chat's records while the cleared one is still what is read. */
-  const sinceClear = useMemo(() => afterClear(storedEntries, clearedAt ?? null), [storedEntries, clearedAt]);
+  const sinceClear = useMemo(
+    () => (chatId ? null : afterClear(storedEntries, clearedAt ?? null)),
+    [storedEntries, clearedAt, chatId],
+  );
   const entries = sinceClear ?? storedEntries;
   /** The open subagent's conversation, once read. */
   const subTranscript = subRead && subRead.token === subToken ? subRead.transcript : null;
@@ -1194,10 +1217,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       setPending((items) => [...items, { id, text, sentAt }]);
       stuck.current = true;
       setReadTick((tick) => tick + 1);
-      // It went to the session, never to a subagent: back to where it lands.
+      // It went to the session, never to a subagent or an earlier chat: back
+      // to where it lands.
       setSubagentPath([]);
+      useReaderChatsStore.getState().back(ptyId);
     });
-  }, [sendTarget]);
+  }, [sendTarget, ptyId]);
 
   // A sent prompt shows until the transcript records it (by its words — a
   // long one's opening, the record cut at its bound — at or after the moment
@@ -1334,7 +1359,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The open subagent at work — it has not reported back, and the session
    * is at work or it runs in the background — and the model its own
    * conversation names. */
-  const subagentWorking = openSubagentRunning(subagentPath, entries, !!live.working);
+  const subagentWorking = openSubagentRunning(subagentPath, entries, !browsed && !!live.working);
   const subagentModel = workingModelName(subTranscript?.model);
   /** What the subagent's working row says beside its name, as the phone's
    * does: how long since it was spawned (its entry's stamp, else its own
@@ -1356,23 +1381,72 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   ].filter(Boolean).join(" · ");
   /** Subagents sent to the background still at work once the session's own
    * turn is over: the main conversation's working row stands for them. */
-  const backgroundAtWork = openStep || live.working ? 0 : sessionAgents.filter((entry) => subagentAtWork(entry, false)).length;
+  const backgroundAtWork = browsed || openStep || live.working ? 0 : sessionAgents.filter((entry) => subagentAtWork(entry, false)).length;
   /** The shells the shown conversation runs, beside its working row. One it
    * waits on shows only while that row does — a call the CLI never answered
    * (killed mid-command) is not a shell at work; a background one shows while
    * the backend sees it still running, the agent at work or not. */
   const shellsWaited = openStep ? subagentWorking : !!live.working;
-  const runningShells = shownTranscript?.available
+  const runningShells = shownTranscript?.available && !browsed
     ? (shownTranscript.shells ?? []).filter((shell) => shell.background || shellsWaited)
     : [];
 
+  /** Where the earlier chat shown stands among the menu's, and the ways
+   * along them, back to the session and onto it in the tab. */
+  const chatAt = browsed ? chatPosition(browsed) : { index: -1, count: 0 };
+  const chatBack = () => useReaderChatsStore.getState().back(ptyId);
+  const chatStep = (delta: number) => {
+    const next = browsed && stepChat(browsed, delta);
+    if (!browsed || !next) return;
+    restoreScroll.current = null;
+    useReaderChatsStore.getState().browse(ptyId, next, browsed.list);
+  };
+  const [resumingChat, setResumingChat] = useState(false);
+  const resumeChat = () => {
+    if (!browsed || !tab || resumingChat || live.working) return;
+    setResumingChat(true);
+    void resumeChatWithToast(scope, tab, cwd, browsed.chat, t).finally(() => setResumingChat(false));
+  };
+  const resumeLabel = t(live.working ? "terminal.chats.resumeBusy" : "terminal.chats.resumeHint");
+  const onRegionKey = (event: KeyboardEvent) => {
+    if (!browsed || event.key !== "Escape") return;
+    event.preventDefault();
+    if (openStep) subagentUp();
+    else chatBack();
+  };
+
   return createPortal(<>
     <div
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${changesOpen && tab ? " with-changes" : ""}`}
+      ref={regionRef}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${changesOpen && tab ? " with-changes" : ""}${browsed ? " browsing" : ""}`}
       role="region"
       aria-label={t("terminal.reader.title")}
       style={changesOpen && tab ? changesWidthStyle(changesWidth) : undefined}
+      tabIndex={browsed ? -1 : undefined}
+      onKeyDown={onRegionKey}
     >
+      {browsed && !openStep && (
+        <nav className="terminal-reader-subagent-bar terminal-reader-chat-bar" aria-label={t("terminal.chats.earlier")}>
+          <button type="button" className="terminal-reader-subagent-nav" onClick={chatBack} aria-label={t("terminal.chats.back")} title={`${t("terminal.chats.back")} (Esc)`}>‹</button>
+          <div className="terminal-reader-subagent-title">
+            <small>
+              {t("terminal.chats.earlierWhen", { when: chatWhen(browsed.chat.updated, use24h, t("mobile.transcript.yesterday")) })}
+              {" "}<UntestedTag id="terminal.reader.chats" />
+            </small>
+            <strong title={browsed.chat.title}>{browsed.chat.title}</strong>
+          </div>
+          {chatAt.count > 1 && chatAt.index >= 0 && (
+            <div className="terminal-reader-subagent-steps">
+              <button type="button" className="terminal-reader-subagent-nav" disabled={chatAt.index <= 0} onClick={() => chatStep(-1)} aria-label={t("terminal.chats.newer")} title={t("terminal.chats.newer")}>‹</button>
+              <span>{t("mobile.subagent.position", { index: chatAt.index + 1, count: chatAt.count })}</span>
+              <button type="button" className="terminal-reader-subagent-nav" disabled={chatAt.index >= chatAt.count - 1} onClick={() => chatStep(1)} aria-label={t("terminal.chats.older")} title={t("terminal.chats.older")}>›</button>
+            </div>
+          )}
+          <button type="button" className="terminal-reader-chat-resume" disabled={!!live.working || resumingChat} onClick={resumeChat} title={resumeLabel}>
+            {t("terminal.chats.resume")}
+          </button>
+        </nav>
+      )}
       {openStep ? (
         <nav className="terminal-reader-subagent-bar" aria-label={subagentLabel}>
           <button type="button" className="terminal-reader-subagent-nav" onClick={subagentUp} aria-label={backLabel} title={`${backLabel} (Esc)`}>‹</button>
@@ -1471,7 +1545,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </Fragment>
             );
           })}
-          {!openStep && pending.map((item) => (
+          {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
@@ -1487,7 +1561,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             </div>
           ))}
           <LiveQuestion
-            live={shownLive}
+            live={browsed ? NO_LIVE : shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             busy={held}
             onAnswer={answer}
@@ -1508,7 +1582,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                 </button>
               )}
             </div>
-          ) : live.working && (
+          ) : !browsed && live.working && (
             <div className="terminal-reader-working" role="status">
               <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
               <span>{workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working")}</span>
@@ -1520,7 +1594,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </button>
             </div>
           )}
-          {strayShown && (
+          {strayShown && !browsed && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
               <span>{t("terminal.reader.stray")}</span>
               <button type="button" className="terminal-reader-stop" onClick={openTerminal} title={t("terminal.reader.strayOpenHint")}>
@@ -1558,7 +1632,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         )}
       </div>
-      {tab && (
+      {tab && !browsed && (
         <TerminalReaderFacts
           tab={tab}
           ptyId={ptyId}
@@ -1578,7 +1652,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           onStatusClose={closeStatus}
         />
       )}
-      <ReaderComposer
+      {browsed ? (
+        <div className="terminal-reader-chat-foot" role="note">
+          <span>{t("terminal.chats.readOnly")}</span>
+          <button type="button" className="terminal-reader-earlier" onClick={chatBack}>{t("terminal.chats.back")}</button>
+          <button type="button" className="terminal-reader-chat-resume" disabled={!!live.working || resumingChat} onClick={resumeChat} title={resumeLabel}>
+            {t("terminal.chats.resumeHere")}
+          </button>
+        </div>
+      ) : <ReaderComposer
         scope={scope}
         tabKey={tabKey}
         tabRef={tabRef}
@@ -1594,7 +1676,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
         onPulled={dropPending}
-      />
+      />}
     </div>
     {changesOpen && tab && (
       <TerminalReaderChanges
@@ -1604,6 +1686,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         visible={visible}
         subagent={subToken}
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
+        chat={chatId}
+        chatTitle={browsed?.chat.title}
         onClose={() => useAgentReaderStore.getState().setChanges(readerAgent(tab), false)}
       />
     )}

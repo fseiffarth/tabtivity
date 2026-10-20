@@ -533,9 +533,13 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("markup_mcp_ticks", "scheduleTargetId", NotAPath),
     // Keys into a CLI's own stores (OpenCode's sessions by folder, Claude's
     // trust list by folder), compared, never opened; a remote tab's are
-    // host paths.
+    // host paths. The Resume menu's (`services::agent_chats`) is slugged into a
+    // folder name under the scope's agent home, or compared with a rollout's
+    // recorded `cwd`.
     ("agent_tab_changes", "tabDir", NotAPath),
     ("agent_tab_transcript", "tabDir", NotAPath),
+    ("agent_tab_chats", "tabDir", NotAPath),
+    ("agent_tab_resume_chat", "tabDir", NotAPath),
     ("claude_folder_trusted", "cwd", NotAPath),
     ("agent_tab_changes", "localModel", NotAPath),
     ("agent_tab_transcript", "localModel", NotAPath),

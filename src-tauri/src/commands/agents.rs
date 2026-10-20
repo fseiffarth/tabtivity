@@ -1656,9 +1656,33 @@ pub async fn agent_tab_transcript(
     limit: Option<usize>,
     local_model: Option<bool>,
     watch: Option<String>,
+    chat: Option<String>,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
     app_core::rt::spawn_blocking(move || {
+        if let Some(chat) = chat {
+            let mut read = agent_transcript::stored_chat_transcript(
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+            read.watched = arm_stored_chat_watch(
+                watch.as_deref(),
+                read.unchanged,
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+            );
+            return read;
+        }
         let local = local_model == Some(true) && agent == "opencode";
         let mut read = if local {
             agent_transcript::local_opencode_transcript(
@@ -1722,6 +1746,30 @@ fn arm_transcript_watch(
     transcript_watch::arm(id, targets)
 }
 
+/// [`arm_transcript_watch`] for `chat`, an earlier conversation of the tab's
+/// folder the Reader shows.
+#[allow(clippy::too_many_arguments)]
+fn arm_stored_chat_watch(
+    watch: Option<&str>,
+    unchanged: bool,
+    agent: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    session_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+) -> bool {
+    use crate::services::{agent_transcript, transcript_watch};
+    let Some(id) = watch.filter(|id| transcript_watch::valid_id(id)) else {
+        return false;
+    };
+    if unchanged && transcript_watch::keep(id) {
+        return true;
+    }
+    let targets = agent_transcript::stored_chat_watch_targets(agent, project_id, tab_dir, session_id, chat, subagent);
+    transcript_watch::arm(id, targets)
+}
+
 /// Stop the Reader's watch `watch_id` (its pane hid, or it moved to another
 /// conversation).
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1746,9 +1794,33 @@ pub async fn agent_tab_changes(
     limit: Option<usize>,
     watch: Option<String>,
     local_model: Option<bool>,
+    chat: Option<String>,
 ) -> crate::services::agent_changes::AgentChanges {
     use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
     app_core::rt::spawn_blocking(move || {
+        if let Some(chat) = chat {
+            let mut read = agent_changes::stored_chat_changes(
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+            read.watched = arm_stored_chat_watch(
+                watch.as_deref(),
+                read.unchanged,
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+            );
+            return read;
+        }
         // A local-model OpenCode tab's changes come from its own store and arm
         // no watch: `watched` stays false, so the panel keeps its 2 s poll.
         if local_model == Some(true) && agent == "opencode" {
@@ -1799,6 +1871,55 @@ pub async fn agent_tab_undo_clear(
 ) -> Option<crate::services::agent_session::UndoClearPlan> {
     app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::undo_clear_plan(&agent, project_id.as_deref(), &session_id)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// The earlier conversations of the folder the tab launched as `agent` with
+/// launch id `session_id` runs in (`services::agent_chats`): the Reader's
+/// Resume menu, a page from the `offset`-th stored session on, newest first.
+/// Never reaches the phone.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_chats(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    session_id: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> crate::services::agent_chats::ChatList {
+    use crate::services::agent_chats;
+    app_core::rt::spawn_blocking(move || {
+        agent_chats::list_chats(
+            &agent,
+            project_id.as_deref(),
+            tab_dir.as_deref(),
+            &session_id,
+            offset.unwrap_or(0),
+            limit.unwrap_or(agent_chats::PAGE),
+        )
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// How to take the tab onto `chat`, one of its folder's earlier conversations
+/// (`agent_tab_chats`): `agent_tab_undo_clear`'s two ways
+/// (`services::agent_session::resume_chat_plan`). `None` when `chat` is not
+/// one of the folder's chats, or the agent resumes none by id.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_resume_chat(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    session_id: String,
+    chat: String,
+) -> Option<crate::services::agent_session::UndoClearPlan> {
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_chats::chat_file(&agent, project_id.as_deref(), tab_dir.as_deref(), &session_id, &chat)?;
+        crate::services::agent_session::resume_chat_plan(&agent, project_id.as_deref(), &session_id, &chat)
     })
     .await
     .ok()

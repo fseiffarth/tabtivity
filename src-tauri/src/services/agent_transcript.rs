@@ -369,6 +369,83 @@ pub fn agent_session_transcript(
         })
 }
 
+/// An earlier conversation `chat` of the tab's folder, picked in the Reader's
+/// Resume menu (`services::agent_chats`), read as [`agent_session_transcript`]
+/// reads the tab's own — its subagents' included. `no_transcript` for an id
+/// that is not one of the folder's chats.
+#[allow(clippy::too_many_arguments)]
+pub fn stored_chat_transcript(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    launch_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> AgentTranscript {
+    let limit = limit.clamp(1, MAX_LIMIT);
+    if subagent.is_some_and(|token| !is_subagent_token(token)) {
+        return AgentTranscript::unavailable("no_subagent");
+    }
+    let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
+        return AgentTranscript::unavailable("no_transcript");
+    };
+    let read = match cmd {
+        "claude" => claude_transcript_at(&main, subagent, version, limit),
+        "codex" => codex_transcript_at(project_id, &main, chat, subagent, version, limit),
+        _ => None,
+    };
+    read.unwrap_or_else(|| AgentTranscript::unavailable(if subagent.is_some() { "no_subagent" } else { "read_failed" }))
+}
+
+/// What a Reader of the stored chat `chat` watches ([`watch_targets`] for it).
+pub fn stored_chat_watch_targets(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    launch_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+) -> Vec<crate::services::transcript_watch::Target> {
+    if subagent.is_some_and(|token| !is_subagent_token(token)) {
+        return Vec::new();
+    }
+    stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent)
+        .map(|file| conversation_targets(cmd, &file, subagent.is_some()))
+        .unwrap_or_default()
+}
+
+/// The file the stored chat `chat` — or, with `subagent`, that subagent's
+/// own — is kept in: [`conversation_file`] for an earlier conversation
+/// (`services::agent_changes` reads it too).
+pub(crate) fn stored_chat_file(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    launch_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+) -> Option<PathBuf> {
+    let main = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat)?;
+    let Some(token) = subagent else {
+        return Some(main);
+    };
+    match cmd {
+        "claude" => claude_subagent_file(&main.with_extension("").join("subagents"), token),
+        "codex" => {
+            let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
+            let child = stores.iter().find_map(|db| {
+                crate::services::codex_store::descendant_threads(db, chat, MAX_SUBAGENT_DEPTH)
+                    .into_iter()
+                    .find(|child| subagent_token(&child.id) == token)
+            })?;
+            codex_rollout(project_id, &child)
+        }
+        _ => None,
+    }
+}
+
 /// How many subagents the Claude tab launched with `launch_id` has at work
 /// right now ([`AgentTranscript::running_agents`]), for the phone's tab cards
 /// when no window answers for them. Only Claude's record says whether a
@@ -510,10 +587,15 @@ fn claude_transcript(
     limit: usize,
 ) -> Option<AgentTranscript> {
     let main = session_file("claude", project_id, launch_id)?;
+    claude_transcript_at(&main, subagent, version, limit)
+}
+
+/// [`claude_transcript`] of the session stored in `main`.
+fn claude_transcript_at(main: &Path, subagent: Option<&str>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
     let folder = main.with_extension("").join("subagents");
     let spawns = Spawns::Claude(&folder);
     match subagent {
-        None => read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, version, limit),
+        None => read_transcript_in(main, TranscriptKind::Claude, &spawns, false, version, limit),
         Some(token) => {
             let file = claude_subagent_file(&folder, token)?;
             read_transcript_in(&file, TranscriptKind::Claude, &spawns, true, version, limit)
@@ -635,10 +717,23 @@ fn codex_transcript(
 ) -> Option<AgentTranscript> {
     let main = session_file("codex", project_id, launch_id)?;
     let thread = agent_session::read_live_session_for(project_id, launch_id)?;
+    codex_transcript_at(project_id, &main, &thread, subagent, version, limit)
+}
+
+/// [`codex_transcript`] of the thread `thread`, stored in `main`.
+fn codex_transcript_at(
+    project_id: Option<&str>,
+    main: &Path,
+    thread: &str,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> Option<AgentTranscript> {
+    let thread = thread.to_string();
     let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
     let Some(token) = subagent else {
         let spawns = Spawns::Codex { stores: &stores, thread: &thread };
-        return read_transcript_in(&main, TranscriptKind::Codex, &spawns, false, version, limit);
+        return read_transcript_in(main, TranscriptKind::Codex, &spawns, false, version, limit);
     };
     let child = stores.iter().find_map(|db| {
         crate::services::codex_store::descendant_threads(db, &thread, MAX_SUBAGENT_DEPTH)

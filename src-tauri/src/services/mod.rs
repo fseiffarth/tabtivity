@@ -10,6 +10,7 @@ pub mod proc_table;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
+pub mod agent_chats;
 pub mod google_chat;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.

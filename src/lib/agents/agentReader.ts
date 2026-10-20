@@ -53,7 +53,9 @@ export const READER_STEP = 60;
  * not recorded one): there is no transcript to name — except a local-model
  * OpenCode tab, which never gets one and is read by folder from the scope's
  * local-model home (`localModel`). `subagent` is the handle on one of its
- * `agent` entries, whose own conversation is read instead. */
+ * `agent` entries, whose own conversation is read instead. `chat` is an
+ * earlier conversation of the tab's folder picked in the Resume menu
+ * (`lib/agents/agentChats`), read in place of the tab's own. */
 export function readerRequest(
   scope: string,
   tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch" | "sessionId" | "launchedAt" | "args" | "cwd">,
@@ -61,6 +63,7 @@ export function readerRequest(
   version: string | undefined,
   limit: number,
   subagent?: string,
+  chat?: string,
 ): Record<string, unknown> | null {
   const localModel = tab.kind === "local_agent";
   if (!tab.sessionId && !localModel) return null;
@@ -74,6 +77,7 @@ export function readerRequest(
     version: version ?? null,
     limit,
     localModel,
+    chat: chat ?? null,
   };
 }
 

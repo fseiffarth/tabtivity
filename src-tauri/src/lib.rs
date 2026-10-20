@@ -2453,6 +2453,8 @@ pub fn run() {
             commands::agents::agent_tab_changes,
             commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
+            commands::agents::agent_tab_chats,
+            commands::agents::agent_tab_resume_chat,
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
             commands::ollama::ollama_models_dir_plan,

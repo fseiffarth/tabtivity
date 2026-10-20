@@ -165,6 +165,35 @@ pub fn agent_session_changes(
     }
 }
 
+/// The changes of `chat`, an earlier conversation of the tab's folder picked
+/// in the Reader's Resume menu — or of its `subagent` — as
+/// [`agent_session_changes`] reads the tab's own.
+#[allow(clippy::too_many_arguments)]
+pub fn stored_chat_changes(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    launch_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> AgentChanges {
+    if subagent.is_some_and(|token| !agent_transcript::is_subagent_token(token)) {
+        return AgentChanges::unavailable("no_subagent");
+    }
+    let kind = match cmd {
+        "claude" => Store::Claude,
+        "codex" => Store::Codex,
+        _ => return AgentChanges::unavailable("unsupported"),
+    };
+    match agent_transcript::stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent) {
+        Some(path) => read_changes(&path, kind, version, limit).unwrap_or_else(|| AgentChanges::unavailable("read_failed")),
+        None if subagent.is_some() => AgentChanges::unavailable("no_subagent"),
+        None => AgentChanges::unavailable("no_transcript"),
+    }
+}
+
 /// A local-model OpenCode tab's changes (`ollama launch opencode`): what
 /// [`agent_session_changes`] answers for `opencode`, read from the scope's
 /// local-model home, where the Reader reads that tab's conversation

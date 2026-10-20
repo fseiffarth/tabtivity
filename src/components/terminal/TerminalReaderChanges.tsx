@@ -184,7 +184,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
   );
 });
 
-export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, subagentTitle, onClose }: {
+export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, subagentTitle, chat, chatTitle, onClose }: {
   scope: string;
   tab: TabEntry;
   cwd: string | undefined;
@@ -192,6 +192,10 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   /** The open subagent's handle: its changes are shown instead. */
   subagent: string | undefined;
   subagentTitle: string | undefined;
+  /** An earlier chat the Reader shows (`lib/agents/agentChats`): its changes
+   * are shown instead. */
+  chat?: string;
+  chatTitle?: string;
   onClose: () => void;
 }) {
   const t = useT();
@@ -206,7 +210,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   const base = tab.cwd || cwd;
   /** Whose changes a read belongs to — a read of another conversation is
    * never drawn under this one. */
-  const readKey = `${tab.sessionId ?? ""}|${subagent ?? ""}`;
+  const readKey = `${tab.sessionId ?? ""}|${chat ?? ""}|${subagent ?? ""}`;
   /** The cards of the last read, and those that arrived after the panel's
    * first read of this conversation — what it already held is not new. */
   const seenRef = useRef<{ key: string; cards: Set<string> } | null>(null);
@@ -217,7 +221,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     let cancelled = false;
     let version: string | undefined;
     const stop = watchedReads(async (watch) => {
-      const args = readerRequest(scope, tabRef.current, cwd, version, 0, subagent);
+      const args = readerRequest(scope, tabRef.current, cwd, version, 0, subagent, chat);
       if (!args) {
         setRead({ key: readKey, changes: { available: false, reason: "no_session", changes: [], truncated: false } });
         return false;
@@ -245,7 +249,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
       cancelled = true;
       stop();
     };
-  }, [visible, scope, cwd, subagent, readKey]);
+  }, [visible, scope, cwd, subagent, chat, readKey]);
 
   const changes = read?.key === readKey ? read.changes : null;
   const list = useMemo(() => (changes?.available ? changes.changes : []), [changes]);
@@ -353,8 +357,10 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
           ✕
         </button>
       </header>
-      {subagent && (
+      {subagent ? (
         <small className="terminal-changes-scope" title={subagentTitle}>{t("terminal.changes.subagent", { name: subagentTitle ?? "" })}</small>
+      ) : chat && (
+        <small className="terminal-changes-scope" title={chatTitle}>{t("terminal.changes.chat", { name: chatTitle ?? "" })}</small>
       )}
       {files.length > 1 && (
         <div className="terminal-changes-files" role="listbox" aria-label={t("terminal.changes.files")}>
