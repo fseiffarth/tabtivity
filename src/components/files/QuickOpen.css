@@ -98,6 +98,9 @@
 }
 
 .qo-context-panel {
+  /* Fixed, not content-sized: typing and switching roots change the result
+     count, and the picker grew and shrank with it (loading/empty included). */
+  height: 60vh;
   border: 1px solid var(--accent, #79b8ff);
   /* Bold accent cap along the top edge. */
   border-top: 4px solid var(--accent, #79b8ff);

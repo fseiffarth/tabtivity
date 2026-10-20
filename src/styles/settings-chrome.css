@@ -1384,6 +1384,12 @@ label.settings-toggle-card-row {
   overflow-y: auto;
   padding-right: 4px;
 }
+/* With the search shown, a fixed height: each keystroke changed the match
+   count, and everything under the list (and the dialog) moved with it. */
+.mobile-project-access-search ~ .mobile-project-access-list {
+  flex: 0 0 auto;
+  height: 280px;
+}
 
 /* Archived-projects (Settings) list — `.settings-list.boxed`'s shape, spelled
    out because this one is a <ul> that also scrolls. */
@@ -3590,8 +3596,10 @@ label.settings-toggle-card-row {
   background-color: var(--pill-hover-bg);
 }
 
+/* Fixed, not max-height: lines stream in while connecting, and a log that grew
+   with each one moved the centered connect dialog line by line. */
 .connection-log {
-  max-height: 150px;
+  height: 150px;
   overflow-y: auto;
   padding: 6px 8px;
   border: 1px solid var(--border-color);
@@ -3706,10 +3714,14 @@ label.settings-toggle-card-row {
   cursor: var(--cur-default, default);
 }
 
+/* A fixed height, not a max-height: folders hold any number of entries, and a
+   list that sized to its contents resized (and, centered, re-positioned) the
+   whole dialog on every step through the tree. */
 .remote-list {
   display: flex;
   flex-direction: column;
-  max-height: 200px;
+  flex: 0 0 auto;
+  height: 200px;
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
   background: var(--control-bg);

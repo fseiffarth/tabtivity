@@ -313,6 +313,10 @@ small { color:#9498aa; }
 .mode { text-transform:capitalize; }
 /* The shell remains a clear first action; the agents fit two across without
    forcing a long sheet. Modes stay with their agent, inside the same tile. */
+/* A fixed height (the sheet's max): the main grid, the sign-in list and the
+   cloud-task form differ in length, and the bottom-anchored sheet moved its
+   header and rows on every step. */
+.new-tab-sheet { height:82dvh; align-content:start; }
 .new-tab-sheet .create { margin-top:4px; gap:10px; }
 .new-tab-sheet .create > .primary { min-height:48px; }
 .new-tab-agents { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
@@ -1178,7 +1182,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
    composer above the field because the CLI's own menu only ever opens in the
    session's input line, which a phone draft does not reach until Send. Capped
    so a long list scrolls rather than pushing the field off the screen. */
-.slash-menu { display:flex; flex-direction:column; max-height:min(40vh,260px); overflow-y:auto; overscroll-behavior:contain; margin:0 -4px 4px -8px; padding-bottom:4px; border-bottom:1px solid #2b2f3f; }
+/* Fixed, not max-height: it sits on the bottom-docked composer, so a list that
+   narrowed with each typed letter moved its head up and down. */
+.slash-menu { display:flex; flex-direction:column; flex:0 0 auto; height:min(40vh,260px); overflow-y:auto; overscroll-behavior:contain; margin:0 -4px 4px -8px; padding-bottom:4px; border-bottom:1px solid #2b2f3f; }
 .slash-menu-head { padding:2px 8px 4px; color:#767a8b; font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; }
 .slash-menu-head em { font-style:normal; color:#ffd36b; letter-spacing:0; text-transform:none; }
 .slash-row { display:flex; align-items:center; gap:4px; }
@@ -1219,8 +1225,13 @@ body.terminal-open { min-height:0; overflow:hidden; }
 
 .schedule-sheet { max-height:92dvh; }
 /* The status sheet: the session's own state, then the CLI's usage panel as
-   bars (Formatted) or exactly as it printed (Terminal). */
-.status-sheet { max-height:92dvh; }
+   bars (Formatted) or exactly as it printed (Terminal). A fixed height: the two
+   views (and loading) differ in length, and the bottom-anchored sheet moved
+   its own Formatted/Terminal switch away from the thumb that tapped it. A
+   column, so Refresh/Done still sit at the sheet's foot. */
+.status-sheet { display:flex; flex-direction:column; height:92dvh; max-height:92dvh; }
+.status-sheet > * { flex-shrink:0; }
+.status-sheet > .mobile-schedule-actions { margin-top:auto; }
 .status-sheet header .terminal-view-switch { flex:0 0 auto; }
 .status-headline { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
 .status-headline strong { padding:3px 9px; border-radius:999px; background:#242938; color:#c9cddb; font-size:.8rem; }
@@ -1865,6 +1876,9 @@ span.files-close { background:transparent; }
 .markup-questions-fold { color:#98a0b4; }
 .markup-questions-body { display:grid; gap:12px; max-height:min(45vh, 420px); overflow:auto; overscroll-behavior:contain; padding:0 10px 12px; -webkit-user-select:text; user-select:text; }
 .markup-questions-ask { display:grid; gap:12px; }
+/* An ask with several questions shows one at a time: a fixed body height, or the
+   bottom-docked card resized per question and moved its ‹ › pager under the thumb. */
+.markup-questions-body:has(.markup-questions-pager) { height:min(45vh, 420px); align-content:start; }
 /* An ask of several questions: one on show, ‹ n / m › above it. */
 .markup-questions-pager { justify-content:space-between; padding:0; }
 .markup-questions-pager span { font-size:.9rem; font-variant-numeric:tabular-nums; color:#98a0b4; }

@@ -1665,8 +1665,12 @@
   color: var(--text-primary);
 }
 
+/* Wide enough for a whole year (day labels + up to 54 week columns): the current
+   year draws only up to today, so picking another year (or the loading line
+   giving way to the grid) re-sized and re-centered the window. */
 .activity-window-body {
   padding: 16px 20px 20px;
+  min-width: min(770px, calc(100vw - 32px));
 }
 
 .activity-loading {

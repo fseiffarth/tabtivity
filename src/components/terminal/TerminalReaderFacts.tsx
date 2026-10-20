@@ -283,7 +283,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       />}
       {picking && (
         <div
-          className="terminal-reader-picker"
+          className="terminal-reader-picker terminal-reader-picker-steps"
           role="dialog"
           aria-label={shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } }}

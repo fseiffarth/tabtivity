@@ -397,9 +397,12 @@
   border-radius: var(--radius-sm);
   padding: 4px 6px;
 }
+/* Fixed, not max-height: the search filters it, and a shrinking list moved the
+   centered dialog with every keystroke. */
 .set-default-app-list {
+  flex: 0 1 auto;
   margin: 6px 0;
-  max-height: 220px;
+  height: 220px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -552,9 +555,13 @@
   font-size: var(--text-md);
   color: var(--text-muted);
 }
+/* A fixed height, not a max-height: a list that sized to each folder's entries
+   resized (and, centered, re-positioned) the dialog on every step through the
+   tree. It still shrinks toward min-height when the window is too short. */
 .folder-picker-list {
+  flex: 0 1 auto;
   min-height: 180px;
-  max-height: 320px;
+  height: 320px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -1272,6 +1279,13 @@
   color: var(--text-primary);
   font-size: var(--text-sm);
   padding: 4px 0;
+}
+/* Once it lists rows, a fixed box: folding a folder changed the max-content
+   width and the height, and anchored bottom-right that moved every row —
+   the folder just clicked included — out from under the pointer. */
+.git-change-tree:has(> .git-change-rows) {
+  width: min(480px, calc(100vw - 16px));
+  height: 320px;
 }
 
 .git-change-empty {

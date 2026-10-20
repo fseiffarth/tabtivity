@@ -1047,7 +1047,11 @@ button.steering-legend-hub:hover::before {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 40vh;
+  /* Fixed, not max-height: the model picker's waiting line, its steps and the
+     effort list share this box, and a content-sized one resized the centered
+     dialog on every step. */
+  flex: 0 0 auto;
+  height: 40vh;
   overflow: auto;
   padding: 8px;
   border: 1px solid var(--border-color);
@@ -1928,6 +1932,15 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   font-size: var(--text-md);
   line-height: 1.45;
   user-select: text;
+}
+/* Browsing the trail swaps the full text above it: a content-sized panel and
+   text box moved the list (and the row under the pointer) with every prompt. */
+.prompt-strip-panel:has(> .prompt-strip-list) {
+  height: calc(100% - 42px);
+}
+.prompt-strip-panel:has(> .prompt-strip-list) > .prompt-strip-full {
+  flex: 0 0 auto;
+  height: 60%;
 }
 .prompt-strip-list {
   position: relative; /* rows' offsetTop is measured against the list */
@@ -3039,7 +3052,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   display: flex;
   flex-direction: column;
   width: min(520px, calc(100% - 28px));
-  max-height: min(50vh, 340px);
+  /* Fixed, not max-height: it opens upward, so a list that narrowed with each
+     typed letter moved its head and first rows up and down under the eye. */
+  height: min(50vh, 340px);
   padding: 6px;
   overflow-y: auto;
   color: var(--text-primary);
@@ -3060,8 +3075,15 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   gap: 4px;
   border-radius: var(--radius);
 }
-.terminal-reader-slash-row:hover,
-.terminal-reader-slash-row.active { background: var(--bg-hover); }
+.terminal-reader-slash-row:hover { background: var(--bg-hover); }
+/* The ↑/↓ row is filled in accent, like the TeX completion popup's: a hover
+   tint alone was hard to tell from the rows around it. */
+.terminal-reader-slash-row.active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+.terminal-reader-slash-row.active .terminal-reader-slash-pick strong,
+.terminal-reader-slash-row.active .terminal-reader-slash-forget { color: var(--accent-contrast); }
 .terminal-reader-slash-pick {
   flex: 1 1 auto;
   min-width: 0;
@@ -3096,6 +3118,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-muted);
 }
 .terminal-reader-slash-row.used .terminal-reader-slash-pick small { color: var(--text-secondary); }
+.terminal-reader-slash-row.active .terminal-reader-slash-pick small { color: var(--accent-contrast); opacity: 0.85; }
 .terminal-reader-slash-forget {
   flex: none;
   padding: 0 8px;
@@ -3176,6 +3199,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   background: var(--bg-elevated);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
+}
+/* The CLI's own picker (model, permission mode) and the status card: a
+   waiting line, each step's options, a refresh's result share one box, which
+   opens upward — sized by content, its head jumped on every step. */
+.terminal-reader-picker:is(.terminal-reader-picker-steps, .terminal-reader-status) {
+  height: min(60vh, 460px);
 }
 .terminal-reader-picker-head {
   display: flex;

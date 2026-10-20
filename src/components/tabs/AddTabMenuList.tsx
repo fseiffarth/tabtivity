@@ -135,6 +135,20 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   // only obscure its results, so it closes as soon as the query changes.
   useEffect(() => setMoreMenu(null), [q]);
 
+  // The menu is as wide as its longest label, so a query that filtered that
+  // row out narrowed the whole menu, search box included, under the cursor.
+  // Grow-only: the widest it has been while open becomes its min-width.
+  const searchRef = useRef<HTMLInputElement>(null);
+  const widestRef = useRef(0);
+  useLayoutEffect(() => {
+    const menu = searchRef.current?.parentElement;
+    if (!menu) return;
+    const width = menu.getBoundingClientRect().width;
+    if (width <= widestRef.current) return;
+    widestRef.current = width;
+    menu.style.minWidth = `${width}px`;
+  }, [q]);
+
   // Place the fly-out against its More row, flipping to the left when the
   // compact parent sits against the right edge of the viewport.
   useLayoutEffect(() => {
@@ -198,6 +212,7 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   return (
     <>
       <input
+        ref={searchRef}
         className="tab-new-menu-search"
         type="text"
         placeholder={t("newTabMenu.searchPlaceholder")}

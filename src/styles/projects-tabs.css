@@ -779,9 +779,12 @@
 }
 
 /* The member list reads as one inset field: the control surface and border of
-   the inputs above it, rows that highlight like menu items. */
+   the inputs above it, rows that highlight like menu items. A fixed height, not
+   a max-height: the filter above narrows it, and a shrinking list moved the
+   centered dialog with every keystroke. */
 .box-editor .box-editor-members {
-  max-height: 40vh;
+  flex: 0 0 auto;
+  height: 40vh;
   overflow-y: auto;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
@@ -3093,6 +3096,9 @@ html:not(.show-untested-tags) .untested-tag {
    block only lays out its schedule-specific rows and compact form. */
 .agent-schedule-dialog {
   width: min(880px, calc(100vw - 32px));
+  /* Fixed, not content-sized: switching the form's recurrence (or Edit on a
+     rule) changed its rows, and the centered dialog jumped with them. */
+  height: min(820px, calc(100vh - 32px));
   max-height: min(820px, calc(100vh - 32px));
 }
 

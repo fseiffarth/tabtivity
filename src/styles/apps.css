@@ -1017,6 +1017,16 @@
   gap: 12px;
   padding: 14px 24px 22px;
 }
+/* Step wizards (the remote connect → browse → details steps of New project and
+   Extend to remote, the HPC pipeline wizard): every step differs in height, and
+   a content-sized centered dialog jumped on each Next/Back. One fixed height,
+   with the Back/Next row kept at its foot. */
+.project-dialog.dialog-framed:is(:has(.remote-steps), .hpc-wizard) {
+  height: min(820px, calc(100vh - 40px));
+}
+.project-dialog.dialog-framed:is(:has(.remote-steps), .hpc-wizard) > .dialog-scroll > .project-dialog-actions {
+  margin-top: auto;
+}
 /* No fixed header above it (the dialog's own title scrolls inside the frame, e.g.
    a bare <h2>): restore the full top inset the un-framed surface used to give. */
 .dialog-framed > .dialog-scroll:first-child {
@@ -1172,6 +1182,10 @@
    both columns a bounded height to scroll in. */
 .settings-dialog.settings-with-navigation {
   width: min(960px, calc(100vw - 32px));
+  /* A fixed height (the frame's max-height), not content-sized: a short page or
+     a search-narrowed rail shrank the centered dialog, and it jumped on every
+     page switch or keystroke. */
+  height: min(720px, calc(100vh - 96px));
   flex-direction: row;
 }
 .settings-navigation { flex: 0 0 clamp(160px, 24%, 220px); min-height: 0; overflow-y: auto; padding: 16px 10px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 12px; }
