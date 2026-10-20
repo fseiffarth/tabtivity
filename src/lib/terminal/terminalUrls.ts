@@ -144,10 +144,44 @@ export function findSignInRequest(
   const urls = findWrappedUrls(getLine, cols, fromY, toY, true).filter((u) => isSignInUrl(u.url));
   const last = urls[urls.length - 1];
   if (!last) return null;
+  // A program that says it signed in under the link leaves the link on
+  // screen; it no longer leads anywhere.
+  if (findSignInDone(getLine, last.end.y + 1, toY)) return null;
   let after = "";
   for (let y = last.end.y + 1; y <= Math.min(toY, last.end.y + CODE_PROMPT_ROWS); y++) {
     after += " " + (getLine(y)?.translateToString(true) ?? "");
   }
   const oauth = new URL(last.url).searchParams.has("client_id");
   return { url: last.url, wantsCode: oauth && CODE_PROMPT.test(after) };
+}
+
+/** A line saying the sign-in went through — a success, not any mention of
+ *  "logged in" ("Not logged in" is the opposite). The one rule the desktop's
+ *  sign-in card and the phone's sign-in sheet both read a success by. */
+const SIGN_IN_DONE = /\b(?:login|sign[- ]in) (?:successful|succeeded|complete)\b|\bsuccessfully (?:signed|logged) in\b|\bsuccessfully authenticated\b|\b(?:signed|logged) in (?:as|with|successfully)\b|\bauthenticat(?:ed|ion) (?:successfully|successful|complete)\b/iu;
+const SIGN_IN_NEGATED = /\bnot (?:signed|logged) in\b|n't (?:signed|logged) in\b/iu;
+/** The CLI holding on after a success until Enter (Claude Code's "Login
+ *  successful. Press Enter to continue"). */
+const PRESS_ENTER = /\bpress enter\b/iu;
+
+export function saysSignedIn(text: string): boolean {
+  return SIGN_IN_DONE.test(text) && !SIGN_IN_NEGATED.test(text);
+}
+
+/** The program saying its sign-in went through on rows `[fromY, toY]`, and
+ *  whether it then waits for Enter; null when no row says so. */
+export function findSignInDone(
+  getLine: (y: number) => LineLike | undefined,
+  fromY: number,
+  toY: number,
+): { pressEnter: boolean } | null {
+  for (let y = Math.max(0, fromY); y <= toY; y++) {
+    if (!saysSignedIn(getLine(y)?.translateToString(true) ?? "")) continue;
+    let pressEnter = false;
+    for (let below = y; below <= toY && !pressEnter; below++) {
+      pressEnter = PRESS_ENTER.test(getLine(below)?.translateToString(true) ?? "");
+    }
+    return { pressEnter };
+  }
+  return null;
 }

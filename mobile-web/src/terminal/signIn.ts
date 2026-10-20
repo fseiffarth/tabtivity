@@ -32,7 +32,7 @@
  */
 
 import { signInLaunch } from "../../../src/lib/agents/signInLaunch";
-import { isSignInUrl } from "../../../src/lib/terminal/terminalUrls";
+import { isSignInUrl, saysSignedIn } from "../../../src/lib/terminal/terminalUrls";
 
 export type SignInFlow = "device" | "code" | "callback" | "wait";
 
@@ -269,15 +269,10 @@ export function signInAlternate(cli: string): "console" | "browser" | undefined 
   return signInLaunch(CLI_COMMANDS[cli] ?? cli).alternate?.kind;
 }
 
-/** A line saying the sign-in went through — a success, not any mention of
- * "logged in" ("Not logged in" is the opposite). */
-const SIGN_IN_DONE = /\b(?:login|sign[- ]in) (?:successful|succeeded|complete)\b|\bsuccessfully (?:signed|logged) in\b|\bsuccessfully authenticated\b|\b(?:signed|logged) in (?:as|with|successfully)\b|\bauthenticat(?:ed|ion) (?:successfully|successful|complete)\b/iu;
-const NEGATED = /\bnot (?:signed|logged) in\b|n't (?:signed|logged) in\b/iu;
-
 /** Whether the bottom of the screen says the sign-in went through. */
 export function signInDone(lines: readonly SignInLineLike[]): boolean {
   return lines.slice(Math.max(0, lines.length - SEARCH_WINDOW))
-    .some(({ text }) => SIGN_IN_DONE.test(text) && !NEGATED.test(text));
+    .some(({ text }) => saysSignedIn(text));
 }
 
 /** How far up a CLI's "you need to sign in" may sit: it is the last thing it
@@ -302,6 +297,6 @@ const SIGNED_OUT = [
  * the phone then offers one. Once the screen says it went through, it is not. */
 export function readSignedOut(lines: readonly SignInLineLike[]): boolean {
   const rows = lines.slice(Math.max(0, lines.length - SIGNED_OUT_WINDOW));
-  if (rows.some(({ text }) => SIGN_IN_DONE.test(text) && !NEGATED.test(text))) return false;
+  if (rows.some(({ text }) => saysSignedIn(text))) return false;
   return rows.some(({ text }) => SIGNED_OUT.some((pattern) => pattern.test(text)));
 }

@@ -48,13 +48,13 @@ import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
-import { findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
 import { openPathLink } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
-import { SIGN_IN_CARD_CLASS, TerminalSignInCard } from "./TerminalSignInCard";
+import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
@@ -378,6 +378,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // The sign-in link the program on screen is waiting on (see
   // `TerminalSignInCard`), and the links the user already closed the card for.
   const [signIn, setSignIn] = useState<SignInRequest | null>(null);
+  // The program said that sign-in went through (`TerminalSignInDoneCard`);
+  // looked for only once a sign-in link was up in this pane.
+  const [signInDone, setSignInDone] = useState<{ pressEnter: boolean } | null>(null);
+  const signInWatched = useRef(false);
   // The session in this pane was just cleared: offer to take it back.
   const undoClearOffered = useAgentClearUndoStore((state) => !!state.cleared[id]);
   // The project's AGENTS.md still holds no guidance: offer the one-time fill card.
@@ -614,8 +618,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // card while one is up. Only parsed output triggers a look — a hidden pane
     // parses nothing (see `writeTerm`) and catches up when shown — and the look
     // is coalesced so a streaming agent costs one scan per 300 ms at most. The
-    // card goes away with the link: a login that succeeded redraws the screen.
+    // card goes away with the link: a login that succeeded redraws the screen,
+    // and the program's "signed in" brings the success card in its place.
     setSignIn(null);
+    setSignInDone(null);
+    signInWatched.current = false;
     let signInScanTimer: ReturnType<typeof setTimeout> | null = null;
     onBuild.push((term) => {
       const scanForSignIn = () => {
@@ -631,6 +638,20 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         setSignIn((prev) =>
           prev?.url === next?.url && prev?.wantsCode === next?.wantsCode ? prev : next,
         );
+        // A link counts even once its card was closed: sending the code closes it.
+        if (found) {
+          signInWatched.current = true;
+          setSignInDone(null);
+          return;
+        }
+        const done = findSignInDone((n) => buf.getLine(n), buf.baseY, buf.baseY + term.rows - 1);
+        if (done && signInWatched.current) {
+          signInWatched.current = false;
+          setSignInDone(done);
+        } else if (!done) {
+          // Enter was pressed in the terminal and the program moved on.
+          setSignInDone((prev) => (prev?.pressEnter ? null : prev));
+        }
       };
       termDisposables.push(term.onWriteParsed(() => {
         signInScanTimer ??= setTimeout(scanForSignIn, 300);
@@ -2381,10 +2402,21 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         onDismiss={() => dismissSignIn(signIn.url)}
       />
     )}
-    {undoClearOffered && (!readerOn || readerCleared) && !signIn && host && (
+    {signInDone && !signIn && host && (
+      <TerminalSignInDoneCard
+        host={host}
+        pressEnter={signInDone.pressEnter}
+        onContinue={() => {
+          void writePtyInput(id, new Uint8Array([0x0d])).catch(console.error);
+          setSignInDone(null);
+        }}
+        onDismiss={() => setSignInDone(null)}
+      />
+    )}
+    {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
     )}
-    {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && host && (
+    {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard
         host={host}
         projectId={projectId}
@@ -2393,7 +2425,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       />
     )}
     {/* The host's CLI only: a remote or container tab runs another install. */}
-    {zoomable && !remoteHostId && !sandbox && !undoClearOffered && !agentsEmpty && !signIn && host && (
+    {zoomable && !remoteHostId && !sandbox && !undoClearOffered && !agentsEmpty && !signIn && !signInDone && host && (
       <TerminalVersionCard host={host} cmd={cmd} />
     )}
     {keySelecting && host && createPortal(
