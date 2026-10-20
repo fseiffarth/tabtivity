@@ -1,7 +1,7 @@
 import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type TabKind } from "../../stores/tabs";
 import { envName } from "../brand";
 import type { LoginTarget } from "../remote/loginTarget";
-import { ASSISTANT_SCOPE, type AssistantLaunch } from "../assistant";
+import { ASSISTANT_SCOPE, assistantPromptTarget, type AssistantLaunch } from "../assistant";
 
 /**
  * The kind a `TerminalView` acts as: its declared `kind` prop, else a
@@ -132,6 +132,8 @@ export function tabTerminalSpawn(
     kind: tab.kind,
     // Tabby chats take no schedule (the backend refuses one for the scope).
     scheduleTargetId: assistant ? undefined : tab.scheduleTargetId,
+    // ...but their Reader still sends: the pane takes prompts under a local id.
+    promptTargetId: assistant ? assistantPromptTarget(tab.key) : undefined,
     relaunchSeq: tab.relaunchSeq ?? 0,
     zoomable: tab.kind === "agent" || tab.kind === "local_agent",
   };

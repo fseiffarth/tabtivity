@@ -14,6 +14,28 @@ import type { Settings } from "../types";
 export const ASSISTANT_SCOPE = "assistant";
 
 /**
+ * A chat's prompt target. Its record carries no `scheduleTargetId` (the backend
+ * refuses a schedule for the scope), yet the Reader's composer sends through
+ * the scheduled-input registry as every agent tab's does. So the chat's pane
+ * registers its input under this id (`tabTerminalSpawn`'s `promptTargetId`) —
+ * derived from the tab key, window-local, never sent to the backend — and the
+ * Reader reads the chat with it filled in ({@link withAssistantPromptTarget}).
+ */
+export function assistantPromptTarget(tabKey: string): string {
+  return `${ASSISTANT_SCOPE}:${tabKey}`;
+}
+
+/** `tab` with its {@link assistantPromptTarget} as `scheduleTargetId` when it
+ *  is a chat of the assistant scope; any other tab unchanged. */
+export function withAssistantPromptTarget<T extends { key: string; scheduleTargetId?: string }>(
+  scope: string,
+  tab: T | undefined,
+): T | undefined {
+  if (scope !== ASSISTANT_SCOPE || !tab || tab.scheduleTargetId) return tab;
+  return { ...tab, scheduleTargetId: assistantPromptTarget(tab.key) };
+}
+
+/**
  * What a chat tab is launched as: the tab's persisted `assistant` block and
  * `PtyOptions.assistant` (`services::assistant::AssistantLaunch`). The backend
  * builds the argv from it and from nothing the renderer sends; `cli` is an

@@ -188,6 +188,9 @@ interface Props {
   kind?: TabKind;
   /** Stable local-only target id for per-tab scheduled prompts. */
   scheduleTargetId?: string;
+  /** Registers the pane's prompt input under this id instead, and sends no
+   *  schedule target to the backend: a Tabby chat (`assistantPromptTarget`). */
+  promptTargetId?: string;
   /** Bumped to respawn the PTY in place (`relaunchTabInScope`). */
   relaunchSeq?: number;
   /** Show the Reader always, even in an attach-only mirror, and without its
@@ -280,7 +283,9 @@ function sweepXtermElements(container: HTMLElement) {
   }
 }
 
-export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
+export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, promptTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
+  // The id the pane's prompt input is registered under (scheduler, Reader).
+  const inputTargetId = promptTargetId ?? scheduleTargetId;
   const viewerId = useRef(crypto.randomUUID()).current;
   const viewerUpdateSeq = useRef(0);
   const colorScheme = useSettingsStore((s) => s.settings?.color_scheme);
@@ -866,7 +871,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       wakePhoneHolds();
     };
     const armScheduledReady = () => {
-      if (!scheduleTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
+      if (!inputTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
       scheduledReady.current = false;
       // Every new output chunk restarts the cushion. This closes the short gap
@@ -924,8 +929,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (!settledOnce && ((agentDeliveryTurn(id)?.startedAt ?? 0) >= lifecycleAt || scheduledInputReady())) settle();
       return settledOnce;
     };
-    const unregisterScheduled = scheduleTargetId && takesPrompts
-      ? registerScheduledAgentInput(scheduleTargetId, {
+    const unregisterScheduled = inputTargetId && takesPrompts
+      ? registerScheduledAgentInput(inputTargetId, {
           ptyId: id,
           ready: scheduledInputReady,
           started: scheduledInputStarted,
@@ -2026,8 +2031,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             ready,
             firstOutputAt: firstOutputAt.current,
             settled: settledOnce,
-            release: scheduleTargetId
-              ? registerScheduledAgentInput(scheduleTargetId, {
+            release: inputTargetId
+              ? registerScheduledAgentInput(inputTargetId, {
                   ptyId: id,
                   ready: () => ready && quiet(),
                   started: () => settledOnce || (agentDeliveryTurn(id)?.startedAt ?? 0) >= lifecycleAt || (ready && quiet()),
@@ -2089,7 +2094,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       fitRef.current = null;
       openedRef.current = false;
     };
-  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, relaunchSeq]);
+  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, inputTargetId, relaunchSeq]);
 
   // Re-theme a LIVE, OPEN terminal. Both halves of that guard are load-bearing,
   // and `termRef.current` alone was neither: assigning `options.theme` makes

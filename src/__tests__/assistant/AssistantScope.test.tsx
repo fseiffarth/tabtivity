@@ -46,7 +46,7 @@ vi.mock("../../components/tabs/TabPane", () => ({
 }));
 
 import { envName } from "../../lib/brand";
-import { ASSISTANT_SCOPE } from "../../lib/assistant";
+import { ASSISTANT_SCOPE, assistantPromptTarget, withAssistantPromptTarget } from "../../lib/assistant";
 import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import {
@@ -295,6 +295,16 @@ describe("the spawn of a chat", () => {
       tmuxAttach: null,
     });
     expect(spawn.scheduleTargetId).toBeUndefined();
+    // The Reader still sends: the pane takes prompts under a local id.
+    expect(spawn.promptTargetId).toBe(assistantPromptTarget(tab.key));
+  });
+
+  it("gives the Reader a chat's local prompt target, and leaves other tabs alone", () => {
+    const tab = { key: "k", scheduleTargetId: undefined as string | undefined };
+    expect(withAssistantPromptTarget(ASSISTANT_SCOPE, tab)?.scheduleTargetId).toBe(assistantPromptTarget("k"));
+    expect(withAssistantPromptTarget("p1", tab)).toBe(tab);
+    const scheduled = { key: "k", scheduleTargetId: "t" };
+    expect(withAssistantPromptTarget(ASSISTANT_SCOPE, scheduled)).toBe(scheduled);
   });
 
   it("sends no launch for a tab of any other scope", () => {
@@ -302,6 +312,7 @@ describe("the spawn of a chat", () => {
     const spawn = tabTerminalSpawn(tab, "p1", { terminalCwd: "/p" });
     expect(spawn.assistant).toBeNull();
     expect(spawn.env).toEqual({ A: "1" });
+    expect(spawn.promptTargetId).toBeUndefined();
   });
 });
 

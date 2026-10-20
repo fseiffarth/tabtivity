@@ -31,6 +31,7 @@ import { useAgentReaderStore, useReaderChangesOpen } from "../../stores/agents/a
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import type { TabEntry } from "../../stores/tabs";
 import { usePaneTab } from "../tabs/paneTabContext";
+import { withAssistantPromptTarget } from "../../lib/assistant";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
@@ -725,7 +726,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   focused: boolean;
 }) {
   const t = useT();
-  const tab = usePaneTab(scope, tabKey);
+  // A Tabby chat with its window-local prompt target: the composer, the
+  // sending marks and the model/effort chips all go through it.
+  const paneTab = usePaneTab(scope, tabKey);
+  const tab = useMemo(() => withAssistantPromptTarget(scope, paneTab), [scope, paneTab]);
   const [transcript, setTranscript] = useState<SessionTranscript | null>(null);
   const [limit, setLimit] = useState(READER_STEP);
   const [pending, setPending] = useState<PendingPrompt[]>([]);
