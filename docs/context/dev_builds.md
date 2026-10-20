@@ -218,7 +218,10 @@ change was not run live.
   otherwise it skips the settle wait and leaves `package-dev-auto.once`, which
   only the running loop reads (never `queue()`, so a stale one cannot let
   commits build while paused) and drops after one pass; pausing again removes
-  it and cancels the pass;
+  it and cancels the pass. `--build-now` and `--resume` return only once the
+  detached run holds the lock (at most 5 s; `await_run`), since the chip
+  re-reads at once and an earlier read still said idle — "Build now" looked
+  like it needed a second click (2026-10-20); the hook's `--queue` never waits;
   `scripts/package-dev-auto.sh --status` says what it is doing and
   `~/.local/share/tabtivity/package-dev-auto.log` holds the last build's output.
   The header's dev-build chip (`header/DevBuildIndicator.tsx`,
