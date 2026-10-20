@@ -29,6 +29,16 @@ function Frame({ className, children }: IconProps & { children: React.ReactNode 
   );
 }
 
+/** The AI switch (`lib/aiSwitch.ts`): the power symbol. */
+export function RailPowerIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <path d="M12 4v7" />
+      <path d="M7.4 7.2a6.5 6.5 0 109.2 0" />
+    </Frame>
+  );
+}
+
 /** Open the panel: a chevron pointing the way the panel slides in. */
 export function RailChevronIcon({ dir, className }: IconProps & { dir: "left" | "right" }) {
   return (

@@ -118,7 +118,11 @@ pub async fn pty_spawn(
                 prepared.spawn_seq(),
             );
         }
-        registry.lock_ok().set_drop_dir(&prepared.opts.id, drop_dir);
+        {
+            let mut reg = registry.lock_ok();
+            reg.set_drop_dir(&prepared.opts.id, drop_dir);
+            reg.set_ai(&prepared.opts.id, prepared.ai);
+        }
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
@@ -379,7 +383,23 @@ pub async fn pty_write(
 ) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();
     let id = pty_id_for(&ctx, registry, id);
-    let sender = registry.lock_ok().input_sender(&id);
+    let (sender, ai) = {
+        let reg = registry.lock_ok();
+        (reg.input_sender(&id), reg.is_ai(&id))
+    };
+    // The AI switch: while it is off nothing typed reaches an agent; an
+    // interrupt or a key that only steers its screen still does.
+    let kept = if ai && crate::services::ai_switch::is_off() {
+        crate::services::ai_switch::filter_while_off(&data)
+    } else {
+        None
+    };
+    if let Some(kept) = kept {
+        if let (Some(sender), false) = (sender, kept.is_empty()) {
+            let _ = sender.send(kept).await;
+        }
+        return Err(crate::services::ai_switch::AI_OFF.to_string());
+    }
     if let Some(sender) = sender {
         sender
             .send(data)

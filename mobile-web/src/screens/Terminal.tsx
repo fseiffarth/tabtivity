@@ -888,6 +888,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [viewportHeight, setViewportHeight] = useState<number>();
   const [connected, setConnected] = useState(false);
   const [stoppedReason, setStoppedReason] = useState("");
+  // The desktop's AI switch is off: the bridge acked what was typed but
+  // dropped it (`ai_off` event). Said for a few seconds after each drop.
+  const [aiOffAt, setAiOffAt] = useState(0);
+  // The switch as the terminal socket reports it (`ai_switch`, `ai_off`):
+  // while off an agent tab's composer keeps its draft instead of sending.
+  const [aiOff, setAiOff] = useState(false);
+  const aiOffRef = useRef(false);
+  aiOffRef.current = aiOff;
+  useEffect(() => {
+    if (!aiOffAt) return;
+    const id = window.setTimeout(() => setAiOffAt(0), 6000);
+    return () => window.clearTimeout(id);
+  }, [aiOffAt]);
   const [altScreen, setAltScreen] = useState(false);
   /** The alternate screen's visible frame, on an agent tab. It is not session
    * output — it is repainted whole and has no scrollback behind it — so it
@@ -1609,7 +1622,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     /** Everything up to the `seq`-th frame reached the PTY (frames are
      * ordered). A bubble whose last frame is in clears its marker, and so
      * does the composer's notice once no late keystroke is left. */
+    // The desktop's AI switch dropped the frame the next ack covers (its
+    // `ai_off` event comes just before that ack): the prompt was not delivered.
+    let aiRefused = false;
     const acked = (seq: number) => {
+      const refused = aiRefused;
+      aiRefused = false;
       const delivered = new Set<number>();
       let bare = false;
       for (const [frame, entry] of unacked) {
@@ -1620,7 +1638,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       }
       const waiting = [...unacked.values()];
       for (const id of delivered) {
-        if (!waiting.some((entry) => entry.prompt === id)) markPrompt(id, { failed: false, retrying: false });
+        if (refused) markPrompt(id, { failed: true, retrying: false });
+        else if (!waiting.some((entry) => entry.prompt === id)) markPrompt(id, { failed: false, retrying: false });
       }
       if (bare && !waiting.some((entry) => entry.late && entry.prompt === undefined)) setSendFailed(false);
     };
@@ -1865,6 +1884,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           watchTrim();
           resetHistory();
           setLines([]);
+          return;
+        }
+        if (control.type === "ai_switch") {
+          setAiOff(control.off);
+          if (!control.off) setAiOffAt(0);
+          return;
+        }
+        if (control.type === "ai_off") {
+          aiRefused = true;
+          setAiOff(true);
+          setAiOffAt(Date.now());
           return;
         }
         if (control.type === "features") {
@@ -2700,6 +2730,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       return true;
     }
     if (!connected || !text.trim()) return false;
+    // The desktop's AI switch is off: the draft stays, nothing is sent.
+    if (tab.kind === "agent" && aiOffRef.current) {
+      setAiOffAt(Date.now());
+      return false;
+    }
     // Only confirm what actually left the device. `readyState === OPEN` on a
     // half-open cellular link silently buffers, and "Sent" was shown regardless.
     if (tab.kind !== "agent") {
@@ -4391,6 +4426,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {tab.kind === "agent" && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
+      {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {undoNote && <div className="voice-feedback" role="status">{t(undoNote)}</div>}
       {subagentTarget && (subagentSending || subagentNote) && <div className={subagentNote ? "voice-feedback error" : "voice-feedback"} role={subagentNote ? "alert" : "status"}>{t(subagentNote || "mobile.subagent.sending")}{isUntested("mobile.subagent.input") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {editNote && !editing && <div className={editNote === "mobile.composer.heldEditFailed" ? "voice-feedback error" : "voice-feedback"} role="status">{t(editNote)}{editNote === "mobile.composer.heldNote" && <> {t("mobile.composer.holdToInterrupt")}{isUntested("mobile.composer.sendHold") && <> · <em>{t("mobile.focus.untested")}</em></>}</>}{isUntested("mobile.chat.editHeld") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}

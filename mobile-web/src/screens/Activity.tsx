@@ -8,6 +8,7 @@ import { tabColorCss } from "../tabColors";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { isUntested } from "../../../src/lib/untested";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -77,6 +78,7 @@ export function Activity({ open, onConnection }: {
   /** Until the first answer, an empty list is "still loading", not "nothing". */
   const [loaded, setLoaded] = useState(false);
   const [desktop, setDesktop] = useState(true);
+  const [aiOff, setAiOff] = useState(false);
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
   const [sort, setSort] = useState<AgentSort>(() => readChoice("agentsSort", isAgentSort, DEFAULT_AGENT_SORT));
   const chooseSort = (next: AgentSort) => { setSort(next); writeChoice("agentsSort", next); };
@@ -100,6 +102,7 @@ export function Activity({ open, onConnection }: {
           setTabs(body.tabs);
           setNow(Date.now());
           setDesktop(body.desktop_available);
+          setAiOff(body.ai_off === true);
           setOffline(null);
           onConnection(null);
           setLoaded(true);
@@ -131,6 +134,7 @@ export function Activity({ open, onConnection }: {
     </p>}
     {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.activity.loading")}</p>}
     {loaded && !desktop && <p className="notice">{t("mobile.activity.desktopUnavailable")}</p>}
+    {loaded && aiOff && <p className="notice" role="status">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</p>}
     {loaded && desktop && tabs.length === 0 && <p className="projects-empty">{t("mobile.activity.empty")}</p>}
     {tabs.length > 1 && <label className="activity-sort">
       <select aria-label={t("mobile.activity.sortAria")} value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>

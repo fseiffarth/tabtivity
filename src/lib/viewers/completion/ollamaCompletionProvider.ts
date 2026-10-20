@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { aiIsOff } from "../../aiSwitch";
 import { listen } from "@tauri-apps/api/event";
 import type { AutocompleteMode } from "../../../types";
 import { CompletionCache, completionModels, completionModelOrder, completionWindow, pickCompletionModel } from "./autocomplete";
@@ -26,6 +27,8 @@ export class OllamaCompletionProvider implements CompletionProvider {
 
   async complete(document: CompletionDocument, signal: AbortSignal,
     publish: (candidates: CompletionCandidate[]) => void): Promise<CompletionCandidate[]> {
+    // The AI switch (`lib/aiSwitch.ts`): no suggestion while AI is off.
+    if (aiIsOff()) return [];
     let requestId: string | undefined;
     let unlisten: (() => void) | undefined;
     const cancel = () => {

@@ -24,6 +24,7 @@ import { recordScheduledDelivery, sendCollectedPrompt, useAgentPromptsStore } fr
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { holdsTimerLease } from "../../stores/timerLease";
+import { aiIsOff } from "../../lib/aiSwitch";
 
 const TICK_MS = 15_000;
 const OUTPUT_SETTLE_MS = 1_200;
@@ -384,8 +385,10 @@ export function AgentScheduleHost() {
         return;
       }
       // Another Tabtivity window holds the timer lease: it delivers, this one
-      // does not (headless owner plan, H2 interim).
-      if (!holdsTimerLease()) return;
+      // does not (headless owner plan, H2 interim). While AI is off nothing
+      // goes in; a due prompt goes in once AI is on again if that is still
+      // within its delivery window, else it is recorded as missed.
+      if (!holdsTimerLease() || aiIsOff()) return;
       running.current = true;
       again = false;
       try {

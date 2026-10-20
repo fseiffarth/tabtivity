@@ -32,6 +32,7 @@ export type UntestedEntry = {
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
   "sidePanel.hiddenRename": { area: "shell", what: "Side panel Hidden list · one row per hidden subwindow named \"Hidden <n>\" (tooltip lists its tabs, a click restores it); ✎ renames it inline and the name survives a restart; a restored subwindow opens beside the focused one" },
+  "sidePanel.aiSwitch": { area: "shell", what: "Side panel ⏻ AI switch: off blocks typing to agents, new agent tabs (they wait and start on resume), schedules/auto-continue/cron, completions, mail AI and the phone; survives a restart; on again resumes" },
   "sidePanel.ideToggle": { area: "shell", what: "Side panel as a VS Code-style docked bar: always-on rail, click-to-toggle, Ctrl+B, snap-close sash, Auto-hide mode" },
   "centerPanel.openTab": { area: "shell", what: "Empty workspace · Open a tab opens the empty group's new-tab menu" },
   "desktop.settingsNavigation": { area: "shell", what: "Grouped settings pages, the left-hand search box and per-page scroll restoration" },
@@ -530,6 +531,7 @@ export const UNTESTED = {
   "mobile.home.reorder": { area: "mobile", what: "Home · Drag to reorder the project list" },
   "mobile.home.agentCounts": { area: "mobile", what: "Home · A project row counts its agent tabs that are working, waiting on a decision, or done beside its open-tab count" },
   "mobile.home.recover": { area: "mobile", what: "Home · The project list loads again on its own after a failed load (page shown again, back online, slow retry)" },
+  "mobile.aiOff": { area: "mobile", what: "Desktop AI switch off: Agents shows the AI-is-off notice; typing in a terminal says AI is off and a sent prompt stays Not delivered (Resend once AI is on)" },
   "mobile.link.ack": { area: "mobile", what: "Terminal · A prompt the link lost keeps its bubble, says Not delivered, and Resend delivers it once" },
   "mobile.link.failureText": { area: "mobile", what: "Terminal · Every close reason and error reads as a sentence, never a code (session_expired, desktop_unavailable, …)" },
   "mobile.link.offlineShell": { area: "mobile", what: "App · Opened with the desktop closed, the phone shows Tabtivity's own splash rather than the proxy's 502 page", tested: "2026-09-28" },

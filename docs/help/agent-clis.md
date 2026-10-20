@@ -203,6 +203,27 @@ open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
 
+## Switch all AI off
+
+The power button (⏻) in the side panel header switches all of Tabtivity's AI
+off, everywhere: desktop, popout windows and the phone. A second click turns
+it back on. The choice survives a restart.
+
+While AI is off:
+
+- Agents that are already running keep running. They just get no new input:
+  what you type into an agent tab (or send from the phone) is dropped, and
+  the tab says so. Ctrl+C, Esc and the arrow keys still reach the agent, so
+  you can always stop it.
+- A new or restored agent tab, or a Tabby chat, does not start. It waits with
+  a note and starts by itself once AI is on again.
+- Scheduled prompts, auto-continue and the morning warm-up do not fire. One
+  that falls due goes in once AI is back on if that is soon enough (a
+  scheduled prompt within the hour); later than that, it counts as missed.
+- Editor autocomplete (Ollama, Copilot), mail AI and loading a local model
+  are paused.
+- Typing an agent CLI's name into a shell tab prints that AI is off.
+
 ## Resume after a restart
 
 Claude, Codex, Mistral and OpenCode tabs reopen their exact conversation (an

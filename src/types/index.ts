@@ -640,6 +640,9 @@ export interface Settings {
   /** Accepted once: agents on a platform with no fence (Windows) run with the
    *  user's full rights. Backend-enforced (`agent_fence::platform_accepted`). */
   agent_fence_platform_accepted?: boolean;
+  /** The AI switch (side panel ⏻, `lib/aiSwitch.ts`): `true` stops every new
+   *  AI use machine-wide. Backend-enforced (`services::ai_switch`). */
+  ai_off?: boolean;
   /** A fenced root-console agent sees every project, box folder and remote
    *  mirror read-only (default off: a widening). The mail `attach` argument
    *  needs it; recorded per root tab at spawn. */

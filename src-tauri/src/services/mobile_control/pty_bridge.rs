@@ -419,6 +419,16 @@ fn closing_retries(reason: &str) -> bool {
     matches!(reason, "idle_timeout" | "session_expired" | "catalog_unavailable")
 }
 
+/// What the AI switch keeps of an input frame to the tab, when it drops any of
+/// it: an agent's frame while AI is off, unless the frame only interrupts or
+/// steers (`ai_switch::filter_while_off`). `None` writes the frame as is.
+fn ai_input_kept(ai: bool, state_dir: &std::path::Path, bytes: &[u8]) -> Option<Vec<u8>> {
+    if !ai || !crate::services::ai_switch::is_off_at(&state_dir.join("settings.json")) {
+        return None;
+    }
+    crate::services::ai_switch::filter_while_off(bytes)
+}
+
 /// The acknowledgement for the phone's `seq`-th input frame on this socket.
 fn ack_frame(seq: u64) -> String {
     TerminalEvent::Ack { seq }.to_frame()
@@ -471,6 +481,8 @@ pub async fn attach(
     state_dir: PathBuf,
     tab_id: String,
     catalog: Arc<Mutex<CatalogCache>>,
+    // The tab runs an agent: its input obeys the AI switch.
+    ai: bool,
     // Called on the leading edge of each burst of typing from this viewer (see
     // `INPUT_REPORT_INTERVAL`). A callback rather than a desktop call of its
     // own, so this module keeps knowing nothing about the desktop socket.
@@ -572,6 +584,13 @@ pub async fn attach(
     // Last, and only ever read by a phone that knows the name: what this
     // bridge accepts beyond the base controls.
     opening.push(TerminalEvent::Features { visibility: true }.to_frame());
+    // The AI switch, for an agent tab's composer: said at open only while
+    // off, and on the tick below at every change.
+    let settings_file = state_dir.join("settings.json");
+    let mut ai_off = ai && crate::services::ai_switch::is_off_at(&settings_file);
+    if ai_off {
+        opening.push(TerminalEvent::AiSwitch { off: true }.to_frame());
+    }
     for frame in opening {
         if !deliver(&mut ws_tx, Message::Text(frame.into())).await {
             return Ok(());
@@ -599,6 +618,13 @@ pub async fn attach(
         tokio::select! {
             _ = authorization_tick.tick() => {
                 if guard.evicted() { break Err("replaced".into()); }
+                if ai {
+                    let now_off = crate::services::ai_switch::is_off_at(&settings_file);
+                    if now_off != ai_off {
+                        ai_off = now_off;
+                        if !deliver(&mut ws_tx, Message::Text(TerminalEvent::AiSwitch { off: now_off }.to_frame().into())).await { break Ok(()); }
+                    }
+                }
                 if last_client_message.elapsed() > IDLE_TIMEOUT {
                     break Err("idle_timeout".into());
                 }
@@ -650,6 +676,19 @@ pub async fn attach(
                     last_client_message = std::time::Instant::now();
                     touch(&auth);
                     if bytes.len() > MAX_INPUT_FRAME { break Err("input_frame_too_large".into()); }
+                    // The AI switch: nothing typed reaches an agent while it is
+                    // off. The frame is still acked — it was handled, by
+                    // dropping it — and the phone is told why.
+                    if let Some(kept) = ai_input_kept(ai, &state_dir, &bytes) {
+                        // `AiOff` first: the phone marks what the ack after
+                        // it covers as not delivered, keeping its words. A
+                        // Ctrl+C in the frame still goes in.
+                        if !kept.is_empty() && (writer.write_all(&kept).is_err() || writer.flush().is_err()) { break Ok(()); }
+                        input_frames += 1;
+                        if !deliver(&mut ws_tx, Message::Text(TerminalEvent::AiOff.to_frame().into())).await { break Ok(()); }
+                        if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
+                        continue;
+                    }
                     if writer.write_all(&bytes).is_err() || writer.flush().is_err() { break Ok(()); }
                     // After the write, so a frame that never reached the PTY is
                     // never reported as having commanded it — and never acked.

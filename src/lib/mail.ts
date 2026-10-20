@@ -676,7 +676,8 @@ export function mailAiFeatureOn(
   account: MailAccount | null | undefined,
   feature: MailAiFeature,
 ): boolean {
-  return account?.ai?.[feature] === true && mailAiResolvable(settings);
+  // Not while the AI switch is off (`lib/aiSwitch.ts`); the settings stay as set.
+  return account?.ai?.[feature] === true && mailAiResolvable(settings) && settings?.ai_off !== true;
 }
 
 /** {@link mailAiFeatureOn} as a store subscription — the call site for a
@@ -686,7 +687,7 @@ export function useMailAiFeature(
   account: MailAccount | null | undefined,
   feature: MailAiFeature,
 ): boolean {
-  const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings));
+  const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings) && s.settings?.ai_off !== true);
   return resolvable && account?.ai?.[feature] === true;
 }
 

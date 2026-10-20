@@ -528,6 +528,9 @@ pub struct PreparedLaunch {
     pub resting: bool,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
+    /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
+    /// input is refused (`commands::terminal::pty_write`).
+    pub ai: bool,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
@@ -659,6 +662,25 @@ pub async fn prepare(
     session_name: Option<String>,
     pool: Option<&crate::services::remote::RemotePoolState>,
 ) -> Result<PreparedLaunch, String> {
+    // The AI switch: no agent starts while it is off — the window's tabs and
+    // the sidecar's headless spawns alike. Read off the caller's options,
+    // before any wrap renames the program. A tab whose agent still runs in
+    // its local tmux session (a restart) only reattaches, so it is let through:
+    // a running agent must stay reachable, if only to stop it. Its input is
+    // gated like any agent's (`ai`).
+    let ai = is_ai_spawn(&opts);
+    if ai && crate::services::ai_switch::is_off() {
+        let (project, host, session, local_only) =
+            (opts.project_id.clone(), opts.remote_host_id.clone(), opts.tmux_session.clone(), opts.local_only);
+        let rejoins = app_core::rt::spawn_blocking(move || {
+            session.is_some_and(|s| reattaches_session(project.as_deref(), host.as_deref(), &s, local_only))
+        })
+        .await
+        .unwrap_or(false);
+        if !rejoins {
+            return Err(crate::services::ai_switch::AI_OFF.to_string());
+        }
+    }
     // Resolve empty cwd to Tabtivity's root workspace directory (an assistant
     // chat's cwd is its own folder, set by the gate below).
     if opts.cwd.is_empty() && opts.assistant.is_none() {
@@ -1285,11 +1307,71 @@ pub async fn prepare(
         spawned_tab_id,
         generation,
         drop_dir,
+        ai,
     })
+}
+
+/// Whether a launch runs an AI, for the AI switch: an agent by the fence's
+/// own reading, or a chat assistant — but not a CLI's sign-in
+/// (`lib/agents/signInLaunch.ts`: `<cli> login …` / `<cli> auth login …`),
+/// which talks to no model.
+pub fn is_ai_spawn(opts: &PtyOptions) -> bool {
+    opts.assistant.is_some()
+        || (crate::services::agent_fence::is_agent(opts) && !is_sign_in_argv(&opts.args))
+}
+
+fn is_sign_in_argv(args: &[String]) -> bool {
+    match args {
+        [first, ..] if first == "login" => true,
+        [first, second, ..] => first == "auth" && second == "login",
+        _ => false,
+    }
+}
+
+/// Whether a spawn wrapped in the tab's tmux `session` (`new-session -A`)
+/// would only reattach it — the session still runs, here or on the tab's
+/// remote host — and so start no program. Blocking: the remote answer is one
+/// `tmux has-session` over the shared master (`BatchMode`, never a prompt);
+/// an unreachable host reads as "would start".
+fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, local_only: bool) -> bool {
+    use crate::services::remote;
+    let target = project.filter(|_| !local_only).and_then(|id| {
+        remote::remote_target_for_host(id, host.unwrap_or(remote::PRIMARY_HOST))
+    });
+    match target {
+        None => crate::services::tmux_local::app_session_alive(session),
+        Some(target) => {
+            let probe = format!(
+                "tmux has-session -t {}",
+                crate::services::ssh_exec::shell_quote(&format!("={session}"))
+            );
+            crate::services::ssh_exec::run_remote_shell(&target.spec, &probe)
+                .is_ok_and(|out| out.status.success())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_sign_in_is_not_an_ai_spawn() {
+        let opts = |cmd: &str, args: &[&str]| PtyOptions {
+            login: None, assistant: None,
+            id: "p:t".into(), cmd: cmd.into(), args: args.iter().map(|a| a.to_string()).collect(),
+            env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false,
+            agent: true, project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None,
+            host_bound_uid: None, local_model: false, schedule_target_id: None, host_session: false,
+        };
+        assert!(is_ai_spawn(&opts("claude", &[])));
+        assert!(is_ai_spawn(&opts("claude", &["--resume", "x"])));
+        assert!(is_ai_spawn(&opts("codex", &["exec", "login"])));
+        assert!(!is_ai_spawn(&opts("claude", &["auth", "login", "--claudeai"])));
+        assert!(!is_ai_spawn(&opts("codex", &["login", "--device-auth"])));
+        let mut shell = opts("bash", &[]);
+        shell.agent = false;
+        assert!(!is_ai_spawn(&shell));
+    }
+
     #[test]
     fn scope_root_is_not_the_tab_cwd() {
         assert_eq!(super::scope_root_for("local", None, "mirror", None, false), "local");
@@ -1317,7 +1399,7 @@ mod tests {
             local_model: false, schedule_target_id: None, host_session: false,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, drop_dir: None, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, drop_dir: None, ai: true, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, host_agent_tab: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }

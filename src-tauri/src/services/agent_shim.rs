@@ -133,6 +133,11 @@ fn drain_terminal_input() {
 /// the shell that continues on it. Every failure is printed and becomes the
 /// exit status; the child's own status is passed through.
 pub fn run(cli: &str, args: &[String]) -> i32 {
+    // The AI switch (`services::ai_switch`): no CLI starts while AI is off.
+    if crate::services::ai_switch::is_off() {
+        eprintln!(concat!("agent shim: AI is off; switch it on with the power button in ", crate::app_name!(), "'s side panel"));
+        return 1;
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::process::{CommandExt, ExitStatusExt};

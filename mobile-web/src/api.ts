@@ -109,7 +109,8 @@ export async function getGitOverview(projectId: string, signal?: AbortSignal): P
  * the project it lives in, because that list is flat and a tab label on its own
  * does not say where the session is. */
 export interface ActivityTab extends TabRow { project_id: string; project_label: string }
-export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean }
+/** `ai_off`: the desktop's AI switch is off (absent from an older desktop). */
+export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean; ai_off?: boolean }
 
 /** `GET /api/v1/activity` — every agent tab the desktop reports as working,
  * waiting on a decision, or done, across every project this phone may reach.
@@ -315,9 +316,9 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
 
 /** The host reads these display preferences from desktop settings on each
  * probe: the untested pills, the desktop's theme for a phone that follows it,
- * and the sections the desktop keeps this phone out of (absent from an older
- * host: none). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[] }> {
+ * the sections the desktop keeps this phone out of (absent from an older
+ * host: none) and the desktop's AI switch (`ai_off`, absent: on). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */

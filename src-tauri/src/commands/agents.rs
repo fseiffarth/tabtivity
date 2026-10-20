@@ -1439,6 +1439,7 @@ pub struct AgentWarmupLaunch {
 /// `WARMUP_TIMEOUT`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupLaunch, String> {
+    crate::services::ai_switch::check()?;
     let message = message.trim().to_string();
     if message.is_empty() || message.len() > WARMUP_MESSAGE_MAX || message.contains(['\n', '\r']) {
         return Err("warm-up message must be one short line".into());

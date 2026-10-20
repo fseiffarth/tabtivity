@@ -28,6 +28,7 @@ import { terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
+import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
@@ -350,6 +351,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // What the pane says when the Windows "full rights" acceptance was declined.
   const unfencedDeclinedTextRef = useRef<() => string>(() => "");
   unfencedDeclinedTextRef.current = () => t("unfencedPlatform.declined");
+  // The AI switch: an agent pane says, the whole time AI is off, that what is
+  // typed does not reach it (the backend drops it, `pty_write`).
+  const aiOff = useAiOff();
+  const aiOffWaitingTextRef = useRef<() => string>(() => "");
+  aiOffWaitingTextRef.current = () => t("terminal.aiOff.waiting");
   // A clicked link never opens straight away: the user confirms the exact URL
   // first, since anything a program prints can be a link. Refs, because the
   // spawn effect below outlives renders.
@@ -467,6 +473,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     const spawnKey = attachOnly
       ? null
       : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+    // Ends a spawn waiting on the AI switch when this lifecycle does.
+    const aiWait = new AbortController();
     const parked = attachOnly ? undefined : asleepPty(id);
     const waking = !!parked && parked.spawnKey !== null && parked.spawnKey === spawnKey;
     // This lifecycle runs (spawned) or took over the PTY: only then does its
@@ -1648,6 +1656,34 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // silent-start notice would only talk over it.
         spawnState = "failed";
         if (cancelled) return;
+        // **The AI switch's refusal, made a wait** (`lib/aiSwitch.ts`). An
+        // agent tab opened or restored while AI is off says so and starts the
+        // moment AI is back on — the same spawn, nothing to click in the tab.
+        // A retry refused again waits again: the switch went back off, or the
+        // backend read `settings.json` before the write this store already
+        // shows had landed (then a growing pause, not a tight loop).
+        if (isAiOffRefusal(e)) {
+          writeTerm(`\r\n\x1b[33m[${aiOffWaitingTextRef.current()}]\x1b[0m\r\n`);
+          let pause = 300;
+          for (;;) {
+            if (!(await whenAiOn(aiWait.signal)) || cancelled) return;
+            try {
+              await spawn();
+              spawnState = "spawned";
+              ownsPty = true;
+              return;
+            } catch (retryErr) {
+              if (cancelled) return;
+              if (!isAiOffRefusal(retryErr)) {
+                writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, pause));
+              pause = Math.min(pause * 2, 5000);
+              if (cancelled) return;
+            }
+          }
+        }
         // **The HPC tag's refusal, made actionable** (G.24). `pty_spawn` dials the
         // host before wrapping a remote tab, and on a machine tagged HPC it
         // refuses with `hpc_mode`'s sentinel — deliberately, because it receives
@@ -1978,6 +2014,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
 
     return () => {
       cancelled = true;
+      aiWait.abort();
       holdForSpawn(false);
       clearPtyInput(id);
       if (initialEnterTimer.current) clearTimeout(initialEnterTimer.current);
@@ -2359,6 +2396,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         subagentTitle={undefined}
         onClose={() => useAgentReaderStore.getState().setChanges(readerAgent, false)}
       />,
+      host,
+    )}
+    {aiOff && (agentPane || assistant) && host && createPortal(
+      <div className="terminal-drop-banner terminal-ai-off-banner" role="status">
+        {t("terminal.aiOff.banner")} <UntestedTag id="sidePanel.aiSwitch" />
+      </div>,
       host,
     )}
     {dropActive && host && createPortal(

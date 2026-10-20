@@ -24,7 +24,13 @@ export type TerminalEvent =
   /** The optional controls this desktop accepts, sent with the opening
    * frames. An event type this bundle does not know is ignored, which is
    * what lets either side be the newer one. */
-  | { type: "features"; visibility: boolean };
+  | { type: "features"; visibility: boolean }
+  /** The desktop's AI switch is off: the input frame the next `ack` covers
+   * was dropped, not written to the agent. */
+  | { type: "ai_off" }
+  /** The desktop's AI switch as it is now (agent tabs): sent at open while
+   * it is off, and at every change after. */
+  | { type: "ai_switch"; off: boolean };
 
 /** The geometry the desktop accepts in a `resize`. Mirrors `MIN_COLS` …
  * `MAX_ROWS` in `protocol.rs`: a size outside these is answered with

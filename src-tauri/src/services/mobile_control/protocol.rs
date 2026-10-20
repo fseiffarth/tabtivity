@@ -1991,6 +1991,12 @@ pub enum TerminalEvent {
     Ack { seq: u64 },
     /// `visibility`: this bridge accepts `TerminalControl::Visibility`.
     Features { visibility: bool },
+    /// The AI switch is off (`services::ai_switch`): the input frame the
+    /// next `Ack` covers was dropped, not written to the agent.
+    AiOff,
+    /// The AI switch as it is now, on an agent tab's socket: sent at open
+    /// while it is off, and at every change after.
+    AiSwitch { off: bool },
 }
 
 impl TerminalEvent {

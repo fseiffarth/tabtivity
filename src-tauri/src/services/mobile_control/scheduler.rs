@@ -480,6 +480,9 @@ use crate::clock::now_secs;
 pub enum Event {
     /// A window holds the timers: nothing to do here.
     WindowHoldsLease(String),
+    /// The AI switch is off (`services::ai_switch`): nothing is delivered,
+    /// relaunched or recorded until it is on again.
+    AiOff,
     /// The tab's session was gone; it was started again (or the start failed).
     Relaunched { tmux: String, error: Option<String> },
     /// An occurrence past the catch-up window was recorded as missed.
@@ -590,6 +593,10 @@ pub async fn tick(ctx: &Context, now: DateTime<Local>) -> Vec<Event> {
     let secs = now.timestamp().max(0) as u64;
     if let Some(holder) = timer_lease::holder_in(&timer_lease::lease_file(&ctx.state_dir), secs) {
         events.push(Event::WindowHoldsLease(holder));
+        return events;
+    }
+    if crate::services::ai_switch::is_off_at(&ctx.state_dir.join("settings.json")) {
+        events.push(Event::AiOff);
         return events;
     }
     let tasks = agent_tasks::file_path(&ctx.state_dir);
@@ -707,7 +714,7 @@ pub async fn run(
             _ = async { tokio::select! { _ = interval.tick() => {}, _ = holds.wake.notified() => {} } } => {
                 for event in tick(&ctx, Local::now()).await {
                     match event {
-                        Event::WindowHoldsLease(_) => {}
+                        Event::WindowHoldsLease(_) | Event::AiOff => {}
                         Event::Relaunched { tmux, error: None } => eprintln!("{}: scheduler: restarted '{tmux}' for a due prompt", crate::brand::MOBILE_HOST_BIN),
                         Event::Relaunched { .. } => {}
                         Event::Missed { tmux, schedule_id, occurrence } => eprintln!("{}: scheduler: '{schedule_id}' on '{tmux}' missed {occurrence}", crate::brand::MOBILE_HOST_BIN),
@@ -1152,6 +1159,24 @@ mod tests {
         // The window is gone (its lease ran out): the sidecar takes over.
         let later = now + ChronoDuration::seconds(31);
         assert!(matches!(tick(&ctx, later).await.as_slice(), [Event::Delivered { .. }]));
+    }
+
+    #[tokio::test]
+    async fn the_sidecar_holds_due_prompts_while_ai_is_off() {
+        let now = Local::now();
+        let key = occurrence_key(&(now - ChronoDuration::minutes(5)));
+        let fixture = Fixture::new(vec![rule_once(&key)]);
+        let recorder = Arc::new(Recorder::default());
+        let secs = now.timestamp() as u64;
+        *recorder.probe.lock().unwrap() = Some(SessionProbe { created: secs - 600, activity: secs - 60 });
+        let (ctx, _launched) = context(&fixture, &recorder);
+        let settings = fixture.state_dir().join("settings.json");
+        std::fs::write(&settings, "{\"ai_off\":true}").unwrap();
+        assert_eq!(tick(&ctx, now).await, vec![Event::AiOff]);
+        assert!(recorder.delivered.lock().unwrap().is_empty());
+        // Back on: the prompt held through the pause goes in.
+        std::fs::write(&settings, "{\"ai_off\":false }").unwrap();
+        assert!(matches!(tick(&ctx, now).await.as_slice(), [Event::Delivered { .. }]));
     }
 
     /// The keys reach the pane: on a private tmux server a session running

@@ -233,6 +233,7 @@ fn new_chat_at(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn assistant_new_chat(ctx: Ctx, cli: String, model: Option<String>) -> Result<NewChat, String> {
     gate(enabled_now())?;
+    crate::services::ai_switch::check()?;
     let chat = app_core::rt::spawn_blocking(move || {
         new_chat_at(
             &storage::state_dir(),

@@ -7,6 +7,7 @@ import {
 } from "../../lib/agents/agentCron";
 import { runAgentCronWarmup } from "../../lib/agents/agentCronRun";
 import { holdsTimerLease } from "../../stores/timerLease";
+import { aiIsOff } from "../../lib/aiSwitch";
 import { storageKey } from "../../lib/brand";
 
 /** How often "is a slot due?" is asked. A minute is finer than the grace window
@@ -97,8 +98,10 @@ export function AgentCronHost() {
     const tick = () => {
       if (inFlight.current) return;
       // Another Tabtivity window holds the timer lease: it sends the morning's
-      // message, this one does not (headless owner plan, H2 interim).
-      if (!holdsTimerLease()) return;
+      // message, this one does not (headless owner plan, H2 interim). Nor
+      // while AI is off: a run due then is sent once AI is on again, if
+      // that is still within its grace window.
+      if (!holdsTimerLease() || aiIsOff()) return;
       const now = new Date();
       const record = fired.current ?? new Set<string>();
       // Re-read the settings rather than closing over `cron`: a schedule edited

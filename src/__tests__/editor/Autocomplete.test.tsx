@@ -49,18 +49,21 @@ const SOURCE = "def foo():\n    ";
 // The settings the mocked store returns — toggled per test via this ref.
 let autocompleteOn = false;
 let copilotOn = false;
-vi.mock("../../stores/settings", () => ({
-  useSettingsStore: (sel: (s: unknown) => unknown) =>
-    sel({
-      settings: {
-        autosave: false,
-        copilot_completion: copilotOn,
-        code_completion_provider: copilotOn ? "copilot" : "ollama",
-        completion_project_policies: { proj: { directory: "/p", copilot: copilotOn, local_only: false } },
-        viewer_prefs: { text: { autocomplete: autocompleteOn } },
-      },
-    }),
-}));
+vi.mock("../../stores/settings", () => {
+  const state = () => ({
+    settings: {
+      autosave: false,
+      copilot_completion: copilotOn,
+      code_completion_provider: copilotOn ? "copilot" : "ollama",
+      completion_project_policies: { proj: { directory: "/p", copilot: copilotOn, local_only: false } },
+      viewer_prefs: { text: { autocomplete: autocompleteOn } },
+    },
+  });
+  // `getState`: the providers ask the AI switch (`lib/aiSwitch.ts`) first.
+  return {
+    useSettingsStore: Object.assign((sel: (s: unknown) => unknown) => sel(state()), { getState: state }),
+  };
+});
 
 function setup() {
   mockListen.mockImplementation(() => Promise.resolve(() => {}));

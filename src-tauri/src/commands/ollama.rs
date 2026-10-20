@@ -1655,6 +1655,8 @@ pub async fn load_ollama_model(
 /// blocking warm-up with `keep_alive: -1`, then `success`/`error` — all keyed by
 /// `model` exactly as given.
 fn run_load(ctx: &CoreCtx, model: &str, device: LoadDevice) -> Result<(), String> {
+    // A load is the model's first run (an empty generate): none while AI is off.
+    crate::services::ai_switch::check()?;
     ctx.emit(
         "ollama-load-progress",
         serde_json::json!({ "model": model, "status": "loading" }),
@@ -3696,6 +3698,7 @@ pub async fn complete_text(
     project_id: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
+    crate::services::ai_switch::check()?;
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
         let settings = crate::storage::load_settings().unwrap_or_default();

@@ -8,6 +8,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { SettingRow } from "../layout/settingsUi";
 import { CliBlockCard, SearchSetupCard } from "./AssistantCards";
 import { cliBlock, type AssistantOptionsHandle } from "./useAssistantOptions";
+import { isAiOffRefusal } from "../../lib/aiSwitch";
 
 /** The CLI a new chat preselects: the user's default if it is offered, else
  *  the backend's, else the first one that can start a chat right now. */
@@ -79,7 +80,9 @@ export function AssistantNewChat({
       if (tab) onStarted(tab.key);
       else setError(t("assistant.newChat.vanished"));
     } catch (err) {
-      setError(t("assistant.newChat.failed", { reason: String(err).replace(/^Error: /, "") }));
+      setError(isAiOffRefusal(err)
+        ? t("sidePanel.aiOffHint")
+        : t("assistant.newChat.failed", { reason: String(err).replace(/^Error: /, "") }));
     } finally {
       setBusy(false);
     }

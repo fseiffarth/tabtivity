@@ -2799,3 +2799,23 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+### AI switch (side panel ⏻) — `docs/ai_switch_plan.md`
+
+- [x] Built 2026-10-20 (uncommitted): `services::ai_switch` + gates, side
+  panel button, waiting agent tabs, timers, completions, mail AI, phone.
+- [ ] 🖐️ Manual test — click ⏻ in the side panel: it turns red. Typing into a
+  running Claude tab does nothing and the red strip says AI is off; Ctrl+C
+  still interrupts it. A new agent tab prints the yellow "AI is off" line and
+  does not start. `claude` typed in a shell tab prints that AI is off. The
+  phone's Agents list shows the notice; typing in a phone terminal shows
+  "AI is off". Restart Tabtivity: ⏻ is still red. Click it again: the waiting
+  tab starts on its own, and typed input reaches the agent.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

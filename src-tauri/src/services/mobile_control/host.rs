@@ -270,6 +270,22 @@ fn api_error(status: StatusCode, code: &str) -> (StatusCode, Json<serde_json::Va
     (status, Json(json!({ "error": code })))
 }
 
+/// Whether the user switched AI off (`services::ai_switch`) — the same
+/// `settings.json` the window writes.
+fn ai_is_off(state: &HostState) -> bool {
+    crate::services::ai_switch::is_off_at(&state.config.state_dir.join("settings.json"))
+}
+
+/// `403 ai_off` while AI is off, for a route that would type into an agent
+/// or start a model.
+fn ai_off_guard(state: &HostState) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if ai_is_off(state) {
+        Err(api_error(StatusCode::FORBIDDEN, crate::services::ai_switch::AI_OFF))
+    } else {
+        Ok(())
+    }
+}
+
 fn exact_origin(headers: &HeaderMap, state: &HostState) -> bool {
     headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(state.config.origin.as_str())
 }
@@ -864,7 +880,7 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone) }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state) }),
         ),
     )
 }
@@ -1066,7 +1082,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
     });
     (
         StatusCode::OK,
-        Json(json!({ "tabs": rows, "desktop_available": desktop_available })),
+        Json(json!({ "tabs": rows, "desktop_available": desktop_available, "ai_off": ai_is_off(&state) })),
     )
 }
 
@@ -1380,6 +1396,11 @@ async fn create_tab(
     if matches!(request.kind, CreateTabKind::Shell) && !shells_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "shells_off");
     }
+    if matches!(request.kind, CreateTabKind::Agent) {
+        if let Err(error) = ai_off_guard(&state) {
+            return error;
+        }
+    }
     let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
@@ -1470,6 +1491,13 @@ async fn answer_headless_created(
 }
 
 fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<serde_json::Value>) {
+    // The AI switch refused the spawn (`launch_prep::prepare`): the phone's
+    // own `ai_off`, not a launch failure.
+    if let headless::CreateRefusal::LaunchFailed(why) = &refusal {
+        if why.rsplit(": ").next() == Some(crate::services::ai_switch::AI_OFF) {
+            return api_error(StatusCode::FORBIDDEN, crate::services::ai_switch::AI_OFF);
+        }
+    }
     if let headless::CreateRefusal::LaunchFailed(why) | headless::CreateRefusal::Persist(why) = &refusal {
         eprintln!("mobile: a create with no window failed ({}): {why}", refusal.code());
     }
@@ -1569,6 +1597,10 @@ async fn reopen_tab(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    // Only agent tabs are kept for Reopen: none starts while AI is off.
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     let request = if body.is_empty() {
         ReopenTabRequest::default()
     } else {
@@ -1869,6 +1901,12 @@ async fn activate_project(
             _ => return api_error(StatusCode::NOT_FOUND, "tab_not_found"),
         },
     };
+    // Opening a chat that is not running starts it: not while AI is off.
+    if project.public.kind == ScopeKind::Assistant && tmux_session.is_some() && !chat_running {
+        if let Err(error) = ai_off_guard(&state) {
+            return error;
+        }
+    }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     let response = admin::desktop_call(
@@ -2832,7 +2870,12 @@ async fn local_models_mutate(
     };
     let ok = match action {
         LocalModelAction::Unload { .. } => StatusCode::OK,
-        LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
+        LocalModelAction::Load { .. } | LocalModelAction::Start => {
+            if let Err(error) = ai_off_guard(&state) {
+                return error;
+            }
+            StatusCode::ACCEPTED
+        }
     };
     let request_id = new_request_id();
     local_models_response(local_models_call(&state, DesktopRequest::LocalModelMutate { request_id, action }).await, ok)
@@ -3202,6 +3245,9 @@ async fn sent_prompt(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -3350,6 +3396,9 @@ async fn hold_prompt(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -3391,6 +3440,9 @@ async fn edit_held_prompt(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -4466,6 +4518,9 @@ async fn prompt_send(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     let Ok(send) = serde_json::from_slice::<PromptSendBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
@@ -4514,6 +4569,9 @@ async fn undo_clear(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
@@ -4674,6 +4732,8 @@ async fn terminal(
     // `detached` frame flushed does not lock the user out of their own agent
     // until the idle reaper (`pty_bridge::IDLE_TIMEOUT`) fires. A genuinely live viewer that
     // refuses to yield still produces `session_busy`, from the bridge.
+    // Everything but a shell runs an AI: its input obeys the AI switch.
+    let ai = tab.public.kind != "shell";
     let tmux = tab.tmux_name.clone();
     let registry = state.terminal_registry.clone();
     let auth = state.auth.clone();
@@ -4716,6 +4776,7 @@ async fn terminal(
                 state_dir,
                 tab_id,
                 catalog,
+                ai,
                 move || {
                     mark_tab_input(&input_socket, input_project.clone(), input_tmux.clone());
                 },
@@ -5958,6 +6019,9 @@ async fn markup_answer(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }

@@ -609,6 +609,11 @@ pub struct Settings {
     /// session because it is a policy about the machine, not one act.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_fence_platform_accepted: Option<bool>,
+    /// The AI switch (`services::ai_switch`, the side panel's power button):
+    /// `true` stops every new AI use machine-wide — agent spawns, input to
+    /// agents, scheduled prompts, completions, mail AI. Unset is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_off: Option<bool>,
     /// Let a fenced **root** agent read every project (local directories, box
     /// folders, remote mirrors) read-only. Default off: one poisoned project can
     /// then reach the others through an agent with open network access.

@@ -73,6 +73,8 @@ pub mod agent_history;
 pub mod tar_stream;
 pub mod agent_install;
 pub mod agent_shim;
+// The AI switch: the side panel's power button, read by every AI gate.
+pub mod ai_switch;
 // Copilot CLI sign-in for fenced tabs: Tabtivity keeps the token in its own
 // keyring entry (the fence hides the keyring) and hands it to each fenced
 // Copilot as COPILOT_GITHUB_TOKEN.

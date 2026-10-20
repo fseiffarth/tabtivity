@@ -16,7 +16,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useActivityStore, type AttentionKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
 import { useT } from "../../lib/i18n";
-import { RailChevronIcon, RailSwitchSideIcon } from "../common/EdgeRailIcons";
+import { RailChevronIcon, RailPowerIcon, RailSwitchSideIcon } from "../common/EdgeRailIcons";
+import { setAiOff, useAiOff } from "../../lib/aiSwitch";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import { terminalCharsPerSecond } from "../../dev/terminalOutputRate";
 import {
@@ -341,9 +342,10 @@ export function SidePanel({
     />
   ) : null;
 
-  // The panel header's left-edge chrome: a side-flip toggle and the pin. Both ride
-  // the single `pin` slot ProjectFilesView exposes (a tab passes neither), so no
-  // extra slot is threaded through the shared viewer.
+  const aiOff = useAiOff();
+  // The panel header's left-edge chrome: a side-flip toggle, the pin and the AI
+  // switch. All ride the single `pin` slot ProjectFilesView exposes (a tab
+  // passes neither), so no extra slot is threaded through the shared viewer.
   const chrome =
     onHide || onToggleSide ? (
       <>
@@ -369,6 +371,18 @@ export function SidePanel({
             <RailChevronIcon dir={side === "left" ? "left" : "right"} />
           </button>
         )}
+        {/* The AI switch (`lib/aiSwitch.ts`): machine-wide, so it rides the
+            panel's own chrome in every scope rather than a project's header. */}
+        <button
+          className={`side-panel-pin side-panel-ai${aiOff ? " off" : ""}`}
+          onClick={() => void setAiOff(!aiOff)}
+          aria-pressed={aiOff}
+          aria-label={t("sidePanel.aiAria")}
+          title={t(aiOff ? "sidePanel.aiOffTitle" : "sidePanel.aiOnTitle")}
+        >
+          <RailPowerIcon />
+        </button>
+        <UntestedTag id="sidePanel.aiSwitch" />
       </>
     ) : null;
 

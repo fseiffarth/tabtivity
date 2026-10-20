@@ -171,6 +171,10 @@ pub fn chat(system: &str, user: &str, opts: ChatOptions) -> Result<String, Strin
 
 /// [`chat`] over a settings snapshot.
 fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -> Result<String, String> {
+    // The AI switch (`services::ai_switch`), read off the same snapshot.
+    if settings.ai_off == Some(true) {
+        return Err(crate::services::ai_switch::AI_OFF.to_string());
+    }
     let (model, addr) = preflight(settings)?;
 
     // Empty capabilities = "could not ask" = unknown → allow. Only a *positive*

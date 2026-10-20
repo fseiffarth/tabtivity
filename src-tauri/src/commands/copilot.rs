@@ -144,6 +144,7 @@ pub async fn copilot_complete(
     tab_size: u32,
     insert_spaces: bool,
 ) -> Result<Vec<Value>, String> {
+    crate::services::ai_switch::check()?;
     let editor = editor_key(&ctx, &editor)?;
     let mut lease = requests::start(&request_owner(&project_id, &editor), &request_id)?;
     // Detached: a keystroke cancels this request, never the server launch

@@ -165,6 +165,18 @@ pub fn is_app_local_tmux_session(session: &str) -> bool {
     crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session).is_some()
 }
 
+/// Whether the app's own local session `session` is running: a spawn wrapped
+/// in `new-session -A` then attaches to it rather than starting anything
+/// (the AI switch lets such a reattach through, `launch_prep::prepare`).
+pub fn app_session_alive(session: &str) -> bool {
+    is_app_local_tmux_session(session)
+        && tmux_available()
+        && tmux_command()
+            .args(["has-session", "-t", &format!("={session}")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+}
+
 /// The tab variables worth putting in a session's environment, sorted so the
 /// argv is deterministic (and testable).
 ///

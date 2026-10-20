@@ -204,6 +204,20 @@
   z-index: 21;
   animation: side-panel-drop-banner 0.18s ease-out;
 }
+/* The AI switch's note on an agent pane (`TerminalView`): the drop banner's
+   look in the danger colour, shrunk to a pill in the top-right corner — it
+   stands for as long as AI is off, so it must not cover the agent's rows. */
+.terminal-ai-off-banner {
+  left: auto;
+  top: 6px;
+  right: 8px;
+  max-width: 60%;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  background: var(--danger);
+  opacity: 0.92;
+  animation: none;
+}
 
 /* One-shot confirmation when the drop lands. */
 .side-panel.drop-flash {
@@ -1049,6 +1063,13 @@
 .side-panel-pin:hover {
   opacity: 1;
   background: var(--bg-hover);
+}
+
+/* The AI switch (⏻) wakes to full strength in the danger colour while AI is
+   off, so the panel says so at a glance. */
+.side-panel-pin.side-panel-ai.off {
+  opacity: 1;
+  color: var(--danger);
 }
 
 /* The hide-panel chevron shares the pin's box (it replaced the 📌). */

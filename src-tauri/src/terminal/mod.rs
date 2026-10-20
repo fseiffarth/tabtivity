@@ -1219,6 +1219,9 @@ struct PtyEntry {
     /// The local folder the process works in (`PreparedLaunch::drop_dir`),
     /// where a file dropped onto the tab lands; `None` for a remote tab.
     drop_dir: Option<String>,
+    /// The process is an AI (`PreparedLaunch::ai`): its input obeys the AI
+    /// switch (`services::ai_switch`).
+    ai: bool,
     /// The spawn's sequence number (`PreparedLaunch::spawn_seq`): what its
     /// teardown passes to `launch_prep::on_tab_gone`, so a kill that lands
     /// after a respawn of the same id cannot clear the respawn's state.
@@ -1523,6 +1526,7 @@ impl PtyRegistry {
                 crash_times,
                 meta,
                 drop_dir: None,
+                ai: false,
                 seq,
             },
         );
@@ -1563,6 +1567,19 @@ impl PtyRegistry {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.drop_dir = dir;
         }
+    }
+
+    pub fn set_ai(&mut self, id: &str, ai: bool) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.ai = ai;
+        }
+    }
+
+    /// Whether `id` runs an AI — for an attach PTY, the tab it shows.
+    pub fn is_ai(&self, id: &str) -> bool {
+        self.entries.get(id).is_some_and(|e| {
+            e.ai || e.meta.attach_of.as_deref().and_then(|tab| self.entries.get(tab)).is_some_and(|t| t.ai)
+        })
     }
 
     /// `None` when no such tab is live; `Some(None)` for a remote one.
