@@ -120,6 +120,7 @@ import {
   placeForFocused,
 } from "../../lib/terminal/pythonRun";
 import { RunHostPicker } from "../tabs/TabLocalityBadges";
+import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import {
   isSlurmScript,
@@ -155,6 +156,7 @@ import {
   resolveLocalMirror,
   type AutocompleteMode,
   type GrammarIssue,
+  type ProjectEntry,
 } from "../../types";
 import { useSyncStore } from "../../stores/remote/sync";
 import { ContextFilePicker } from "./ContextFilePicker";
@@ -7033,7 +7035,8 @@ function useBreakpoints(
  *
  *  Right-clicking Run opens a small popover to type **arguments** (`sys.argv`) —
  *  appended to the command line and reused by every subsequent Run/Debug, so a
- *  plain left-click re-runs with them (the tooltip shows what they are). */
+ *  plain left-click re-runs with them (the tooltip shows what they are) — and
+ *  to pick the project's **interpreter** (venv/conda/system) for every Run. */
 function RunDebugButtons({
   breakpointCount,
   busy,
@@ -7042,6 +7045,7 @@ function RunDebugButtons({
   setArgs,
   onRun,
   onDebug,
+  project,
 }: {
   breakpointCount: number;
   busy: boolean;
@@ -7052,6 +7056,9 @@ function RunDebugButtons({
   setArgs: (v: string) => void;
   onRun: () => void;
   onDebug: () => void;
+  /** The file's project, whose pinned interpreter the popover edits; absent in
+   *  the root scope (nothing to pin it on), and the picker is left out. */
+  project?: ProjectEntry;
 }) {
   const t = useT();
   const [argsOpen, setArgsOpen] = useState(false);
@@ -7165,6 +7172,13 @@ function RunDebugButtons({
               }
             }}
           />
+          {project && (
+            <PythonInterpreterSelect
+              project={project}
+              labelClassName="file-viewer-run-args-label"
+              selectClassName="file-viewer-run-args-input"
+            />
+          )}
           <div className="file-viewer-run-args-row">
             <button
               type="button"
@@ -7831,6 +7845,7 @@ function TextView({
             setArgs={setPyArgs}
             onRun={onRun}
             onDebug={onDebug}
+            project={project}
           />
         )}
         {showEditor && showSlurm && (

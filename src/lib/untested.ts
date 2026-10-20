@@ -186,6 +186,7 @@ export const UNTESTED = {
   "fileBrowser.1": { area: "files", what: "FileBrowser · New Presentation" },
   "fileBrowser.2": { area: "files", what: "FileBrowser · New Presentation" },
   "fileTree.1": { area: "files", what: "FileTree · Arguments ($@) — {name}" },
+  "pythonInterp.runWithLabel": { area: "files", what: "Right-click Run on a .py (code viewer and file tree ▶) · Interpreter picker: lists the project's venvs/conda/system Pythons, picking one pins it for every Run of the project" },
   "fileTree.2": { area: "files", what: "FileTree · New Presentation" },
   "fileTree.3": { area: "files", what: "FileTree · {t(syncExcluded ? \"fileTree.includeInSync\" : \"fileTree.excludeFromSync\")}" },
   "fileTree.4": { area: "files", what: "FileTree · Send to project…" },

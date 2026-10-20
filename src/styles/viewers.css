@@ -504,6 +504,10 @@
   font-family: var(--font-mono, monospace);
   font-size: 11px;
 }
+/* The interpreter picker: a long venv path must not stretch the popover. */
+select.file-viewer-run-args-input {
+  max-width: 360px;
+}
 .file-viewer-run-args-input:focus {
   outline: none;
   border-color: var(--accent);

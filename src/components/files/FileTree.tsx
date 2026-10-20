@@ -63,6 +63,7 @@ import {
   needsMainCheck,
 } from "../../lib/terminal/pythonMainCache";
 import { runPythonFile, pythonRunPlan, placeForFocused } from "../../lib/terminal/pythonRun";
+import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import {
   shellRunnerFor,
   shellScriptRunPlan,
@@ -4624,6 +4625,13 @@ export function FileTree({
                   }
                 }}
               />
+              {project && isPythonPath(argsPopover.entry.path) && (
+                <PythonInterpreterSelect
+                  project={project}
+                  labelClassName="file-run-args-label"
+                  selectClassName="file-run-args-input"
+                />
+              )}
               <div className="file-run-args-row">
                 <button
                   type="button"
@@ -5251,7 +5259,7 @@ export function FileTree({
                 : true) && (
                 <div>
                   <span className="file-tooltip-label">{t("fileTree.tooltipRun")} </span>
-                  {t("fileTree.tooltipRunHint")}
+                  {t(isPythonPath(tooltip.entry.path) ? "fileTree.tooltipRunHintPy" : "fileTree.tooltipRunHint")}
                 </div>
               )}
               {/* Nested under Run, not a top-level "Run args" row — and shown

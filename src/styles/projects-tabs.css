@@ -2750,6 +2750,10 @@ button:has(> .menu-shortcut) {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
 }
+/* The interpreter picker: a long venv path must not stretch the popover. */
+select.file-run-args-input {
+  max-width: 360px;
+}
 .file-run-args-input:focus {
   outline: none;
   border-color: var(--accent);
