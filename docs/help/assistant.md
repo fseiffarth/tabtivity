@@ -14,20 +14,23 @@ that need no project ("what does this error mean", "find me the paper on X",
 ## Turn it on
 
 1. **Settings → System → Experimental**: switch **Tabby** on.
-2. A chat-bubble icon appears on the side panel's edge bar, below Files, Git,
+2. A cat-head icon appears on the side panel's edge bar, below Files, Git,
    Apps and Agents (and as a button in the panel's own row of views), and
    **Settings → Agents** gets a **Tabby** page.
-3. Click the icon to open the side panel on Tabby: **New chat** and your chats
-   on top, the chat shown below. With no chats it shows the new-chat form.
-   Click the icon again to close the panel; the chat keeps running.
+3. Click the icon to open the side panel on Tabby. Tabby is one chat: it opens
+   on your last chat (resumed where you left it), or starts a new one on your
+   default CLI straight away. Click the icon again to close the panel; the chat
+   keeps running.
 
-Switching it off again removes the icon and the phone row and stops Tabby's
+Switching it off again removes the icon and the phone button and stops Tabby's
 web access.
 
 ## Choose a CLI and model
 
-New chat offers the CLIs you have installed and, for local models, one entry per
-Ollama model:
+The dropdown at the top of the Tabby view lists the CLIs you have installed;
+for a local one a second dropdown picks the Ollama model. Picking another one
+starts a fresh chat on it in place of the current chat. **Relaunch** beside it
+starts a fresh session of the same CLI (the current conversation ends).
 
 | Choice | Runs on | Web search |
 |---|---|---|
@@ -39,7 +42,7 @@ Ollama model:
 A CLI you are not signed in to shows a **Sign in** card that opens the login in
 a terminal tab; press **Check again** afterwards. **Settings → Agents → Tabby**
 sets the default CLI and model. The chat shows in the Reader, like any agent
-tab; each chat keeps its own conversation across restarts.
+tab, and keeps its conversation across restarts.
 
 Codex needs a model list that Codex writes once it has run anywhere in
 Tabtivity. If the first Codex chat says to start Codex once, open a Codex tab in
@@ -49,7 +52,7 @@ any project, then try again.
 
 Claude and Codex search the web themselves. A local model cannot, so Tabby gives
 it a search tool backed by one of two services you choose in **Settings →
-Agents → Tabby** (the new-chat view shows the same form as a **Set up web
+Agents → Tabby** (a local-model chat shows the same form as a **Set up web
 search** card):
 
 - **SearXNG**: the address of a SearXNG instance (`http` or `https`, no query
@@ -88,13 +91,15 @@ the logins of your signed-in agent CLIs. **On Windows there is no sandbox**, so
 ## From the phone
 
 With the experimental switch on, **Settings → Mobile → Tabby from the phone**
-(on by default) puts a **Tabby** row on the phone's Home screen. Open it for the
-chat list; **＋** starts a chat (the same CLIs and local models as on the
-desktop, dimmed when not ready). A chat shows as **Not running** after the
-desktop restarted: tap it to start it. The phone's chat has no files, outbox,
-upload or Commit buttons. Tabby works from the phone with the desktop window
-closed as long as Tabtivity is running. Turning the phone switch off removes
-the row. There is no phone chat on Windows (it needs tmux).
+(on by default) puts a round Tabby button (the same cat icon) just above the
+phone's tab bar on Home; Tabby is not listed among the projects. Tap it for the
+same one chat as on the desktop: the last chat, started again if the desktop
+restarted, or a new one on the default CLI. In the chat, tap the CLI name at the
+top to pick another CLI or local model (dimmed when not signed in on the
+desktop), or the ↻ button to relaunch a fresh session. The phone's chat has no
+files, outbox, upload or Commit buttons. Tabby works from the phone with the
+desktop window closed as long as Tabtivity is running. Turning the phone switch
+off removes the button. There is no phone chat on Windows (it needs tmux).
 
 ## Troubleshooting
 

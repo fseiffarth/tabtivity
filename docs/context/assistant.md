@@ -199,9 +199,9 @@ A restored chat does not start its CLI. `CenterPanel` mounts an assistant-scope
 pane (the PTY owner) only for keys in `useOverlayAgentStore.assistantStartedKeys`.
 `assistantScope.startAssistantChat(key)` is the one door: `mountAssistantChat`
 (a chat just made, or the phone opening one) calls it, and the Tabby view calls
-it for the chat it shows. Opening the view starts the newest chat only; an
-older one starts when selected; nothing un-starts a chat. Without this, every
-restored chat would spawn its CLI at the first open.
+it for the chat it shows. Opening the view starts the newest chat only;
+nothing un-starts a chat. Without this, every restored chat would spawn its
+CLI at the first open.
 
 ## On the desktop: a side-panel view
 
@@ -217,6 +217,15 @@ the assistant scope) goes through `showAssistant`, which selects it and asks
 the shell (`app:reveal-side-panel` with `detail.view`) to open the panel on
 the view. With no panel target (no project, no root folder) there is no panel
 and so no Tabby on the desktop.
+
+**One chat**, on both surfaces (the user's call, 2026-10-20: no chat list).
+The view shows the scope's newest chat (or the one a jump named), resumed by
+`startAssistantChat`; with none it starts one on the default CLI at once
+(`defaultCliOf`), and a blocked default waits behind its card until the
+options poll sees it clear. The head's CLI (and local-model) dropdown and
+Relaunch start a fresh chat (`assistant_new_chat`) and then remove every other
+chat of the scope, so the scope holds the chat both surfaces show. A pick
+whose CLI is blocked shows its card and leaves the chat alone.
 
 ## The phone
 
@@ -235,14 +244,21 @@ next recheck (`access_revoked`). The key is read through
 - It works with no window: `headless::create_tab` allows the scope, the Mobile
   host's runtime serves the lane. Window up, the window creates the tab
   (`assistant_new_chat`); down, the owner does.
-- The chat list is the existing Project screen with `kind: "assistant"`; the
-  Focus chat is the existing one with files, outbox, inbox upload, Commit,
-  markup and held prompts hidden. Every folder-shaped route (git, files,
+- Tabby is no Home row: Home filters the `assistant` kind out of its list and
+  its FAB opens `TabbyOpen`, which shows the newest chat (activated first when
+  it has no process) or creates one on the default ready launch
+  (`assistantChat.ts`), then hands over to the Focus chat. The Project screen
+  sends a landing on the scope (a restored place, a notification's back) back
+  to Home. The Focus chat is the existing one with files, outbox, inbox
+  upload, Commit, markup and held prompts hidden; its head is `TabbyHead`: the
+  CLI dropdown (catalog rows carry `assistant_launch`, the chat's launch id,
+  matched against `launch-options`) and Relaunch, both a create plus a close
+  of every other chat. Every folder-shaped route (git, files,
   uploads, worktrees, inbox, outbox, markup, uncommitted, schedules, collected
   prompts, desktop images) answers `404 not_a_project` for the scope.
 - A chat restored with the desktop has no process under lazy spawn, so the
   catalog lists it `available:false` and the terminal route answers
-  `410 session_gone`. The phone's "Not running, tap to start it" posts
+  `410 session_gone`. Opening such a chat from the phone (`TabbyOpen`) posts
   `POST /projects/{id}/activate?tab=<tab id>`; the window starts that one chat
   (`startAssistantChat`, which also respawns a chat started earlier whose CLI
   has since quit). With no window the owner starts the stored chat detached
@@ -290,4 +306,4 @@ setup; all `core`, refuse with `assistant_off`), `mobile_control/assistant.rs`.
 Frontend: `src/components/assistant/`, `stores/assistantScope.ts`,
 `stores/assistantView.ts`, `components/layout/AttachedAgentPane.tsx`,
 `lib/assistant.ts`. Phone: `mobile-web/src/scopeKind.ts`,
-`screens/NewChatSheet.tsx`. User docs: `docs/help/assistant.md`.
+`assistantChat.ts`, `screens/TabbyOpen.tsx`, `components/TabbyHead.tsx`. User docs: `docs/help/assistant.md`.
