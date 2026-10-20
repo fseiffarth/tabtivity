@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { TabEntry } from "../../stores/tabs";
 import { TAB_ACCENT } from "./newTabItems";
 import { tabColorCss } from "../../lib/theme/tabColors";
-import { TabStatusMark } from "./TabLocalityBadges";
+import { TabStatusMark, statusMarkSlots } from "./TabLocalityBadges";
 import { UntestedTag } from "../common/UntestedTag";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { useT } from "../../lib/i18n";
@@ -119,7 +119,10 @@ export function TabStackChip({
           onStackContextMenu(e);
         }}
       >
-        <TabStatusMark stateClass={stateClass} />
+        <TabStatusMark
+          stateClass={stateClass}
+          slots={Math.max(...members.map((m) => statusMarkSlots(m.tab.kind))) as 0 | 1 | 2}
+        />
         <span className="tab-stack-name">{name}</span>
         {active && <span className="tab-label tab-stack-current">{active.tab.label}</span>}
         <span className="tab-stack-count">{members.length}</span>
@@ -204,7 +207,7 @@ function StackMenu({
           >
             <span className="tab-new-menu-dot" style={{ color: accent }}>●</span>
             <span className="tab-stack-row-label">{tab.label}</span>
-            <TabStatusMark stateClass={stateClass} />
+            <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
             <span
               className="tab-close tab-stack-row-close"
               role="button"

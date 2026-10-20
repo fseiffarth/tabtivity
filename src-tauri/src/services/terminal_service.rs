@@ -121,8 +121,10 @@ fn write_terminal_session(
     if crate::services::workspace::is_owned(&prev) {
         return Err(crate::services::workspace::OWNED_ERROR.to_string());
     }
+    let mut tab_layout = tabs.to_vec();
+    sanitize_scope_layout(project_id, &mut tab_layout, &storage::state_dir());
     let session = TerminalSession {
-        tab_layout: tabs.to_vec(),
+        tab_layout,
         active_tab_index,
         // Clear the tree when there are no tabs; otherwise persist what was sent
         // (a missing tree is tolerated → frontend rebuilds a single group on load).
@@ -164,6 +166,9 @@ pub(crate) fn after_state_session_write(project_id: &str, local_file: &str) {
     let Some(session) = read_state_session(project_id) else {
         return;
     };
+    // The chat assistant's scope has no project folder: nothing is copied out
+    // of the state dir, whatever file the caller named.
+    let local_file = export_target(project_id, local_file);
     // Drop host-bound markers (#150) for tabs this project no longer has, so the
     // directory does not accumulate one file per local-model tab ever opened.
     // Driven off the layout that was just saved, which is the same file the spawn
@@ -250,6 +255,7 @@ fn write_export_copy(local_file: &str, session: &TerminalSession) {
 pub fn load_terminal_session(project_id: &str) -> TerminalSession {
     let mut session = read_state_session(project_id).unwrap_or_default();
     sanitize_loaded_layout(&mut session.tab_layout);
+    sanitize_scope_layout(project_id, &mut session.tab_layout, &storage::state_dir());
     session
 }
 
@@ -302,25 +308,17 @@ const PANE_MARKER_CMDS: &[&str] = &[
     crate::app_tab_command!("promptchart"),
 ];
 
-/// Agent CLIs a persisted tab may relaunch. Mirrors the frontend's `AGENT_CMDS`
-/// plus the local-model drivers (`commands::ollama::LOCAL_DRIVERS`), because those
-/// are the only commands `loadFromLayout` can legitimately have written.
-const AGENT_CMDS: &[&str] = &[
-    "claude",
-    "codex",
-    "gemini",
-    "agy",
-    "vibe",
-    "aider",
-    "opencode",
-    "cursor-agent",
-    "copilot",
-    "grok",
-    "qwen",
-    "openclaw",
-    "droid",
-    "ollama",
-];
+/// Agent CLIs a persisted tab may relaunch: every built-in agent's binary
+/// (`commands::agents`' registry, which the frontend's generated
+/// `agentCliTable.ts` mirrors, so `cmdToKind` writes each as an agent tab) plus
+/// `ollama`, the local-model launcher (`commands::ollama::LOCAL_DRIVERS`),
+/// because those are the only commands `loadFromLayout` can legitimately have
+/// written.
+fn agent_cmds() -> Vec<&'static str> {
+    let mut cmds = crate::commands::agents::agent_bins();
+    cmds.push("ollama");
+    cmds
+}
 
 /// Script interpreters a Run tab persists as its `cmd` (`lib/terminal/shellScriptRun.ts`'s
 /// `ScriptShell`, plus bare `sh`). A Python Run tab persists `cmd: ""` and types
@@ -337,7 +335,7 @@ fn known_tab_commands(custom: &HashMap<String, CustomAgentSpec>) -> HashSet<Stri
     set.insert(String::new());
     for c in PANE_MARKER_CMDS
         .iter()
-        .chain(AGENT_CMDS)
+        .chain(agent_cmds().iter())
         .chain(SCRIPT_INTERP_CMDS)
     {
         set.insert((*c).to_string());
@@ -406,6 +404,88 @@ pub(crate) fn custom_agent_specs() -> HashMap<String, CustomAgentSpec> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The tab fields no chat assistant tab keeps: everything that could name a
+/// program, an argument, an environment, a place to run it or a right to hold
+/// (`assistant_scope_keeps_only_validated_chats`). Beyond these the record is
+/// the window's own bookkeeping (key, label, colour, tmux name, …).
+const ASSISTANT_DROPPED_KEYS: &[&str] = &[
+    "env",
+    "args",
+    "resumeArgs",
+    "location",
+    SCHEDULE_TARGET_KEY,
+    HOST_BOUND_UID_KEY,
+    LOCAL_LAUNCH_KEY,
+    EMBED_EXEC_KEY,
+    "sandbox",
+    "tmuxAttach",
+    "login",
+    "localOnly",
+    "remoteHostId",
+    "hostSession",
+];
+
+/// The layout rule of the chat assistant's scope (plan "Call sites", the
+/// layout sanitiser): the scope keeps only agent tabs whose `assistant` block
+/// validates ([`assistant::record_launch`](crate::services::assistant::record_launch):
+/// a strict `{ cli, model }`, an offered CLI, a model that passes
+/// `ollama::validate_model_name` and does not start with `-`, the profile's own
+/// `cmd`, a uuid-shaped `sessionId`) — the rest are dropped — and from the
+/// kept ones every field in [`ASSISTANT_DROPPED_KEYS`]. `kind` is `agent` and
+/// `cwd` is rewritten to the chat's folder under `state_dir`. Run on every
+/// load and every save of the scope, so what reaches a spawn or the phone is
+/// only ever what `assistant::new_chat_record` makes.
+pub(crate) fn sanitize_assistant_layout(tabs: &mut Vec<TabEntry>, state_dir: &Path) {
+    tabs.retain_mut(|tab| {
+        let Some(launch) = crate::services::assistant::record_launch(tab) else {
+            eprintln!("terminal_service: dropped an assistant tab '{}' without a valid launch", tab.label);
+            return false;
+        };
+        let Some(dir) = tab
+            .session_id
+            .as_deref()
+            .and_then(|uid| crate::services::assistant::chat_dir(state_dir, uid).ok())
+        else {
+            return false;
+        };
+        for key in ASSISTANT_DROPPED_KEYS {
+            tab.extra.remove(*key);
+        }
+        tab.extra.insert("kind".to_string(), Value::String("agent".to_string()));
+        // Written back through the typed launch: nothing but its two fields.
+        if let Ok(block) = serde_json::to_value(&launch) {
+            tab.extra.insert(crate::services::assistant::ASSISTANT_KEY.to_string(), block);
+        }
+        tab.cwd = dir.to_string_lossy().into_owned();
+        // The session name is the backend's, derived from the uid: a layout
+        // cannot point a chat at another session (`new-session -A` attaches).
+        if let Some(uid) = tab.session_id.as_deref() {
+            tab.extra.insert("tmuxSession".to_string(), Value::String(crate::services::assistant::tmux_session_for(uid)));
+        }
+        true
+    });
+}
+
+/// The scope's own layout rule, when it has one: the chat assistant's scope
+/// ([`storage::is_assistant_scope`]: every spelling of its id, since a
+/// case-folding filesystem maps them all onto its folder) keeps only validated
+/// chats. The one call the save, load, snapshot and sync paths make.
+pub(crate) fn sanitize_scope_layout(project_id: &str, tabs: &mut Vec<TabEntry>, state_dir: &Path) {
+    if storage::is_assistant_scope(project_id) {
+        sanitize_assistant_layout(tabs, state_dir);
+    }
+}
+
+/// The project-tree file a scope's layout is exported next to: none for the
+/// chat assistant's scope (any spelling), which has no project folder.
+pub(crate) fn export_target<'a>(project_id: &str, local_file: &'a str) -> &'a str {
+    if storage::is_assistant_scope(project_id) {
+        ""
+    } else {
+        local_file
+    }
 }
 
 /// Sanitize an untrusted persisted layout in place against the current known-good
@@ -597,11 +677,8 @@ pub(crate) fn strip_persisted_env(tab: &mut TabEntry, custom: &HashMap<String, C
     });
     if !dropped.is_empty() {
         dropped.sort();
-        eprintln!(
-            "terminal_service: persisted tab '{}' set {} in its env — dropped",
-            tab.label,
-            dropped.join(", ")
-        );
+        let keys = dropped.join(", ");
+        eprintln!("terminal_service: persisted tab '{}' set {keys} in its env — dropped", tab.label);
     }
 }
 
@@ -880,7 +957,7 @@ mod tests {
         set.insert(String::new());
         for c in PANE_MARKER_CMDS
             .iter()
-            .chain(AGENT_CMDS)
+            .chain(agent_cmds().iter())
             .chain(SCRIPT_INTERP_CMDS)
         {
             set.insert((*c).to_string());
@@ -1095,6 +1172,20 @@ mod tests {
     }
 
     #[test]
+    fn every_registry_agent_restores_as_itself_not_as_a_shell() {
+        // The set used to be a hand copy of 13 CLIs, so a tab of any agent added
+        // to the registry later (Kiro, Goose, Amp, …) came back as a plain shell.
+        let set = known_tab_commands(&no_custom());
+        for bin in crate::commands::agents::agent_bins() {
+            let mut tabs = vec![entry(bin)];
+            sanitize_tab_layout(&mut tabs, &set, &no_custom());
+            assert_eq!(tabs[0].cmd, bin, "{bin} restored as a shell");
+            assert!(tabs[0].session_id.is_some(), "{bin} lost its session");
+        }
+        assert!(set.contains("ollama"));
+    }
+
+    #[test]
     fn a_custom_agents_spec_env_survives_and_a_differing_value_is_dropped() {
         let custom = HashMap::from([(
             "my-agent".to_string(),
@@ -1288,5 +1379,127 @@ mod tests {
         assert_ne!(std::fs::metadata(&path).expect("export").ino(), first);
         let exported: TerminalSession = storage::read_json(&path).expect("read export");
         assert_eq!(exported.active_tab_index, 1);
+    }
+    // ── the chat assistant's scope ──────────────────────────────────────────
+
+    const CHAT_UID: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+
+    /// A chat tab as the window or a hostile layout might hold it: the real
+    /// record with every field a layout could abuse set.
+    fn planted_chat(launch: Value) -> TabEntry {
+        let mut tab = entry("claude");
+        tab.cwd = "/etc".to_string();
+        tab.session_id = Some(CHAT_UID.to_string());
+        tab.extra.insert("assistant".to_string(), launch);
+        tab.extra.insert("kind".to_string(), Value::String("local_agent".to_string()));
+        tab.extra.insert("args".to_string(), serde_json::json!(["--dangerously-skip-permissions"]));
+        tab.extra.insert("scheduleTargetId".to_string(), Value::String("t".to_string()));
+        tab.extra.insert("hostBoundUid".to_string(), Value::String("h".to_string()));
+        tab.extra.insert("localLaunch".to_string(), serde_json::json!({ "driver": "claude", "model": "m", "args": ["x"] }));
+        tab.extra.insert("sandbox".to_string(), Value::Bool(true));
+        tab.extra.insert("tmuxAttach".to_string(), Value::String("s".to_string()));
+        tab.extra.insert("login".to_string(), serde_json::json!({ "kind": "ssh" }));
+        tab.extra.insert("color".to_string(), Value::String("teal".to_string()));
+        tab.extra.insert("tmuxSession".to_string(), Value::String("slug-assistant--agent-1".to_string()));
+        tab
+    }
+
+    #[test]
+    fn assistant_scope_keeps_only_validated_chats() {
+        let state = Path::new("state");
+        let mut tabs = vec![
+            planted_chat(serde_json::json!({ "cli": "claude" })),
+            planted_chat(serde_json::json!({ "cli": "claude", "model": "claude-opus-5" })),
+            // Not validated: unknown key, unknown CLI, a model that reads as a
+            // flag or breaks a string, no block at all, another binary.
+            planted_chat(serde_json::json!({ "cli": "claude", "args": ["--x"] })),
+            planted_chat(serde_json::json!({ "cli": "gemini" })),
+            planted_chat(serde_json::json!({ "cli": "claude", "model": "--dangerously-skip-permissions" })),
+            planted_chat(serde_json::json!({ "cli": "claude", "model": "m\"x" })),
+            planted_chat(serde_json::json!({ "cli": "opencode_local" })),
+            planted_chat(Value::Null),
+            {
+                let mut tab = planted_chat(serde_json::json!({ "cli": "claude" }));
+                tab.cmd = "bash".to_string();
+                tab
+            },
+            {
+                let mut tab = planted_chat(serde_json::json!({ "cli": "claude" }));
+                tab.session_id = Some("../x".to_string());
+                tab
+            },
+            {
+                let mut tab = planted_chat(serde_json::json!({ "cli": "claude" }));
+                tab.extra.remove("assistant");
+                tab
+            },
+        ];
+        sanitize_assistant_layout(&mut tabs, state);
+        assert_eq!(tabs.len(), 2, "{:?}", tabs.iter().map(|t| t.extra.get("assistant")).collect::<Vec<_>>());
+        for tab in &tabs {
+            for key in ASSISTANT_DROPPED_KEYS {
+                assert!(!tab.extra.contains_key(*key), "{key}");
+            }
+            assert_eq!(tab.extra["kind"], "agent");
+            assert_eq!(tab.cwd, crate::services::assistant::chat_dir(state, CHAT_UID).unwrap().to_string_lossy());
+            // The window's own bookkeeping stays.
+            assert_eq!(tab.extra["color"], "teal");
+            // The tmux session is the backend's, derived from the uid: the
+            // planted name (a session `new-session -A` would attach to) is gone.
+            assert_eq!(tab.extra["tmuxSession"], crate::services::assistant::tmux_session_for(CHAT_UID).as_str());
+        }
+        assert_eq!(tabs[1].extra["assistant"], serde_json::json!({ "cli": "claude", "model": "claude-opus-5" }));
+    }
+
+    #[test]
+    fn a_planted_assistant_layout_keeps_no_env_or_args_through_a_load() {
+        // The whole path a stored layout takes back to the window: the general
+        // sanitiser first, then the scope's. `env` has the tab's uid only if
+        // the window re-derives it (it does, from `sessionId`).
+        let mut tabs = vec![planted_chat(serde_json::json!({ "cli": "codex" }))];
+        tabs[0].cmd = "codex".to_string();
+        sanitize_loaded_layout(&mut tabs);
+        sanitize_assistant_layout(&mut tabs, Path::new("state"));
+        assert_eq!(tabs.len(), 1);
+        let tab = &tabs[0];
+        for key in ["env", "args", "resumeArgs", "location", "localLaunch"] {
+            assert!(!tab.extra.contains_key(key), "{key}");
+        }
+        assert_eq!(tab.cmd, "codex");
+    }
+
+    /// The scope's id is a directory name, and a case-folding filesystem maps
+    /// `Assistant` onto `assistant`: every spelling gets the scope's layout rule
+    /// and no export copy, not only the exact one.
+    #[test]
+    fn every_spelling_of_the_assistant_scope_gets_its_layout_rule() {
+        let state = Path::new("state");
+        for id in ["assistant", "Assistant", "ASSISTANT", " assistant", "assistant ", "assistant\n"] {
+            let mut tabs = vec![planted_chat(serde_json::json!({ "cli": "claude" })), entry("bash")];
+            sanitize_scope_layout(id, &mut tabs, state);
+            assert_eq!(tabs.len(), 1, "{id:?}: the plain shell is dropped");
+            for key in ASSISTANT_DROPPED_KEYS {
+                assert!(!tabs[0].extra.contains_key(*key), "{id:?} {key}");
+            }
+            assert_eq!(tabs[0].cwd, crate::services::assistant::chat_dir(state, CHAT_UID).unwrap().to_string_lossy(), "{id:?}");
+            assert_eq!(export_target(id, "/projects/p/project.json"), "", "{id:?}: nothing is copied out of the state dir");
+        }
+        // A project (or box) id is left alone, whatever it resembles.
+        for id in ["p1", "assistants", "my-assistant", "root"] {
+            let mut tabs = vec![entry("bash")];
+            sanitize_scope_layout(id, &mut tabs, state);
+            assert_eq!(tabs.len(), 1, "{id:?}");
+            assert_eq!(export_target(id, "/projects/p/project.json"), "/projects/p/project.json", "{id:?}");
+        }
+    }
+
+    #[test]
+    fn a_project_scope_is_left_to_the_general_rules() {
+        // Only the assistant's id switches the rule on.
+        let mut tabs = vec![planted_chat(serde_json::json!({ "cli": "claude" }))];
+        let before = tabs[0].extra.len();
+        sanitize_loaded_layout(&mut tabs);
+        assert!(tabs[0].extra.len() <= before);
+        assert!(tabs[0].extra.contains_key("assistant"), "the general rules do not know the block");
     }
 }

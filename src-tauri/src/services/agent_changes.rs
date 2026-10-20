@@ -149,7 +149,8 @@ pub fn agent_session_changes(
     }
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit);
+        let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
+        return opencode_changes(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -161,6 +162,35 @@ pub fn agent_session_changes(
         None if subagent.is_some() => AgentChanges::unavailable("no_subagent"),
         // Nothing written yet — a session before its first turn.
         None => AgentChanges::empty(),
+    }
+}
+
+/// The changes of `chat`, an earlier conversation of the tab's folder picked
+/// in the Reader's Resume menu — or of its `subagent` — as
+/// [`agent_session_changes`] reads the tab's own.
+#[allow(clippy::too_many_arguments)]
+pub fn stored_chat_changes(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    launch_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> AgentChanges {
+    if subagent.is_some_and(|token| !agent_transcript::is_subagent_token(token)) {
+        return AgentChanges::unavailable("no_subagent");
+    }
+    let kind = match cmd {
+        "claude" => Store::Claude,
+        "codex" => Store::Codex,
+        _ => return AgentChanges::unavailable("unsupported"),
+    };
+    match agent_transcript::stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent) {
+        Some(path) => read_changes(&path, kind, version, limit).unwrap_or_else(|| AgentChanges::unavailable("read_failed")),
+        None if subagent.is_some() => AgentChanges::unavailable("no_subagent"),
+        None => AgentChanges::unavailable("no_transcript"),
     }
 }
 
@@ -180,7 +210,7 @@ pub fn local_opencode_changes(
         return AgentChanges::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit)
+    opencode_changes(&db, project_id, tab_dir, since, None, subagent, version, limit)
 }
 
 /// Every file a tab's conversation changed, by the path its CLI named — the
@@ -335,11 +365,13 @@ fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
 
 /// An OpenCode tab's changes, from the session the Reader reads for it in
 /// the store `db`.
+#[allow(clippy::too_many_arguments)]
 fn opencode_changes(
     db: &Path,
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
+    own: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -353,7 +385,7 @@ fn opencode_changes(
     if !db.is_file() {
         return AgentChanges::empty();
     }
-    crate::services::opencode_store::session_changes(db, dir, since, subagent, version, limit)
+    crate::services::opencode_store::session_changes(db, dir, since, own, subagent, version, limit)
         .unwrap_or_else(|| AgentChanges::unavailable("read_failed"))
 }
 
@@ -367,7 +399,6 @@ pub enum Store {
 /// The changes in the transcript at `path`: its tail, the last `limit`
 /// changes in it. `None` only when the file cannot be read.
 pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usize) -> Option<AgentChanges> {
-    use std::io::{Read, Seek, SeekFrom};
     // The agent writes its transcript: never a link, a FIFO or another special
     // file (threat model gap 29).
     let mut file = crate::services::home_io::open_regular(path)?;
@@ -376,19 +407,9 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
     if version == Some(current.as_str()) {
         return Some(AgentChanges::unchanged(current));
     }
-    let len = meta.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::with_capacity((len - start) as usize);
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.lines();
-    if start > 0 {
-        // Whatever came before the seek point is missing from the first line.
-        lines.next();
-    }
+    let (text, cut) = crate::services::agent_session::read_conversation_tail(&mut file, meta.len(), TAIL_BYTES)?;
     let mut changes = Vec::new();
-    for line in lines {
+    for line in text.lines() {
         // Most records are no change: only parse the ones that may be.
         let candidate = match kind {
             Store::Claude => line.contains("\"toolUseResult\"") && line.contains("\"filePath\""),
@@ -405,7 +426,7 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
             Store::Codex => codex_changes(&value, &mut changes),
         }
     }
-    Some(AgentChanges::read(current, changes, start > 0, limit))
+    Some(AgentChanges::read(current, changes, cut, limit))
 }
 
 /// The change a Claude tool result records: an edit's applied hunks, or a

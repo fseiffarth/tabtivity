@@ -49,7 +49,7 @@ function readSnapshot(): Snapshot {
 }
 
 /**
- * Settings → Performance → "What open tabs hold" (`docs/tab_cost_plan.md`
+ * Settings → Performance → "What open tabs hold" (`docs/done/tab_cost_plan.md`
  * step 1): every tab's estimate from `lib/tabCost`, largest first, with Show
  * (current project only — switching project from inside Settings is not
  * trivial) and Close. Main window only. Read on mount and on Refresh; no timer.

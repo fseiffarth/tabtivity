@@ -31,6 +31,7 @@ const h = vi.hoisted(() => ({
   machine: { supported: false } as Record<string, unknown>,
   agents: [] as unknown[],
   skills: [] as unknown[],
+  extraModels: [] as unknown[],
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
@@ -85,6 +86,7 @@ beforeEach(() => {
   h.machine = { supported: false };
   h.agents = [];
   h.skills = [];
+  h.extraModels = [];
   useRootOverlayStore.setState({ open: false });
   invokeMock.mockReset();
   invokeMock.mockImplementation(((cmd: string) => {
@@ -100,6 +102,7 @@ beforeEach(() => {
           size: 1,
           capabilities: ["completion", "tools"],
         },
+        ...h.extraModels,
       ]);
     if (cmd === "list_agents") return Promise.resolve(h.agents);
     if (cmd === "skills_list_installed") return Promise.resolve(h.skills);
@@ -292,7 +295,7 @@ describe("ModelsOverlay", () => {
     try {
       render(<ModelsOverlayHost />);
       open("models");
-      fireEvent.click(await within(pane("models")!).findByText("Manage local models…"));
+      fireEvent.click(await within(pane("models")!).findByText("Manage models"));
       expect(useModelsOverlayStore.getState().view).toBe("ollama");
       expect(pane("ollama")?.hidden).toBe(false);
       expect(screen.getByTestId("ollama-panel")).toBeTruthy();
@@ -332,7 +335,7 @@ describe("ModelsOverlay", () => {
     expect(calls("list_agents")).toHaveLength(0);
   });
 
-  it("lays Local models out as the dropdown: Local Models band, then Machine", async () => {
+  it("lays Local models out as a status bar, the Machine meters, then a card per model", async () => {
     h.machine = {
       supported: true,
       cpu_percent: 10,
@@ -348,16 +351,34 @@ describe("ModelsOverlay", () => {
     render(<ModelsOverlayHost />);
     open("models");
     await screen.findByText("qwen:7b");
-    const machine = await screen.findByText("Machine");
-    const bands = [...pane("models")!.querySelectorAll(".tab-new-menu-group-label")].map((el) => ({
-      text: el.textContent,
-      sub: el.classList.contains("is-sub"),
-    }));
-    expect(bands[0]).toEqual({ text: "Local Models", sub: false });
-    expect(bands.find((b) => b.text === "Running models")?.sub).toBe(true);
-    // Machine comes last, after the models' own sub-bands.
-    expect(bands[bands.length - 1].text).toBe("Machine");
-    expect(machine).toBeTruthy();
+    const page = pane("models")!.querySelector(".lm-page")!;
+    expect(within(page as HTMLElement).getByText("Ollama running")).toBeTruthy();
+    const headings = [...page.querySelectorAll(".lm-heading-title")].map((el) => el.textContent);
+    // Machine first (will it fit?), then what is in memory ("on disk" only
+    // appears once a model is not resident).
+    expect(headings).toEqual(["Machine", "Running models"]);
+    // One card per model; a resident one carries its tasks and an Unload verb.
+    const running = page.querySelector(".lm-card.is-running")!;
+    expect(within(running as HTMLElement).getByRole("button", { name: "Tabs" })).toBeTruthy();
+    expect(within(running as HTMLElement).getByRole("button", { name: "Unload" })).toBeTruthy();
+    // Machine readings are meters, and none is drawn for a missing sensor.
+    expect(page.querySelectorAll("[role='meter']").length).toBeGreaterThan(0);
+    expect(page.querySelector(".local-model-stat-note")).toBeNull();
+  });
+
+  it("offers a model on disk one primary Load button and an immediate load-on-start switch", async () => {
+    h.extraModels = [
+      { name: "llama:8b", parameter_size: "8B", quantization: "Q4", running: false, size_vram: 0, size: 4e9 },
+    ];
+    useOllamaActivityStore.setState({ installed: true });
+    render(<ModelsOverlayHost />);
+    open("models");
+    const name = await screen.findByText("llama:8b");
+    const card = name.closest(".lm-card") as HTMLElement;
+    expect(card.classList.contains("is-running")).toBe(false);
+    expect(within(card).getByRole("button", { name: "Load" }).className).toContain("btn-primary");
+    expect(within(card).getByRole("checkbox")).toBeTruthy();
+    expect(within(card).getByText("Load on start")).toBeTruthy();
   });
 
   it("re-reads the wired CLIs when the agent registry changes", async () => {

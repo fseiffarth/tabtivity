@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import type { SignInRequest } from "../../lib/terminal/terminalUrls";
@@ -92,6 +92,60 @@ export function TerminalSignInCard({
           </button>
         </form>
       )}
+    </div>,
+    host,
+  );
+}
+
+/** How long the "signed in" card stays when the program needs nothing more. */
+const SIGN_IN_DONE_MS = 8000;
+
+/**
+ * The card that follows {@link TerminalSignInCard} once the program says the
+ * sign-in went through (`findSignInDone`) — in the Reader the terminal's own
+ * "Login successful" is hidden. A program that then waits for Enter gets a
+ * Continue that sends it; one that does not lets the card go by itself.
+ */
+export function TerminalSignInDoneCard({
+  host,
+  pressEnter,
+  onContinue,
+  onDismiss,
+}: {
+  host: HTMLElement;
+  pressEnter: boolean;
+  onContinue: () => void;
+  onDismiss: () => void;
+}) {
+  const t = useT();
+  useEffect(() => {
+    if (pressEnter) return;
+    const timer = setTimeout(onDismiss, SIGN_IN_DONE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one timer per card
+  }, [pressEnter]);
+  return createPortal(
+    <div className={`hint-bubble ${SIGN_IN_CARD_CLASS}`} role="status">
+      <button
+        type="button"
+        className="hint-bubble-close"
+        aria-label={t("terminal.signIn.dismiss")}
+        title={t("terminal.signIn.dismiss")}
+        onClick={onDismiss}
+      >
+        ×
+      </button>
+      <div className="hint-bubble-title">
+        {t("terminal.signIn.doneTitle")} <UntestedTag id="terminal.signIn.done" />
+      </div>
+      <div className="hint-bubble-body">
+        {t(pressEnter ? "terminal.signIn.doneBodyEnter" : "terminal.signIn.doneBody")}
+      </div>
+      <div className="hint-bubble-actions">
+        <button type="button" className="hint-bubble-got-it" onClick={pressEnter ? onContinue : onDismiss}>
+          {t(pressEnter ? "terminal.signIn.doneContinue" : "terminal.signIn.doneOk")}
+        </button>
+      </div>
     </div>,
     host,
   );

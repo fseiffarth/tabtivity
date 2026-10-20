@@ -446,7 +446,28 @@ fn generate_core_dispatch() {
         }
         generated.push_str(&format!("    names.push({:?});\n", sig.name));
     }
-    generated.push_str("    names\n}\n");
+    generated.push_str("    names\n}\n\n");
+    // The JSON argument keys of every wrapper: what the dispatcher's user
+    // confinement table (`core_dispatch::USER_CONFINED`) is checked against,
+    // so a new path-named argument cannot slip past it unclassified.
+    generated.push_str("/// The JSON argument keys one dispatchable command reads, by its name (the coverage test's; nothing reads it at run time).\n#[allow(dead_code)]\npub fn arg_keys(cmd: &str) -> Option<&'static [&'static str]> {\n    match cmd {\n");
+    for sig in &sigs {
+        for cfg in &sig.cfg {
+            generated.push_str("        ");
+            generated.push_str(cfg);
+            generated.push('\n');
+        }
+        let keys: Vec<String> = sig
+            .params
+            .iter()
+            .filter_map(|p| match p {
+                Param::Json { key } => Some(format!("{key:?}")),
+                Param::Ctx => None,
+            })
+            .collect();
+        generated.push_str(&format!("        {:?} => Some(&[{}]),\n", sig.name, keys.join(", ")));
+    }
+    generated.push_str("        _ => None,\n    }\n}\n");
     let out = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("core_dispatch.rs");
     fs::write(out, generated).expect("write core dispatch");
 }

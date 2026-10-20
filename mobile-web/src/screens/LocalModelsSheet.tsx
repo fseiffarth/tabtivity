@@ -3,6 +3,7 @@ import { ApiError, getLocalModels, localModelAction, wasApplied, type LocalModel
 import { keepAliveKey, modelSizeLabel, placementKey, pollDelay, sortModels, summary } from "../localModels";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { useBackLayer } from "../backStack";
 
 type Translate = ReturnType<typeof useT>;
 
@@ -88,6 +89,7 @@ export function LocalModelsSheet({ onClose, onChange }: {
   /** The latest list, or the code it could not be read with. */
   onChange?: (list: LocalModelList | null, failure: string | null) => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [list, setList] = useState<LocalModelList | null>(null);
   const [failure, setFailure] = useState<string | null>(null);

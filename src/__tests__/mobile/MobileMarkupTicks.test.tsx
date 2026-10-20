@@ -1,5 +1,5 @@
 /**
- * The agent's ticks on the phone (`markup_done`, `docs/markup_tick_approve_plan.md`
+ * The agent's ticks on the phone (`markup_done`, `docs/done/markup_tick_approve_plan.md`
  * P3): Submit sends a round id, the ticks come with the questions poll, each
  * ticked sent mark wears a ✓ that a tap approves (the mark leaves the layer),
  * never in the moment after the badge appeared, and "n done · Approve all"

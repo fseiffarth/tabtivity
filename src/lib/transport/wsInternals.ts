@@ -37,6 +37,7 @@ import { adaptClientCommand, adaptWindowCommand } from "./clientAdapters";
 import { dialogAdapter, type MessageOptions, type OpenOptions, type SaveOptions } from "./dialogAdapter";
 import type { WsClient } from "./wsClient";
 import type { NativeInternals } from "./bridgeSocket";
+import { translate, useI18nStore } from "../i18n";
 
 /** `client` commands the Connect window runs natively on this machine — the
  *  only app commands it may call besides its socket bridge and the download
@@ -269,16 +270,27 @@ function dialogPlugin(command: string, args: Record<string, unknown>): Promise<u
       // compare with their ok label.
       const buttons = args.buttons as string | Record<string, unknown> | undefined;
       const text = String(args.message ?? "");
+      // `ok`/`cancel` are the plugin's answer tokens and stay English (`ask`
+      // compares the answer with "Yes", `confirm` with "Ok"); only the labels
+      // the user sees are translated. A caller's custom labels are both.
+      const lang = useI18nStore.getState().lang;
       let ok = "Ok";
       let cancel: string | null = null;
-      if (buttons === "OkCancel") cancel = "Cancel";
-      else if (buttons === "YesNo") [ok, cancel] = ["Yes", "No"];
-      else if (typeof buttons === "object" && buttons !== null) {
+      let okLabel = translate(lang, "common.ok");
+      let cancelLabel: string | undefined;
+      if (buttons === "OkCancel") {
+        cancel = "Cancel";
+        cancelLabel = translate(lang, "common.cancel");
+      } else if (buttons === "YesNo") {
+        [ok, cancel] = ["Yes", "No"];
+        [okLabel, cancelLabel] = [translate(lang, "common.yes"), translate(lang, "common.no")];
+      } else if (typeof buttons === "object" && buttons !== null) {
         if ("OkCustom" in buttons) ok = String(buttons.OkCustom);
         else if (Array.isArray(buttons.OkCancelCustom)) [ok, cancel] = buttons.OkCancelCustom.map(String) as [string, string];
         else if (Array.isArray(buttons.YesNoCancelCustom)) [ok, cancel] = buttons.YesNoCancelCustom.slice(0, 2).map(String) as [string, string];
+        [okLabel, cancelLabel] = [ok, cancel ?? undefined];
       }
-      const opts: MessageOptions = { title: args.title as string | undefined, kind: args.kind as MessageOptions["kind"], okLabel: ok, cancelLabel: cancel ?? undefined };
+      const opts: MessageOptions = { title: args.title as string | undefined, kind: args.kind as MessageOptions["kind"], okLabel, cancelLabel };
       if (cancel === null) return adapter.message(text, opts).then(() => ok);
       const no = cancel;
       return adapter.confirm(text, opts).then((yes) => (yes ? ok : no));

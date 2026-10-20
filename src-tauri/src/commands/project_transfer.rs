@@ -1701,11 +1701,11 @@ fn format_for(contents: &BundleContents) -> u32 {
     }
 }
 
-fn dir_options() -> zip::write::FileOptions<'static, ()> {
+fn dir_options() -> zip::write::FileOptions<'static, 'static, ()> {
     zip::write::FileOptions::default().unix_permissions(0o755)
 }
 
-fn link_options() -> zip::write::FileOptions<'static, ()> {
+fn link_options() -> zip::write::FileOptions<'static, 'static, ()> {
     zip::write::FileOptions::default()
 }
 
@@ -1919,7 +1919,7 @@ fn open_bundle(path: &str) -> Result<(Bundle, ExportManifest), String> {
     // A bundle an older build wrote carries its manifest under the app's old
     // name; such bundles stay importable.
     let manifest_name = crate::services::brand_migration::compat::export_manifest_name(&crate::brand::PAIR, |name| {
-        zip.file_names().any(|entry| entry == name)
+        zip.file_names().any(|entry| entry.is_ok_and(|entry| entry == name))
     });
     let manifest: ExportManifest = {
         let entry = zip.by_name(&manifest_name).map_err(|_| {
@@ -2040,7 +2040,7 @@ fn extract_section(zip: &mut Bundle, section: &str, dest: &Path) -> Result<u64, 
         let Ok(rel) = enclosed.strip_prefix(section) else {
             continue;
         };
-        if rel.as_os_str().is_empty() || !entry.name().starts_with(&prefix) {
+        if rel.as_os_str().is_empty() || !entry.name().is_ok_and(|name| name.starts_with(&prefix)) {
             continue;
         }
         let out = dest.join(rel);
@@ -2156,7 +2156,9 @@ fn import_agent_history(
         if entry.is_dir() || entry.is_symlink() || entry.enclosed_name().is_none() {
             continue;
         }
-        let name = entry.name().to_string();
+        let Ok(name) = entry.name().map(|name| name.into_owned()) else {
+            continue;
+        };
         let Some((key, rel)) = name
             .strip_prefix(&format!("{SECTION_AGENTS}/"))
             .and_then(|rest| rest.split_once('/'))
@@ -2834,7 +2836,7 @@ mod tests {
         }
         assert_eq!(seen, 3);
         let mut zip = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).unwrap();
-        let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+        let names: Vec<String> = zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
         for want in ["mirror/src/main.rs", "mirror/again.rs", "mirror/build/paper.pdf", "mirror/link"] {
             assert!(names.iter().any(|n| n == want), "{want} missing from {names:?}");
         }

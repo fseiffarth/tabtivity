@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { joinedSelectionText, rowJoin, type LineLike } from "../../lib/terminal/terminalSelection";
-import { findSignInRequest, findWrappedUrls, isSignInUrl } from "../../lib/terminal/terminalUrls";
+import { findSignInDone, findSignInRequest, findWrappedUrls, isSignInUrl } from "../../lib/terminal/terminalUrls";
 
 const COLS = 100;
 
@@ -158,5 +158,23 @@ describe("findSignInRequest", () => {
 
   it("is null without a sign-in link", () => {
     expect(findSignInRequest(at([row("hello https://example.com")]), COLS, 0, 0)).toBeNull();
+  });
+
+  it("lets a link go once the program says it signed in under it", () => {
+    const rows = [row("Open https://github.com/login/device and enter the code ABCD-1234"), row("✓ Logged in as octocat")];
+    expect(findSignInRequest(at(rows), COLS, 0, 1)).toBeNull();
+  });
+});
+
+describe("findSignInDone", () => {
+  it("reads a success and whether the program waits for Enter", () => {
+    expect(findSignInDone(at([row("Login successful. Press Enter to continue")]), 0, 0)).toEqual({ pressEnter: true });
+    expect(findSignInDone(at([row("Login successful."), row(""), row("Press Enter to continue…")]), 0, 2)).toEqual({ pressEnter: true });
+    expect(findSignInDone(at([row("Successfully logged in")]), 0, 0)).toEqual({ pressEnter: false });
+  });
+
+  it("is null for a sign-in that did not go through", () => {
+    expect(findSignInDone(at([row("Not logged in · Please run /login")]), 0, 0)).toBeNull();
+    expect(findSignInDone(at([row("Waiting for you to sign in…")]), 0, 0)).toBeNull();
   });
 });

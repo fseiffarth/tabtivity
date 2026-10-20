@@ -28,7 +28,7 @@ async function composer(host: HTMLElement): Promise<HTMLTextAreaElement> {
 
 const rows = () => [...document.querySelectorAll(".terminal-reader-slash-row strong")].map((row) => row.textContent);
 
-describe("the Reader composer's / menu", () => {
+describe("the Reader composer's / menu and undo", () => {
   let host: HTMLElement;
   beforeEach(() => {
     localStorage.clear();
@@ -98,5 +98,29 @@ describe("the Reader composer's / menu", () => {
     expect(box.value).toBe("/co");
     fireEvent.change(box, { target: { value: "/com" } });
     expect(rows()).toEqual(["/compact"]);
+  });
+
+  it("undoes a picked command and the typing before it with Ctrl+Z, and redoes with Ctrl+Shift+Z", async () => {
+    const box = await composer(host);
+    fireEvent.change(box, { target: { value: "/mo" } });
+    fireEvent.click(screen.getByText("/model"));
+    expect(box.value).toBe("/model ");
+    fireEvent.keyDown(box, { key: "z", ctrlKey: true });
+    expect(box.value).toBe("/mo");
+    fireEvent.keyDown(box, { key: "z", ctrlKey: true });
+    expect(box.value).toBe("");
+    fireEvent.keyDown(box, { key: "Z", ctrlKey: true, shiftKey: true });
+    expect(box.value).toBe("/mo");
+    fireEvent.keyDown(box, { key: "y", ctrlKey: true });
+    expect(box.value).toBe("/model ");
+  });
+
+  it("starts afresh once a prompt is sent", async () => {
+    const box = await composer(host);
+    fireEvent.change(box, { target: { value: "hello" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(box.value).toBe("");
+    fireEvent.keyDown(box, { key: "z", ctrlKey: true });
+    expect(box.value).toBe("");
   });
 });

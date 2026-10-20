@@ -46,6 +46,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "claude" => resolve_claude_session(opts),
         "codex" => resolve_codex_session(opts),
         "vibe" => resolve_vibe_session(opts),
+        "opencode" => crate::services::opencode_session::resolve(opts),
         _ => opts,
     }
 }
@@ -226,7 +227,7 @@ fn codex_session_exists_in<'a>(
 }
 
 /// The rollout log behind [`codex_session_exists`], when there is one.
-fn codex_session_log(root: &std::path::Path, uuid: &str) -> Option<PathBuf> {
+pub(crate) fn codex_session_log(root: &std::path::Path, uuid: &str) -> Option<PathBuf> {
     fn walk(dir: &std::path::Path, uuid: &str, depth: u8) -> Option<PathBuf> {
         if depth > 5 {
             return None;
@@ -384,9 +385,16 @@ where
 
 /// Where a scope's Claude keeps its transcripts: `<scope home>/.claude/projects`.
 pub(crate) fn claude_projects_roots(project_id: Option<&str>) -> Vec<PathBuf> {
-    vec![crate::services::agent_home::scope_home(project_id)
+    let mut roots = vec![crate::services::agent_home::scope_home(project_id)
         .join(".claude")
-        .join("projects")]
+        .join("projects")];
+    // The chat assistant's local-Claude chats run in the scope's local-model
+    // home (`assistant.local`), not its cloud one; a chat's uuid is in one of
+    // the two (the phone's Focus view reads the transcript from here).
+    if project_id.is_some_and(|id| crate::storage::project_key(id.trim()).eq_ignore_ascii_case(crate::storage::ASSISTANT_SCOPE)) {
+        roots.push(crate::services::agent_home::local_model_home(project_id).join(".claude").join("projects"));
+    }
+    roots
 }
 
 /// Where a scope's Codex keeps its rollouts: `<scope home>/.codex/sessions`.
@@ -401,7 +409,7 @@ pub(crate) fn codex_sessions_root(project_id: Option<&str>) -> PathBuf {
 /// `<projects>/<encoded-cwd>/<uuid>.jsonl`; since uuids are globally unique we
 /// scan the project dirs for `<uuid>.jsonl` rather than re-deriving the cwd
 /// encoding.
-fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> bool {
+pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> bool {
     claude_session_log(projects, uuid).is_some()
 }
 
@@ -627,6 +635,58 @@ pub fn last_prompt_in_transcript(path: &std::path::Path, kind: TranscriptKind) -
     with_prompt_tail(path, |lines| lines.iter().rev().find_map(|line| prompt_in_record(line, kind)))
 }
 
+/// How far into a transcript the first prompt is looked for: a session's
+/// opening records are small, but Claude's request replays and Codex's
+/// instructions come before a slow first prompt.
+const CHAT_HEAD_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The first prompt of the transcript at `path`, with its moment when the
+/// record has one, and the last prompt in its tail (the model's window: a
+/// menu row, not the chart, so no wider read) — a stored chat's row in the
+/// Reader's Resume menu (`services::agent_chats`). The first prompt is `None`
+/// for a session no prompt went into.
+pub(crate) fn chat_prompts(
+    path: &std::path::Path,
+    kind: TranscriptKind,
+) -> (Option<TranscriptPrompt>, Option<String>) {
+    use std::io::{BufRead, Read};
+    let Some(file) = crate::services::home_io::open_regular(path) else {
+        return (None, None);
+    };
+    let mut reader = std::io::BufReader::new(file.take(CHAT_HEAD_BYTES));
+    let mut line = Vec::new();
+    let mut first = None;
+    while first.is_none() {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        // A line the head cut short parses as nothing, which is what it holds.
+        if is_replay_record(&line) || !line.ends_with(b"\n") {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&line) else { continue };
+        first = timed_prompt_in_record(text, kind).or_else(|| {
+            prompt_in_record(text, kind).map(|text| TranscriptPrompt { text, at: String::new() })
+        });
+    }
+    if first.is_none() {
+        return (None, None);
+    }
+    (first, last_in_transcript_tail(path, |line| prompt_in_record(line, kind)))
+}
+
+/// The Claude session log `<uuid>.jsonl` in the one folder `folder`, when it
+/// is a regular file (the agent writes it: never a link).
+pub(crate) fn claude_chat_log(folder: &std::path::Path, uuid: &str) -> Option<PathBuf> {
+    if !is_uuid_shaped(uuid) {
+        return None;
+    }
+    let path = folder.join(format!("{uuid}.jsonl"));
+    std::fs::symlink_metadata(&path).ok()?.is_file().then_some(path)
+}
+
 /// Read the last `MODEL_TAIL_BYTES` of `path` and return `pick`'s answer for
 /// the *last* line it accepts.
 fn last_in_transcript_tail<T>(
@@ -669,22 +729,107 @@ fn with_transcript_tail<T>(
     tail: u64,
     read: impl FnOnce(&[&str]) -> Option<T>,
 ) -> Option<T> {
-    use std::io::{Read, Seek, SeekFrom};
     // The agent writes its transcript: never a link, a FIFO or another
     // special file.
     let mut file = crate::services::home_io::open_regular(path)?;
     let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(tail);
+    let (text, _) = read_conversation_tail(&mut file, len, tail)?;
+    let lines: Vec<&str> = text.lines().collect();
+    read(&lines)
+}
+
+/// The start of every request-replay record Claude Code writes into its
+/// transcripts since 2.1.300 (`api-request`, `api-request-blob`,
+/// `api-request-shape`): the system prompt, tools and messages of each API
+/// request, copied again. They are most of a busy session's bytes (two thirds
+/// and more) and no reader here wants one.
+const REPLAY_RECORD: &[u8] = br#"{"type":"api-request"#;
+
+/// Whether a transcript line is a request-replay record ([`REPLAY_RECORD`]).
+fn is_replay_record(line: &[u8]) -> bool {
+    line.starts_with(REPLAY_RECORD)
+}
+
+/// How far back past `budget` a tail read scans for conversation: the replay
+/// records it skips may make up all but a quarter of the file.
+const REPLAY_SCAN_FACTOR: u64 = 4;
+const SCAN_CHUNK: u64 = 1024 * 1024;
+
+/// The tail of a transcript that holds `budget` bytes of conversation, with
+/// the request-replay records skipped both in the count and in the text: a
+/// byte window alone would hold a third of the turns it held before 2.1.300.
+/// Whole lines, in file order; a line the window starts inside is dropped. The
+/// flag says the window starts after the file's first byte. The scan reaches
+/// back at most [`REPLAY_SCAN_FACTOR`] times `budget`.
+pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget: u64) -> Option<(String, bool)> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    let start = conversation_tail_start(file, len, budget)?;
     file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::with_capacity((len - start) as usize);
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<&str> = text.lines().collect();
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut text = String::new();
     if start > 0 {
         // Whatever came before the seek point is missing from the first line.
-        lines.remove(0);
+        reader.read_until(b'\n', &mut line).ok()?;
     }
-    read(&lines)
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            break;
+        }
+        if !is_replay_record(&line) {
+            text.push_str(&String::from_utf8_lossy(&line));
+        }
+    }
+    Some((text, start > 0))
+}
+
+/// Where [`read_conversation_tail`]'s window starts: walking back line by line
+/// from the end, `budget` bytes of lines that are not replay records. Without
+/// replay records it is `len - budget`, the plain byte window.
+fn conversation_tail_start(file: &mut std::fs::File, len: u64, budget: u64) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let floor = len.saturating_sub(budget.saturating_mul(REPLAY_SCAN_FACTOR));
+    let mut counted = 0u64;
+    // End of the line being walked back over; its newline is found next.
+    let mut line_end = len;
+    let mut pos = len;
+    // The first bytes after `pos`: how a line starting in this chunk goes on.
+    let mut head: Vec<u8> = Vec::new();
+    let mut chunk = Vec::new();
+    while pos > floor {
+        let lo = pos.saturating_sub(SCAN_CHUNK).max(floor);
+        chunk.resize((pos - lo) as usize, 0);
+        file.seek(SeekFrom::Start(lo)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        for index in (0..chunk.len()).rev() {
+            if chunk[index] != b'\n' {
+                continue;
+            }
+            let newline = lo + index as u64;
+            let mut opening = chunk[index + 1..].iter().take(REPLAY_RECORD.len()).copied().collect::<Vec<u8>>();
+            opening.extend(head.iter().take(REPLAY_RECORD.len() - opening.len()));
+            if !is_replay_record(&opening) {
+                // The line with its newline in front.
+                let size = line_end - newline;
+                if counted + size >= budget {
+                    return Some(line_end - (budget - counted));
+                }
+                counted += size;
+            }
+            line_end = newline;
+        }
+        let mut next = chunk.iter().take(REPLAY_RECORD.len()).copied().collect::<Vec<u8>>();
+        next.extend(head.iter().take(REPLAY_RECORD.len() - next.len()));
+        head = next;
+        pos = lo;
+    }
+    // The file's first line has no newline in front to be found by: the
+    // window starts inside it, or takes the whole file.
+    if floor == 0 && !is_replay_record(&head) && counted + line_end > budget {
+        return Some(line_end - (budget - counted));
+    }
+    Some(floor)
 }
 
 // ── The prompts a tab was given, with their times ────────────────────────────
@@ -1449,6 +1594,31 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
     write_live_session_in(dir, uid, cleared)
 }
 
+/// How the window takes the tab keyed `uid` onto `chat`, an earlier
+/// conversation of its folder picked in the Reader's Resume menu
+/// (`services::agent_chats`, which has checked that `chat` is one): the undo's
+/// two ways. Claude types `/resume <chat>` into the running session; Codex has
+/// its record pointed at `chat` — in the root that holds it, else the scope's
+/// own — and is relaunched onto it. `None` for any other agent, or a `chat`
+/// that is no id.
+pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
+    if !is_uuid_shaped(chat) || !is_uuid_shaped(uid) {
+        return None;
+    }
+    match agent {
+        "claude" => Some(UndoClearPlan::Type { command: format!("/resume {chat}") }),
+        "codex" => {
+            let dir = live_record_dir(project_id, uid).unwrap_or_else(|| match project_id {
+                Some(pid) => project_live_sessions_dir(pid),
+                None => live_sessions_dir(),
+            });
+            restore_cleared_in(&dir, uid, chat).ok()?;
+            Some(UndoClearPlan::Relaunch)
+        }
+        _ => None,
+    }
+}
+
 /// Testable core of [`cleared_session_for`] against the record's directory.
 fn cleared_session_in(
     dir: &std::path::Path,
@@ -1749,6 +1919,7 @@ pub fn codex_binder_enabled(scope_id: Option<&str>) -> bool {
 /// hook's stdin JSON — both CLIs use that schema.
 pub fn install_session_start_hook() -> std::io::Result<()> {
     write_hook_script()?;
+    crate::services::opencode_session::write_plugin()?;
     crate::services::agent_hint::write_script()
 }
 
@@ -1784,6 +1955,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
             eprintln!("agent_session: register vibe hook in {}: {e}", home.display());
         }
     }
+    // OpenCode's session plugin (`services::opencode_session`).
+    crate::services::opencode_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);
@@ -2059,6 +2232,16 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
+         # A Bash call put in the background (`run_in_background`, or moved there\n\
+         # while it ran) comes back with its task id, and its shell writes to\n\
+         # `<id>.output`: that is how the job scan tells it from the call the\n\
+         # agent waits on, which looks the same. The last few ids are kept; written\n\
+         # before the turn record, whose write is what makes the scan look.\n\
+         if [ \"$event\" = PostToolUse ]; then\n\
+         \x20 bg=$(printf '%s' \"$input\" | sed -n 's/.*\"backgroundTaskId\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z0-9]*\\)\".*/\\1/p')\n\
+         \x20 [ -n \"$bg\" ] && {{ tail -n 15 \"$dir/${UPPER}_TAB_UID.bg\" 2>/dev/null; printf '%s\\n' \"$bg\"; }} > \"$dir/${UPPER}_TAB_UID.bg.$$\" &&\n\
+         \x20   mv -f \"$dir/${UPPER}_TAB_UID.bg.$$\" \"$dir/${UPPER}_TAB_UID.bg\"\n\
+         fi\n\
          [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
          # A prompt in the conversation a /clear started ends that clear's undo:\n\
          # resuming the one it ended would leave the prompt behind. Not a session\n\
@@ -2504,6 +2687,8 @@ mod tests {
 
     fn opts_with_args(args: &[&str]) -> PtyOptions {
         PtyOptions {
+            login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
@@ -2571,6 +2756,19 @@ mod tests {
         assert!(once.contains("name = \"mine\""));
         assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The assistant's local-Claude chats keep their transcripts in the
+    /// scope's local-model home, so its Claude roots name both homes; no
+    /// other scope's do.
+    #[test]
+    fn the_assistants_claude_roots_include_its_local_model_home() {
+        let roots = claude_projects_roots(Some("assistant"));
+        assert_eq!(roots.len(), 2);
+        assert!(roots[1].starts_with(crate::services::agent_home::local_model_home(Some("assistant"))));
+        assert_eq!(claude_projects_roots(Some(" Assistant ")).len(), 2);
+        assert_eq!(claude_projects_roots(Some("p1")).len(), 1);
+        assert_eq!(claude_projects_roots(None).len(), 1);
     }
 
     #[test]
@@ -3573,6 +3771,25 @@ mod tests {
         assert_eq!(turn().as_deref(), Some("decision"));
         run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"Bash""#));
         assert_eq!(turn().as_deref(), Some("working"));
+        // A Bash call put in the background leaves its task id for the job scan
+        // (the result's shape as Claude 2.1.300 records it); a foreground call,
+        // even one whose OUTPUT quotes such a field, leaves none.
+        let bg = || std::fs::read_to_string(live.join(format!("{uid}.bg"))).ok();
+        let fg_result = r#","tool_name":"Bash","tool_response":{"stdout":"{\"backgroundTaskId\":\"zzz9\"}","stderr":""}"#;
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", fg_result));
+        assert_eq!(bg(), None);
+        let bg_result = |id: &str| {
+            format!(r#","tool_name":"Bash","tool_response":{{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"{id}"}}"#)
+        };
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", &bg_result("brwkwm4yv")));
+        assert_eq!(bg().as_deref(), Some("brwkwm4yv\n"));
+        assert_eq!(turn().as_deref(), Some("working"));
+        // Only the last sixteen are kept.
+        for i in 0..20 {
+            run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", &bg_result(&format!("t{i}"))));
+        }
+        let kept: Vec<String> = bg().unwrap().lines().map(str::to_string).collect();
+        assert_eq!(kept, (4..20).map(|i| format!("t{i}")).collect::<Vec<_>>());
         // A notification that is not a wait leaves the state alone.
         run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", r#","notification_type":"auth_success""#));
         assert_eq!(turn().as_deref(), Some("working"));
@@ -4396,6 +4613,43 @@ mod tests {
         assert_eq!(last_prompt_in_transcript(&path, TranscriptKind::Codex).as_deref(), Some("Implement these"));
         let recent = recent_prompts_in_transcript(&path, TranscriptKind::Codex).unwrap();
         assert_eq!(recent.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Implement these"]);
+    }
+
+    #[test]
+    fn a_conversation_tail_counts_and_keeps_no_request_replay_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let read = |budget: u64| {
+            let mut file = std::fs::File::open(&path).unwrap();
+            let len = file.metadata().unwrap().len();
+            read_conversation_tail(&mut file, len, budget).unwrap()
+        };
+
+        // Without replay records it is the plain byte window, across chunks.
+        let line = format!("{{\"type\":\"user\",\"n\":\"{}\"}}\n", "u".repeat(1000));
+        std::fs::write(&path, line.repeat(3000)).unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        for budget in [10, line.len() as u64, 5 * SCAN_CHUNK / 2, len - 1, len, len + 9] {
+            let (text, cut) = read(budget);
+            let mut plain = std::fs::read_to_string(&path).unwrap();
+            let start = len.saturating_sub(budget) as usize;
+            plain.drain(..start);
+            if start > 0 {
+                plain.drain(..=plain.find('\n').unwrap());
+            }
+            assert_eq!((text.len(), cut), (plain.len(), start > 0), "budget {budget}");
+        }
+
+        // Replay records are skipped, even one split over a chunk boundary:
+        // two prompts with three times their size of replay between and after
+        // them both fit a window of the two.
+        let line = format!("{{\"type\":\"user\",\"n\":\"{}\"}}\n", "u".repeat(400_000));
+        let replay = format!("{{\"type\":\"api-request\",\"body\":\"{}\"}}\n", "r".repeat(SCAN_CHUNK as usize / 3));
+        std::fs::write(&path, format!("{line}{}{line}{}", replay.repeat(3), replay.repeat(3))).unwrap();
+        assert_eq!(read(2 * line.len() as u64), (line.repeat(2), false));
+        assert_eq!(read(line.len() as u64 + 5), (line.clone(), true));
+        // Past the scan's reach the window is cut where the reach ends.
+        assert_eq!(read(1024), (String::new(), true));
     }
 
     #[test]

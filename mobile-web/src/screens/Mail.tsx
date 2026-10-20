@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArchiveIcon, FolderIcon, InboxIcon, OutboxIcon, PaperclipIcon, PencilIcon, TrashIcon, WarningIcon } from "../../../src/components/common/icons/Icon";
 import { describeFailure } from "../connection";
 import {
@@ -15,6 +15,8 @@ import {
   type MobileMailWrites,
 } from "../api";
 import { readChoice, writeChoice } from "../prefs";
+import { goBack as stepBack, useBackLayer } from "../backStack";
+import { installFocusSwipe } from "../terminal/focusSwipe";
 import { isUntested } from "../../../src/lib/untested";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 
@@ -230,13 +232,23 @@ export function Mail() {
   // Mail is a tab now, so the chevron only ever walks its own stack: message →
   // folder → account list. At the root there is nothing above it to go back to.
   const goBack = message ? () => setMessage(null) : folder ? () => setFolder(null) : null;
+  useBackLayer(goBack);
+  // A right swipe walks the same stack, through Back's own path. Not from a
+  // field (the reply box) — `installFocusSwipe` leaves those alone.
+  const screen = useRef<HTMLElement | null>(null);
+  const inStack = goBack !== null;
+  useEffect(() => {
+    const host = screen.current;
+    if (!inStack || !host) return;
+    return installFocusSwipe(host, { onSwipeRight: stepBack, onSwipeLeft: () => {} }, { ignore: ".sheet-backdrop, [role='dialog']" });
+  }, [inStack]);
   const refresh = () => {
     if (message) void loadMessage(message.message);
     else if (folder) void loadFolder(folder.folder, folder.offset);
     else void loadOverview();
   };
 
-  return <main className="screen mail-mobile-screen">
+  return <main ref={screen} className="screen mail-mobile-screen">
     <header>
       {goBack && <button className="back" onClick={goBack}>‹</button>}
       <h1>{message ? safeText(message.message.subject) || t("mobile.mail.noSubject") : folder ? safeText(folder.folder.name) : t("mobile.mail.title")}</h1>

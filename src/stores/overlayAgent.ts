@@ -2,11 +2,12 @@ import { create } from "zustand";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "./tabs";
 import type { SteeringApp } from "../lib/shortcuts/steeringRegion";
 import { storageKey } from "../lib/brand";
+import { ASSISTANT_SCOPE } from "../lib/assistant";
 
 /**
  * The **docked agent** of the mail, calendar and to-do overlays — a root agent
  * tab shown in a column beside the app, so the agent's MCP writes land next to
- * the prompt that caused them (`docs/overlay_agent_plan.md`).
+ * the prompt that caused them (`docs/done/overlay_agent_plan.md`).
  *
  * The tab itself is an ordinary root tab (`addTabToRoot`): its PTY is owned by
  * `CenterPanel`'s keep-alive layer and it shows in the root console's strip.
@@ -95,8 +96,25 @@ interface OverlayAgentState {
    * column's mount effect; the set keeps its identity while nothing changes.
    */
   shownKeys: ReadonlySet<string>;
-  markShown: (key: string) => void;
-  unmarkShown: (key: string) => void;
+  /** The same for the Tabby scope: chat tab keys an attach-only view draws
+   *  right now (`AttachedAgentPane`). `CenterPanel`'s copy of the chat keeps
+   *  the PTY and stays hidden regardless; this only keeps it from sleeping. */
+  assistantShownKeys: ReadonlySet<string>;
+  /** Tabby chat keys whose CLI may run this session. A restored chat is only a
+   *  saved record until it is first shown (or just made): `CenterPanel` mounts
+   *  the pane that owns its PTY, and so spawns the CLI, only for keys in this
+   *  set, so opening Tabby with many saved chats starts none of them. Nothing
+   *  removes a key: the chat keeps running once started. */
+  assistantStartedKeys: ReadonlySet<string>;
+  markAssistantStarted: (key: string) => void;
+  /** Started chats whose process has ended (the CLI quit, and with it the
+   *  pane: a Tabby chat leaves no shell behind). Cleared when it respawns.
+   *  `startAssistantChat` restarts one; the overlay offers the same. */
+  assistantEndedKeys: ReadonlySet<string>;
+  markAssistantEnded: (key: string, ended: boolean) => void;
+  /** `scope` is the scope of `key`'s tab: root (the default) or Tabby. */
+  markShown: (key: string, scope?: string) => void;
+  unmarkShown: (key: string, scope?: string) => void;
   /** The column's width (px), already clamped. */
   width: number;
   /** Commit a finished resize drag: clamped, then remembered on this machine. */
@@ -129,19 +147,37 @@ export const useOverlayAgentStore = create<OverlayAgentState>((set) => ({
       return { docks: { ...s.docks, [app]: EMPTY_DOCK } };
     }),
   shownKeys: new Set<string>(),
-  markShown: (key) =>
+  assistantShownKeys: new Set<string>(),
+  assistantStartedKeys: new Set<string>(),
+  markAssistantStarted: (key) =>
     set((s) => {
-      if (s.shownKeys.has(key)) return s;
-      const shownKeys = new Set(s.shownKeys);
-      shownKeys.add(key);
-      return { shownKeys };
+      if (s.assistantStartedKeys.has(key)) return s;
+      return { assistantStartedKeys: new Set(s.assistantStartedKeys).add(key) };
     }),
-  unmarkShown: (key) =>
+  assistantEndedKeys: new Set<string>(),
+  markAssistantEnded: (key, ended) =>
     set((s) => {
-      if (!s.shownKeys.has(key)) return s;
-      const shownKeys = new Set(s.shownKeys);
-      shownKeys.delete(key);
-      return { shownKeys };
+      if (s.assistantEndedKeys.has(key) === ended) return s;
+      const keys = new Set(s.assistantEndedKeys);
+      if (ended) keys.add(key);
+      else keys.delete(key);
+      return { assistantEndedKeys: keys };
+    }),
+  markShown: (key, scope = ROOT_SCOPE) =>
+    set((s) => {
+      const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";
+      if (s[field].has(key)) return s;
+      const keys = new Set(s[field]);
+      keys.add(key);
+      return { [field]: keys };
+    }),
+  unmarkShown: (key, scope = ROOT_SCOPE) =>
+    set((s) => {
+      const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";
+      if (!s[field].has(key)) return s;
+      const keys = new Set(s[field]);
+      keys.delete(key);
+      return { [field]: keys };
     }),
   width: readPersistedWidth(),
   setWidth: (width) => {

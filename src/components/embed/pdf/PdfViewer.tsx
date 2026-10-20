@@ -183,11 +183,7 @@ import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidd
 import { isTabInPopout, splitSubPaneKey, useTabsStore } from "../../../stores/tabs";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
-
-/** How often the open PDF re-checks its file's mtime for an on-disk change (a
- *  LaTeX recompile rewrites the very bytes this tab is showing). Mirrors the
- *  other viewers' poll interval. */
-const RELOAD_POLL_MS = 1500;
+import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 
 /** A recompile rewrites the PDF in place, so a reload can catch the file
  *  mid-write and pdf.js throws `InvalidPDFException: Invalid PDF structure` on
@@ -2147,7 +2143,7 @@ function PdfCanvas({
    *  sharpness, not a grab of the screen around it. Mutually exclusive with
    *  redaction because both modes own the same plain drag gesture. */
   const [copySelecting, setCopySelecting] = useState(false);
-  /** Markup mode (`usePdfMarkup`, `docs/pdf_markup_rounds_plan.md` §2.6) — the
+  /** Markup mode (`usePdfMarkup`, `docs/done/pdf_markup_rounds_plan.md` §2.6) — the
    *  third mode that owns the plain drag, so it excludes the two above. */
   const [marking, setMarking] = useState(false);
   const markingRef = useRef(false);
@@ -2772,9 +2768,11 @@ function PdfCanvas({
   // The diskVersion that produced `doc`. Compile-triggered forward search waits
   // for this to reach the requested fresh version before it scrolls.
   const [loadedDiskVersion, setLoadedDiskVersion] = useState(-1);
+  /** The poll's baseline (`useDiskReloadPoll`, below): every path that re-reads
+   *  or writes the file records the mtime it saw here. */
   const lastMtime = useRef<number | null>(null);
 
-  // ── Mark up (`usePdfMarkup`, `docs/pdf_markup_rounds_plan.md` §2.6) ─────────
+  // ── Mark up (`usePdfMarkup`, `docs/done/pdf_markup_rounds_plan.md` §2.6) ─────────
   // Marks drawn over the pages and sent, as a prompt with a marked copy, to an
   // agent tab of this project. Offered only where the sheets are the file's own
   // pages (`markupGate`), one viewer per file per window (`claimMarkup`).
@@ -4112,57 +4110,40 @@ function PdfCanvas({
     [path, remoteSource, syncable, onReverseSource],
   );
 
-  // Seed the mtime baseline once per file, visible or not, so it pairs with the
-  // bytes the load effect read — the re-show catch-up below compares against it.
-  useEffect(() => {
-    lastMtime.current = null;
-    let cancelled = false;
-    fileMtime(path, scope)
-      .then((m) => { if (!cancelled) lastMtime.current = m; })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [path, scope]);
-
-  // Poll mtime; on an advance (e.g. a recompile wrote a new PDF), bump
-  // diskVersion so the load effect re-reads the fresh bytes (#43-style).
-  // Visible panes only — a hidden PDF tab (every backgrounded project's, and a
-  // TeX PDF behind another tab in its group) polled an SFTP stat per tick on a
-  // remote project forever. The immediate check on re-show catches a recompile
-  // that happened while the tab was hidden.
+  // Poll mtime; on a change (e.g. a recompile wrote a new PDF), bump
+  // diskVersion so the load effect re-reads the fresh bytes (#43-style). The
+  // baseline is seeded once per file, visible or not, so it pairs with the
+  // bytes the load effect read. `useDiskReloadPoll` polls visible panes only —
+  // a hidden PDF tab (every backgrounded project's, and a TeX PDF behind
+  // another tab in its group) polled an SFTP stat per tick on a remote project
+  // forever — and its immediate check on re-show catches a recompile that
+  // happened while the tab was hidden.
+  //
+  // A reload REPLACES the arrangement, so it would silently throw away any
+  // unsaved page edits. With edits pending `diskChanged` raises a banner and
+  // lets the reader choose; without them the old auto-reload stands (a LaTeX
+  // recompile must still refresh the PDF on its own). Marks on the pages hold
+  // it back the same way, behind the markup strip's Reload.
   //
   // Held while a build of this PDF is running in a TeX editor (`beginCompile`):
   // latexmk rewrites the file once per pass, and the poll used to read every
   // intermediate PDF — retrying each one it caught mid-write — before the
   // compile's own reload request at the end read the one that counts.
-  const wasCompiling = useRef(false);
+  // Resuming after a build: its reload request (or its SyncTeX reveal) has
+  // just asked for the bytes and is recording the mtime it read them at. An
+  // immediate check here would see the same advance first and read the file
+  // a second time; the interval's first tick is soon enough for a build that
+  // ended without asking (a failed one).
+  const wasCompileHeld = useRef(compileHeld);
+  const resumingAfterCompile = wasCompileHeld.current && !compileHeld;
   useEffect(() => {
-    const afterCompile = wasCompiling.current;
-    wasCompiling.current = compileHeld;
-    if (!paneVisible || compileHeld) return;
-    let cancelled = false;
-    const check = () => {
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
-          lastMtime.current = m;
-          // A reload REPLACES the arrangement, so it would silently throw away any
-          // unsaved page edits. With edits pending we raise a banner and let the
-          // reader choose; without them the old auto-reload stands (a LaTeX
-          // recompile must still refresh the PDF on its own). Marks on the pages
-          // hold it back the same way, behind the markup strip's Reload.
-          diskChanged(() => setDiskVersion((v) => v + 1));
-        })
-        .catch(() => {});
-    };
-    // Resuming after a build: its reload request (or its SyncTeX reveal) has
-    // just asked for the bytes and is recording the mtime it read them at. An
-    // immediate check here would see the same advance first and read the file
-    // a second time; the interval's first tick is soon enough for a build that
-    // ended without asking (a failed one).
-    if (!afterCompile) check();
-    const id = setInterval(check, RELOAD_POLL_MS);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, paneVisible, diskChanged, compileHeld]);
+    wasCompileHeld.current = compileHeld;
+  });
+  useDiskReloadPoll(path, scope, () => diskChanged(() => setDiskVersion((v) => v + 1)), {
+    baseline: lastMtime,
+    enabled: !compileHeld,
+    immediate: !resumingAfterCompile,
+  });
 
   // Load (and reload on path / disk change) the document. pdf.js detaches the
   // backing buffer, so each load gets a fresh Uint8Array; the prior documents are

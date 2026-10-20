@@ -26,10 +26,12 @@ import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
 import { SECTION_ICON } from "./glyphs";
 import type { SubagentStep } from "./terminal/subagents";
+import type { MarkupBack } from "./components/OutboxViewer";
 /** The bundle this phone is running, on every splash: a connect that hangs or
  * fails is exactly when the reader needs to know whether the phone picked up
  * the desktop's current bundle or is booting a stale one out of the cache. */
 import { BUNDLE_VERSION as SPLASH_VERSION } from "./buildInfo";
+import { BackNest, useBackLayer } from "./backStack";
 import { BRAND, LEGACY_NAMES, NAMES, storageDashKey } from "../../src/lib/brand";
 
 /**
@@ -246,7 +248,7 @@ export function App() {
     if (hiddenSections.includes(tab)) setTab("projects");
   }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
-  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep } | null>(null);
+  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** The server's identity key is not the pinned one: ask for the recovery
    * code (`SecretsRepinSheet`). Once per sign-in; Later closes it. */
@@ -536,7 +538,14 @@ export function App() {
     // (`onVisibility`) locked the app again seconds after it was unlocked.
   }, [reset, auth]);
 
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep) => setTerminal({ project, tab: next, pickModel, signIn, subagent });
+  // Back: a tab returns to where it was opened from, another section to
+  // Projects, a project to the list. At the list Back leaves the app.
+  useBackLayer(() => {
+    if (terminal) setTerminal(null);
+    else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
+    else setProjectView({ kind: "home" });
+  }, auth === "paired" && (terminal !== null || tab !== "projects" || projectView.kind === "project"));
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
@@ -587,22 +596,25 @@ export function App() {
   </>;
   // A terminal is the one full-bleed screen: it owns every pixel it can get,
   // and the tab bar would sit on the keyboard toolbar besides.
-  if (terminal) return <Terminal
+  // Each screen nests its sheets above the App's own step back
+  // (`backStack.ts`): one opening on arrival registers before the App does.
+  if (terminal) return <BackNest><Terminal
     key={terminal.tab.id}
     tab={terminal.tab}
     project={terminal.project}
     pickModel={terminal.pickModel}
     subagent={terminal.subagent}
     signInTab={terminal.signIn}
-    openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn)}
+    markupBack={terminal.markupBack}
+    openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
     back={() => setTerminal(null)}
-  />;
-  return <div className="tabbed">
+  /></BackNest>;
+  return <div className="tabbed"><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
           : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent)} />
+            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
             : <Home
               open={(id) => setProjectView({ kind: "project", id })}
               // Straight into the session, leaving the Projects tab on its
@@ -613,6 +625,7 @@ export function App() {
               todo={openTodo}
               mail={() => setTab("mail")}
             />}
+    </BackNest>
     <TabBar active={tab} open={openSection} hidden={hiddenSections} />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
     {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}

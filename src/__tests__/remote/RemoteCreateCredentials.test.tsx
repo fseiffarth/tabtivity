@@ -15,7 +15,7 @@
  *     The project then claimed to be auto-connect-eligible and failed on next launch.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -26,6 +26,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../../components/terminal/TerminalView", () => ({ TerminalView: () => null }));
 
 import { ExtendToRemoteDialog } from "../../components/projects/ExtendToRemoteDialog";
+import * as projectsModule from "../../stores/projects";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSettingsStore } from "../../stores/settings";
@@ -97,6 +98,28 @@ async function fillSsh(password: string) {
 }
 
 describe("the create/extend dialog can save the SSH password", () => {
+  it("does not restore an old host or its saved-credential state after the address changes", async () => {
+    let finish!: (value: { saved: boolean; save_error: null }) => void;
+    const connecting = new Promise<{ saved: boolean; save_error: null }>((resolve) => { finish = resolve; });
+    const fallback = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args, options) =>
+      command === "ssh_connect" ? connecting : fallback(command, args, options),
+    );
+    render(<ExtendToRemoteDialog project={PROJECT} onClose={() => {}} />);
+    await fillSsh("hunter2");
+    await userEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+    await userEvent.clear(screen.getByPlaceholderText(/user@host/i));
+    await userEvent.type(screen.getByPlaceholderText(/user@host/i), "bob@other.example");
+
+    await act(async () => { finish({ saved: true, save_error: null }); await connecting; });
+
+    expect(screen.queryByRole("button", { name: /use this folder/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /^connect$/i })).toBeTruthy();
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: /save password/i }).checked).toBe(false);
+    expect(lastArgs("ssh_list_dir")).toBeUndefined();
+    expect(lastArgs("ssh_remember_address")).toBeUndefined();
+  });
+
   it("passes the ticked checkbox to the connect, so the working password is stored", async () => {
     render(<ExtendToRemoteDialog project={PROJECT} onClose={() => {}} />);
     await fillSsh("hunter2");
@@ -242,5 +265,16 @@ describe("the credential the dialog used is the one the project connects with", 
         background: false,
       }),
     );
+  });
+});
+
+describe("no plaintext password is parked in the frontend", () => {
+  it("the projects store keeps no stash of dialog passwords or via-login marks", () => {
+    // `stashRemotePassword` kept the typed SSH password in a module Map that
+    // nothing read and nothing cleared (screen 2026-10-15 #11). The hand-over
+    // above goes straight into `remote_connect`; nothing may hold it after.
+    const exported = Object.keys(projectsModule);
+    expect(exported).not.toContain("stashRemotePassword");
+    expect(exported).not.toContain("stashRemoteViaLogin");
   });
 });

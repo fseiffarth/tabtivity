@@ -1,8 +1,9 @@
 /**
- * The Focus view's sideways swipe: left→right reveals the agent's status
- * strip, right→left puts it away. The project screen reads the same gesture
- * for its files drawer (`ProjectFiles`), which slides in from the left, and
- * for closing a tab card, which a right→left swipe over it does.
+ * The phone's sideways swipe. Left→right steps back, as Android's Back does
+ * (the Focus view keeps it to the left third and reveals the agent's status
+ * strip further right); right→left opens the files (`ProjectFiles`), which
+ * slide in from the right, or puts the status strip away first. Over a tab
+ * card on the project screen, right→left closes the card instead.
  *
  * Every listener here is passive and nothing is ever prevented. The Focus view
  * is a reading surface whose vertical scroll and text selection are the
@@ -13,8 +14,9 @@
  *
  * Three gestures are deliberately not swipes: one starting at a screen edge
  * (Android's system back gesture lives there, and toggling the strip on the
- * way out of the app would be a surprise — the files drawer opts its left edge
- * back in, `leftEdge`), one starting in a text field (a
+ * way out of the app would be a surprise — a host whose left→right is Back
+ * opts that edge back in, `leftEdge`, and one whose right→left pulls in the
+ * files drawer opts the right edge in, `rightEdge`), one starting in a text field (a
  * drag there moves the caret), and one over something that can still pan
  * sideways in that direction (a wide code block has to keep scrolling).
  */
@@ -106,11 +108,12 @@ export function installFocusSwipe(
   },
   /** `ignore`: a selector whose elements never start a swipe — a control
    * that owns its own drag (`touch-action:none`), or a sheet laid over the
-   * host that the swipe must not reach through. `leftEdge`: a start at the
-   * left edge counts too — a drawer that slides in from there is pulled from
-   * there. Where Android keeps that edge for its back gesture it cancels the
-   * touch, and a cancelled touch is never a swipe. */
-  config: { ignore?: string; leftEdge?: boolean } = {},
+   * host that the swipe must not reach through. `leftEdge` / `rightEdge`: a
+   * start at that edge counts too — Back is swiped from the left one, and a
+   * drawer that slides in from the right is pulled from there. Where Android
+   * keeps an edge for its back gesture it cancels the touch, and a cancelled
+   * touch is never a swipe. */
+  config: { ignore?: string; leftEdge?: boolean; rightEdge?: boolean } = {},
 ): () => void {
   let gesture: Gesture | null = null;
 
@@ -124,7 +127,7 @@ export function installFocusSwipe(
       return;
     }
     gesture = null;
-    if ((x < SWIPE_EDGE_GUARD && !config.leftEdge) || x > window.innerWidth - SWIPE_EDGE_GUARD) return;
+    if ((x < SWIPE_EDGE_GUARD && !config.leftEdge) || (x > window.innerWidth - SWIPE_EDGE_GUARD && !config.rightEdge)) return;
     const element = elementOf(target);
     if (element?.closest(EDITABLE)) return;
     if (config.ignore && element?.closest(config.ignore)) return;

@@ -10,8 +10,9 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
+import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { ROOT_SCOPE, bumpUsage, markAgentActive } from "../../stores/usage";
@@ -22,6 +23,7 @@ import {
   onTerminalReplay,
   type TerminalOutputRange,
 } from "../../lib/terminal/terminalBus";
+import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
 import { terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
@@ -30,25 +32,29 @@ import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
-import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
+import { isExternalFileDrag, parseDroppedFiles } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
+import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../../mobile-web/src/terminal/openCodeMini";
+import { bufferRows } from "../../../mobile-web/src/terminal/subagentInput";
 import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
 import { terminalSpawnKey, terminalViewKind } from "../../lib/terminal/terminalSpawn";
+import type { LoginTarget } from "../../lib/remote/loginTarget";
 import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
+import { confirmFreshSubmit, isClaude } from "../../lib/agents/freshSubmit";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
-import { findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
 import { openPathLink } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
-import { SIGN_IN_CARD_CLASS, TerminalSignInCard } from "./TerminalSignInCard";
+import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
@@ -57,6 +63,8 @@ import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
+import { buildScaffoldFillPrompt } from "../projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { type ConfirmSpec, useDialogs } from "../common/PromptDialogs";
@@ -66,6 +74,7 @@ import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
 import { storageKey } from "../../lib/brand";
+import type { AssistantLaunch } from "../../lib/assistant";
 
 // Hoisted to module scope: keystroke input fires this on every key, so we reuse
 // one encoder rather than allocating a `new TextEncoder()` per keystroke. The
@@ -116,6 +125,10 @@ interface Props {
   args?: string[];
   env?: Record<string, string>;
   initialInput?: string;
+  // A login terminal (`lib/remote/loginTarget`): the backend runs this ssh/OpenVPN
+  // login as the PTY's own program and ignores `cmd`/`args`/`env`/`cwd`. Only such
+  // a PTY, while the login runs, accepts a pasted saved credential.
+  login?: LoginTarget | null;
   cwd: string;
   // When true, never run this tab over ssh even for remote projects (e.g.
   // locally-bound Ollama agents). Forwarded to the backend spawn.
@@ -146,6 +159,9 @@ interface Props {
    *  home (`PtyOptions.host_session`). Honoured by the backend only with no
    *  project id. */
   hostSession?: boolean;
+  /** A Tabby chat's launch (`PtyOptions.assistant`): the backend builds the
+   *  argv from it and ignores `cmd`/`args`/`env` but the `TAB_UID` in `env`. */
+  assistant?: AssistantLaunch | null;
   // Whether this pane is laid out on screen (single-mode active tab, or any
   // pane in grid mode). Drives display + xterm fit.
   visible: boolean;
@@ -173,8 +189,14 @@ interface Props {
   kind?: TabKind;
   /** Stable local-only target id for per-tab scheduled prompts. */
   scheduleTargetId?: string;
+  /** Registers the pane's prompt input under this id instead, and sends no
+   *  schedule target to the backend: a Tabby chat (`assistantPromptTarget`). */
+  promptTargetId?: string;
   /** Bumped to respawn the PTY in place (`relaunchTabInScope`). */
   relaunchSeq?: number;
+  /** Show the Reader always, without its on/off toggle (the Tabby overlay's
+   *  chats). Not the per-CLI preference: that one is left as it is. */
+  readerAlways?: boolean;
 }
 
 function terminalTheme(scheme: string | undefined) {
@@ -261,7 +283,9 @@ function sweepXtermElements(container: HTMLElement) {
   }
 }
 
-export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, relaunchSeq = 0 }: Props) {
+export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, promptTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
+  // The id the pane's prompt input is registered under (scheduler, Reader).
+  const inputTargetId = promptTargetId ?? scheduleTargetId;
   const viewerId = useRef(crypto.randomUUID()).current;
   const viewerUpdateSeq = useRef(0);
   const colorScheme = useSettingsStore((s) => s.settings?.color_scheme);
@@ -353,8 +377,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   // The sign-in link the program on screen is waiting on (see
   // `TerminalSignInCard`), and the links the user already closed the card for.
   const [signIn, setSignIn] = useState<SignInRequest | null>(null);
+  // The program said that sign-in went through (`TerminalSignInDoneCard`);
+  // looked for only once a sign-in link was up in this pane.
+  const [signInDone, setSignInDone] = useState<{ pressEnter: boolean } | null>(null);
+  const signInWatched = useRef(false);
   // The session in this pane was just cleared: offer to take it back.
   const undoClearOffered = useAgentClearUndoStore((state) => !!state.cleared[id]);
+  // The project's AGENTS.md still holds no guidance: offer the one-time fill card.
+  const [agentsEmpty, setAgentsEmpty] = useState(false);
+  const agentsEmptyProbed = useRef<string | null>(null);
   // Over the Reader, only once it has let go of the cleared chat (its mark).
   const readerCleared = useAgentClearUndoStore((state) => state.marks[id] !== undefined);
   const dismissedSignIns = useRef(new Set<string>());
@@ -372,7 +403,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   // Path links (`lib/terminal/pathLinks`), read by the link provider through
   // a ref: it lives in the spawn effect, which must not respawn on a settings
   // or project change.
-  const pathLinkContext = usePathLinkContext(projectId, cwd);
+  const pathLinkContext = usePathLinkContext(projectId, cwd, localOnly);
   const pathLinkContextRef = useRef(pathLinkContext);
   pathLinkContextRef.current = pathLinkContext;
   const tRef = useRef(t);
@@ -417,6 +448,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   scrollbackRowsRef.current = scrollbackRows;
   const argsKey = JSON.stringify(args);
   const envKey = JSON.stringify(env);
+  // By value, like args/env: a caller rebuilding the same target each render
+  // must not respawn the login.
+  const loginKey = JSON.stringify(login);
+  const assistantKey = JSON.stringify(assistant);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -431,7 +466,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // Mode's synthetic cleanup, which therefore still sees the PTY parked.
     const spawnKey = attachOnly
       ? null
-      : terminalSpawnKey({ id, cmd, args, env, initialInput, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
     const parked = attachOnly ? undefined : asleepPty(id);
     const waking = !!parked && parked.spawnKey !== null && parked.spawnKey === spawnKey;
     // This lifecycle runs (spawned) or took over the PTY: only then does its
@@ -582,8 +617,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // card while one is up. Only parsed output triggers a look — a hidden pane
     // parses nothing (see `writeTerm`) and catches up when shown — and the look
     // is coalesced so a streaming agent costs one scan per 300 ms at most. The
-    // card goes away with the link: a login that succeeded redraws the screen.
+    // card goes away with the link: a login that succeeded redraws the screen,
+    // and the program's "signed in" brings the success card in its place.
     setSignIn(null);
+    setSignInDone(null);
+    signInWatched.current = false;
     let signInScanTimer: ReturnType<typeof setTimeout> | null = null;
     onBuild.push((term) => {
       const scanForSignIn = () => {
@@ -599,6 +637,20 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         setSignIn((prev) =>
           prev?.url === next?.url && prev?.wantsCode === next?.wantsCode ? prev : next,
         );
+        // A link counts even once its card was closed: sending the code closes it.
+        if (found) {
+          signInWatched.current = true;
+          setSignInDone(null);
+          return;
+        }
+        const done = findSignInDone((n) => buf.getLine(n), buf.baseY, buf.baseY + term.rows - 1);
+        if (done && signInWatched.current) {
+          signInWatched.current = false;
+          setSignInDone(done);
+        } else if (!done) {
+          // Enter was pressed in the terminal and the program moved on.
+          setSignInDone((prev) => (prev?.pressEnter ? null : prev));
+        }
       };
       termDisposables.push(term.onWriteParsed(() => {
         signInScanTimer ??= setTimeout(scanForSignIn, 300);
@@ -816,6 +868,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         // "Agent tabs you used today" — once per tab per day, however much you
         // then ask it.
         markAgentActive(scope, id, sub(METRIC.AGENT_ACTIVE, agentLeaf));
+        noteAgentSubmit(id);
       } else if (kind === "shell") {
         bumpUsage(scope, METRIC.SHELL_COMMAND);
       }
@@ -831,8 +884,16 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // keeps the settledness its parked stand-in carried.
     const takesPrompts = !attachOnly || isDetachedWindow();
     let settledOnce = waking && !!parked?.settled;
+    // A hook turn begun before this lifecycle is an earlier CLI's (a relaunch
+    // keeps the PTY id and the activity store's turn).
+    const lifecycleAt = Date.now();
+    const settle = () => {
+      if (settledOnce) return;
+      settledOnce = true;
+      wakePhoneHolds();
+    };
     const armScheduledReady = () => {
-      if (!scheduleTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
+      if (!inputTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
       scheduledReady.current = false;
       // Every new output chunk restarts the cushion. This closes the short gap
@@ -841,10 +902,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       scheduledSettleTimer.current = setTimeout(() => {
         if (cancelled) return;
         scheduledReady.current = true;
-        if (!settledOnce) {
-          settledOnce = true;
-          wakePhoneHolds();
-        }
+        settle();
       }, SCHEDULED_SETTLE_MS);
     };
     /**
@@ -870,22 +928,31 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       if (scheduledReady.current) return true;
       if (!terminalReadySeen.current) return false;
       const last = lastPtyOutputAt(id);
-      return last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
+      const quiet = last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
+      // Every quiet reading counts toward `started`, not only one taken by
+      // `started` itself: a hidden pane never runs the arming timer, and the
+      // idle gate asks this, so its first delivery used to leave the pane
+      // "not started" for the whole turn it began.
+      if (quiet) settle();
+      return quiet;
     };
     /**
      * Whether a phone prompt may be typed while the agent works
-     * (`queueableWhileBusy`): the CLI has drawn and gone quiet once. Not the
-     * bare terminal-ready event — a brand-new tab is ready before its CLI has
-     * started, and what is typed into a CLI still starting is lost (the phone
-     * markup's new-tab Submit held its prompt into exactly that window). Once
-     * settled it stays so: a working agent redraws without pause.
+     * (`queueableWhileBusy`), so the CLI's own queue decides when the agent
+     * takes it: the CLI has drawn and gone quiet once, or its hooks report a
+     * turn begun in this lifecycle — a CLI mid-turn is up, though a hidden
+     * pane may never have seen it quiet. Not the bare terminal-ready event — a
+     * brand-new tab is ready before its CLI has started, and what is typed
+     * into a CLI still starting is lost (the phone markup's new-tab Submit
+     * held its prompt into exactly that window). Once settled it stays so: a
+     * working agent redraws without pause.
      */
     const scheduledInputStarted = () => {
-      if (!settledOnce && scheduledInputReady()) settledOnce = true;
+      if (!settledOnce && ((agentDeliveryTurn(id)?.startedAt ?? 0) >= lifecycleAt || scheduledInputReady())) settle();
       return settledOnce;
     };
-    const unregisterScheduled = scheduleTargetId && takesPrompts
-      ? registerScheduledAgentInput(scheduleTargetId, {
+    const unregisterScheduled = inputTargetId && takesPrompts
+      ? registerScheduledAgentInput(inputTargetId, {
           ptyId: id,
           ready: scheduledInputReady,
           started: scheduledInputStarted,
@@ -904,6 +971,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           // reads as this tab working, but is deliberately NOT counted: the
           // usage recap counts prompts asked, and a slash command is not one.
           noteInput: () => noteUserInput(id),
+          // OpenCode's dialogs (a picker the Reader's model chip left up, say)
+          // take typed words instead of the agent; read off the viewport.
+          dialogCloseKeys: () => (term && isOpenCodeTab(cmd) ? openCodeDialogCloseKeys(bufferRows(term.buffer.active, term.rows)) : []),
         })
       : undefined;
 
@@ -1376,7 +1446,18 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           ).catch(console.error);
           initialEnterTimer.current = setTimeout(() => {
             initialInputPending.current = false;
+            const enteredAt = Date.now();
             writePtyInput(id, new Uint8Array([0x0d])).catch(console.error);
+            // A Claude still starting can drop this Enter (`freshSubmit.ts`).
+            // A slash command (`/rename`) begins no turn for a hook to confirm.
+            if (kind === "agent" && isClaude(cmd) && !initialInput.trimStart().startsWith("/")) {
+              void confirmFreshSubmit(
+                id,
+                enteredAt,
+                () => writePtyInput(id, new Uint8Array([0x0d])).then(() => true),
+                () => !cancelled,
+              );
+            }
             // What the user typed meanwhile goes into the prompt the submitted
             // line leaves behind, not onto its end.
             initialEnterTimer.current = setTimeout(() => releaseHeldInput(true), HELD_INPUT_FLUSH_MS);
@@ -1544,7 +1625,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
-          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession },
+          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
@@ -1666,6 +1747,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       if (!attachOnly && !waking) holdForSpawn(true);
       void setupAndSpawn().finally(() => {
         if (ownsPty || cancelled) holdForSpawn(false);
+        // No PTY, so no `terminal-exit` will ever say this launch is over: say
+        // it here (a root login tab's dedupe mark waits on one or the other).
+        else if (spawnState === "failed") noteTerminalSpawnFailed(id);
       });
     });
 
@@ -1969,11 +2053,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
             ready,
             firstOutputAt: firstOutputAt.current,
             settled: settledOnce,
-            release: scheduleTargetId
-              ? registerScheduledAgentInput(scheduleTargetId, {
+            release: inputTargetId
+              ? registerScheduledAgentInput(inputTargetId, {
                   ptyId: id,
                   ready: () => ready && quiet(),
-                  started: () => settledOnce || (ready && quiet()),
+                  started: () => settledOnce || (agentDeliveryTurn(id)?.startedAt ?? 0) >= lifecycleAt || (ready && quiet()),
                   bracketedPaste: () => bracketed,
                   agent: cmd,
                   recordAuthorizedInput: () => {
@@ -2032,7 +2116,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       fitRef.current = null;
       openedRef.current = false;
     };
-  }, [id, cmd, cwd, initialInput, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, relaunchSeq]);
+  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, inputTargetId, relaunchSeq]);
 
   // Re-theme a LIVE, OPEN terminal. Both halves of that guard are load-bearing,
   // and `termRef.current` alone was neither: assigning `options.theme` makes
@@ -2103,15 +2187,17 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   }, [id, viewerId, attachOnly]);
 
   // The Reader over an agent pane (`TerminalReaderView`): offered only for a
-  // CLI whose transcript Tabtivity reads, and only in the tab's own pane.
-  // `usePaneTab`: a popout's tabs store holds no tabs.
+  // CLI whose transcript Tabtivity reads. `usePaneTab`: a popout's tabs store
+  // holds no tabs. Every view of the tab offers it: an attach-only one (a
+  // popout, the root console, an overlay's docked column, Tabby) is where the
+  // tab is drawn while its owning pane stands down, and the composer types
+  // through the owner's input registration (`scheduledAgentInput`).
   const readerIds = splitPtyId(id);
   const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
-  // A popout's pane is that tab's own pane in its window; the main window's
-  // attach-only mirrors of a tab shown elsewhere are not.
-  const readerAvailable = readerOffered(readerTab) && (!attachOnly || isDetachedWindow());
+  const readerAvailable = readerOffered(readerTab);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
-  const readerOn = useReaderOpen(readerAgent, readerAvailable);
+  const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
+  const readerOn = readerAlways ? readerAvailable : readerPreferred;
   const changesOn = useReaderChangesOpen(readerAgent);
   /** The Changes panel over the terminal itself while the Reader is off —
    * the pane pads its right edge by the panel, so the fit leaves it free. */
@@ -2134,6 +2220,35 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   };
 
   const agentPane = paneKind === "agent" || paneKind === "local_agent";
+
+  // One-time empty-AGENTS.md card: only agent panes of a real project probe,
+  // only while visible (hidden panes catch up on show), at most once per
+  // project, and never after the user dismissed it.
+  useEffect(() => {
+    if (!agentPane || !projectId || !visible) return;
+    if (agentsEmptyProbed.current === projectId) return;
+    if (agentsEmptyDismissed(projectId)) return;
+    agentsEmptyProbed.current = projectId;
+    let cancelled = false;
+    invoke<boolean>("project_agents_empty", { projectId })
+      .then((empty) => {
+        if (!cancelled && empty) setAgentsEmpty(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agentPane, projectId, visible]);
+
+  // Paste the AGENTS.md fill instruction for the user to extend with their
+  // own project description and submit themselves — never submitted for
+  // them, so it cannot answer a trust dialog or a half-booted TUI.
+  const fillAgentsEmpty = () => {
+    termRef.current?.paste(`${buildScaffoldFillPrompt(["AGENTS.md"])}\n`);
+    termRef.current?.focus();
+    if (projectId) dismissAgentsEmpty(projectId);
+    setAgentsEmpty(false);
+  };
 
   // Files dragged in from the OS file manager (`lib/terminal/terminalDrop`):
   // an agent gets them through its folder's inbox as `@` references, a shell
@@ -2162,8 +2277,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     const onDrop = (e: DragEvent) => {
       setDropActive(false);
       if (!e.dataTransfer) return;
-      const paths = parseDroppedFilePaths(e.dataTransfer);
-      if (paths.length === 0) {
+      const files = parseDroppedFiles(e.dataTransfer);
+      if (files.length === 0) {
         if (Array.from(e.dataTransfer.types ?? []).includes("Files")) {
           e.preventDefault();
           toast("terminal.drop.noPath");
@@ -2171,7 +2286,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         return;
       }
       e.preventDefault();
-      void deliverDrop(id, paths, agentPane).then(({ text, error }) => {
+      void deliverDrop(id, files, agentPane).then(({ text, error }) => {
         if (text && !(readerOnRef.current && insertIntoReader(id, text))) {
           termRef.current?.paste(text);
           termRef.current?.focus();
@@ -2226,10 +2341,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         background={terminalTheme(colorScheme).background}
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
         onReturnFocus={() => termRef.current?.focus()}
-        reader={readerAvailable ? {
+        reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
           changes: { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) },
+          cwd,
         } : undefined}
       />
     )}
@@ -2258,6 +2374,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         scope={splitId.scope}
         tabKey={splitId.key}
         cwd={cwd}
+        localOnly={localOnly}
         visible={visible}
         focused={focused}
       />
@@ -2287,11 +2404,30 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         onDismiss={() => dismissSignIn(signIn.url)}
       />
     )}
-    {undoClearOffered && (!readerOn || readerCleared) && !signIn && host && (
+    {signInDone && !signIn && host && (
+      <TerminalSignInDoneCard
+        host={host}
+        pressEnter={signInDone.pressEnter}
+        onContinue={() => {
+          void writePtyInput(id, new Uint8Array([0x0d])).catch(console.error);
+          setSignInDone(null);
+        }}
+        onDismiss={() => setSignInDone(null)}
+      />
+    )}
+    {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
     )}
+    {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
+      <TerminalAgentsEmptyCard
+        host={host}
+        projectId={projectId}
+        onFill={fillAgentsEmpty}
+        onDismiss={() => setAgentsEmpty(false)}
+      />
+    )}
     {/* The host's CLI only: a remote or container tab runs another install. */}
-    {zoomable && !remoteHostId && !sandbox && !undoClearOffered && !signIn && host && (
+    {zoomable && !remoteHostId && !sandbox && !undoClearOffered && !agentsEmpty && !signIn && !signInDone && host && (
       <TerminalVersionCard host={host} cmd={cmd} />
     )}
     {keySelecting && host && createPortal(

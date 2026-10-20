@@ -20,7 +20,7 @@ added here once §12 Q1, Q3 and Q4 are answered.*
 ### Z.0 — Prerequisites and pre-existing debt (#169–#172)
 
 *Kept from the removed sync-server design because each is worth doing on its
-own. #171 and #172 are H0 of [`docs/headless_owner_plan.md`](../docs/headless_owner_plan.md),
+own. #171 and #172 are H0 of [`docs/done/headless_owner_plan.md`](../docs/done/headless_owner_plan.md),
 the desktop groundwork the hosted plan's P1 builds on.*
 
 169. **Live-test the CalDAV push work.** *Code-complete as of 2026-07-29 (still
@@ -123,7 +123,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
     The schedule, git-push, help and root MCP listener and the per-run tokens
     it checks live in the window process (`services::root_mcp::runtime()`).
     An agent tab the phone creates with no window open, or that the sidecar's
-    scheduler restarts (`docs/headless_owner_handoff.md`, H3 parity gaps),
+    scheduler restarts (`docs/done/headless_owner_handoff.md`, H3 parity gaps),
     therefore starts without `tabtivity-schedule` / `-git` / `-help`, and
     keeps running without them after a window attaches. Move the listener and
     token minting into the sidecar (it becomes the per-user daemon in

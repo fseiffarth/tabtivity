@@ -5,6 +5,7 @@ import {
   DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, defaultMarkupInstruction, MARKUP_ASK_STOPS, MAX_MARKUP_INSTRUCTION,
   readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction, writeMarkupApply, writeMarkupAsk, writeMarkupDirect, writeMarkupInstruction,
 } from "../markupInstruction";
+import { useBackLayer } from "../backStack";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -29,6 +30,7 @@ export function MarkupInstructionSheet({ onChange, onClose }: {
   onChange: (custom: string | null) => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [direct, setDirect] = useState(readMarkupDirect);
   const [text, setText] = useState(() => readMarkupInstruction() ?? defaultMarkupInstruction(direct));

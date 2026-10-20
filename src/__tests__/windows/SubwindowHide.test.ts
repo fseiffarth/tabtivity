@@ -6,9 +6,10 @@
  * `tabsByScope` (so the flat pane layer keeps their PTYs mounted, hidden).
  * Covers: hide strips + parks the group and keeps payloads; hiding the last
  * group is allowed (empties the layout); unhide re-injects with regenerated ids
- * and can restore focused on a chosen tab; closeHiddenGroup discards the tabs;
- * and the persist round-trip (snapshot → loadFromLayout) restores it STILL
- * hidden rather than docked live.
+ * beside the focused subwindow and can restore focused on a chosen tab;
+ * closeHiddenGroup discards the tabs; and the persist round-trip (snapshot →
+ * loadFromLayout) restores it STILL hidden, with its user-given name, rather
+ * than docked live.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -151,6 +152,22 @@ describe("tabs store — hide / unhide subwindow", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  it("unhide puts the group beside the focused subwindow, not the first", () => {
+    const { a, b, left, right } = twoGroups();
+    const c = useTabsStore.getState().addTab(tab("c"));
+    useTabsStore.getState().splitWithTab(c.key, right.id, "right");
+    const cGroup = allGroups(useTabsStore.getState().layout).find((g) =>
+      g.tabKeys.includes(c.key),
+    )!;
+    useTabsStore.getState().hideGroup(left.id); // layout: [b, c]
+    useTabsStore.getState().focusGroup(cGroup.id);
+
+    useTabsStore.getState().unhideGroup(left.id);
+
+    const order = allGroups(useTabsStore.getState().layout).flatMap((g) => g.tabKeys);
+    expect(order).toEqual([b.key, c.key, a.key]);
+  });
+
   it("unhide with activeKey restores focused on that tab", () => {
     // A 2-tab group [b, c] hidden whole; restore focused on c (not the first).
     const a = useTabsStore.getState().addTab(tab("a"));
@@ -271,6 +288,30 @@ describe("tabs store — hidden-subwindow persistence", () => {
     void a;
     void b;
     void right;
+  });
+
+  it("a hidden group's name round-trips; a blank rename clears it", () => {
+    const { right } = twoGroups();
+    useTabsStore.getState().hideGroup(right.id);
+    useTabsStore.getState().renameHiddenGroup(right.id, "  Builds  ");
+    expect(useTabsStore.getState().hiddenGroupsByScope["p"][0].name).toBe("Builds");
+
+    const snap = useTabsStore.getState().snapshotScopeForSwitch("p");
+    const savedTabs = snap.tabs.map((t) => ({
+      key: t.key,
+      label: t.label,
+      cmd: t.cmd,
+      cwd: t.cwd,
+      kind: t.kind,
+    }));
+    reset();
+    useTabsStore.getState().loadFromLayout(savedTabs, "/p", "p2", snap.tabGroups ?? undefined);
+    useTabsStore.setState({ scope: "p2" });
+    const [restored] = useTabsStore.getState().hiddenGroupsByScope["p2"];
+    expect(restored.name).toBe("Builds");
+
+    useTabsStore.getState().renameHiddenGroup(restored.id, "   ");
+    expect(useTabsStore.getState().hiddenGroupsByScope["p2"][0].name).toBeUndefined();
   });
 
   it("withHiddenDocked returns the in-window tree unchanged with no hidden groups", () => {

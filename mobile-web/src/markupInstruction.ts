@@ -6,7 +6,7 @@
 // an untouched phone gets the desktop's default for the round's mode. With
 // **Apply marks directly** on (the default, `readMarkupDirect`) that has the
 // agent make the changes at once, and the desktop keeps an undo snapshot the
-// pill's **Undo** puts back (`docs/pdf_markup_direct_apply_plan.md`); where it
+// pill's **Undo** puts back (`docs/done/pdf_markup_direct_apply_plan.md`); where it
 // can take none — or with the switch off — the default asks the agent to list
 // the changes first, because "apply my marks" on a PDF built from a `.tex`
 // beside it had the agent edit that file unasked with nothing to undo it.
@@ -19,7 +19,7 @@ import { NAMES } from "../../src/lib/brand";
 export const DEFAULT_MARKUP_INSTRUCTION = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.";
 
 /** The desktop's default for an `apply` round (**Apply marks directly**,
- * `docs/pdf_markup_direct_apply_plan.md`): the agent makes the changes and an
+ * `docs/done/pdf_markup_direct_apply_plan.md`): the agent makes the changes and an
  * Undo backs them. Equal to `DEFAULT_APPLY_INSTRUCTION` in `markup.rs` (the
  * same test checks it). */
 export const DEFAULT_MARKUP_APPLY_INSTRUCTION = "Make the changes these marks ask for (strike-throughs, insertions, circled parts, margin notes): edit the sources the PDF is built from — not the PDF itself and not the marked copy — and rebuild it. Afterwards list what you changed, and any mark you could not read.";
@@ -105,7 +105,7 @@ export function writeMarkupAsk(stop: number): void {
 }
 
 /** What **Make these changes** sends once the agent has listed the changes
- * (`docs/pdf_markup_rounds_plan.md` §2.8): a plain prompt the phone words —
+ * (`docs/done/pdf_markup_rounds_plan.md` §2.8): a plain prompt the phone words —
  * the desktop adds nothing to it. Kept beside the instruction, and like it
  * this phone's own. */
 export const DEFAULT_MARKUP_APPLY = `Make the changes you listed from my marks now: edit the sources the PDF is built from, rebuild it, and send me the rebuilt PDF with \`${NAMES.sendCli} <file>\`.`;

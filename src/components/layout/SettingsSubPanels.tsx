@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsAdvanced, SettingsCard, SettingsHeader, SettingsList, SettingsSection, ToggleRow } from "./settingsUi";
@@ -610,6 +610,109 @@ interface AgentInfo {
   warmup: boolean;
 }
 
+/** A small "?" that carries a long explanation as a tooltip, so the page keeps
+ *  a short line and the detail is one hover (or focus) away. Not a button: it
+ *  has no border or fill and does nothing when clicked. */
+function AgentsHelp({ text }: { text: string }) {
+  return (
+    <span className="agents-help" role="img" tabIndex={0} aria-label={text} title={text}>
+      ?
+    </span>
+  );
+}
+
+/** A coloured dot and a word: a status, never a control (no border, no fill). */
+function AgentsStatus({
+  tone,
+  children,
+  title,
+}: {
+  tone: "ok" | "warn" | "off";
+  children: ReactNode;
+  title?: string;
+}) {
+  return (
+    <span className={`agents-status is-${tone}`} title={title}>
+      <span className="agents-dot" aria-hidden="true" />
+      <span className="agents-status-text">{children}</span>
+    </span>
+  );
+}
+
+/** An inline fold for detail most people never need: closed on every open,
+ *  unmounted while closed. The lighter sibling of `AgentsGroup`, used inside a
+ *  card or a group for one block of secondary content. */
+function AgentsFold({
+  label,
+  children,
+  className,
+}: {
+  label: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  return (
+    <div className={`agents-fold${open ? " open" : ""}${className ? ` ${className}` : ""}`}>
+      <button
+        type="button"
+        className="agents-fold-toggle"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="agents-fold-chevron" aria-hidden="true">
+          ›
+        </span>
+        {label}
+      </button>
+      {open && (
+        <div id={bodyId} className="agents-fold-body">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One collapsible settings group of the Agents section: a title, a one-line
+ *  summary of what is inside, and the controls themselves once opened. Closed
+ *  on every open, body unmounted while closed. */
+function AgentsGroup({
+  title,
+  summary,
+  children,
+}: {
+  title: ReactNode;
+  summary: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  return (
+    <div className={`agents-group${open ? " open" : ""}`}>
+      <button
+        type="button"
+        className="agents-group-head"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="agents-group-chevron" aria-hidden="true">
+          ›
+        </span>
+        <span className="agents-group-title">{title}</span>
+        <span className="agents-group-summary">{summary}</span>
+      </button>
+      {open && (
+        <div id={bodyId} className="agents-group-body">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * "Codex won't run our session hook" notice for the Manage Agents panel.
@@ -648,35 +751,29 @@ function CodexHookNotice() {
   const off = state === "disabled";
 
   return (
-    <div className="agent-codex-hook">
-      <div className="settings-subheader">
-        {t("agents.codexHookLabel")}{" "}
-        <span className="ollama-status-text">
-          {off ? t("agents.codexHookDisabled") : t("agents.codexHookNotTrusted")}
-        </span>
+    <div className="agents-notice is-warn">
+      <div className="agents-notice-head">
+        <AgentsStatus tone="warn">
+          {t("agents.codexHookLabel")}: {off ? t("agents.codexHookDisabled") : t("agents.codexHookNotTrusted")}
+        </AgentsStatus>
       </div>
-      <p className="settings-help">
-        {off ? t("agents.codexHookCauseDisabled") : t("agents.codexHookCauseUntrusted")}{" "}
-        {t("agents.codexHookFallback")}
-      </p>
-      <p className="settings-help">
-        {t("agents.codexHookFindPre")} <code>/hooks</code>{" "}
-        {t("agents.codexHookFindMid")} <strong>{NAMES.sessionHookSh.replace(/\.sh$/, "")}</strong>
-        {off ? t("agents.codexHookActionDisabled") : t("agents.codexHookActionUntrusted")}
-      </p>
-      <div className="ollama-install-cmd-row">
-        <code className="ollama-install-cmd">/hooks</code>
-        <button
-          type="button"
-          className="ollama-action-btn primary"
-          onClick={openCodexHooksTab}
-        >
+      <p className="settings-help">{off ? t("agents.codexHookCauseDisabled") : t("agents.codexHookCauseUntrusted")}</p>
+      <div className="agents-actions">
+        <button type="button" className="settings-btn sm primary" onClick={openCodexHooksTab}>
           {t("agents.openInCodex")}
         </button>
-        <button type="button" className="ollama-action-btn" onClick={() => void recheck()}>
+        <button type="button" className="settings-btn sm" onClick={() => void recheck()}>
           {t("common.recheck")}
         </button>
       </div>
+      <AgentsFold label={t("agents.howToFix")}>
+        <p className="settings-help">{t("agents.codexHookFallback")}</p>
+        <p className="settings-help">
+          {t("agents.codexHookFindPre")} <code>/hooks</code>{" "}
+          {t("agents.codexHookFindMid")} <strong>{NAMES.sessionHookSh.replace(/\.sh$/, "")}</strong>
+          {off ? t("agents.codexHookActionDisabled") : t("agents.codexHookActionUntrusted")}
+        </p>
+      </AgentsFold>
     </div>
   );
 }
@@ -691,14 +788,12 @@ function ClaudeRemoteControlNotice() {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();
   return (
-    <div className="settings-toggle-card agent-claude-remote-control">
-      <label className="settings-toggle-card-row">
-        <span>{t("settings.claudeRemote")}</span>
-        <Toggle
-          checked={settings?.agent_remote_control ?? true}
-          onChange={(e) => void updateSettings({ agent_remote_control: e.target.checked })}
-        />
-      </label>
+    <div className="agents-option">
+      <ToggleRow
+        label={t("settings.claudeRemote")}
+        checked={settings?.agent_remote_control ?? true}
+        onChange={(e) => void updateSettings({ agent_remote_control: e.target.checked })}
+      />
       <p className="settings-help">
         {t("settings.claudeRemoteHelp1")} <code>--remote-control</code>{" "}
         {t("settings.claudeRemoteHelp2")}
@@ -736,7 +831,15 @@ interface AgentLogin {
 /** The shared agent logins: one row per CLI whose login Tabtivity can share,
  *  with the one-click import from this computer and a way out. `refreshKey`
  *  re-reads them when the API keys below change. */
-export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
+export function AgentLoginsRows({
+  refreshKey = 0,
+  onChange,
+}: {
+  refreshKey?: number;
+  /** Called after an import or sign-out, so a view of the same logins (the
+   *  Agents section's cards) can re-read them. */
+  onChange?: () => void;
+}) {
   const t = useT();
   const [logins, setLogins] = useState<AgentLogin[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -762,21 +865,22 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
       .finally(() => {
         setBusy(null);
         refresh();
+        onChange?.();
       });
   };
   return (
-    <>
+    <div className="agents-block">
       <div className="settings-subheader">
         {t("settings.agentLogins")} <UntestedTag id="settings.agentLogins" />
+        <AgentsHelp text={t("settings.agentLoginsHelp")} />
       </div>
-      <p className="settings-help">{t("settings.agentLoginsHelp")}</p>
       {rows.map((l) => {
         const label = registry.get(l.id) ?? labels.get(l.id) ?? l.id;
         const login = l.signed_in
           ? l.account
             ? t("settings.agentLoginSignedInAs", { account: l.account })
             : t("settings.agentLoginSignedIn")
-          : t("settings.agentLoginNotSignedIn");
+          : t("agents.loginNone");
         const keyLabel = l.api_budget_reached
           ? t("settings.agentLoginApiBudgetReached")
           : t("settings.agentLoginUsesApiKey");
@@ -788,25 +892,30 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
             ? t("settings.agentLoginAdminKey")
             : t("settings.agentLoginAdminKeyGone")
           : own;
+        const ok = l.uses_admin_key ? !!l.admin_key_offered : l.signed_in || (!!l.api_key && !l.api_budget_reached);
         return (
-          <div key={l.id} className="settings-toggle-card-row">
-            <span>
-              {label}
-              <span className="settings-help"> · {state}</span>
+          <div key={l.id} className="agents-row">
+            <div className="agents-row-main">
+              <span className="agents-row-name">{label}</span>
+              <AgentsStatus
+                tone={ok ? "ok" : "off"}
+                title={!l.signed_in && !l.api_key && !l.uses_admin_key ? t("settings.agentLoginNotSignedIn") : undefined}
+              >
+                {state}
+              </AgentsStatus>
               {l.blocked && (
-                <span className="settings-help pill-fence-live-note">
-                  {" "}
+                <span className="agents-row-note is-warn">
                   {l.blocked.command
                     ? t("settings.agentLoginBlockedCommand", { field: l.blocked.command })
                     : t("settings.agentLoginBlocked", { account: l.blocked.account ?? "", stored: l.blocked.stored ?? "" })}
                 </span>
               )}
-            </span>
-            <span>
+            </div>
+            <div className="agents-actions">
               {l.importable && (
                 <button
                   type="button"
-                  className="ollama-action-btn"
+                  className="settings-btn sm"
                   disabled={busy === l.id}
                   onClick={() => run(l.id, "agent_login_import")}
                 >
@@ -816,19 +925,19 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
               {l.signed_in && (
                 <button
                   type="button"
-                  className="ollama-action-btn"
+                  className="settings-btn sm danger"
                   disabled={busy === l.id}
                   onClick={() => run(l.id, "agent_login_sign_out")}
                 >
                   {t("settings.agentLoginSignOut")}
                 </button>
               )}
-            </span>
+            </div>
           </div>
         );
       })}
       {error && <p className="settings-help">{error}</p>}
-    </>
+    </div>
   );
 }
 
@@ -998,16 +1107,19 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
     });
   };
   return (
-    <>
+    <div className="agents-block">
       <div className="settings-subheader">
         {t("settings.agentApiKeys")} <UntestedTag id="settings.agentApiKeys" />
       </div>
-      <p className="settings-help">{t("settings.agentApiKeysHelp")}</p>
-      <p className="settings-help">{t("settings.agentApiKeysWarning")}</p>
       <p className="settings-help">
         {t("settings.agentApiLimitHelp", { date: status.resetsOn ?? "", priced: status.pricesDate ?? "" })}{" "}
         <UntestedTag id="settings.agentApiKeys.limit" />
       </p>
+      <AgentsFold label={t("agents.apiHowItWorks")}>
+        <p className="settings-help">{t("settings.agentApiKeysHelp")}</p>
+        <p className="settings-help">{t("settings.agentApiKeysWarning")}</p>
+        <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
+      </AgentsFold>
       {status.ledgerRestarted && (
         <p className="settings-help pill-fence-live-note">
           {t("settings.agentApiLedgerRestarted", { date: status.ledgerRestarted })}
@@ -1037,87 +1149,92 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         const state = !status.readable
           ? t(status.store === "vault" ? "settings.agentApiKeyVaultLocked" : "settings.agentApiKeyLocked")
           : p.saved
-            ? `${t("settings.agentApiKeySaved")} · ${budget}`
+            ? t("settings.agentApiKeySaved")
             : t("settings.agentApiKeyNotSaved");
         const limitInput = (
-          <input
-            type="number"
-            min={0.000001}
-            step="any"
-            value={limitText}
-            aria-label={t("settings.agentApiLimitLabel", { provider: name })}
-            title={t("settings.agentApiLimitLabel", { provider: name })}
-            disabled={busy === p.id}
-            onChange={(e) => {
-              const value = e.target.value;
-              setLimitDrafts((d) => ({ ...d, [p.id]: value }));
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (p.saved ? setLimit : save)(p.id);
-            }}
-          />
+          <span className="agents-limit">
+            <input
+              type="number"
+              className="agents-input agents-limit-input"
+              min={0.000001}
+              step="any"
+              value={limitText}
+              aria-label={t("settings.agentApiLimitLabel", { provider: name })}
+              title={t("settings.agentApiLimitLabel", { provider: name })}
+              disabled={busy === p.id}
+              onChange={(e) => {
+                const value = e.target.value;
+                setLimitDrafts((d) => ({ ...d, [p.id]: value }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (p.saved ? setLimit : save)(p.id);
+              }}
+            />
+            <span className="agents-limit-unit">{t("agents.apiLimitUnit")}</span>
+          </span>
         );
         const blocked = p.saved && (p.budget === "reached" || p.budget === "noLimit");
         return (
           <Fragment key={p.id}>
-            <div className="settings-toggle-card-row">
-              <span>
-                {name}
-                <span className={blocked ? "settings-help pill-fence-live-note" : "settings-help"}> · {state}</span>
-              </span>
-              <span>
+            <div className="agents-row agents-key-row">
+              <div className="agents-row-main">
+                <span className="agents-row-name">{name}</span>
+                <AgentsStatus tone={!status.readable ? "warn" : p.saved ? "ok" : "off"}>{state}</AgentsStatus>
+                {budget && status.readable && (
+                  <span className={`agents-row-note${blocked ? " is-warn" : ""}`}>{budget}</span>
+                )}
+              </div>
+              <div className="agents-key-form">
+                {status.readable && !p.saved && (
+                  <PasswordInput
+                    className="agents-input"
+                    value={draft}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={t("settings.agentApiKeyPlaceholder", { provider: name })}
+                    aria-label={t("settings.agentApiKeyPlaceholder", { provider: name })}
+                    disabled={busy === p.id}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setDrafts((d) => ({ ...d, [p.id]: value }));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") save(p.id);
+                    }}
+                  />
+                )}
+                {status.readable && limitInput}
                 {status.readable && p.saved && (
-                  <>
-                    {limitInput}
-                    <button
-                      type="button"
-                      className="ollama-action-btn"
-                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitTokens}
-                      onClick={() => setLimit(p.id)}
-                    >
-                      {t("settings.agentApiLimitSet")}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className="settings-btn sm"
+                    disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitTokens}
+                    onClick={() => setLimit(p.id)}
+                  >
+                    {t("settings.agentApiLimitSet")}
+                  </button>
                 )}
                 {status.readable && !p.saved && (
-                  <>
-                    <PasswordInput
-                      value={draft}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder={t("settings.agentApiKeyPlaceholder", { provider: name })}
-                      aria-label={t("settings.agentApiKeyPlaceholder", { provider: name })}
-                      disabled={busy === p.id}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setDrafts((d) => ({ ...d, [p.id]: value }));
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") save(p.id);
-                      }}
-                    />
-                    {limitInput}
-                    <button
-                      type="button"
-                      className="ollama-action-btn"
-                      disabled={busy === p.id || !draft.trim() || !limitOk}
-                      onClick={() => save(p.id)}
-                    >
-                      {t("settings.agentApiKeySave")}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className="settings-btn sm primary"
+                    disabled={busy === p.id || !draft.trim() || !limitOk}
+                    onClick={() => save(p.id)}
+                  >
+                    {t("settings.agentApiKeySave")}
+                  </button>
                 )}
                 {status.readable && p.saved && (
                   <button
                     type="button"
-                    className="ollama-action-btn"
+                    className="settings-btn sm danger"
                     disabled={busy === p.id}
                     onClick={() => act(p.id, () => invoke("agent_api_key_clear", { provider: p.id }))}
                   >
                     {t("settings.agentApiKeyRemove")}
                   </button>
                 )}
-              </span>
+              </div>
             </div>
             {p.saved && p.limitTokens == null && p.legacyLimitUsd != null && (
               <p className="settings-help pill-fence-live-note">
@@ -1133,11 +1250,10 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         );
       })}
       {!status.readable && status.store !== "vault" && (
-        <div className="settings-toggle-card-row">
-          <span />
+        <div className="agents-actions">
           <button
             type="button"
-            className="ollama-action-btn"
+            className="settings-btn sm primary"
             disabled={busy === "unlock"}
             onClick={() => act("unlock", unlockKeyring)}
           >
@@ -1145,6 +1261,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
           </button>
         </div>
       )}
+      <div className="settings-subheader agents-subhead">{t("agents.credHeading")}</div>
       {API_KEY_CLIS.map(({ cli, untested }) => {
         const row = status.clis.find((c) => c.id === cli);
         if (!row) return null;
@@ -1170,18 +1287,13 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         const broker = row.usesAdmin ? row.adminBroker : null;
         return (
           <Fragment key={cli}>
-            <div className="settings-toggle-card-row">
-              <span>
-                {t("settings.agentCredRunsOn", { cli: name })} <UntestedTag id={untested} />
-                {(row.adminOffered || row.usesAdmin) && (
-                  <>
-                    {" "}
-                    <UntestedTag id="agents.adminKey" />
-                  </>
-                )}
+            <div className="agents-row">
+              <div className="agents-row-main">
+                <span className="agents-row-name">{t("settings.agentCredRunsOn", { cli: name })}</span>
+                <UntestedTag id={untested} />
+                {(row.adminOffered || row.usesAdmin) && <UntestedTag id="agents.adminKey" />}
                 {broker && (
-                  <span className="settings-help">
-                    {" · "}
+                  <span className="agents-row-note">
                     <UntestedTag id="server.agentKeys.broker" />{" "}
                     {broker.budget != null
                       ? t("settings.agentLoginBrokerUsage", {
@@ -1191,7 +1303,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                       : t("settings.agentLoginBrokerUsageNoCap", { billed: broker.billed.toLocaleString() })}
                   </span>
                 )}
-              </span>
+              </div>
               <Dropdown
                 value={current}
                 options={options}
@@ -1207,9 +1319,8 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
           </Fragment>
         );
       })}
-      <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
       {error && <p className="settings-help">{error}</p>}
-    </>
+    </div>
   );
 }
 
@@ -1245,32 +1356,34 @@ function AgentGlobalRow() {
       });
   };
   return (
-    <>
+    <div className="agents-block">
       <div className="settings-subheader">
         {t("settings.agentGlobal")} <UntestedTag id="settings.agentGlobal" />
+        <AgentsHelp text={t("settings.agentGlobalHelp")} />
       </div>
-      <p className="settings-help">{t("settings.agentGlobalHelp")}</p>
-      <div className="settings-toggle-card-row">
-        <span className="settings-help">
-          {layer && layer.files > 0
-            ? t("settings.agentGlobalFiles", { count: layer.files })
-            : t("settings.agentGlobalEmpty")}
-        </span>
-        <span>
-          <button type="button" className="ollama-action-btn" disabled={busy} onClick={importNow}>
+      <div className="agents-row">
+        <div className="agents-row-main">
+          <AgentsStatus tone={layer && layer.files > 0 ? "ok" : "off"}>
+            {layer && layer.files > 0
+              ? t("settings.agentGlobalFiles", { count: layer.files })
+              : t("settings.agentGlobalEmpty")}
+          </AgentsStatus>
+        </div>
+        <div className="agents-actions">
+          <button type="button" className="settings-btn sm" disabled={busy} onClick={importNow}>
             {t("settings.agentGlobalImport")}
           </button>
           <button
             type="button"
-            className="ollama-action-btn"
+            className="settings-btn sm"
             onClick={() => void invoke("agent_global_open").catch((e: unknown) => setNote(String(e)))}
           >
             {t("settings.agentGlobalOpen")}
           </button>
-        </span>
+        </div>
       </div>
       {note && <p className="settings-help">{note}</p>}
-    </>
+    </div>
   );
 }
 
@@ -1289,7 +1402,7 @@ function CodexAutoReviewToggle() {
   };
   useEffect(refresh, []);
   return (
-    <>
+    <div className="agents-option">
       <ToggleRow
         label={<>{t("settings.codexAutoReview")} <UntestedTag id="settings.codexAutoReview" /></>}
         checked={on ?? false}
@@ -1307,7 +1420,7 @@ function CodexAutoReviewToggle() {
       />
       <p className="settings-help">{t("settings.codexAutoReviewHelp")}</p>
       {note && <p className="settings-help">{note}</p>}
-    </>
+    </div>
   );
 }
 
@@ -1343,44 +1456,72 @@ function CopilotFenceAuthRow() {
         : t("settings.copilotFenceAuthSignedInOffline");
 
   return (
-    <>
-      <div className="settings-toggle-card-row">
-        <span>
-          {t("settings.copilotFenceAuth")} <UntestedTag id="settings.copilotFenceAuth" />
-        </span>
+    <div className="agents-block">
+      <div className="settings-subheader">
+        {t("settings.copilotFenceAuth")} <UntestedTag id="settings.copilotFenceAuth" />
+        <AgentsHelp text={t("settings.copilotFenceAuthHelp")} />
+      </div>
+      <div className="agents-row">
+        <div className="agents-row-main">
+          <AgentsStatus tone={auth.signedIn && auth.valid !== false ? "ok" : auth.signedIn ? "warn" : "off"}>
+            {state}
+          </AgentsStatus>
+        </div>
         {auth.signedIn && (
-          <button
-            type="button"
-            className="ollama-action-btn"
-            onClick={() => {
-              setError(null);
-              invoke("copilot_fence_sign_out")
-                .then(refresh)
-                .catch((e: unknown) => setError(String(e)));
-            }}
-          >
-            {t("settings.copilotFenceAuthSignOut")}
-          </button>
+          <div className="agents-actions">
+            <button
+              type="button"
+              className="settings-btn sm danger"
+              onClick={() => {
+                setError(null);
+                invoke("copilot_fence_sign_out")
+                  .then(refresh)
+                  .catch((e: unknown) => setError(String(e)));
+              }}
+            >
+              {t("settings.copilotFenceAuthSignOut")}
+            </button>
+          </div>
         )}
       </div>
-      <p className="settings-help">{state}</p>
       {error && <p className="settings-help">{error}</p>}
-      <p className="settings-help">{t("settings.copilotFenceAuthHelp")}</p>
-    </>
+    </div>
   );
 }
 
+/** The Accounts & keys group: every credential an agent can run on, and the
+ *  config every agent home starts from. `onChange` tells the CLI cards that a
+ *  login or key changed, so their sign-in line re-reads. */
+function AgentAccounts({ onChange }: { onChange?: () => void }) {
+  // Bumped by the API keys rows, so the logins re-read their "uses API key".
+  const [apiKeysVersion, setApiKeysVersion] = useState(0);
+  return (
+    <div className="agents-stack">
+      <AgentLoginsRows refreshKey={apiKeysVersion} onChange={onChange} />
+      <AgentApiKeysRows
+        onChange={() => {
+          setApiKeysVersion((v) => v + 1);
+          onChange?.();
+        }}
+      />
+      <AgentGlobalRow />
+      <CopilotFenceAuthRow />
+    </div>
+  );
+}
+
+/** The Agent sandbox group. There is no switch for the sandbox itself: what is
+ *  here is what it may additionally reveal. */
 function AgentFenceCard() {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();
-  // Bumped by the API keys rows, so the logins re-read their "uses API key".
-  const [apiKeysVersion, setApiKeysVersion] = useState(0);
   const stored = settings?.agent_fence_paths;
   const effective = stored ?? [...AGENT_FENCE_DEFAULT_PATHS];
   const [paths, setPaths] = useState(effective.join("\n"));
   useEffect(() => {
     setPaths((stored ?? [...AGENT_FENCE_DEFAULT_PATHS]).join("\n"));
   }, [stored]);
+  const dirty = parseAgentFencePaths(paths).join("\n") !== effective.join("\n");
 
   const savePaths = () => {
     const next = parseAgentFencePaths(paths);
@@ -1389,77 +1530,72 @@ function AgentFenceCard() {
   };
 
   return (
-    <SettingsCard className="agent-fence-card">
-      <div className="settings-subheader">
-        {t("settings.agentFenceTitle")} <UntestedTag id="settings.agentFenceTitle" />
-      </div>
+    <div className="agents-stack">
       <p className="settings-help">{t("settings.agentFenceHelp")}</p>
-      <p className="settings-help">{t("settings.agentFenceLimits")}</p>
-      <p className="settings-help">{t("settings.agentFenceSharedState")}</p>
-      <label className="settings-toggle-card-row">
-        <span>{t("settings.agentFenceCargoCredentials")} <UntestedTag id="settings.agentFenceCargoCredentials" /></span>
-        <Toggle
+      <AgentsFold label={t("agents.fenceLimits")}>
+        <p className="settings-help">{t("settings.agentFenceLimits")}</p>
+        <p className="settings-help">{t("settings.agentFenceSharedState")}</p>
+      </AgentsFold>
+      <div className="agents-option">
+        <ToggleRow
+          label={<>{t("settings.agentFenceCargoCredentials")} <UntestedTag id="settings.agentFenceCargoCredentials" /></>}
           checked={settings?.agent_fence_cargo_credentials ?? false}
           onChange={(e) => void updateSettings({ agent_fence_cargo_credentials: e.target.checked })}
         />
-      </label>
-      <p className="settings-help">{t("settings.agentFenceCargoCredentialsHelp")}</p>
+        <p className="settings-help">{t("settings.agentFenceCargoCredentialsHelp")}</p>
+      </div>
       {settings?.agent_fence_platform_accepted && (
         // Only once given: the acceptance a fence-less platform (Windows) asks
         // for before the first agent tab. Switching it off asks again next time.
-        <>
-          <label className="settings-toggle-card-row">
-            <span>{t("settings.agentFencePlatformAccepted")} <UntestedTag id="settings.agentFencePlatformAccepted" /></span>
-            <Toggle
-              checked
-              onChange={() => void updateSettings({ agent_fence_platform_accepted: false })}
-            />
-          </label>
+        <div className="agents-option">
+          <ToggleRow
+            label={<>{t("settings.agentFencePlatformAccepted")} <UntestedTag id="settings.agentFencePlatformAccepted" /></>}
+            checked
+            onChange={() => void updateSettings({ agent_fence_platform_accepted: false })}
+          />
           <p className="settings-help">{t("settings.agentFencePlatformAcceptedHelp")}</p>
-        </>
+        </div>
       )}
-      <AgentLoginsRows refreshKey={apiKeysVersion} />
-      <AgentApiKeysRows onChange={() => setApiKeysVersion((v) => v + 1)} />
-      <AgentGlobalRow />
-      <CopilotFenceAuthRow />
-      <label className="settings-toggle-card-row">
-        <span>{t("settings.rootFenceProjects")} <UntestedTag id="settings.rootFenceProjects" /></span>
-        <Toggle
+      <div className="agents-option">
+        <ToggleRow
+          label={<>{t("settings.rootFenceProjects")} <UntestedTag id="settings.rootFenceProjects" /></>}
           checked={settings?.root_fence_projects_readable ?? false}
           onChange={(e) => void updateSettings({ root_fence_projects_readable: e.target.checked })}
         />
-      </label>
-      <p className="settings-help">{t("settings.rootFenceProjectsHelp")}</p>
-      <label className="settings-help" htmlFor="agent-fence-paths">
-        {t("settings.agentFencePaths")}
-      </label>
-      <textarea
-        id="agent-fence-paths"
-        className="ollama-pull-input"
-        rows={8}
-        value={paths}
-        spellCheck={false}
-        onChange={(event) => setPaths(event.target.value)}
-        onBlur={savePaths}
-        aria-label={t("settings.agentFencePaths")}
-      />
-      <div className="ollama-install-cmd-row">
-        <button
-          type="button"
-          className="ollama-action-btn"
-          onClick={() => {
-            setPaths(AGENT_FENCE_DEFAULT_PATHS.join("\n"));
-            void updateSettings({ agent_fence_paths: undefined });
-          }}
-        >
-          {t("settings.agentFenceReset")}
-        </button>
+        <p className="settings-help">{t("settings.rootFenceProjectsHelp")}</p>
       </div>
-      <p className="settings-help">{t("settings.agentFencePathsHelp")}</p>
-    </SettingsCard>
+      <div className="agents-block">
+        <div className="settings-subheader">
+          <label htmlFor="agent-fence-paths">{t("settings.agentFencePaths")}</label>
+          <AgentsHelp text={t("settings.agentFencePathsHelp")} />
+          {dirty && <AgentsStatus tone="warn">{t("agents.fenceUnsaved")}</AgentsStatus>}
+        </div>
+        <textarea
+          id="agent-fence-paths"
+          className="ollama-pull-input"
+          rows={8}
+          value={paths}
+          spellCheck={false}
+          onChange={(event) => setPaths(event.target.value)}
+          onBlur={savePaths}
+          aria-label={t("settings.agentFencePaths")}
+        />
+        <div className="agents-actions">
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => {
+              setPaths(AGENT_FENCE_DEFAULT_PATHS.join("\n"));
+              void updateSettings({ agent_fence_paths: undefined });
+            }}
+          >
+            {t("settings.agentFenceReset")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
-
 
 /**
  * "Install Node/npm first" helper for the Manage Agents panel. Most agent CLIs
@@ -1485,14 +1621,14 @@ function NodeRuntimeNotice() {
 
   const { command, shellKey, shellKind } = NODE_INSTALL[HOST_OS];
   return (
-    <div className="ollama-vibe-section agent-list-entry">
-      <div className="settings-subheader">
-        Node.js / npm{" "}
-        <span className="ollama-status-text">
+    <div className="agents-notice is-warn">
+      <div className="agents-notice-head">
+        <span className="agents-notice-title">Node.js / npm</span>
+        <AgentsStatus tone="warn">
           {tooOld
             ? t("agents.nodeTooOld", { version: status.version ?? "", min: status.min_major })
             : t("agents.nodeNotDetected")}
-        </span>
+        </AgentsStatus>
         {tooOld && <UntestedTag id="settingsSubPanels.1" />}
       </div>
       {tooOld ? (
@@ -1510,12 +1646,12 @@ function NodeRuntimeNotice() {
         <code className="ollama-install-cmd">{command}</code>
         <button
           type="button"
-          className="ollama-action-btn primary"
+          className="settings-btn sm primary"
           onClick={() => runInstallInTab(t("install.nodeTabLabel"), command, shellKind)}
         >
           {t("agents.runInTerminal")}
         </button>
-        <button type="button" className="ollama-action-btn" onClick={() => void recheck()}>
+        <button type="button" className="settings-btn sm" onClick={() => void recheck()}>
           {t("common.recheck")}
         </button>
       </div>
@@ -1615,7 +1751,7 @@ function TimeListEditor({
         />
         <button
           type="button"
-          className="ollama-action-btn"
+          className="settings-btn sm"
           disabled={disabled || times.includes(pending)}
           onClick={() => onChange(addTime(times, pending))}
         >
@@ -1782,11 +1918,7 @@ function AgentComposerCard({ agents }: { agents: AgentInfo[] | null }) {
   );
 
   return (
-    <SettingsCard>
-      <div className="settings-subheader">
-        {t("agents.composerHeading")}
-        <UntestedTag id="settingsSubPanels.2" />
-      </div>
+    <div className="agents-stack">
       <p className="settings-help">{t("agents.composerHelp")}</p>
       <div className="settings-card-row">
         <span>{t("agents.composerAgent")}</span>
@@ -1837,7 +1969,7 @@ function AgentComposerCard({ agents }: { agents: AgentInfo[] | null }) {
           {t("agents.composerAdd")}
         </button>
       </div>
-    </SettingsCard>
+    </div>
   );
 }
 
@@ -1856,12 +1988,11 @@ function AgentCronSection({ agents }: { agents: AgentInfo[] | null }) {
   const all = allAgentsEnabled(cron, capable);
 
   return (
-    <SettingsCard>
-      <div className="settings-subheader">
-        {t("agentCron.title")} <UntestedTag id="agentCron.title" />
-      </div>
+    <div className="agents-stack">
       <p className="settings-help">{t("agentCron.help", { message: AGENT_CRON_MESSAGE })}</p>
-      <p className="settings-help">{t("agentCron.runningNote")}</p>
+      <AgentsFold label={t("agents.cronWhenItRuns")}>
+        <p className="settings-help">{t("agentCron.runningNote")}</p>
+      </AgentsFold>
       <ToggleRow
         label={t("agentCron.enable")}
         checked={enabled}
@@ -1933,7 +2064,7 @@ function AgentCronSection({ agents }: { agents: AgentInfo[] | null }) {
           </>
         )}
       </div>
-    </SettingsCard>
+    </div>
   );
 }
 
@@ -2028,6 +2159,22 @@ export function AgentsPanel({
   const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
   // Filter over the *not installed* half only (see the two sections below).
   const [search, setSearch] = useState("");
+  // The shared sign-in each installed card reports (`agent_logins`, read only;
+  // the Accounts & keys group owns the import and sign-out). Re-read when that
+  // group changes one.
+  const [logins, setLogins] = useState<Map<string, AgentLogin>>(() => new Map());
+  const [loginsVersion, setLoginsVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AgentLogin[]>("agent_logins")
+      .then((rows) => {
+        if (!cancelled && Array.isArray(rows)) setLogins(new Map(rows.map((l) => [l.id, l])));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [loginsVersion]);
   const logRef = useRef<HTMLPreElement>(null);
   const shortcutOverrides = useShortcutOverrides();
   const customAgents = settings?.custom_agents ?? NO_CUSTOM_AGENTS;
@@ -2281,13 +2428,16 @@ export function AgentsPanel({
   // one Tabtivity's flags and parsers were verified against
   // (docs/third_party_update_checklist.md, as data in `agent_versions`).
   // Informational: drift is what explains an agent tab misreading an approval
-  // prompt or a mode line, and it blocks nothing.
-  const versionNotice = (a: AgentInfo) => {
+  // prompt or a mode line, and it blocks nothing. Split in three so each lands
+  // where it belongs on the card: `facts` are plain text in the meta line,
+  // `update` is the one button that can become the card's primary action, and
+  // `drift` is a warning block of its own.
+  const versionParts = (a: AgentInfo) => {
     const report = versions[a.id];
-    if (!report) return null;
     const update = updates[a.id];
-    const current = report.version ?? update?.current ?? null;
-    const moved = report.state === "moved" && !report.dismissed;
+    const current = report?.version ?? update?.current ?? null;
+    const moved = !!report && report.state === "moved" && !report.dismissed;
+    const busy = installing !== null || removing !== null;
     const staleLabel = (note: AgentVersionStale) =>
       t(
         note.direction === "newer"
@@ -2297,123 +2447,99 @@ export function AgentsPanel({
             : "agents.versionStaleDifferent",
         { version: note.version, surface: note.surface },
       );
-    return (
+    // After a check found a newer release the version pair reads `2.1.284 →
+    // 2.1.287` and the card's primary button runs the installer for it.
+    const hasUpdate = !!(update?.updateAvailable && current && update.latest);
+    // Newest release known but the installed one unreadable: no claim of an
+    // update, but the installer can still be run again for it.
+    const unreadUpdate = !!(update && !update.updateAvailable && update.latest && !current);
+    const facts = report ? (
       <>
-        <div className="agent-version-row">
-          {/* After a check found a newer release the chip turns into the
-              update itself — `2.1.284 → 2.1.287`, the Ollama row's version
-              pair — because the new number is what the user wants to act on. */}
-          {update?.updateAvailable && current && update.latest && !adminInstalls ? (
-            <button
-              type="button"
-              className="local-model-version-note has-update"
-              disabled={installing !== null || removing !== null}
-              title={t("agents.updateTitle", { label: a.label, current, latest: update.latest })}
-              onClick={() => void updateAgent(a.id)}
-            >
-              {installing === a.id ? (
-                t("agents.updating")
-              ) : (
-                <>
-                  {current}
-                  <span className="local-model-version-arrow" aria-hidden="true">
-                    →
-                  </span>
-                  <span className="local-model-version-new">{update.latest}</span>
-                </>
-              )}
-            </button>
-          ) : (
-            current && (
-              <span
-                className="agent-version-chip"
-                title={t("agents.versionTitle", {
-                  label: a.label,
-                  raw: report.raw ?? current,
-                })}
-              >
-                {current}
-              </span>
-            )
-          )}
-          {/* Newest release known but the installed one unreadable: no claim
-              of an update, but the installer can still be run again for it. */}
-          {update && !update.updateAvailable && update.latest && !current && !adminInstalls && (
-            <button
-              type="button"
-              className="ollama-action-btn"
-              disabled={installing !== null || removing !== null}
-              title={t("agents.updateUnreadTitle", { label: a.label, latest: update.latest })}
-              onClick={() => void updateAgent(a.id)}
-            >
-              {installing === a.id ? t("agents.updating") : t("agents.updateToLatest", { latest: update.latest })}
-            </button>
-          )}
-          {update?.error && (
-            <span className="local-model-update-note" title={update.error}>
-              {t("agents.updateCouldntCheck")}
+        {current && (
+          <span
+            className="agents-version"
+            title={t("agents.versionTitle", { label: a.label, raw: report.raw ?? current })}
+          >
+            {current}
+          </span>
+        )}
+        {hasUpdate && update?.latest && (
+          <>
+            <span className="agents-version-arrow" aria-hidden="true">
+              →
             </span>
-          )}
-          {update && !update.checkable && (
-            <span className="local-model-update-note">{t("agents.updateNoRegistry")}</span>
-          )}
-          {update && !update.updateAvailable && !update.error && update.latest && current && (
-            <span className="local-model-update-note">{t("agents.updatesNone")}</span>
-          )}
-          {!report.supported && !current && (
-            <span className="settings-help">{t("agents.versionUnsupported")}</span>
-          )}
-          {report.state === "unverified" && (
-            <span className="settings-help">{t("agents.versionUnverified")}</span>
-          )}
-          {report.error && (
-            <span className="agent-cron-warn">{report.error}</span>
-          )}
-          {report.supported && (
-            <button
-              type="button"
-              className="ollama-action-btn"
-              disabled={checkingVersions}
-              onClick={() => loadVersions(true)}
-            >
-              {checkingVersions
-                ? t("agents.versionChecking")
-                : t("agents.versionRecheck")}
-            </button>
-          )}
+            <span className="agents-version is-new">{update.latest}</span>
+          </>
+        )}
+        {report.supported && (
           <button
             type="button"
-            className="ollama-action-btn"
-            disabled={!!checkingUpdates[a.id] || installing === a.id}
-            title={t("agents.checkUpdatesTitle", { label: a.label })}
-            onClick={() => checkUpdate(a.id)}
+            className="agents-icon-btn"
+            disabled={checkingVersions}
+            aria-label={t("agents.versionRecheck")}
+            title={checkingVersions ? t("agents.versionChecking") : t("agents.versionRecheck")}
+            onClick={() => loadVersions(true)}
           >
-            {checkingUpdates[a.id] ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
+            <span className={checkingVersions ? "agents-spin" : undefined} aria-hidden="true">
+              ↻
+            </span>
           </button>
-          <UntestedTag id="settingsSubPanels.agentUpdates" />
-          <UntestedTag id="settingsSubPanels.3" />
-        </div>
-        {moved && (
-          <div className="agent-version-drift">
-            <span className="agent-cron-warn">{t("agents.versionDrift")}</span>
-            <ul className="agent-version-stale">
-              {report.stale.map((note) => (
-                <li key={`${note.version}:${note.surface}`}>{staleLabel(note)}</li>
-              ))}
-            </ul>
-            <p className="settings-help">{t("agents.versionDriftHelp")}</p>
+        )}
+        {update && !update.updateAvailable && !update.error && update.latest && current && (
+          <AgentsStatus tone="ok">{t("agents.updatesNone")}</AgentsStatus>
+        )}
+        {update?.error && (
+          <span className="agents-note" title={update.error}>
+            {t("agents.updateCouldntCheck")}
+          </span>
+        )}
+        {update && !update.checkable && <span className="agents-note">{t("agents.updateNoRegistry")}</span>}
+        {!report.supported && !current && <span className="agents-note">{t("agents.versionUnsupported")}</span>}
+        {report.state === "unverified" && <span className="agents-note">{t("agents.versionUnverified")}</span>}
+        {report.error && <span className="agents-note is-warn">{report.error}</span>}
+      </>
+    ) : null;
+    const updateButton =
+      !adminInstalls && update?.latest && (hasUpdate || unreadUpdate) ? (
+        <button
+          type="button"
+          className="settings-btn sm primary"
+          disabled={busy}
+          title={
+            hasUpdate && current
+              ? t("agents.updateTitle", { label: a.label, current, latest: update.latest })
+              : t("agents.updateUnreadTitle", { label: a.label, latest: update.latest })
+          }
+          onClick={() => void updateAgent(a.id)}
+        >
+          {installing === a.id ? t("agents.updating") : t("agents.updateToLatest", { latest: update.latest })}
+        </button>
+      ) : null;
+    const drift =
+      moved && report ? (
+        <div className="agents-notice is-warn">
+          <div className="agents-notice-head">
+            <AgentsStatus tone="warn">{t("agents.versionDrift")}</AgentsStatus>
+            <AgentsHelp text={t("agents.versionDriftHelp")} />
+          </div>
+          <ul className="agent-version-stale">
+            {report.stale.map((note) => (
+              <li key={`${note.version}:${note.surface}`}>{staleLabel(note)}</li>
+            ))}
+          </ul>
+          <div className="agents-actions">
             <button
               type="button"
-              className="ollama-action-btn"
+              className="settings-btn sm"
               title={t("agents.versionDismissTitle")}
               onClick={() => void dismissVersion(a.id, report.version ?? "")}
             >
               {t("agents.versionDismiss")}
             </button>
           </div>
-        )}
-      </>
-    );
+        </div>
+      ) : null;
+    return { facts, updateButton, drift };
   };
 
   // The installed list's order is the + menu's, and so Ctrl+1–9's
@@ -2455,308 +2581,362 @@ export function AgentsPanel({
     });
   };
 
+  // The sign-in line on an installed card: read-only here (the group below
+  // owns the import / sign-out buttons), and absent for a CLI whose login
+  // Tabtivity cannot share, so no card claims "not signed in" it cannot know.
+  const loginFacts = (a: AgentInfo) => {
+    const l = logins.get(loginIdForCmd(a.id));
+    if (!l?.shared) return null;
+    if (l.uses_admin_key && l.admin_key_offered) {
+      return <AgentsStatus tone="ok">{t("settings.agentLoginAdminKey")}</AgentsStatus>;
+    }
+    if (l.signed_in) {
+      return (
+        <AgentsStatus tone="ok">
+          {l.account ? t("settings.agentLoginSignedInAs", { account: l.account }) : t("settings.agentLoginSignedIn")}
+        </AgentsStatus>
+      );
+    }
+    if (l.api_key) {
+      return (
+        <AgentsStatus tone={l.api_budget_reached ? "warn" : "ok"}>
+          {l.api_budget_reached ? t("settings.agentLoginApiBudgetReached") : t("settings.agentLoginUsesApiKey")}
+        </AgentsStatus>
+      );
+    }
+    return (
+      <AgentsStatus tone="off" title={t("settings.agentLoginNotSignedIn")}>
+        {t("agents.loginNone")}
+      </AgentsStatus>
+    );
+  };
+
   // The card for one CLI. One renderer for both sections below, so an
   // installed entry and one still to be installed cannot drift into two
   // designs — the only thing that differs is which list a card lands in.
+  //
+  // Hierarchy, top to bottom: name and status; the facts (version, sign-in,
+  // shortcut) as plain text; what to do about it (warnings); how the CLI is
+  // used; then the actions — at most one filled button (the install or the
+  // update), the rest outlined, the destructive one in the danger colour.
+  // Anything rare (another machine, a manual removal, per-CLI options) sits in
+  // a fold, so a row of cards stays the same height and the same shape.
   const agentCard = (a: AgentInfo) => {
     const chord = a.installed ? chordFor(a.bin) : null;
+    const hidden = disabledAgents.includes(a.id);
+    const parts = a.installed ? versionParts(a) : null;
+    const signIn = a.installed ? loginFacts(a) : null;
+    const busy = installing !== null || removing !== null;
+    const remoteBusy = remoteInstalling !== null && remoteInstalling.startsWith(`${a.id}:`);
+    const hasOptions = (a.id === "claude") || (a.id === "codex" && a.installed);
     return (
-    <SettingsCard key={a.id} className="agent-list-entry">
-      <div className="agent-list-entry-head">
-        <div className="settings-subheader">
-          {a.label}{" "}
+    <SettingsCard key={a.id} className={`agents-card${a.installed ? "" : " is-available"}${hidden ? " is-hidden" : ""}`}>
+      <div className="agents-card-head">
+        <div className="agents-card-title">
+          <span className="agents-card-name">{a.label}</span>
           {a.installed ? (
-            <span className="ollama-status-text">
-              <span className="ollama-status-dot running" /> {t("agents.installed")}
-            </span>
+            <AgentsStatus tone="ok">{t("agents.installed")}</AgentsStatus>
           ) : (
-            <span className="ollama-status-text">{t("agents.notInstalled")}</span>
+            <AgentsStatus tone="off">{t("agents.notInstalled")}</AgentsStatus>
           )}
         </div>
         {a.installed && (
-          <div className="agent-list-entry-actions">
+          <div className="agents-card-controls">
             <UntestedTag id="settingsSubPanels.agentOrder" />
-            {chord && (
-              <kbd className="agent-chord-chip" title={t("agents.chordTitle", { label: a.label })}>
-                {chord}
-              </kbd>
-            )}
-            <button
-              type="button"
-              className="settings-btn sm icon"
-              title={t("agents.moveUp", { modifier: modifierLabel() })}
-              aria-label={t("agents.moveUpLabel", { label: a.label })}
-              disabled={visibleOrder.indexOf(a.bin) <= 0}
-              onClick={() => moveAgent(a.bin, -1)}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="settings-btn sm icon"
-              title={t("agents.moveDown", { modifier: modifierLabel() })}
-              aria-label={t("agents.moveDownLabel", { label: a.label })}
-              disabled={visibleOrder.indexOf(a.bin) >= visibleOrder.length - 1}
-              onClick={() => moveAgent(a.bin, 1)}
-            >
-              ↓
-            </button>
-            <label
-              className="agent-disable-toggle"
-              title={t("agents.disableToggleTitle")}
-            >
+            <span className="agents-reorder">
+              <button
+                type="button"
+                className="agents-icon-btn"
+                title={t("agents.moveUp", { modifier: modifierLabel() })}
+                aria-label={t("agents.moveUpLabel", { label: a.label })}
+                disabled={visibleOrder.indexOf(a.bin) <= 0}
+                onClick={() => moveAgent(a.bin, -1)}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="agents-icon-btn"
+                title={t("agents.moveDown", { modifier: modifierLabel() })}
+                aria-label={t("agents.moveDownLabel", { label: a.label })}
+                disabled={visibleOrder.indexOf(a.bin) >= visibleOrder.length - 1}
+                onClick={() => moveAgent(a.bin, 1)}
+              >
+                ↓
+              </button>
+            </span>
+            <label className="agent-disable-toggle" title={t("agents.disableToggleTitle")}>
               <Toggle
-                checked={!disabledAgents.includes(a.id)}
+                checked={!hidden}
                 onChange={(e) => setAgentDisabled(a.id, !e.target.checked)}
                 size="sm"
-                aria-label={t(
-                  disabledAgents.includes(a.id) ? "agents.disableAriaEnable" : "agents.disableAriaDisable",
-                  { label: a.label },
-                )}
+                aria-label={t(hidden ? "agents.disableAriaEnable" : "agents.disableAriaDisable", { label: a.label })}
               />
-              {disabledAgents.includes(a.id) ? t("agents.disabled") : t("agents.enabled")}
+              {hidden ? t("agents.disabled") : t("agents.enabled")}
             </label>
           </div>
         )}
       </div>
-      <div className="agent-remote-install-row">
-        {/* The app's own `Dropdown`, never a native <select>: WebKitGTK
-            renders a <select> popup as a light OS menu that ignores the
-            theme entirely — the reason every other picker in the app
-            (the file-browser sort, the LaTeX engine, the catalog sort a
-            few hundred lines below) already uses this one. */}
-        <Dropdown
-          className="agent-remote-machine-picker"
-          title={t("agents.remoteMachineAria", { label: a.label })}
-          value={remoteTargets[a.id] ?? ""}
-          placeholder={
-            !remoteMachinesLoaded
-              ? t("agents.remoteMachinesLoading")
-              : remoteMachines.length === 0
-                ? t("agents.noRemoteMachines")
-                : t("agents.chooseRemoteMachine")
-          }
-          disabled={!remoteMachinesLoaded || remoteMachines.length === 0 || remoteInstalling !== null}
-          options={remoteMachines.map((machine) => ({
-            value: machine.id,
-            label: machine.label || machine.host,
-          }))}
-          onChange={(v) => setRemoteTargets((prev) => ({ ...prev, [a.id]: v }))}
-        />
-        <button
-          type="button"
-          className="ollama-action-btn"
-          disabled={!remoteTargets[a.id] || remoteInstalling !== null}
-          onClick={() => void installAgentRemote(a)}
-        >
-          {remoteInstalling === `${a.id}:${remoteTargets[a.id]}`
-            ? t("agents.installingRemote")
-            : t("agents.installOnRemote")}
-        </button>
-        <button
-          type="button"
-          className="ollama-action-btn"
-          title={t("agents.installOnRemoteTerminalTitle")}
-          disabled={!remoteTargets[a.id] || remoteInstalling !== null}
-          onClick={() => void installAgentRemoteInTerminal(a)}
-        >
-          {t("agents.installOnRemoteTerminal")}
-        </button>
-        <UntestedTag id="settingsSubPanels.4" />
-      </div>
-      {remoteResults[a.id] && (
-        <div className="agent-remote-result">{remoteResults[a.id]}</div>
+      {a.installed && (parts?.facts || signIn || chord) && (
+        <div className="agents-card-meta">
+          {parts?.facts}
+          {signIn}
+          {chord && (
+            <kbd className="agent-chord-chip" title={t("agents.chordTitle", { label: a.label })}>
+              {chord}
+            </kbd>
+          )}
+        </div>
       )}
-      {remoteErrors[a.id] && (
-        <div className="project-dialog-error">{remoteErrors[a.id]}</div>
+      {parts?.drift}
+      {a.id === "codex" && <CodexHookNotice />}
+      {a.installed && installedExtras && (
+        <div className="agents-card-use">
+          <span className="agents-card-use-label">
+            {t("agents.useAs")}
+            <AgentsHelp text={t("agents.useAsHelp")} />
+          </span>
+          {installedExtras(a)}
+        </div>
       )}
+      {remoteResults[a.id] && <div className="agent-remote-result">{remoteResults[a.id]}</div>}
+      {remoteErrors[a.id] && <div className="project-dialog-error">{remoteErrors[a.id]}</div>}
+      {remoteBusy && <div className="agents-note">{t("agents.installingRemote")}</div>}
+      {logs[a.id] && (
+        <pre className="ollama-install-log" ref={installing === a.id ? logRef : undefined}>
+          {logs[a.id]}
+        </pre>
+      )}
+      {errors[a.id] && <div className="project-dialog-error">{errors[a.id]}</div>}
       {adminInstalls && (
-        <>
-          {a.installed && versionNotice(a)}
-          <p className="settings-help">
-            {t(a.installed ? "agents.askAdminInstalled" : "agents.askAdminMissing", { label: a.label })}{" "}
-            <code>{`sudo ${NAMES.serverAdminHelper} cli-install ${a.id}`}</code>{" "}
-            <UntestedTag id="agents.askAdmin" />
-          </p>
-        </>
+        <p className="settings-help">
+          {t(a.installed ? "agents.askAdminInstalled" : "agents.askAdminMissing", { label: a.label })}{" "}
+          <code>{`sudo ${NAMES.serverAdminHelper} cli-install ${a.id}`}</code>{" "}
+          <UntestedTag id="agents.askAdmin" />
+        </p>
       )}
-      {a.installed && !adminInstalls && (
-        <>
-          {versionNotice(a)}
-          <div className="ollama-install-cmd-row">
+      {/* The actions sit on the card's foot (margin-top: auto), so a row of
+          cards lines them up whatever the content above is. */}
+      <div className="agents-card-foot">
+        {a.installed && (
+          <div className="agents-actions">
+            {parts?.updateButton}
             <button
               type="button"
-              className="ollama-action-btn"
-              disabled={installing !== null || removing !== null}
-              title={t("agents.removeTitle")}
-              onClick={() => void removeAgent(a.id)}
+              className="settings-btn sm"
+              disabled={!!checkingUpdates[a.id] || installing === a.id}
+              title={t("agents.checkUpdatesTitle", { label: a.label })}
+              onClick={() => checkUpdate(a.id)}
             >
-              {removing === a.id ? t("agents.removing") : t("agents.remove")}
+              {checkingUpdates[a.id] ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
             </button>
-            <button
-              type="button"
-              className="ollama-action-btn"
-              disabled={installing !== null || removing !== null}
-              title={t("agents.reinstallTitle")}
-              onClick={() => void reinstallAgent(a.id)}
-            >
-              {removing === a.id ? t("agents.reinstalling") : t("agents.reinstall")}
-            </button>
+            <UntestedTag id="settingsSubPanels.agentUpdates" />
+            <UntestedTag id="settingsSubPanels.3" />
+            {!adminInstalls && (
+              <>
+                <span className="agents-spacer" />
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={busy}
+                  title={t("agents.reinstallTitle")}
+                  onClick={() => void reinstallAgent(a.id)}
+                >
+                  {removing === a.id ? t("agents.reinstalling") : t("agents.reinstall")}
+                </button>
+                <button
+                  type="button"
+                  className="settings-btn sm danger"
+                  disabled={busy}
+                  title={t("agents.removeTitle")}
+                  onClick={() => void removeAgent(a.id)}
+                >
+                  {removing === a.id ? t("agents.removing") : t("agents.remove")}
+                </button>
+              </>
+            )}
           </div>
-          {logs[a.id] && (
-            <pre className="ollama-install-log" ref={installing === a.id ? logRef : undefined}>
-              {logs[a.id]}
-            </pre>
-          )}
-          {errors[a.id] && (
-            <div className="project-dialog-error">{errors[a.id]}</div>
-          )}
-          {/* npm-installed agents only (uninstall_cmd empty otherwise):
-              npm's global dir is root-owned on a system-wide Linux
-              Node install, so Remove can fail with EACCES — the same
-              run-in-a-terminal escape hatch the install flow offers,
-              plus a one-click sudo-prefixed variant for that exact
-              case (uninstall_cmd_sudo, empty on Windows). */}
-          {a.uninstall_cmd !== "" && (
-            <>
-              <p className="settings-help">
-                {t("agents.permissionHelpPre")}{" "}
-                <strong>{a.shell}</strong> {t("agents.permissionHelpPost")}{" "}
-                <code>sudo</code> {t("agents.permissionHelpPost2")}
-              </p>
-              <div className="ollama-install-cmd-row">
-                <code className="ollama-install-cmd">{a.uninstall_cmd}</code>
-                <button
-                  type="button"
-                  className="ollama-action-btn"
-                  onClick={() =>
-                    runInstallInTab(t("install.removeTabLabel", { label: a.label }), a.uninstall_cmd, a.shell_kind)
-                  }
-                >
-                  {t("agents.runInTerminal")}
-                </button>
-                {a.uninstall_cmd_sudo !== "" && (
-                  <button
-                    type="button"
-                    className="ollama-action-btn"
-                    title={t("agents.runWithSudoTitle")}
-                    onClick={() =>
-                      runInstallInTab(t("install.removeTabLabel", { label: a.label }), a.uninstall_cmd_sudo, a.shell_kind)
-                    }
-                  >
-                    {t("agents.runWithSudo")}
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </>
-      )}
-      {!a.installed && !adminInstalls && (
-        <>
-          {/* Auto-install runs the official installer via `sh` on
-              Linux/macOS and via PowerShell/cmd on Windows. It is only
-              hidden when this platform has no one-line installer at all
-              (install_cmd empty — Windows-only case, see AgentInfo);
-              the docs-link fallback below covers that. */}
-          {a.install_cmd !== "" && (
-            <>
-              <div className="ollama-install-cmd-row">
-                <button
-                  type="button"
-                  className="ollama-action-btn primary"
-                  disabled={installing !== null}
-                  onClick={() => void installAgent(a.id)}
-                >
-                  {installing === a.id ? t("agents.installing") : t("agents.installLabel", { label: a.label })}
-                </button>
-                {installing === a.id && (
-                  <span className="ollama-status-text">{t("agents.runningInstaller")}</span>
-                )}
-              </div>
-              {logs[a.id] && (
-                <pre
-                  className="ollama-install-log"
-                  ref={installing === a.id ? logRef : undefined}
-                >
-                  {logs[a.id]}
-                </pre>
-              )}
-              {errors[a.id] && (
-                <div className="project-dialog-error">{errors[a.id]}</div>
-              )}
-            </>
-          )}
-          {a.install_cmd ? (
-            <>
-              {/* Whenever install_cmd is non-empty the one-click button
-                  above is also shown, so this is always the "or". */}
-              <p className="settings-help">
-                {t("agents.orInstallInShellPre")} <strong>{a.shell}</strong>{" "}
-                {t("agents.orInstallInShellPost")}
-              </p>
-              <div className="ollama-install-cmd-row">
-                <code className="ollama-install-cmd">{a.install_cmd}</code>
-                <button
-                  type="button"
-                  className="ollama-action-btn primary"
-                  onClick={() =>
-                    runInstallInTab(t("install.agentTabLabel", { label: a.label }), a.install_cmd, a.shell_kind)
-                  }
-                >
-                  {t("agents.runInTerminal")}
-                </button>
-                {/* npm-based installers only (install_cmd_sudo empty
-                    otherwise — Windows, or a curl/pip installer that
-                    targets the user's own home directory): the actual
-                    EACCES fix when npm's global directory is root-owned,
-                    the default on a non-nvm Linux/macOS Node install. */}
-                {a.install_cmd_sudo !== "" && (
-                  <button
-                    type="button"
-                    className="ollama-action-btn"
-                    title={t("agents.runWithSudoTitle")}
-                    onClick={() =>
-                      runInstallInTab(t("install.agentTabLabel", { label: a.label }), a.install_cmd_sudo, a.shell_kind)
-                    }
-                  >
-                    {t("agents.runWithSudo")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="ollama-action-btn"
-                  disabled={installing !== null}
-                  onClick={() => recheck(a.id)}
-                >
-                  {t("common.recheck")}
-                </button>
-              </div>
-            </>
-          ) : (
+        )}
+        {/* Auto-install runs the official installer via `sh` on Linux/macOS and
+            via PowerShell/cmd on Windows. It is only hidden when this platform
+            has no one-line installer at all (install_cmd empty — Windows-only
+            case, see AgentInfo); the docs-link fallback below covers that. */}
+        {!a.installed && !adminInstalls && a.install_cmd !== "" && (
+          <div className="agents-actions">
+            <button
+              type="button"
+              className="settings-btn sm primary"
+              disabled={installing !== null}
+              onClick={() => void installAgent(a.id)}
+            >
+              {installing === a.id ? t("agents.installing") : t("agents.installLabel", { label: a.label })}
+            </button>
+            {installing === a.id && <span className="agents-note">{t("agents.runningInstaller")}</span>}
+          </div>
+        )}
+        {!a.installed && !adminInstalls && a.install_cmd === "" && (
+          <p className="settings-help">
+            {t("agents.noWindowsInstallerPre")}{" "}
+            <a href={a.docs} target="_blank" rel="noreferrer">
+              {t("agents.installDocs")}
+            </a>
+            {t("agents.noWindowsInstallerPost")}{" "}
+            <button
+              type="button"
+              className="settings-btn sm"
+              disabled={installing !== null}
+              onClick={() => recheck(a.id)}
+            >
+              {t("common.recheck")}
+            </button>
+            .
+          </p>
+        )}
+      </div>
+      {/* One fold per card, so a row of cards ends in the same single line:
+          what is rare (another machine, a manual install or removal, a CLI's
+          own options) is inside, as titled blocks. */}
+      <AgentsFold label={t("agents.more")}>
+        {hasOptions && (
+          <div className="agents-block">
+            <div className="settings-subheader">{t("agents.options")}</div>
+            {a.id === "codex" && a.installed && <CodexAutoReviewToggle />}
+            {a.id === "claude" && <ClaudeRemoteControlNotice />}
+          </div>
+        )}
+        {!a.installed && !adminInstalls && a.install_cmd !== "" && (
+          <div className="agents-block">
+            <div className="settings-subheader">{t("agents.otherInstall")}</div>
+            {/* Whenever install_cmd is non-empty the one-click button above is
+                also shown, so this is always the "or". */}
             <p className="settings-help">
-              {t("agents.noWindowsInstallerPre")}{" "}
-              <a href={a.docs} target="_blank" rel="noreferrer">
-                {t("agents.installDocs")}
-              </a>
-              {t("agents.noWindowsInstallerPost")}{" "}
+              {t("agents.orInstallInShellPre")} <strong>{a.shell}</strong> {t("agents.orInstallInShellPost")}
+            </p>
+            <div className="ollama-install-cmd-row">
+              <code className="ollama-install-cmd">{a.install_cmd}</code>
               <button
                 type="button"
-                className="ollama-action-btn"
+                className="settings-btn sm"
+                onClick={() =>
+                  runInstallInTab(t("install.agentTabLabel", { label: a.label }), a.install_cmd, a.shell_kind)
+                }
+              >
+                {t("agents.runInTerminal")}
+              </button>
+              {/* npm-based installers only (install_cmd_sudo empty otherwise —
+                  Windows, or a curl/pip installer that targets the user's own
+                  home directory): the actual EACCES fix when npm's global
+                  directory is root-owned, the default on a non-nvm Linux/macOS
+                  Node install. */}
+              {a.install_cmd_sudo !== "" && (
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  title={t("agents.runWithSudoTitle")}
+                  onClick={() =>
+                    runInstallInTab(t("install.agentTabLabel", { label: a.label }), a.install_cmd_sudo, a.shell_kind)
+                  }
+                >
+                  {t("agents.runWithSudo")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="settings-btn sm"
                 disabled={installing !== null}
                 onClick={() => recheck(a.id)}
               >
                 {t("common.recheck")}
               </button>
-              .
+            </div>
+          </div>
+        )}
+        {a.installed && !adminInstalls && a.uninstall_cmd !== "" && (
+          // npm-installed agents only (uninstall_cmd empty otherwise): npm's
+          // global dir is root-owned on a system-wide Linux Node install, so
+          // Remove can fail with EACCES — the same run-in-a-terminal escape
+          // hatch the install flow offers, plus a one-click sudo-prefixed
+          // variant for that exact case (uninstall_cmd_sudo, empty on Windows).
+          <div className="agents-block">
+            <div className="settings-subheader">{t("agents.removeManually")}</div>
+            <p className="settings-help">
+              {t("agents.permissionHelpPre")} <strong>{a.shell}</strong> {t("agents.permissionHelpPost")}{" "}
+              <code>sudo</code> {t("agents.permissionHelpPost2")}
             </p>
-          )}
-        </>
-      )}
-      {a.id === "codex" && a.installed && <CodexAutoReviewToggle />}
-      {a.id === "codex" && <CodexHookNotice />}
-      {a.id === "claude" && <ClaudeRemoteControlNotice />}
-      {a.installed && installedExtras?.(a)}
+            <div className="ollama-install-cmd-row">
+              <code className="ollama-install-cmd">{a.uninstall_cmd}</code>
+              <button
+                type="button"
+                className="settings-btn sm"
+                onClick={() =>
+                  runInstallInTab(t("install.removeTabLabel", { label: a.label }), a.uninstall_cmd, a.shell_kind)
+                }
+              >
+                {t("agents.runInTerminal")}
+              </button>
+              {a.uninstall_cmd_sudo !== "" && (
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  title={t("agents.runWithSudoTitle")}
+                  onClick={() =>
+                    runInstallInTab(t("install.removeTabLabel", { label: a.label }), a.uninstall_cmd_sudo, a.shell_kind)
+                  }
+                >
+                  {t("agents.runWithSudo")}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="agents-block">
+          <div className="settings-subheader">
+            {t("agents.remoteFold")} <UntestedTag id="settingsSubPanels.4" />
+          </div>
+          <div className="agent-remote-install-row">
+            {/* The app's own `Dropdown`, never a native <select>: WebKitGTK
+                renders a <select> popup as a light OS menu that ignores the
+                theme entirely — the reason every other picker in the app
+                (the file-browser sort, the LaTeX engine, the catalog sort a
+                few hundred lines below) already uses this one. */}
+            <Dropdown
+              className="agent-remote-machine-picker"
+              title={t("agents.remoteMachineAria", { label: a.label })}
+              value={remoteTargets[a.id] ?? ""}
+              placeholder={
+                !remoteMachinesLoaded
+                  ? t("agents.remoteMachinesLoading")
+                  : remoteMachines.length === 0
+                    ? t("agents.noRemoteMachines")
+                    : t("agents.chooseRemoteMachine")
+              }
+              disabled={!remoteMachinesLoaded || remoteMachines.length === 0 || remoteInstalling !== null}
+              options={remoteMachines.map((machine) => ({
+                value: machine.id,
+                label: machine.label || machine.host,
+              }))}
+              onChange={(v) => setRemoteTargets((prev) => ({ ...prev, [a.id]: v }))}
+            />
+            <button
+              type="button"
+              className="settings-btn sm"
+              disabled={!remoteTargets[a.id] || remoteInstalling !== null}
+              onClick={() => void installAgentRemote(a)}
+            >
+              {remoteBusy ? t("agents.installingRemote") : t("agents.installOnRemote")}
+            </button>
+            <button
+              type="button"
+              className="settings-btn sm"
+              title={t("agents.installOnRemoteTerminalTitle")}
+              disabled={!remoteTargets[a.id] || remoteInstalling !== null}
+              onClick={() => void installAgentRemoteInTerminal(a)}
+            >
+              {t("agents.installOnRemoteTerminal")}
+            </button>
+          </div>
+        </div>
+      </AgentsFold>
     </SettingsCard>
     );
   };
@@ -2776,11 +2956,7 @@ export function AgentsPanel({
     <>
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
-      <p className="settings-help">
-        {t("agents.help1")} <strong>+</strong> {t("agents.help2")} <code>npm</code>{" "}
-        {t("agents.help3")} <code>PATH</code> {t("agents.help4")}
-      </p>
-      <p className="settings-help">{t("agents.googleCliChoice")}</p>
+      <p className="settings-help agents-lead">{t("agents.lead")}</p>
       <NodeRuntimeNotice />
       {agents === null ? (
         <p className="settings-help">{t("agents.checkingInstalled")}</p>
@@ -2792,60 +2968,95 @@ export function AgentsPanel({
               grows. Rendering the catalog in full buried the handful of entries
               that matter under a dozen install cards, so it is behind a search
               box instead and shows nothing until something is typed. */}
-          <SettingsSection title={t("agents.installedGroup")}>
-            {installedAgents.length === 0 ? (
-              <p className="settings-help">{t("agents.noneInstalled")}</p>
-            ) : (
-              <>
-                <SettingsList>{installedAgents.map(agentCard)}</SettingsList>
-              </>
-            )}
-          </SettingsSection>
-          <SettingsSection title={t("agents.availableGroup")}>
-            {availableAgents.length === 0 ? (
-              <p className="settings-help">{t("agents.allInstalled")}</p>
-            ) : (
-              <>
-                <div className="ollama-catalog-controls">
-                  <input
-                    type="text"
-                    className="ollama-pull-input"
-                    placeholder={t("agents.searchPlaceholder")}
-                    value={search}
-                    spellCheck={false}
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    aria-label={t("agents.searchPlaceholder")}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </div>
-                {query === "" ? (
-                  <p className="settings-help">
-                    {t("agents.searchHint", { count: String(availableAgents.length) })}
-                  </p>
-                ) : matches.length === 0 ? (
-                  <p className="settings-help">
-                    {t("agents.noSearchMatch", { query: search.trim() })}
-                  </p>
-                ) : (
-                  <SettingsList>{matches.map(agentCard)}</SettingsList>
-                )}
-              </>
-            )}
-          </SettingsSection>
+          <div className="agents-section-head" role="heading" aria-level={3}>
+            {t("agents.installedGroup")}
+            <span className="agents-count">{installedAgents.length}</span>
+          </div>
+          {installedAgents.length === 0 ? (
+            <p className="settings-help">{t("agents.noneInstalled")}</p>
+          ) : (
+            <SettingsList className="agents-grid">{installedAgents.map(agentCard)}</SettingsList>
+          )}
+          <div className="agents-section-head" role="heading" aria-level={3}>
+            {t("agents.availableGroup")}
+            <span className="agents-count">{availableAgents.length}</span>
+            <AgentsHelp text={t("agents.googleCliChoice")} />
+          </div>
+          {availableAgents.length === 0 ? (
+            <p className="settings-help">{t("agents.allInstalled")}</p>
+          ) : (
+            <>
+              <div className="agents-search">
+                <input
+                  type="text"
+                  className="agents-input"
+                  placeholder={t("agents.searchPlaceholder")}
+                  value={search}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  aria-label={t("agents.searchPlaceholder")}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              {query === "" ? (
+                <p className="settings-help">
+                  {t("agents.searchHint", { count: String(availableAgents.length) })}
+                </p>
+              ) : matches.length === 0 ? (
+                <p className="settings-help">
+                  {t("agents.noSearchMatch", { query: search.trim() })}
+                </p>
+              ) : (
+                <SettingsList className="agents-grid">{matches.map(agentCard)}</SettingsList>
+              )}
+            </>
+          )}
         </>
       )}
-      {/* The fence, the warm-up schedule and the prompt composer are set once
-          and then forgotten, and on top they pushed the CLIs this panel is
-          named for below the fold. */}
-      <SettingsAdvanced>
-        <AgentFenceCard />
-        <AgentCronSection agents={agents} />
-        <AgentScheduleMcpSettings />
-        <GitPushMcpSettings />
-        <MarkupMcpSettings />
-        <AgentComposerCard agents={agents} />
-      </SettingsAdvanced>
+      {/* The sandbox, the accounts and keys, the warm-up schedule and the prompt
+          composer are set once and then forgotten, and on top they pushed the
+          CLIs this panel is named for below the fold. Each is one closed row
+          with a line saying what is inside. */}
+      <div className="agents-section-head" role="heading" aria-level={3}>
+        {t("agents.settingsHeading")}
+      </div>
+      <div className="agents-groups">
+        <AgentsGroup title={t("agents.groupAccounts")} summary={t("agents.sumAccounts")}>
+          <AgentAccounts onChange={() => setLoginsVersion((v) => v + 1)} />
+        </AgentsGroup>
+        <AgentsGroup
+          title={<>{t("settings.agentFenceTitle")} <UntestedTag id="settings.agentFenceTitle" /></>}
+          summary={t("agents.sumSandbox")}
+        >
+          <AgentFenceCard />
+        </AgentsGroup>
+        <AgentsGroup
+          title={<>{t("agentCron.title")} <UntestedTag id="agentCron.title" /></>}
+          summary={t("agents.sumSchedule")}
+        >
+          <AgentCronSection agents={agents} />
+        </AgentsGroup>
+        <AgentsGroup title={t("agents.groupTools")} summary={t("agents.sumTools")}>
+          <div className="agents-stack">
+            <div className="agents-option">
+              <AgentScheduleMcpSettings />
+            </div>
+            <div className="agents-option">
+              <GitPushMcpSettings />
+            </div>
+            <div className="agents-option">
+              <MarkupMcpSettings />
+            </div>
+          </div>
+        </AgentsGroup>
+        <AgentsGroup
+          title={<>{t("agents.composerHeading")} <UntestedTag id="settingsSubPanels.2" /></>}
+          summary={t("agents.sumComposer")}
+        >
+          <AgentComposerCard agents={agents} />
+        </AgentsGroup>
+      </div>
       </div>
     </>
   );
@@ -2911,8 +3122,8 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // lazily and cached. The parameter count and size are what the search card
   // omits for a model with no size badge, so it is fetched from the manifest.
   const [tagInfo, setTagInfo] = useState<Record<string, TagInfo>>({});
-  // Free-text "pull any model" field — accepts any registry ref the catalog omits.
-  const [pullName, setPullName] = useState("");
+  // Which size/tag each registry card's picker shows (default: its first).
+  const [variantPick, setVariantPick] = useState<Record<string, string>>({});
   // Live download progress per model ref, keyed by the exact ref passed to
   // `pull_ollama_model`. `pct` is null during non-download phases (manifest,
   // verify, write) where Ollama reports no byte totals.
@@ -2963,20 +3174,15 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     return ` — ${fmtBytes(info.size_bytes)}`;
   };
 
-  // The visible parameter/quantization/size chips for a registry row that has no
-  // size badge on its search card — so a bare "pull"/cloud model still shows what
-  // it is and whether it fits. Cloud-ness is already shown by the capability row,
-  // so a cloud model shows its parameter count (e.g. 756B) and no size.
-  const tagFactChips = (info: TagInfo | undefined) => {
-    if (info === "loading") return <span className="ollama-catalog-hint">…</span>;
-    if (!info || info === "error") return null;
-    return (
-      <>
-        {info.params && <span className="ollama-badge">{info.params}</span>}
-        {info.quant && <span className="ollama-badge">{info.quant}</span>}
-        {info.size_bytes > 0 && <span className="ollama-badge">{fmtBytes(info.size_bytes)}</span>}
-      </>
-    );
+  // The quiet "9.7B · Q4_K_M · 4.7 GB" line under a registry card's size picker —
+  // what the selected tag is and whether it fits. A cloud model downloads
+  // nothing, so it shows its parameter count only.
+  const tagFactText = (info: TagInfo | undefined): string => {
+    if (info === "loading") return "…";
+    if (!info || info === "error") return "";
+    return [info.params, info.quant, info.size_bytes > 0 ? fmtBytes(info.size_bytes) : ""]
+      .filter(Boolean)
+      .join(" · ");
   };
 
   const refresh = async () => {
@@ -3288,18 +3494,18 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     }
   };
 
-  // Pull an arbitrary model ref typed into the free-text field. Reuses the same
-  // pull command as the catalog, so it accepts anything on the registry
+  // Pull an arbitrary model ref typed into the registry search bar. Reuses the
+  // same pull command as the catalog, so it accepts anything on the registry
   // (`name`, `name:tag`, `namespace/name:tag`) — not just the curated catalog.
   const pullTyped = async () => {
-    const model = pullName.trim();
+    const model = regQuery.trim();
     if (!model) return;
     const key = `${model}:pull`;
     setBusy((prev) => ({ ...prev, [key]: true }));
     setError(null);
     try {
       await invoke("pull_ollama_model", { model });
-      setPullName(""); // clear only on success; errors keep the typed ref
+      setRegQuery(""); // clear only on success; errors keep the typed ref
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -3433,32 +3639,21 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   }, [shownRegistry]);
 
   // "Load on Tabtivity start" — which models `stores/agents/ollamaAutoload` warms into
-  // memory at launch. The per-model switches write straight through (the same
-  // setting the 🧠 menu's chip toggles, so the two surfaces cannot disagree);
-  // the Energy Saver opt-out is *staged* behind a Save button, because it is the
-  // one control here that changes whether the app spends power unattended.
+  // memory at launch. Both controls write straight through: the per-model switch
+  // on each downloaded card (the same setting the 🧠 menu's chip toggles, so the
+  // two surfaces cannot disagree) and the Energy Saver opt-out, which flashes
+  // "Saved" instead of hiding behind a Save button.
   const autoloadModels = settings?.ollama_autoload_models ?? [];
   const saverPref = settings?.ollama_autoload_in_energy_saver === true;
-  const [saverDraft, setSaverDraft] = useState(saverPref);
   const [saverSaved, setSaverSaved] = useState(false);
-  // Re-seat the draft when the *stored* value actually moves — settings arrive
-  // asynchronously, so the first render of this panel can precede them, and this
-  // panel's own save lands here too. Guarded on a change (not on every render)
-  // so a staged edit survives unrelated settings writes.
-  const lastStoredSaver = useRef(saverPref);
-  useEffect(() => {
-    if (lastStoredSaver.current === saverPref) return;
-    lastStoredSaver.current = saverPref;
-    setSaverDraft(saverPref);
-  }, [saverPref]);
   const toggleAutoload = (name: string) => {
     const next = autoloadModels.includes(name)
       ? autoloadModels.filter((m) => m !== name)
       : [...autoloadModels, name];
     void updateSettings({ ollama_autoload_models: next });
   };
-  const saveSaverPref = () => {
-    void updateSettings({ ollama_autoload_in_energy_saver: saverDraft }).then(() => {
+  const setSaverPref = (on: boolean) => {
+    void updateSettings({ ollama_autoload_in_energy_saver: on }).then(() => {
       setSaverSaved(true);
       window.setTimeout(() => setSaverSaved(false), 2000);
     });
@@ -3472,9 +3667,74 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         : t("ollama.noLoadedModel")
       : t("ollama.loadedModels", { names: runningModels.map((m) => m.name).join(", ") });
 
-  // Vibe runtime section — required to launch Local Model tabs. Shown in both
-  // the install-Ollama and main panels; collapses to a one-line "ready" note
-  // once Vibe is detected, and expands to an installer when it is missing.
+  // Vibe runtime — required to launch Local Model tabs. Its install steps (shown
+  // only while it is missing) are shared by the install-Ollama page's card and
+  // the running page's status card, where a ready runtime is a single line.
+  const vibeInstallBlock = (
+    <>
+      <p className="settings-help">
+        {t("ollama.vibeMissing1")} <code>vibe</code> {t("ollama.vibeMissing2")}
+      </p>
+      <div className="ollama-install-cmd-row">
+        <button
+          type="button"
+          className="ollama-action-btn primary"
+          disabled={vibeInstalling}
+          onClick={() => void installVibe()}
+        >
+          {vibeInstalling ? t("ollama.installingEllipsis") : t("ollama.installVibe")}
+        </button>
+        {vibeInstalling && <span className="ollama-status-text">{t("ollama.runningInstaller")}</span>}
+      </div>
+      {vibeInstallLog !== null && (
+        <pre className="ollama-install-log" ref={vibeInstallLogRef}>
+          {vibeInstallLog || t("ollama.startingEllipsis")}
+        </pre>
+      )}
+      <p className="settings-help">
+        {t("ollama.orInstallInShellPre")} {vibeStrategy?.os === "windows" ? "PowerShell" : "terminal"}{" "}
+        {t("ollama.orInstallInShellPost")}
+      </p>
+      <div className="ollama-install-cmd-row">
+        <code className="ollama-install-cmd">{vibeStrategy?.command ?? VIBE_INSTALL_CMD}</code>
+        <button
+          type="button"
+          className="ollama-action-btn primary"
+          onClick={() =>
+            runInstallInTab(
+              t("install.vibeTabLabel"),
+              vibeStrategy?.command ?? VIBE_INSTALL_CMD,
+              vibeStrategy?.os === "windows" ? "powershell" : "bash",
+            )
+          }
+        >
+          {t("ollama.runInTerminal")}
+        </button>
+        <button
+          type="button"
+          className="ollama-action-btn"
+          disabled={vibeInstalling}
+          onClick={() =>
+            void invoke<boolean>("vibe_is_installed")
+              .then((ok) => {
+                setVibeInstalled(ok);
+                if (!ok)
+                  setError(
+                    vibeStrategy?.os === "windows"
+                      ? t("ollama.vibeStillNotDetectedWindows")
+                      : t("ollama.vibeStillNotDetectedOther"),
+                  );
+              })
+              .catch(() => {})
+          }
+        >
+          {t("common.recheck")}
+        </button>
+      </div>
+    </>
+  );
+
+  // The install-Ollama page's runtime card.
   const vibeSection = (
     <SettingsCard className="ollama-vibe-section">
       <div className="settings-subheader">{t("ollama.vibeTitle")}</div>
@@ -3485,67 +3745,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           <span className="ollama-status-dot running" /> {t("ollama.vibeInstalled")}
         </p>
       ) : (
-        <>
-          <p className="settings-help">
-            {t("ollama.vibeMissing1")} <code>vibe</code> {t("ollama.vibeMissing2")}
-          </p>
-          <div className="ollama-install-cmd-row">
-            <button
-              type="button"
-              className="ollama-action-btn primary"
-              disabled={vibeInstalling}
-              onClick={() => void installVibe()}
-            >
-              {vibeInstalling ? t("ollama.installingEllipsis") : t("ollama.installVibe")}
-            </button>
-            {vibeInstalling && <span className="ollama-status-text">{t("ollama.runningInstaller")}</span>}
-          </div>
-          {vibeInstallLog !== null && (
-            <pre className="ollama-install-log" ref={vibeInstallLogRef}>
-              {vibeInstallLog || t("ollama.startingEllipsis")}
-            </pre>
-          )}
-          <p className="settings-help">
-            {t("ollama.orInstallInShellPre")} {vibeStrategy?.os === "windows" ? "PowerShell" : "terminal"}{" "}
-            {t("ollama.orInstallInShellPost")}
-          </p>
-          <div className="ollama-install-cmd-row">
-            <code className="ollama-install-cmd">{vibeStrategy?.command ?? VIBE_INSTALL_CMD}</code>
-            <button
-              type="button"
-              className="ollama-action-btn primary"
-              onClick={() =>
-                runInstallInTab(
-                  t("install.vibeTabLabel"),
-                  vibeStrategy?.command ?? VIBE_INSTALL_CMD,
-                  vibeStrategy?.os === "windows" ? "powershell" : "bash",
-                )
-              }
-            >
-              {t("ollama.runInTerminal")}
-            </button>
-            <button
-              type="button"
-              className="ollama-action-btn"
-              disabled={vibeInstalling}
-              onClick={() =>
-                void invoke<boolean>("vibe_is_installed")
-                  .then((ok) => {
-                    setVibeInstalled(ok);
-                    if (!ok)
-                      setError(
-                        vibeStrategy?.os === "windows"
-                          ? t("ollama.vibeStillNotDetectedWindows")
-                          : t("ollama.vibeStillNotDetectedOther"),
-                      );
-                  })
-                  .catch(() => {})
-              }
-            >
-              {t("common.recheck")}
-            </button>
-          </div>
-        </>
+        vibeInstallBlock
       )}
     </SettingsCard>
   );
@@ -3643,82 +3843,186 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     );
   }
 
+  // A section's heading: sentence-case title, a quiet count, and room on the
+  // right for that section's own controls.
+  const sectionHead = (title: ReactNode, count?: number) => (
+    <div className="ollama-section-head" role="heading" aria-level={3}>
+      <span className="ollama-section-name">{title}</span>
+      {count !== undefined && <span className="ollama-section-count">{count}</span>}
+    </div>
+  );
+
+  // A typed query that is plainly a model reference (`name:tag`,
+  // `namespace/name`, or an exact registry name) offers a direct pull beside
+  // the search it is also feeding.
+  const typedRef = regQuery.trim();
+  const typedIsRef =
+    typedRef !== "" &&
+    !/\s/.test(typedRef) &&
+    (/[:/]/.test(typedRef) || regModels.some((m) => m.name === typedRef));
+  const typedBusy = !!busy[`${typedRef}:pull`];
+
+  // One registry card: name, one-line description, capability badges, quiet
+  // size/pulls text, and a real Pull button on the foot. A model with several
+  // sizes gets a size picker; a bare "latest"/"cloud" model pulls directly.
+  const registryCard = (m: RegistryModel) => {
+    const isCloud = m.capabilities.includes("cloud");
+    const hasSizes = m.sizes.length > 0;
+    const picked = variantPick[m.name];
+    const tag = hasSizes ? (picked && m.sizes.includes(picked) ? picked : m.sizes[0]) : isCloud ? "cloud" : "latest";
+    const fullName = `${m.name}:${tag}`;
+    const isInstalled = installedNames.has(fullName);
+    const busyKey = `${fullName}:pull`;
+    const info = tagInfo[fullName];
+    const facts = tagFactText(info);
+    const meta = [m.pulls && t("ollama.pullsSuffix", { pulls: m.pulls }), m.updated].filter(Boolean).join(" · ");
+    // The registry page's badges are scraped as capabilities, and a cloud
+    // model's pricing badge ("Medium usage $0.30 in · …") rides along: a
+    // one-word capability stays a badge, anything longer is quiet text.
+    const caps = m.capabilities.filter((c) => !/\s/.test(c));
+    const notes = m.capabilities.filter((c) => /\s/.test(c));
+    return (
+      <div className="ollama-catalog-row" key={m.name}>
+        <div className="ollama-catalog-header">
+          <span className="ollama-model-name">{m.name}</span>
+        </div>
+        {meta && <div className="ollama-catalog-hint">{meta}</div>}
+        {m.description && <div className="ollama-catalog-desc">{m.description}</div>}
+        {caps.length > 0 && (
+          <div className="ollama-caps">
+            {caps.map((c) => (
+              <span className="ollama-cap" key={c}>
+                {c}
+              </span>
+            ))}
+          </div>
+        )}
+        {notes.map((n) => (
+          <div className="ollama-catalog-hint" key={n}>
+            {n}
+          </div>
+        ))}
+        <div
+          className="ollama-catalog-foot"
+          onMouseEnter={() => fetchTagInfo(fullName)}
+          onFocus={() => fetchTagInfo(fullName)}
+        >
+          <div className="ollama-catalog-pick">
+            {hasSizes && (
+              <Dropdown
+                className="ollama-variant"
+                value={tag}
+                ariaLabel={t("ollama.variantLabel", { name: m.name })}
+                onChange={(v) => {
+                  setVariantPick((p) => ({ ...p, [m.name]: v }));
+                  fetchTagInfo(`${m.name}:${v}`);
+                }}
+                options={m.sizes.map((s) => ({
+                  value: s,
+                  label: installedNames.has(`${m.name}:${s}`) ? `${s} ✓` : s,
+                }))}
+              />
+            )}
+            {facts && <span className="ollama-catalog-facts">{facts}</span>}
+          </div>
+          <button
+            type="button"
+            className={`ollama-action-btn${isInstalled ? "" : " primary"}`}
+            disabled={!!busy[busyKey]}
+            title={t(isInstalled ? "ollama.tagUpdateTitle" : "ollama.tagDownloadTitle", {
+              name: fullName,
+              size: tagSizeSuffix(info),
+            })}
+            onClick={() =>
+              void withBusy(busyKey, () => invoke("pull_ollama_model", { model: fullName }))
+            }
+          >
+            {busy[busyKey]
+              ? pullText(fullName, t("ollama.pulling"))
+              : isInstalled
+                ? t("ollama.update")
+                : t("ollama.pull")}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const filterGroup = (
+    label: string,
+    anyActive: boolean,
+    onAny: () => void,
+    items: { key: string; label: string; active: boolean; toggle: () => void }[],
+  ) => (
+    <div className="ollama-filter-group">
+      <span className="ollama-filter-label">{label}</span>
+      <div className="ollama-seg" role="group" aria-label={label}>
+        <button type="button" className={anyActive ? "active" : ""} aria-pressed={anyActive} onClick={onAny}>
+          {t("ollama.any")}
+        </button>
+        {items.map((it) => (
+          <button
+            key={it.key}
+            type="button"
+            className={it.active ? "active" : ""}
+            aria-pressed={it.active}
+            onClick={it.toggle}
+          >
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <>
       <SettingsHeader title={t("ollama.modelsTitle")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
 
-      <div className="ollama-status-bar">
-        <span className={`ollama-status-dot ${serverRunning ? "running" : "stopped"}`} />
-        <span className="ollama-status-text">
-          {serverRunning === null
-            ? t("ollama.checkingEllipsis")
-            : serverRunning
-              ? t("ollama.serverRunningLabel", { label: loadedLabel })
-              : t("ollama.serverNotRunning")}
-        </span>
-        {serverRunning === false && (
-          <button type="button" className="ollama-action-btn" onClick={() => void startServer()}>
-            {t("ollama.start")}
-          </button>
-        )}
-        {serverRunning === true && (
-          <button
-            type="button"
-            className="ollama-action-btn"
-            disabled={loading}
-            onClick={() => void refresh()}
-          >
-            {loading ? "..." : t("ollama.refresh")}
-          </button>
-        )}
+      <div className={`ollama-status-card${serverRunning === false ? " down" : ""}`}>
+        <div className="ollama-status-main">
+          <span className={`ollama-status-dot ${serverRunning ? "running" : "stopped"}`} />
+          <div className="ollama-status-copy">
+            <div className="ollama-status-title">
+              {serverRunning === null
+                ? t("ollama.checkingEllipsis")
+                : serverRunning
+                  ? t("ollama.serverRunning")
+                  : t("ollama.serverNotRunning")}
+            </div>
+            {serverRunning === true && <div className="ollama-status-sub">{loadedLabel}</div>}
+          </div>
+          {serverRunning === false && (
+            <button type="button" className="ollama-action-btn primary" onClick={() => void startServer()}>
+              {t("ollama.start")}
+            </button>
+          )}
+          {serverRunning === true && (
+            <button
+              type="button"
+              className="ollama-action-btn"
+              disabled={loading}
+              onClick={() => void refresh()}
+            >
+              {loading ? "..." : t("ollama.refresh")}
+            </button>
+          )}
+        </div>
+        <div className="ollama-runtime-row">
+          <span className="ollama-runtime-name">{t("ollama.vibeTitle")}</span>
+          <span className={`ollama-runtime-state${vibeInstalled ? " ok" : ""}`}>
+            {vibeInstalled === null
+              ? t("ollama.checkingEllipsis")
+              : vibeInstalled
+                ? t("ollama.vibeReady")
+                : t("ollama.vibeNotInstalled")}
+          </span>
+        </div>
+        {vibeInstalled === false && <div className="ollama-runtime-install">{vibeInstallBlock}</div>}
       </div>
 
       {error && <ErrorNote className="project-dialog-error" error={error} />}
-
-      <div className="settings-section-title">
-        {t("ollama.modelLocationTitle")} <UntestedTag id="ollama.modelLocationTitle" />
-      </div>
-      <p className="settings-help">{t("ollama.modelLocationHelp")}</p>
-      <div className="ollama-install-cmd-row">
-        <code className="ollama-install-cmd">
-          {modelsPath ||
-            (modelsDirPlan
-              ? t("ollama.modelLocationDefaultHint", { path: modelsDirPlan.default_dir })
-              : "…")}
-        </code>
-        <button
-          type="button"
-          className="ollama-action-btn"
-          onClick={() => void chooseModelsDir()}
-        >
-          {t("ollama.modelLocationBrowse")}
-        </button>
-        {modelsPath && (
-          <button type="button" className="ollama-action-btn" onClick={clearModelsDir}>
-            {t("ollama.modelLocationReset")}
-          </button>
-        )}
-      </div>
-      {modelsDirPlan?.systemd_service && (
-        <>
-          <p className="settings-help">{t("ollama.modelLocationSystemdHelp")}</p>
-          {modelsDirPlan.service_cmd && (
-            <div className="ollama-install-cmd-row">
-              <button
-                type="button"
-                className="ollama-action-btn primary"
-                title={modelsDirPlan.service_cmd}
-                onClick={applyModelsDirToService}
-              >
-                {t("ollama.modelLocationApply")}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
-      {vibeSection}
 
       {(() => {
         // Interrupted entries not currently being (re)pulled — these get a
@@ -3733,7 +4037,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           return null;
         return (
           <>
-            <div className="settings-section-title">{t("ollama.downloadingTitle")}</div>
+            {sectionHead(t("ollama.downloadingTitle"))}
             <div className="settings-list">
               {Object.entries(pullProgress).map(([model, pr]) => (
                 <div className="ollama-model-row" key={model}>
@@ -3772,14 +4076,14 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <div className="ollama-model-actions">
                     <button
                       type="button"
-                      className="ollama-action-btn"
+                      className="ollama-action-btn primary"
                       onClick={() => resumePull(model)}
                     >
                       {t("ollama.resume")}
                     </button>
                     <button
                       type="button"
-                      className="ollama-action-btn danger"
+                      className="ollama-ghost-btn danger"
                       title={t("ollama.deletePartialTitle")}
                       onClick={() => deletePausedPull(model)}
                     >
@@ -3798,14 +4102,14 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <div className="ollama-model-actions">
                     <button
                       type="button"
-                      className="ollama-action-btn"
+                      className="ollama-action-btn primary"
                       onClick={() => continuePull(model)}
                     >
                       {t("ollama.continueDownload")}
                     </button>
                     <button
                       type="button"
-                      className="ollama-action-btn"
+                      className="ollama-ghost-btn"
                       title={t("ollama.dismissTitle")}
                       onClick={() => dismissPull(model)}
                     >
@@ -3831,7 +4135,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <div className="ollama-model-actions">
                     <button
                       type="button"
-                      className="ollama-action-btn danger"
+                      className="ollama-ghost-btn danger"
                       title={t("ollama.deleteLayerTitle")}
                       onClick={() => deleteOrphan(o.path)}
                     >
@@ -3845,197 +4149,220 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         );
       })()}
 
-      <div className="settings-section-title">{t("ollama.downloadedModelsTitle")}</div>
+      {sectionHead(t("ollama.downloadedModelsTitle"), loading ? undefined : models.length)}
       {loading ? (
         <div className="ollama-empty">{t("common.loading")}</div>
       ) : models.length === 0 ? (
         <div className="ollama-empty">{t("ollama.noModelsDownloaded")}</div>
       ) : (
         <div className="settings-list">
-          {models.map((m) => (
-            <div className="ollama-model-row" key={m.name}>
-              <div className="ollama-model-header">
-                <span className="ollama-model-name">{m.name}</span>
-                <span className="ollama-model-size">{fmtBytes(m.size)}</span>
-              </div>
-              <div className="ollama-model-details">
-                {m.parameter_size && <span className="ollama-badge">{m.parameter_size}</span>}
-                {m.quantization && <span className="ollama-badge">{m.quantization}</span>}
-                {m.family && <span className="ollama-badge">{m.family}</span>}
-                {m.running && (
-                  <span className={`ollama-badge running${m.size_vram > 0 ? " gpu" : ""}`}>
-                    {m.size_vram > 0 ? `GPU ${fmtBytes(m.size_vram)}` : "CPU"}
+          {models.map((m) => {
+            const loadingNow = busy[`${m.name}:load`] || loadingMem[m.name];
+            const meta = [fmtBytes(m.size), m.parameter_size, m.quantization, m.family]
+              .filter(Boolean)
+              .join(" · ");
+            return (
+              <div className={`ollama-model-row ollama-model-card${m.running ? " running" : ""}`} key={m.name}>
+                <div className="ollama-model-header">
+                  <span className="ollama-model-name">{m.name}</span>
+                  {m.running && (
+                    <span className={`ollama-live${m.size_vram > 0 ? " gpu" : ""}`}>
+                      {t("ollama.inMemory")} · {m.size_vram > 0 ? `GPU ${fmtBytes(m.size_vram)}` : "CPU"}
+                    </span>
+                  )}
+                </div>
+                <div className="ollama-model-meta">{meta}</div>
+                <div className="ollama-model-actions">
+                  {m.running ? (
+                    <button
+                      type="button"
+                      className="ollama-action-btn"
+                      disabled={busy[`${m.name}:stop`]}
+                      title={t("ollama.unloadTitle")}
+                      onClick={() =>
+                        void withBusy(`${m.name}:stop`, () =>
+                          invoke("stop_ollama_model", { model: m.name }),
+                        )
+                      }
+                    >
+                      {busy[`${m.name}:stop`] ? "..." : t("ollama.unload")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="ollama-action-btn primary"
+                      disabled={loadingNow}
+                      title={t("ollama.loadTitle")}
+                      onClick={() =>
+                        void withBusy(`${m.name}:load`, () =>
+                          invoke("load_ollama_model", { model: m.name }),
+                        )
+                      }
+                    >
+                      {loadingNow ? t("ollama.loading") : t("ollama.load")}
+                    </button>
+                  )}
+                  <span className="ollama-model-actions-end">
+                    <button
+                      type="button"
+                      className="ollama-ghost-btn"
+                      disabled={busy[`${m.name}:pull`]}
+                      title={t("ollama.updateTitle")}
+                      onClick={() =>
+                        void withBusy(`${m.name}:pull`, () =>
+                          invoke("pull_ollama_model", { model: m.name }),
+                        )
+                      }
+                    >
+                      {busy[`${m.name}:pull`] ? pullText(m.name, t("ollama.updating")) : t("ollama.update")}
+                    </button>
+                    <button
+                      type="button"
+                      className="ollama-ghost-btn danger"
+                      disabled={busy[`${m.name}:del`]}
+                      title={t("ollama.deleteModelTitle")}
+                      onClick={() =>
+                        void withBusy(`${m.name}:del`, () =>
+                          invoke("delete_ollama_model", { model: m.name }),
+                        )
+                      }
+                    >
+                      {busy[`${m.name}:del`] ? "..." : t("ollama.delete")}
+                    </button>
                   </span>
-                )}
-              </div>
-              <div className="ollama-model-actions">
-                {m.running ? (
-                  <button
-                    type="button"
-                    className="ollama-action-btn"
-                    disabled={busy[`${m.name}:stop`]}
-                    title={t("ollama.unloadTitle")}
-                    onClick={() =>
-                      void withBusy(`${m.name}:stop`, () =>
-                        invoke("stop_ollama_model", { model: m.name }),
-                      )
-                    }
-                  >
-                    {busy[`${m.name}:stop`] ? "..." : t("ollama.unload")}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="ollama-action-btn"
-                    disabled={busy[`${m.name}:load`] || loadingMem[m.name]}
-                    title={t("ollama.loadTitle")}
-                    onClick={() =>
-                      void withBusy(`${m.name}:load`, () =>
-                        invoke("load_ollama_model", { model: m.name }),
-                      )
-                    }
-                  >
-                    {busy[`${m.name}:load`] || loadingMem[m.name] ? t("ollama.loading") : t("ollama.load")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="ollama-action-btn"
-                  disabled={busy[`${m.name}:pull`]}
-                  title={t("ollama.updateTitle")}
-                  onClick={() =>
-                    void withBusy(`${m.name}:pull`, () =>
-                      invoke("pull_ollama_model", { model: m.name }),
-                    )
-                  }
-                >
-                  {busy[`${m.name}:pull`] ? pullText(m.name, t("ollama.updating")) : t("ollama.update")}
-                </button>
-                <button
-                  type="button"
-                  className="ollama-action-btn danger"
-                  disabled={busy[`${m.name}:del`]}
-                  title={t("ollama.deleteModelTitle")}
-                  onClick={() =>
-                    void withBusy(`${m.name}:del`, () =>
-                      invoke("delete_ollama_model", { model: m.name }),
-                    )
-                  }
-                >
-                  {busy[`${m.name}:del`] ? "..." : t("ollama.delete")}
-                </button>
-              </div>
-              {(busy[`${m.name}:load`] || loadingMem[m.name]) && (
-                <div className="ollama-load-progress" title={t("ollama.loadingIntoMemoryTitle")}>
-                  <div className="ollama-download-bar">
-                    <div className="ollama-download-bar-fill indeterminate" />
+                </div>
+                {loadingNow && (
+                  <div className="ollama-load-progress" title={t("ollama.loadingIntoMemoryTitle")}>
+                    <div className="ollama-download-bar">
+                      <div className="ollama-download-bar-fill indeterminate" />
+                    </div>
+                    <span className="ollama-download-status">{t("ollama.loadingIntoMemory")}</span>
                   </div>
-                  <span className="ollama-download-status">{t("ollama.loadingIntoMemory")}</span>
+                )}
+                <label className="ollama-model-autostart">
+                  <span>{t("ollama.loadAtStart")}</span>
+                  <Toggle
+                    size="sm"
+                    checked={autoloadModels.includes(m.name)}
+                    onChange={() => toggleAutoload(m.name)}
+                    title={t("ollama.autostartToggleTitle", { name: m.name })}
+                  />
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {models.length > 0 && (
+        <SettingsCard className="ollama-startup">
+          <div className="settings-subheader">
+            {t("ollama.autostartTitle")} <UntestedTag id="ollama.autostartTitle" />
+          </div>
+          <ToggleRow
+            label={t("ollama.autostartInSaver")}
+            checked={saverPref}
+            onChange={(e) => setSaverPref(e.target.checked)}
+            aside={saverSaved ? <span className="ollama-status-text">{t("ollama.autostartSaved")}</span> : null}
+          />
+          <p className="settings-help">{t("ollama.autostartInSaverHelp")}</p>
+        </SettingsCard>
+      )}
+
+      <SettingsAdvanced title={t("ollama.storageTitle")}>
+        <SettingsCard>
+          <div className="settings-subheader">
+            {t("ollama.modelLocationTitle")} <UntestedTag id="ollama.modelLocationTitle" />
+          </div>
+          <div className="ollama-path-row">
+            <code className="ollama-path" title={modelsPath || modelsDirPlan?.default_dir}>
+              {modelsPath || modelsDirPlan?.default_dir || "…"}
+            </code>
+            {!modelsPath && <span className="ollama-path-default">{t("common.default")}</span>}
+            <button type="button" className="ollama-action-btn" onClick={() => void chooseModelsDir()}>
+              {t("ollama.modelLocationBrowse")}
+            </button>
+            {modelsPath && (
+              <button type="button" className="ollama-action-btn" onClick={clearModelsDir}>
+                {t("ollama.modelLocationReset")}
+              </button>
+            )}
+          </div>
+          <p className="settings-help">{t("ollama.modelLocationHelp")}</p>
+          {modelsDirPlan?.systemd_service && (
+            <>
+              <p className="settings-help">{t("ollama.modelLocationSystemdHelp")}</p>
+              {modelsDirPlan.service_cmd && (
+                <div className="ollama-install-cmd-row">
+                  <button
+                    type="button"
+                    className="ollama-action-btn primary"
+                    title={modelsDirPlan.service_cmd}
+                    onClick={applyModelsDirToService}
+                  >
+                    {t("ollama.modelLocationApply")}
+                  </button>
                 </div>
               )}
-            </div>
-          ))}
-        </div>
-      )}
+            </>
+          )}
+        </SettingsCard>
+      </SettingsAdvanced>
 
-      {/* Load-on-start: the models Tabtivity warms into memory at launch, plus the
-          Energy Saver opt-out. See `stores/agents/ollamaAutoload` for the rules. */}
-      <div className="settings-section-title">
-        {t("ollama.autostartTitle")} <UntestedTag id="ollama.autostartTitle" />
-      </div>
-      <p className="settings-help">{t("ollama.autostartHelp")}</p>
-      {models.length === 0 ? (
-        <div className="ollama-empty">{t("ollama.noModelsDownloaded")}</div>
-      ) : (
-        <div className="settings-list ollama-autostart-list">
-          {models.map((m) => (
-            <label
-              className={`ollama-autostart-row${autoloadModels.includes(m.name) ? " on" : ""}`}
-              key={`autostart:${m.name}`}
-            >
-              <Toggle
-                size="sm"
-                checked={autoloadModels.includes(m.name)}
-                onChange={() => toggleAutoload(m.name)}
-                title={t("ollama.autostartToggleTitle", { name: m.name })}
-              />
-              <span className="ollama-model-name">{m.name}</span>
-              {m.parameter_size && <span className="ollama-badge">{m.parameter_size}</span>}
-            </label>
-          ))}
-        </div>
-      )}
-      <div className="settings-toggle-card">
-        <label className="settings-toggle-card-row">
-          <span>{t("ollama.autostartInSaver")}</span>
-          <Toggle checked={saverDraft} onChange={(e) => setSaverDraft(e.target.checked)} />
-        </label>
-        <p className="settings-help">{t("ollama.autostartInSaverHelp")}</p>
-        <div className="ollama-autostart-saver-actions">
-          {saverSaved && <span className="ollama-status-text">{t("ollama.autostartSaved")}</span>}
-          <button
-            type="button"
-            className="ollama-action-btn primary"
-            disabled={saverDraft === saverPref}
-            onClick={saveSaverPref}
-          >
-            {t("common.save")}
-          </button>
-        </div>
-      </div>
+      {sectionHead(t("ollama.browseRegistry"))}
 
-      <div className="settings-section-title ollama-section-title-row">
-        <span>{t("ollama.browseRegistry")}</span>
-        <button
-          type="button"
-          className="ollama-action-btn"
-          disabled={regLoading}
-          onClick={() => void loadRegistryPage(1, true)}
-        >
-          {regLoading ? "..." : t("ollama.refresh")}
-        </button>
-      </div>
-
-      <p className="settings-help">
-        {t("ollama.pullHelp1")}{" "}
-        <code>llama3.1:8b</code> {t("ollama.pullHelp2")} <code>namespace/model:tag</code>.
-      </p>
-      <div className="ollama-install-cmd-row">
+      <div className="ollama-browse-bar">
         <input
           type="text"
-          className="ollama-pull-input"
-          placeholder={t("ollama.pullPlaceholder")}
-          value={pullName}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          disabled={!!busy[`${pullName.trim()}:pull`]}
-          onChange={(e) => setPullName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void pullTyped();
-          }}
-        />
-        <button
-          type="button"
-          className="ollama-action-btn"
-          disabled={!pullName.trim() || !!busy[`${pullName.trim()}:pull`]}
-          onClick={() => void pullTyped()}
-        >
-          {busy[`${pullName.trim()}:pull`] ? pullText(pullName.trim(), t("ollama.pulling")) : t("ollama.pull")}
-        </button>
-      </div>
-
-      <div className="ollama-catalog-controls">
-        <input
-          type="text"
-          className="ollama-pull-input"
-          placeholder={t("ollama.searchPlaceholder")}
+          className="ollama-search-input"
+          placeholder={t("ollama.searchOrPullPlaceholder")}
+          aria-label={t("ollama.searchOrPullPlaceholder")}
           value={regQuery}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
+          disabled={typedBusy}
           onChange={(e) => setRegQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && typedIsRef) void pullTyped();
+          }}
         />
+        {typedIsRef && (
+          <button
+            type="button"
+            className="ollama-action-btn primary ollama-pull-ref"
+            disabled={typedBusy}
+            title={typedRef}
+            onClick={() => void pullTyped()}
+          >
+            {typedBusy ? pullText(typedRef, t("ollama.pulling")) : t("ollama.pullRef", { ref: typedRef })}
+          </button>
+        )}
+      </div>
+
+      <div className="ollama-filters">
+        {filterGroup(
+          t("ollama.filterType"),
+          regTypes.size === 0,
+          () => setRegTypes(new Set()),
+          REGISTRY_TYPES.map((cap) => ({
+            key: cap,
+            label: t(`ollama.cap.${cap}` as TranslationKey),
+            active: regTypes.has(cap),
+            toggle: () => toggleType(cap),
+          })),
+        )}
+        {filterGroup(
+          t("ollama.filterParams"),
+          regSizes.size === 0,
+          () => setRegSizes(new Set()),
+          SIZE_BUCKETS.map((b) => ({
+            key: b.key,
+            label: b.label,
+            active: regSizes.has(b.key),
+            toggle: () => toggleSizeBucket(b.key),
+          })),
+        )}
         <label className="ollama-sort-label" title={t("ollama.sortBy")}>
           {t("ollama.sortBy")}
           <Dropdown
@@ -4047,132 +4374,22 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </label>
       </div>
 
-      <div className="ollama-filter-row">
-        <span className="ollama-filter-label">{t("ollama.filterType")}</span>
-        <button
-          type="button"
-          className={`ollama-chip${regTypes.size === 0 ? " active" : ""}`}
-          onClick={() => setRegTypes(new Set())}
-        >
-          {t("ollama.any")}
-        </button>
-        {REGISTRY_TYPES.map((cap) => (
+      {regError && (
+        <div className="ollama-reg-error">
+          <ErrorNote className="project-dialog-error" error={regError} />
           <button
-            key={cap}
             type="button"
-            className={`ollama-chip${regTypes.has(cap) ? " active" : ""}`}
-            onClick={() => toggleType(cap)}
+            className="ollama-action-btn"
+            disabled={regLoading}
+            onClick={() => void loadRegistryPage(1, true)}
           >
-            {t(`ollama.cap.${cap}` as TranslationKey)}
+            {t("ollama.refresh")}
           </button>
-        ))}
-      </div>
-
-      <div className="ollama-filter-row">
-        <span className="ollama-filter-label">{t("ollama.filterParams")}</span>
-        <button
-          type="button"
-          className={`ollama-chip${regSizes.size === 0 ? " active" : ""}`}
-          onClick={() => setRegSizes(new Set())}
-        >
-          {t("ollama.any")}
-        </button>
-        {SIZE_BUCKETS.map((b) => (
-          <button
-            key={b.key}
-            type="button"
-            className={`ollama-chip${regSizes.has(b.key) ? " active" : ""}`}
-            onClick={() => toggleSizeBucket(b.key)}
-          >
-            {b.label}
-          </button>
-        ))}
-      </div>
-
-      {regError && <ErrorNote className="project-dialog-error" error={regError} />}
+        </div>
+      )}
 
       <div className="settings-list">
-        {shownRegistry.map((m) => (
-          <div className="ollama-catalog-row" key={m.name}>
-            <div className="ollama-catalog-header">
-              <span className="ollama-model-name">{m.name}</span>
-              <span className="ollama-catalog-hint">
-                {m.pulls && t("ollama.pullsSuffix", { pulls: m.pulls })}
-                {m.pulls && m.updated ? " · " : ""}
-                {m.updated}
-              </span>
-            </div>
-            {m.description && <div className="ollama-catalog-desc">{m.description}</div>}
-            {m.capabilities.length > 0 && (
-              <div className="ollama-model-details">
-                {m.capabilities.map((c) => (
-                  <span className="ollama-badge" key={c}>
-                    {c}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="ollama-catalog-tags">
-              {m.sizes.length === 0 ? (
-                (() => {
-                  // No size badge on the search card: a cloud model (its tag is
-                  // `:cloud`) or a single-variant model (`:latest`). Either way the
-                  // parameters + size come from the manifest, fetched eagerly above
-                  // and shown as chips beside the pull button.
-                  const isCloud = m.capabilities.includes("cloud");
-                  const fullName = `${m.name}:${isCloud ? "cloud" : "latest"}`;
-                  const isInstalled = installedNames.has(fullName);
-                  const busyKey = `${fullName}:pull`;
-                  const info = tagInfo[fullName];
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        className={`ollama-tag-btn${isInstalled ? " installed" : ""}`}
-                        disabled={!!busy[busyKey]}
-                        title={t(isInstalled ? "ollama.tagUpdateTitle" : "ollama.tagDownloadTitle", { name: fullName, size: tagSizeSuffix(info) })}
-                        onMouseEnter={() => fetchTagInfo(fullName)}
-                        onFocus={() => fetchTagInfo(fullName)}
-                        onClick={() =>
-                          void withBusy(busyKey, () =>
-                            invoke("pull_ollama_model", { model: fullName }),
-                          )
-                        }
-                      >
-                        {busy[busyKey] ? pullText(fullName, "…") : t("ollama.pullLower")}
-                      </button>
-                      {tagFactChips(info)}
-                    </>
-                  );
-                })()
-              ) : (
-                m.sizes.map((tag) => {
-                  const fullName = `${m.name}:${tag}`;
-                  const isInstalled = installedNames.has(fullName);
-                  const isBusy = busy[`${fullName}:pull`];
-                  return (
-                    <button
-                      key={tag}
-                      type="button"
-                      className={`ollama-tag-btn${isInstalled ? " installed" : ""}`}
-                      disabled={!!isBusy}
-                      title={t(isInstalled ? "ollama.tagUpdateTitle" : "ollama.tagDownloadTitle", { name: fullName, size: tagSizeSuffix(tagInfo[fullName]) })}
-                      onMouseEnter={() => fetchTagInfo(fullName)}
-                      onFocus={() => fetchTagInfo(fullName)}
-                      onClick={() =>
-                        void withBusy(`${fullName}:pull`, () =>
-                          invoke("pull_ollama_model", { model: fullName }),
-                        )
-                      }
-                    >
-                      {isBusy ? pullText(fullName, "…") : tag}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        ))}
+        {shownRegistry.map(registryCard)}
 
         {/* Lazy-load sentinel + status line. */}
         {regLoading && <div className="ollama-empty">{t("common.loading")}</div>}

@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 
 import { APP_TIMER_ID } from "../../stores/timer";
 import { ROOT_SCOPE, useUsageStore, type GitStats } from "../../stores/usage";
+import { ASSISTANT_SCOPE } from "../../lib/assistant";
+import { NAMES } from "../../lib/brand";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { METRIC, agentLabel } from "../../lib/usageMetrics";
@@ -465,7 +467,11 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
   }
   const appSecs = keys.reduce((sum, k) => sum + (timeByDay[k]?.[APP_TIMER_ID] ?? 0), 0);
   const projectName = (id: string) =>
-    id === ROOT_SCOPE ? t("stats.rootTerminal") : projects.find((p) => p.id === id)?.name ?? id;
+    id === ROOT_SCOPE
+      ? t("stats.rootTerminal")
+      : id === ASSISTANT_SCOPE
+        ? NAMES.assistant
+        : projects.find((p) => p.id === id)?.name ?? id;
   const rankedProjects = Object.entries(secsByProject)
     .filter(([, secs]) => secs > 0)
     .sort((a, b) => b[1] - a[1]);

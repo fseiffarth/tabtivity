@@ -107,7 +107,7 @@ export function AgentScheduleDialog({ scope, tab, onClose, initialMessage, initi
   const [promptId, setPromptId] = useState(initialPromptId);
   // One-time is the default: the common case is "run this prompt once, in a
   // while", and a rule that repeats forever is the one worth picking on purpose.
-  const [kind, setKind] = useState<FormKind>("once");
+  const [kind, setKind] = useState<FormKind>("in");
   const [time, setTime] = useState("09:00");
   const [once, setOnce] = useState(defaultOnce);
   const [inHours, setInHours] = useState("1");
@@ -178,7 +178,7 @@ export function AgentScheduleDialog({ scope, tab, onClose, initialMessage, initi
     setPromptId(undefined);
     setEditing(null);
     setMessage("");
-    setKind("once");
+    setKind("in");
     setTime("09:00");
     setOnce(defaultOnce());
     setInHours("1");
@@ -468,8 +468,8 @@ export function AgentScheduleDialog({ scope, tab, onClose, initialMessage, initi
               <label>
                 <span>{t("agentSchedule.recurrence")}</span>
                 <select value={kind} onChange={(event) => setKind(event.target.value as FormKind)}>
-                  <option value="once">{t("agentSchedule.once")}</option>
                   <option value="in">{t("agentSchedule.in")}</option>
+                  <option value="once">{t("agentSchedule.once")}</option>
                   <option value="daily">{t("agentSchedule.daily")}</option>
                   <option value="weekdays">{t("agentSchedule.weekdays")}</option>
                 </select>

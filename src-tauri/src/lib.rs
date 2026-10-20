@@ -19,8 +19,8 @@
 // `crate::brand::…` and `crate::app_slug!()` resolve here unchanged.
 pub use app_core::brand;
 pub use app_core::{
-    app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, legacy_name, legacy_slug,
-    legacy_upper,
+    app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, assistant_name, legacy_name,
+    legacy_slug, legacy_upper,
 };
 pub mod clock;
 pub mod commands;
@@ -1306,7 +1306,7 @@ pub fn run() {
     // renderer died, window froze) and later dropped PDF content. That loss was
     // traced to the GPU-accelerated 2D canvas, which every webview now has off
     // (`webkit_tuning_plugin`); see docs/pdf_gpu_rendering_check_plan.md and
-    // docs/gpu_compositing_plan.md. So the renderer stays off by default, on
+    // docs/done/gpu_compositing_plan.md. So the renderer stays off by default, on
     // only with the experimental `gpu_compositing` setting, and an inherited
     // value is always the user's. Read here, before GTK/WebKit init and before
     // any thread exists (`set_var`). A missing or unreadable file means off.
@@ -1710,7 +1710,6 @@ pub fn run() {
             commands::app_update::app_update_releases_url,
             commands::mobile_control::mobile_desktop_respond,
             commands::mobile_control::mobile_opaque_id,
-            commands::mobile_control::mobile_prepare_phone_install_script,
             commands::mobile_control::mobile_admin,
             commands::mobile_control::mobile_paired_devices,
             commands::mobile_control::mobile_host_status,
@@ -1721,6 +1720,7 @@ pub fn run() {
             commands::mobile_control::mobile_tailscale_serve_status,
             commands::mobile_control::mobile_desktop_images,
             commands::mobile_control::mobile_attach_desktop_image,
+            commands::mobile_control::project_inbox_describe,
             commands::mobile_control::global_inbox_list,
             commands::mobile_control::global_inbox_open,
             commands::mobile_control::global_inbox_reveal,
@@ -1734,7 +1734,6 @@ pub fn run() {
             commands::projects::get_projects,
             commands::projects::save_projects,
             commands::projects::load_project,
-            commands::projects::save_project,
             commands::projects::set_project_description,
             commands::projects::set_project_name,
             commands::projects::plan_project_dir_rename,
@@ -1746,10 +1745,8 @@ pub fn run() {
             commands::vm::vm_boot,
             commands::vm::vm_shutdown,
             commands::vm::vm_rebuild,
-            commands::vm::vm_blocked,
             commands::vm::vm_allow_temporarily,
             commands::vm::vm_set_spec,
-            commands::vm::vm_unpushed_commits,
             commands::vm::remote_download_size,
             commands::vm::remote_download_to,
             commands::projects::set_project_remote_control,
@@ -1763,6 +1760,9 @@ pub fn run() {
             commands::markup_mcp::markup_mcp_answer,
             commands::markup_mcp::markup_mcp_dismiss,
             commands::markup_mcp::markup_mcp_reopen,
+            commands::assistant::assistant_options,
+            commands::assistant::assistant_new_chat,
+            commands::assistant::assistant_set_search,
             commands::projects::set_project_mobile_access,
             commands::projects::sandbox_preflight,
             commands::python::python_interpreters,
@@ -1777,7 +1777,6 @@ pub fn run() {
             commands::hpc_ws::hpc_ws_list,
             commands::hpc_ws::hpc_ws_allocate,
             commands::hpc_ws::hpc_ws_extend,
-            commands::hpc_ws::hpc_ws_release,
             commands::hpc_ws::hpc_ws_link,
             commands::hpc_ws::hpc_ws_anchor,
             commands::hpc_ws::hpc_scratch_candidates,
@@ -1823,6 +1822,7 @@ pub fn run() {
             commands::projects::move_remote_mirror,
             commands::projects::create_project,
             commands::projects::preview_project_scaffold,
+            commands::projects::project_agents_empty,
             commands::projects::project_scaffold_missing,
             commands::projects::repair_project_scaffold,
             commands::projects::repair_all_project_scaffolds,
@@ -1857,7 +1857,6 @@ pub fn run() {
             commands::boxes::patch_box,
             commands::boxes::ensure_box_folder,
             commands::boxes::refresh_box_agent_docs,
-            commands::boxes::set_box_relations,
             commands::boxes::set_box_mobile_access,
             // Native calendar (local event store)
             commands::calendar::calendar_load,
@@ -2031,7 +2030,6 @@ pub fn run() {
             commands::ssh::remote_forget_password,
             commands::ssh::remote_kill_all_jobs,
             commands::ssh::ssh_close_master,
-            commands::ssh::remote_login_command,
             commands::ssh::ssh_default_dir,
             commands::ssh::ssh_list_dir,
             commands::ssh::ssh_mkdir,
@@ -2039,7 +2037,6 @@ pub fn run() {
             commands::remote::remote_connect,
             commands::remote::remote_disconnect,
             commands::remote::remote_disconnect_all_hosts,
-            commands::remote::remote_connected_ids,
             commands::remote::remote_connected_targets,
             commands::remote::worker_sync_now,
             commands::remote::worker_outputs_preview,
@@ -2110,7 +2107,6 @@ pub fn run() {
             commands::openvpn::vpn_saved_password_state,
             commands::openvpn::vpn_can_connect_silently,
             commands::openvpn::vpn_forget_password,
-            commands::openvpn::openvpn_login_command,
             commands::openvpn::openvpn_disconnect,
             commands::openvpn::openvpn_disconnect_all_on_quit,
             commands::openvpn::openvpn_status,
@@ -2238,7 +2234,6 @@ pub fn run() {
             commands::terminal::pty_scrollback,
             commands::terminal::pty_watch,
             commands::terminal::pty_unwatch,
-            commands::terminal::local_tmux_list,
             commands::terminal::local_tmux_kill,
             commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,
@@ -2251,8 +2246,6 @@ pub fn run() {
             commands::apps::list_tracked_windows,
             commands::apps::untrack_window,
             commands::apps::close_tracked_window,
-            commands::apps::check_pid_alive,
-            commands::apps::restore_open_apps,
             commands::apps::run_script_detached,
             commands::apps::drag_preview_icon,
             commands::apps::start_file_drag,
@@ -2270,12 +2263,10 @@ pub fn run() {
             // Workspace / network
             commands::workspace::workspace_info,
             commands::workspace::workspace_capabilities,
-            commands::workspace::workspace_switch,
             commands::workspace::desktop_owns_super_key,
             commands::workspace::show_window,
             commands::workspace::hide_window,
             commands::workspace::get_opened_windows,
-            commands::workspace::switch_project_windows, // deprecated; use switch_project_runtime
             // Detached subwindows (#42)
             commands::subwindow::detach_subwindow,
             commands::subwindow::attach_subwindow,
@@ -2293,11 +2284,10 @@ pub fn run() {
             commands::presenter::presenter_next_monitor,
             commands::presenter::presenter_inhibit_sleep,
             commands::presenter::presenter_release_sleep,
-            commands::workspace::workspace_name,
             commands::workspace::network_conn_type,
             commands::workspace::network_wifi_ssid,
             commands::workspace::network_identity,
-            // Project-runtime switching (replaces switch_project_windows)
+            // Project-runtime switching
             commands::project_runtime::switch_project_runtime,
             commands::project_runtime::switch_project_session,
             commands::project_runtime::load_side_panel_folder,
@@ -2335,6 +2325,7 @@ pub fn run() {
             commands::git::git_reword_head,
             commands::git_peer::git_peer_status,
             commands::git_peer::git_peer_set_enabled,
+            commands::git_peer::git_peer_set_local_authoritative,
             commands::git_peer::git_peer_sync_now,
             commands::git_peer::git_peer_checkout,
             commands::git_peer::git_peer_resolve,
@@ -2356,7 +2347,7 @@ pub fn run() {
             commands::sqlite::sqlite_page,
             // Spreadsheet (.xlsx/.xls) reader (Dev G)
             commands::sheets::read_spreadsheet,
-            // Skills Library (docs/skills_plan.md)
+            // Skills Library (docs/done/skills_plan.md)
             commands::skills::skills_list_sources,
             commands::skills::skills_add_source,
             commands::skills::skills_remove_source,
@@ -2392,7 +2383,6 @@ pub fn run() {
             commands::debug::webview_renderer_memory,
             commands::debug::webview_renderer_restart,
             // Ollama local models
-            commands::ollama::list_ollama_models,
             commands::ollama::ensure_vibe_ollama_model,
             commands::ollama::prepare_local_agent,
             commands::ollama::clear_local_model_conversations,
@@ -2463,11 +2453,11 @@ pub fn run() {
             commands::agents::agent_tab_changes,
             commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
-            commands::ollama::ollama_is_running,
+            commands::agents::agent_tab_chats,
+            commands::agents::agent_tab_resume_chat,
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
             commands::ollama::ollama_models_dir_plan,
-            commands::ollama::ollama_registry_size,
             commands::ollama::ollama_registry_details,
             commands::ollama::list_ollama_models_detailed,
             commands::ollama::stop_ollama_model,
@@ -2483,14 +2473,12 @@ pub fn run() {
             commands::ollama::delete_ollama_model,
             commands::ollama::ollama_check_updates,
             commands::ollama::ollama_version_status,
-            commands::ollama::list_installable_models,
             commands::ollama::search_ollama_registry,
             // Local code/text autocomplete (opt-in, local-only)
             commands::ollama::complete_text,
             commands::ollama::prepare_text_completion,
             commands::ollama::cancel_text_completion,
             commands::copilot::copilot_setup,
-            commands::copilot::copilot_project_policy,
             commands::copilot::copilot_set_project_policy,
             commands::copilot::copilot_complete,
             commands::copilot::copilot_prepare,
@@ -2503,10 +2491,8 @@ pub fn run() {
             commands::copilot::copilot_sign_in,
             commands::copilot::copilot_finish_sign_in,
             commands::copilot::copilot_sign_out,
-            commands::copilot::copilot_stop,
             // Dictionary spell check (Hunspell dictionaries, local-only)
             commands::spell::spell_check,
-            commands::spell::spell_languages,
             commands::spell::spell_add_word,
             commands::spell::spell_dictionaries,
             commands::spell::spell_install_language,

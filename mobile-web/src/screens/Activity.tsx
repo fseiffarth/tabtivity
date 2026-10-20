@@ -37,8 +37,9 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
 };
 
 /** "3m ago" from a desktop timestamp — a rough age, since the two clocks are
- * not the same clock and the reading is a minute old at worst. */
-function ago(at: number, now: number, t: Translate): string {
+ * not the same clock and the reading is a minute old at worst. Home's Needs
+ * you says its rows' ages in the same words. */
+export function ago(at: number, now: number, t: Translate): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));
   if (minutes < 1) return t("mobile.activity.justNow");
   if (minutes < 90) return t("mobile.activity.minutesAgo", { count: minutes });
@@ -132,7 +133,6 @@ export function Activity({ open, onConnection }: {
     {loaded && !desktop && <p className="notice">{t("mobile.activity.desktopUnavailable")}</p>}
     {loaded && desktop && tabs.length === 0 && <p className="projects-empty">{t("mobile.activity.empty")}</p>}
     {tabs.length > 1 && <label className="activity-sort">
-      <span>{t("agentPrompts.sort.label")}</span>
       <select aria-label={t("mobile.activity.sortAria")} value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
         {AGENT_SORTS.map((value) => <option key={value} value={value}>{t(SORT_LABEL[value])}</option>)}
       </select>
@@ -148,7 +148,7 @@ export function Activity({ open, onConnection }: {
         // The tab's colour (#264) carries onto this list too, and this is the
         // list it earns most: a flat cross-project row of look-alike "claude"
         // sessions is the case the colour is assigned for.
-        className={`card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}`}
+        className={`card activity-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}`}
         key={tab.id}
         disabled={!tab.available}
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}

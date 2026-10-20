@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The Skills Library's **install target** (`docs/skills_plan.md`) — the one
+ * The Skills Library's **install target** (`docs/done/skills_plan.md`) — the one
  * thing about the feature that is scoped at all, since the sources and their
  * cached clones are machine state shared by every project.
  *
  * What is pinned down here is the boundary rather than the plumbing. The
- * personal scope (`~/.claude/skills/`, read by every project on this machine
- * and, since it is also loaded by *uncontained* sessions, the widest-reaching
- * destination in the app) is addressed by a variant that carries **no path**:
- * the backend resolves it against its own home. If this side ever grew a way to
+ * personal scope (the agent-global layer's `.claude/skills/`, laid into every
+ * agent home on this machine — the widest-reaching destination in the app) is
+ * addressed by a variant that carries **no path**: the backend resolves it
+ * itself. If this side ever grew a way to
  * spell the personal scope as a project directory — a home path threaded into
  * `{ kind: "project" }` — the split would be decoration, so the tests below
  * assert on the *shape* that crosses the IPC boundary and not merely on the

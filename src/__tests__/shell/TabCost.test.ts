@@ -1,5 +1,5 @@
 /**
- * `lib/tabCost` (`docs/tab_cost_plan.md` step 1): the per-window PDF document
+ * `lib/tabCost` (`docs/done/tab_cost_plan.md` step 1): the per-window PDF document
  * registry and its loaded count, the terminal estimate read off the live
  * xterm, the per-tab reader, the ranking, and the loaded-PDF notice's
  * hysteresis.

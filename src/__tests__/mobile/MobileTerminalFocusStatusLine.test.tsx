@@ -73,8 +73,8 @@ const CLAUDE_SCREEN = [
   STATUS_ROW,
 ].join("\n");
 
-async function openAgent(screenText: string, { project, kind = "agent" }: { project?: string; kind?: "agent" | "shell" } = {}) {
-  render(<Terminal tab={{ id: "tab", label: kind === "agent" ? "Claude" : "Shell", kind, available: true, viewer_busy: false }} project={project} back={() => {}} />);
+async function openAgent(screenText: string, { project, kind = "agent", back = () => {} }: { project?: string; kind?: "agent" | "shell"; back?: () => void } = {}) {
+  render(<Terminal tab={{ id: "tab", label: kind === "agent" ? "Claude" : "Shell", kind, available: true, viewer_busy: false }} project={project} back={back} />);
   await act(async () => {});
   const bytes = new TextEncoder().encode(screenText);
   const payload = new ArrayBuffer(bytes.byteLength);
@@ -134,7 +134,7 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
     expect(within(output()).queryByText(/42% context/)).toBeNull();
     expect(strip()).toBeNull();
 
-    drag(output(), [100, 300], [220, 310]);
+    drag(output(), [500, 300], [620, 310]);
 
     const shown = strip();
     expect(shown).not.toBeNull();
@@ -147,7 +147,7 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
 
   it("closes on a left swipe", async () => {
     await openAgent(CLAUDE_SCREEN);
-    drag(output(), [100, 300], [220, 300]);
+    drag(output(), [500, 300], [620, 300]);
     expect(strip()).not.toBeNull();
 
     drag(output(), [260, 300], [120, 295]);
@@ -156,7 +156,7 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
 
   it("closes on its ✕", async () => {
     await openAgent(CLAUDE_SCREEN);
-    drag(output(), [100, 300], [220, 300]);
+    drag(output(), [500, 300], [620, 300]);
     expect(strip()).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Hide status line" }));
@@ -167,13 +167,13 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
     await openAgent(CLAUDE_SCREEN);
     // Far enough sideways to count, but less than half the vertical travel:
     // that is a scroll, not a swipe.
-    drag(output(), [100, 100], [170, 300]);
+    drag(output(), [500, 100], [570, 300]);
     expect(strip()).toBeNull();
   });
 
   it("says so when the screen has no status line", async () => {
     await openAgent("⏺ Done.\nAll 12 tests pass.");
-    drag(output(), [100, 300], [220, 300]);
+    drag(output(), [500, 300], [620, 300]);
 
     expect(strip()).not.toBeNull();
     expect(document.querySelectorAll(".focus-statusline-row")).toHaveLength(0);
@@ -182,7 +182,7 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
 
   it("has no strip in Terminal view", async () => {
     await openAgent(CLAUDE_SCREEN);
-    drag(output(), [100, 300], [220, 300]);
+    drag(output(), [500, 300], [620, 300]);
     expect(strip()).not.toBeNull();
 
     fireEvent.click(screen.getByTitle("Output view"));
@@ -192,7 +192,7 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
 
     const body = document.querySelector(".terminal-body");
     expect(body).not.toBeNull();
-    drag(body!, [100, 300], [220, 300]);
+    drag(body!, [500, 300], [620, 300]);
     expect(strip()).toBeNull();
   });
 });
@@ -228,18 +228,23 @@ describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("opens the files on a swipe from the left third, the status line from further right", async () => {
+  it("opens the files on a right→left swipe, once the status line is put away", async () => {
     vi.stubGlobal("fetch", hostWith(true));
-    await openAgent(CLAUDE_SCREEN, { project: "p1" });
+    const back = vi.fn();
+    await openAgent(CLAUDE_SCREEN, { project: "p1", back });
 
     drag(output(), [600, 300], [760, 300]);
     expect(strip()).not.toBeNull();
     expect(drawer()).toBeNull();
+    // The first right→left swipe puts the status line away, the next one
+    // pulls the files in.
     drag(output(), [760, 300], [600, 300]);
     expect(strip()).toBeNull();
+    expect(drawer()).toBeNull();
 
-    drag(output(), [100, 300], [260, 300]);
+    drag(output(), [760, 300], [600, 300]);
     expect(strip()).toBeNull();
+    expect(back).not.toHaveBeenCalled();
     const files = drawer();
     expect(files).not.toBeNull();
     // With no menu rows of its own the drawer is the files library straight
@@ -252,34 +257,51 @@ describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
     expect(drawer()).toBeNull();
   });
 
-  it("opens from the screen's left edge", async () => {
+  it("opens from the screen's right edge", async () => {
     vi.stubGlobal("fetch", hostWith(true));
     await openAgent(CLAUDE_SCREEN, { project: "p1" });
 
-    drag(output(), [4, 300], [200, 300]);
+    drag(output(), [window.innerWidth - 4, 300], [window.innerWidth - 200, 300]);
     expect(drawer()).not.toBeNull();
   });
 
-  it("leaves the swipe to the status line, edge guard included, while the switch is off", async () => {
+  it("goes back on a left→right swipe from the left third, its edge included", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    const back = vi.fn();
+    await openAgent(CLAUDE_SCREEN, { project: "p1", back });
+
+    drag(output(), [100, 300], [260, 300]);
+    expect(back).toHaveBeenCalledTimes(1);
+    drag(output(), [4, 300], [200, 300]);
+    expect(back).toHaveBeenCalledTimes(2);
+    expect(strip()).toBeNull();
+    expect(drawer()).toBeNull();
+  });
+
+  it("leaves right→left to the status line while the switch is off", async () => {
     const fetch = hostWith(false);
     vi.stubGlobal("fetch", fetch);
     await openAgent(CLAUDE_SCREEN, { project: "p1" });
 
-    drag(output(), [4, 300], [200, 300]);
-    expect(strip()).toBeNull();
-    drag(output(), [100, 300], [260, 300]);
+    drag(output(), [600, 300], [760, 300]);
     expect(strip()).not.toBeNull();
+    drag(output(), [760, 300], [600, 300]);
+    expect(strip()).toBeNull();
+    drag(output(), [760, 300], [600, 300]);
     expect(drawer()).toBeNull();
     expect(fetch.mock.calls.some(([url]) => String(url).includes("/files"))).toBe(false);
   });
 
-  it("opens the files from anywhere on a shell, which has no status line", async () => {
+  it("goes back from anywhere on a shell, which has no status line", async () => {
     vi.stubGlobal("fetch", hostWith(true));
-    await openAgent("$ ls\nREADME.md", { project: "p1", kind: "shell" });
+    const back = vi.fn();
+    await openAgent("$ ls\nREADME.md", { project: "p1", kind: "shell", back });
 
     drag(output(), [600, 300], [760, 300]);
-    expect(drawer()).not.toBeNull();
+    expect(back).toHaveBeenCalledTimes(1);
     expect(strip()).toBeNull();
+    drag(output(), [760, 300], [600, 300]);
+    expect(drawer()).not.toBeNull();
   });
 
   it("opens from the header's ☰ in either view, which is there only while the switch is on", async () => {

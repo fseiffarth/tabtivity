@@ -23,6 +23,12 @@ describe("agentPromptAutoTags", () => {
     expect(agentPromptAutoTags({ message: "x", model: "opus-4-1", preface: ["/model haiku"] })).toEqual(["model:haiku"]);
   });
 
+  it("names the phone a prompt came from as one token, and an unpaired one as a phone", () => {
+    expect(agentPromptAutoTags({ message: "x", phone: "Pixel 9 Pro" })).toEqual(["device:pixel-9-pro"]);
+    expect(agentPromptAutoTags({ message: "x", phone: "" })).toEqual(["device:phone"]);
+    expect(agentPromptAutoTags({ message: "x" })).toEqual([]);
+  });
+
   it("marks a message longer than 2 KiB", () => {
     expect(agentPromptAutoTags({ message: "é".repeat(1_025) })).toContain("long");
   });

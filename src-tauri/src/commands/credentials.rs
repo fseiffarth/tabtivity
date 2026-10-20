@@ -19,29 +19,55 @@ use app_core::sync::LockExt;
 use std::sync::{Mutex, OnceLock};
 
 use crate::commands::terminal::RegistryState;
+use crate::terminal::PtyOptions;
 use crate::services::remote_credentials::{self as creds, KeyringState};
 use crate::tauri_host::Ctx;
 
-// ── Login-PTY registry (which terminals may receive a secret) ────────────────
+// ── Login PTYs (which terminals may receive a secret) ────────────────────────
 //
 // `credential_paste_to_pty` used to write a saved secret into whatever PTY id the
 // caller named. That defeats the design it implements: the secret never reaches JS,
 // but it reaches a process JS chose, so a caller able to spawn `sh -c 'cat >
 // /tmp/loot'` could read every saved SSH/OpenVPN password out of the keychain.
 //
-// The backend can bound this without trusting the caller, because the backend is
-// what *mints* the login command line in the first place
-// (`remote_login_command` / `openvpn_login_command`). Each minted command is
-// remembered together with the credential target it logs into; when that exact
-// command is later typed into a PTY (the frontend types it as the terminal's
-// `initialInput`, in a single `pty_write`), that PTY is marked as a login terminal
-// for that target. A paste is then only allowed into a PTY that is genuinely
-// running the login Tabtivity built for that very credential — which is where the
-// secret was always going to go.
+// So the backend spawns the login itself. A `pty_spawn` with `login` set names a
+// *target* ([`LoginTarget`]), never a command line: [`apply_login`] replaces the
+// caller's `cmd`/`args` with the argv the backend builds for that target
+// (`ssh_exec::interactive_login_args` / `openvpn::interactive_connect_argv`),
+// clears the caller's `env`, and runs that argv as the PTY's own program — no
+// shell before or after it, so nothing else ever runs in that PTY. Only after
+// such a spawn succeeds is the PTY marked ([`note_login_pty`]), and the mark goes
+// with the spawn: dropped when its child exits ([`forget_login_pty_spawn`], from
+// the reader task), when the PTY is killed ([`forget_login_pty`]), and at the top
+// of every `pty_spawn` of that id. A paste is then only allowed into a PTY that is
+// running, right now, the login Tabtivity built for that very credential — which
+// is where the secret was always going to go.
+//
+// Accepted residual: after a successful ssh login the PTY is the remote shell of
+// the very account the credential authenticates; a paste there stays allowed
+// (same trust domain).
+//
+// Ceiling: the gate is no same-user boundary. The genuine ssh/openvpn read the
+// user's own `~/.ssh/config`, `known_hosts`, the `.ovpn` and `PATH`, which any
+// process running as the user can rewrite (and such a process can usually read an
+// unlocked keyring directly). It stops a caller of the commands, nothing more.
+//
+// A server client's ssh login may dial only a host the owner already configured
+// — a remote project's primary or worker host, or a global machine — matched on
+// user, host and port as the keychain account spells them
+// ([`ssh_login_configured`]); anything else would let a browser client make the
+// server dial any host and port. On a per-user server daemon the account owns
+// the hosts it stores, so the list is a typo guard there, not an approval. The
+// login runs to the matched entry's stored spelling, never the caller's, which
+// only had to compare equal. The desktop window keeps any host (adding a
+// machine or project logs in before it is stored).
 
-/// Which login a marked PTY is running — i.e. which saved credentials may be typed
-/// into it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Which login a login PTY runs — i.e. which saved credentials may be typed into
+/// it. Also `PtyOptions::login`'s payload, tagged by `kind`:
+/// `{"kind":"ssh","user":…|null,"host":…,"port":…|null}` /
+/// `{"kind":"vpn","config":…}`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LoginTarget {
     /// An interactive `ssh` login to this host target.
     Ssh {
@@ -67,68 +93,251 @@ impl LoginTarget {
             ],
         }
     }
-}
 
-/// Login command lines the backend has minted this session → the login they open.
-fn minted_logins() -> &'static Mutex<HashMap<String, LoginTarget>> {
-    static MAP: OnceLock<Mutex<HashMap<String, LoginTarget>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// PTY id → the login it was observed to be running.
-fn login_ptys() -> &'static Mutex<HashMap<String, LoginTarget>> {
-    static MAP: OnceLock<Mutex<HashMap<String, LoginTarget>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Record that `command` was minted as the interactive login for `target`. Called
-/// by `remote_login_command` / `openvpn_login_command` — the only two places a
-/// login command line is built.
-pub fn note_minted_login(command: &str, target: LoginTarget) {
-    let command = command.trim();
-    if command.is_empty() {
-        return;
-    }
-    minted_logins()
-        .lock_ok()
-        .insert(command.to_string(), target);
-}
-
-/// Inspect bytes written into `pty` and mark it a login terminal when they carry a
-/// minted login command. Called from `pty_write`.
-///
-/// A `contains` match rather than equality: the frontend prefixes the typed line
-/// with `\x15` (kill-line) for shell tabs, and the trailing Enter is a separate
-/// write. Cheap — the map holds at most a handful of entries and only writes long
-/// enough to be a command line are scanned at all.
-pub fn note_pty_input(pty: &str, data: &[u8]) {
-    let map = minted_logins().lock_ok();
-    if map.is_empty() || data.len() < 8 {
-        return;
-    }
-    let text = String::from_utf8_lossy(data);
-    for (command, target) in map.iter() {
-        if text.contains(command.as_str()) {
-            login_ptys()
-                .lock_ok()
-                .insert(pty.to_string(), target.clone());
-            return;
+    /// The login's argv, program first. Building a VPN one also claims the tunnel
+    /// (`openvpn::interactive_connect_argv`'s pidfile and management socket).
+    fn argv(&self) -> Result<Vec<String>, String> {
+        match self {
+            Self::Ssh { user, host, port } => {
+                #[allow(unused_mut)]
+                let mut argv = crate::services::ssh_exec::interactive_login_args(user, host, *port)?;
+                #[cfg(windows)]
+                pin_program(&mut argv, |bin| {
+                    crate::paths::helper_program(std::ffi::OsStr::new(bin))
+                        .or_else(|| crate::paths::resolve_executable(&format!("{bin}.exe")))
+                })?;
+                Ok(argv)
+            }
+            Self::Vpn { config } => crate::services::openvpn::interactive_connect_argv(config),
         }
     }
 }
 
-/// Forget a PTY's login marking (its terminal is gone). Called from `pty_kill`.
+/// Pin a login argv's program to the absolute path `resolve` finds for it.
+///
+/// Windows needs this for `ssh`: the PTY layer (portable-pty) looks a bare name up
+/// on `PATH` only, and one it cannot find there goes to `CreateProcessW` as the
+/// module name, which completes a partial name from the app's current directory —
+/// so a file named `ssh` planted there would be the login a secret is pasted into.
+/// The admin-installed copy is preferred, then `PATH` (as `openvpn.exe` is
+/// resolved for a VPN login); none found refuses the login.
+#[cfg(any(windows, test))]
+fn pin_program(
+    argv: &mut [String],
+    resolve: impl FnOnce(&str) -> Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    let program = argv.first_mut().ok_or_else(|| "empty login command".to_string())?;
+    let path = resolve(program.as_str())
+        .filter(|p| p.is_absolute())
+        .ok_or_else(|| format!("{program} was not found; install the OpenSSH client"))?;
+    *program = path.to_string_lossy().into_owned();
+    Ok(())
+}
+
+/// PTY id → the login its current spawn runs, and that spawn's sequence number
+/// (`PreparedLaunch::spawn_seq`).
+fn login_ptys() -> &'static Mutex<HashMap<String, (LoginTarget, u64)>> {
+    static MAP: OnceLock<Mutex<HashMap<String, (LoginTarget, u64)>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Why a `pty_spawn` asking for `target` from `caller` must not run, if it must
+/// not. A login PTY is a plain local root PTY: nothing that would put it in a
+/// project, a container, a fence, a tmux session or a schedule may ride along.
+fn login_refusal(
+    opts: &PtyOptions,
+    target: &LoginTarget,
+    caller: &app_core::Caller,
+) -> Option<&'static str> {
+    let flags: [(bool, &'static str); 9] = [
+        (opts.project_id.is_some(), "a project tab"),
+        (opts.agent, "an agent tab"),
+        (opts.sandbox, "a container tab"),
+        (opts.host_session, "the Host session"),
+        (opts.local_model, "a local-model tab"),
+        (opts.tmux_session.is_some(), "a tmux session"),
+        (opts.tmux_attach.is_some(), "a tmux attach"),
+        (opts.host_bound_uid.is_some(), "a host-bound tab"),
+        (opts.schedule_target_id.is_some(), "a scheduled tab"),
+    ];
+    if let Some((_, what)) = flags.into_iter().find(|(set, _)| *set) {
+        return Some(what);
+    }
+    // OpenVPN is machine-wide and owned by the desktop's VPN indicator; a server
+    // client was never allowed to bring a tunnel up (`openvpn_login_command` was
+    // an admin command), and `pty_spawn` is a core one.
+    if matches!(target, LoginTarget::Vpn { .. }) && matches!(caller, app_core::Caller::Client(_)) {
+        return Some("a browser client (a VPN login is the desktop's)");
+    }
+    None
+}
+
+/// The stored address `target`, an ssh login, matches in `configured` — the
+/// same user, host and port, compared as the keychain account spells them
+/// ([`creds::ssh_account`]: trimmed, host case-folded, no port = 22). It is the
+/// **stored** spelling that comes back, which is what the login argv is built
+/// from: the caller's only had to compare equal (a Unicode case fold such as
+/// KELVIN SIGN → `k` must not reach ssh).
+fn ssh_login_known(
+    target: &LoginTarget,
+    configured: impl IntoIterator<Item = crate::services::remote::SshAddress>,
+) -> Option<crate::services::remote::SshAddress> {
+    let LoginTarget::Ssh { user, host, port } = target else {
+        return None;
+    };
+    let wanted = creds::ssh_account(user, host, *port);
+    configured
+        .into_iter()
+        .find(|(user, host, port)| creds::ssh_account(user, host, *port) == wanted)
+}
+
+/// [`ssh_login_known`] against what the owner configured: every remote project's
+/// primary and worker hosts (`projects.json`) and every global machine.
+fn ssh_login_configured(target: &LoginTarget) -> Option<crate::services::remote::SshAddress> {
+    let machines = crate::commands::global_machines::load_all()
+        .into_iter()
+        .map(|m| (m.user, m.host, m.port));
+    ssh_login_known(
+        target,
+        crate::services::remote::configured_project_ssh_addresses()
+            .into_iter()
+            .chain(machines),
+    )
+}
+
+/// Turn a `pty_spawn` that asks for a login into the login itself, before
+/// anything else reads its options. `None` when `opts.login` is unset (an
+/// ordinary spawn, untouched).
+///
+/// With a login: refuse the combinations [`login_refusal`] names and a server
+/// client's ssh login to a host nothing configures, then replace
+/// the caller's `cmd`/`args` with the backend's argv for the target, clear its
+/// `env` (a caller-chosen `LD_PRELOAD` or `PATH` would capture the very secret
+/// this gate protects), run it in the root work dir and never ssh-wrap it.
+pub(crate) fn apply_login(
+    opts: &mut PtyOptions,
+    caller: &app_core::Caller,
+) -> Result<Option<LoginTarget>, String> {
+    apply_login_with(opts, caller, ssh_login_configured)
+}
+
+/// [`apply_login`] with the configured-host check passed in (tests).
+fn apply_login_with(
+    opts: &mut PtyOptions,
+    caller: &app_core::Caller,
+    ssh_configured: impl FnOnce(&LoginTarget) -> Option<crate::services::remote::SshAddress>,
+) -> Result<Option<LoginTarget>, String> {
+    let Some(mut target) = opts.login.clone() else {
+        return Ok(None);
+    };
+    if let Some(what) = login_refusal(opts, &target, caller) {
+        return Err(format!("a login terminal cannot be {what}"));
+    }
+    // A server client dials only hosts the owner configured (module comment),
+    // and ssh gets the stored spelling of the one it matched — never the
+    // caller's, which only had to compare equal.
+    if matches!(target, LoginTarget::Ssh { .. }) && matches!(caller, app_core::Caller::Client(_)) {
+        let Some((user, host, port)) = ssh_configured(&target) else {
+            return Err(
+                "a browser client may open an ssh login only to a host a remote project or machine names"
+                    .to_string(),
+            );
+        };
+        target = LoginTarget::Ssh { user, host, port };
+    }
+    let mut argv = target.argv()?.into_iter();
+    let program = argv.next().ok_or_else(|| "empty login command".to_string())?;
+    opts.cmd = program;
+    opts.args = argv.collect();
+    opts.env.clear();
+    opts.cwd = String::new();
+    opts.local_only = true;
+    opts.remote_host_id = None;
+    Ok(Some(target))
+}
+
+/// Mark `pty`'s spawn `seq` as running the login for `target`. Called by
+/// `pty_spawn` once a login spawn succeeded — the only writer of the mark.
+///
+/// A login that ends at once (ssh refused, a bad config) can have its reader
+/// close the spawn before this runs, and that reader's
+/// [`forget_login_pty_spawn`] then found nothing to drop. So the mark goes in
+/// first and the spawn is checked after: a reader that closes it later still
+/// drops the mark, and one that already did is caught here.
+pub(crate) fn note_login_pty(pty: &str, target: LoginTarget, seq: u64) {
+    note_login_pty_if(pty, target, seq, || crate::terminal::route_spawn_live(pty, seq));
+}
+
+fn note_login_pty_if(pty: &str, target: LoginTarget, seq: u64, live: impl FnOnce() -> bool) {
+    login_ptys().lock_ok().insert(pty.to_string(), (target, seq));
+    if !live() {
+        forget_login_pty_spawn(pty, seq);
+    }
+}
+
+/// Forget a PTY's login mark, whatever spawn set it: the PTY is killed, or is
+/// about to be respawned (a respawn of the id must not inherit the mark).
 pub fn forget_login_pty(pty: &str) {
     login_ptys().lock_ok().remove(pty);
 }
 
+/// Forget `pty`'s login mark when spawn `seq` set it: that spawn's child exited,
+/// so the login is over. A newer spawn's mark is left alone.
+pub fn forget_login_pty_spawn(pty: &str, seq: u64) {
+    let mut map = login_ptys().lock_ok();
+    if map.get(pty).is_some_and(|(_, s)| *s == seq) {
+        map.remove(pty);
+    }
+}
+
 /// Whether `account` may be typed into `pty` — i.e. `pty` is running a login whose
-/// own credentials include that account.
+/// own credentials include that account. (The paste itself also checks that the
+/// PTY still runs the marked spawn — see [`marked_spawn`].)
+#[cfg(test)]
 fn paste_allowed(pty: &str, account: &str) -> bool {
+    marked_spawn(pty, account).is_some()
+}
+
+/// The spawn of `pty` that runs a login whose own credentials include `account`.
+/// The paste still checks that `pty` runs that very spawn: a respawn of the id
+/// that began before the login's mark went in (its own `forget_login_pty` already
+/// ran) replaces the PTY without dropping the mark, and the replaced reader's
+/// exit is not the current spawn's, so it drops nothing either.
+fn marked_spawn(pty: &str, account: &str) -> Option<u64> {
     login_ptys()
         .lock_ok()
         .get(pty)
-        .is_some_and(|t| t.accounts().iter().any(|a| a == account))
+        .filter(|(t, _)| t.accounts().iter().any(|a| a == account))
+        .map(|(_, seq)| *seq)
+}
+
+/// A VPN login's tunnel claim (`openvpn::interactive_connect_argv` arms it while
+/// [`apply_login`] builds the argv) until the login's PTY runs: dropped without
+/// [`LoginClaim::keep`] — any `pty_spawn` error after the argv was built — it is
+/// handed back (`openvpn::release_interactive_claim`), so no Pending claim and
+/// management endpoint stay recorded with no process behind them.
+pub(crate) struct LoginClaim(Option<String>);
+
+impl LoginClaim {
+    pub(crate) fn of(target: Option<&LoginTarget>) -> Self {
+        Self(match target {
+            Some(LoginTarget::Vpn { config }) => Some(config.clone()),
+            _ => None,
+        })
+    }
+
+    /// The login runs: its claim is the tunnel's now.
+    pub(crate) fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for LoginClaim {
+    fn drop(&mut self) {
+        if let Some(config) = self.0.take() {
+            crate::services::openvpn::release_interactive_claim(&config);
+        }
+    }
 }
 
 /// Whether the OS credential store is readable right now (see [`KeyringState`]).
@@ -220,15 +429,17 @@ pub async fn credential_paste_to_pty(
     // that is where `pty_write` saw it typed, and where the secret goes.
     let pty = crate::commands::terminal::pty_id_for(&ctx, registry, pty);
     let account = target.account();
-    // The destination must be a terminal the backend has *seen* run the login this
-    // credential belongs to (see the login-PTY registry above). Without this the
-    // caller picks the process the secret is written into.
-    if !paste_allowed(&pty, &account) {
-        return Err(
-            "that terminal is not a login for this credential — open the connection's login \
-             terminal and try again"
-                .to_string(),
-        );
+    // The destination must be a PTY the backend itself spawned running the login
+    // this credential belongs to, still running (see "Login PTYs" above). Without
+    // this the caller picks the process the secret is written into.
+    let not_a_login = || {
+        "that terminal is not a login for this credential — open the connection's login \
+         terminal and try again"
+            .to_string()
+    };
+    let seq = marked_spawn(&pty, &account).ok_or_else(not_a_login)?;
+    if registry.lock_ok().input_sender_of_spawn(&pty, seq).is_none() {
+        return Err(not_a_login());
     }
     let Some(secret) = app_core::rt::blocking("credential read", move || creds::get(&account))
         .await?
@@ -241,7 +452,7 @@ pub async fn credential_paste_to_pty(
     }
     let sender = registry
         .lock_ok()
-        .input_sender(&pty)
+        .input_sender_of_spawn(&pty, seq)
         .ok_or_else(|| "the login terminal is no longer running".to_string())?;
     sender
         .send(bytes)
@@ -253,73 +464,477 @@ pub async fn credential_paste_to_pty(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_core::{Caller, ClientId};
 
-    /// The whole gate, end to end over the two module-global registries: mint a
-    /// login → type it into a PTY → that PTY (and only it) accepts that credential.
+    /// Windows resolves `ssh` to its full path (`…\OpenSSH\ssh.exe`).
+    fn program_stem(cmd: &str) -> String {
+        std::path::Path::new(cmd).file_stem().unwrap().to_string_lossy().to_ascii_lowercase()
+    }
+
+    fn ssh(host: &str) -> LoginTarget {
+        LoginTarget::Ssh {
+            user: Some("alice".to_string()),
+            host: host.to_string(),
+            port: None,
+        }
+    }
+
+    fn client() -> Caller {
+        Caller::Client(ClientId::new("web-1"))
+    }
+
+    fn window() -> Caller {
+        Caller::Local(ClientId::new("main"))
+    }
+
+    /// The allow-list's answer when the caller's own spelling is what is stored.
+    fn as_stored(t: &LoginTarget) -> Option<crate::services::remote::SshAddress> {
+        match t {
+            LoginTarget::Ssh { user, host, port } => Some((user.clone(), host.clone(), *port)),
+            LoginTarget::Vpn { .. } => None,
+        }
+    }
+
+    /// A spawn as the renderer sends it — here a hostile one, whose command line
+    /// would capture whatever is typed into it.
+    fn hostile(id: &str, login: serde_json::Value) -> PtyOptions {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "cmd": "sh",
+            "args": ["-c", "cat > /tmp/loot"],
+            "env": { "LD_PRELOAD": "/tmp/evil.so", "PATH": "/tmp/evil" },
+            "cwd": "/tmp",
+            "cols": 80,
+            "rows": 24,
+            "login": login,
+        }))
+        .expect("a pty_spawn payload")
+    }
+
+    /// The mark is the whole gate: a PTY that no login spawn marked takes no
+    /// secret, and a marked one takes only its own login's.
     #[test]
-    fn only_a_pty_running_the_matching_login_accepts_a_secret() {
-        let config = format!(concat!("/tmp/", crate::app_slug!(), "-test-{}.ovpn"), std::process::id());
-        let vpn_cmd = format!("pkexec openvpn --config {config} --auth-nocache");
-        let ssh_cmd = format!(
-            "ssh -o ControlMaster=auto alice@host-{}",
-            std::process::id()
-        );
-        note_minted_login(
-            &vpn_cmd,
-            LoginTarget::Vpn {
-                config: config.clone(),
-            },
-        );
-        note_minted_login(
-            &ssh_cmd,
-            LoginTarget::Ssh {
-                user: Some("alice".to_string()),
-                host: format!("host-{}", std::process::id()),
-                port: None,
-            },
-        );
-
+    fn only_a_pty_spawned_as_that_login_accepts_its_secret() {
+        let pid = std::process::id();
+        let config = format!(concat!("/tmp/", crate::app_slug!(), "-test-{}.ovpn"), pid);
+        let host = format!("host-{pid}");
         let vpn_account = creds::openvpn_account(&config);
-        let ssh_account = creds::ssh_account(
-            &Some("alice".to_string()),
-            &format!("host-{}", std::process::id()),
-            None,
-        );
+        let ssh_account = creds::ssh_account(&Some("alice".to_string()), &host, None);
 
-        // An unmarked PTY — the "spawn `cat > /tmp/loot`" case — is refused.
-        assert!(!paste_allowed("pty-evil", &vpn_account));
+        // A PTY no login spawn marked — the "spawn `cat > /tmp/loot`" case.
+        assert!(!paste_allowed("t-gate:evil", &vpn_account));
+        assert!(!paste_allowed("t-gate:evil", &ssh_account));
 
-        // Typing the minted command marks it (the frontend's `\x15` kill-line
-        // prefix and the separate trailing Enter must not defeat the match).
-        note_pty_input("pty-vpn", format!("\x15{vpn_cmd}").as_bytes());
-        assert!(paste_allowed("pty-vpn", &vpn_account));
+        note_login_pty_if("t-gate:vpn", LoginTarget::Vpn { config: config.clone() }, 1, || true);
+        assert!(paste_allowed("t-gate:vpn", &vpn_account));
         // …and the tunnel's other two secrets are legitimate there too.
-        assert!(paste_allowed(
-            "pty-vpn",
-            &creds::openvpn_key_account(&config)
-        ));
-        assert!(paste_allowed(
-            "pty-vpn",
-            &creds::openvpn_user_account(&config)
-        ));
+        assert!(paste_allowed("t-gate:vpn", &creds::openvpn_key_account(&config)));
+        assert!(paste_allowed("t-gate:vpn", &creds::openvpn_user_account(&config)));
         // But an SSH password is not: a VPN login is not that host's login.
-        assert!(!paste_allowed("pty-vpn", &ssh_account));
+        assert!(!paste_allowed("t-gate:vpn", &ssh_account));
 
-        note_pty_input("pty-ssh", ssh_cmd.as_bytes());
-        assert!(paste_allowed("pty-ssh", &ssh_account));
-        assert!(!paste_allowed("pty-ssh", &vpn_account));
+        note_login_pty_if("t-gate:ssh", ssh(&host), 1, || true);
+        assert!(paste_allowed("t-gate:ssh", &ssh_account));
+        assert!(!paste_allowed("t-gate:ssh", &vpn_account));
+        // Another host's password is not this login's either.
+        let other = creds::ssh_account(&Some("alice".to_string()), "elsewhere", None);
+        assert!(!paste_allowed("t-gate:ssh", &other));
 
-        // Closing the terminal drops the marking, so a reused id starts unblessed.
-        forget_login_pty("pty-vpn");
-        assert!(!paste_allowed("pty-vpn", &vpn_account));
+        // Killing the terminal drops the mark, so a reused id starts unblessed.
+        forget_login_pty("t-gate:vpn");
+        assert!(!paste_allowed("t-gate:vpn", &vpn_account));
+        forget_login_pty("t-gate:ssh");
+    }
 
-        // Ordinary keystrokes never mark anything.
-        note_pty_input("pty-plain", b"ls -la\r");
-        assert!(!paste_allowed("pty-plain", &vpn_account));
+    /// A login whose child exited is over: its PTY is no paste target, however
+    /// the exit and the mark interleave — and an older spawn's exit never drops a
+    /// newer spawn's mark.
+    #[test]
+    fn a_login_whose_child_exited_is_refused() {
+        let host = format!("exit-{}", std::process::id());
+        let account = creds::ssh_account(&Some("alice".to_string()), &host, None);
 
-        // Cleanup so the globals don't leak into other tests.
-        forget_login_pty("pty-ssh");
-        minted_logins().lock().unwrap().remove(&vpn_cmd);
-        minted_logins().lock().unwrap().remove(&ssh_cmd);
+        // The reader closes the spawn after the mark went in.
+        note_login_pty_if("t-exit:a", ssh(&host), 7, || true);
+        forget_login_pty_spawn("t-exit:a", 6); // an older spawn's exit: no effect
+        assert!(paste_allowed("t-exit:a", &account));
+        forget_login_pty_spawn("t-exit:a", 7);
+        assert!(!paste_allowed("t-exit:a", &account));
+
+        // The reader closed the spawn before the mark went in (ssh refused at once).
+        note_login_pty_if("t-exit:b", ssh(&host), 3, || false);
+        assert!(!paste_allowed("t-exit:b", &account));
+
+        // The real liveness check: no open route for this spawn means it ended.
+        note_login_pty("t-exit:c", ssh(&host), 9);
+        assert!(!paste_allowed("t-exit:c", &account));
+    }
+
+    /// With `login` set the caller's command line, environment and cwd are gone:
+    /// the PTY runs the backend's own ssh argv for the target, locally.
+    #[test]
+    fn a_login_spawn_ignores_the_callers_cmd_args_and_env() {
+        let mut opts = hostile(
+            "root:login-ssh",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "host.example", "port": 2222 }),
+        );
+        opts.remote_host_id = Some("worker".to_string());
+        let target = apply_login_with(&mut opts, &client(), as_stored).unwrap();
+        assert_eq!(
+            target,
+            Some(LoginTarget::Ssh {
+                user: Some("alice".to_string()),
+                host: "host.example".to_string(),
+                port: Some(2222),
+            })
+        );
+        assert_eq!(program_stem(&opts.cmd), "ssh");
+        assert_eq!(opts.args.last().map(String::as_str), Some("alice@host.example"));
+        assert!(opts.args.windows(2).any(|w| w == ["-p", "2222"]));
+        assert!(!opts.args.iter().any(|a| a.contains("loot")), "{:?}", opts.args);
+        assert!(opts.env.is_empty(), "a caller's LD_PRELOAD/PATH must not reach a login");
+        assert_eq!(opts.cwd, "");
+        assert!(opts.local_only);
+        assert_eq!(opts.remote_host_id, None);
+
+        // A bad target is refused by the argv builder, not run.
+        let mut bad = hostile("root:login-bad", serde_json::json!({ "kind": "ssh", "host": "-oProxyCommand=x" }));
+        assert!(apply_login(&mut bad, &window()).is_err());
+    }
+
+    /// Without `login` a spawn is untouched, and nothing marks it.
+    #[test]
+    fn an_ordinary_spawn_is_not_a_login() {
+        let mut opts = hostile("root:plain", serde_json::Value::Null);
+        assert_eq!(apply_login(&mut opts, &window()).unwrap(), None);
+        assert_eq!(opts.cmd, "sh");
+        assert_eq!(opts.env.len(), 2);
+        // The key may be left out entirely.
+        let bare: PtyOptions = serde_json::from_value(serde_json::json!({
+            "id": "root:bare", "cmd": "sh", "args": [], "cwd": "", "cols": 80, "rows": 24,
+        }))
+        .unwrap();
+        assert_eq!(bare.login, None);
+    }
+
+    /// A login PTY is a plain local root PTY: every flag that would make it a
+    /// project, agent, container, fenced, tmux or scheduled tab is refused.
+    #[test]
+    fn a_login_refuses_every_other_kind_of_tab() {
+        let login = serde_json::json!({ "kind": "ssh", "user": null, "host": "h", "port": null });
+        type Set = fn(&mut PtyOptions);
+        let cases: [(&str, Set); 9] = [
+            ("project", |o| o.project_id = Some("p".to_string())),
+            ("agent", |o| o.agent = true),
+            ("sandbox", |o| o.sandbox = true),
+            ("host_session", |o| o.host_session = true),
+            ("local_model", |o| o.local_model = true),
+            ("tmux_session", |o| o.tmux_session = Some("s".to_string())),
+            ("tmux_attach", |o| o.tmux_attach = Some("s".to_string())),
+            ("host_bound_uid", |o| o.host_bound_uid = Some("u".to_string())),
+            ("schedule_target_id", |o| o.schedule_target_id = Some("t".to_string())),
+        ];
+        for (name, set) in cases {
+            let mut opts = hostile("root:combo", login.clone());
+            set(&mut opts);
+            assert!(apply_login(&mut opts, &window()).is_err(), "login + {name} must be refused");
+            assert_eq!(opts.cmd, "sh", "a refused login changes nothing ({name})");
+        }
+    }
+
+    /// OpenVPN is machine-wide and the desktop's: a browser client may not bring
+    /// a tunnel up through a login PTY (`openvpn_login_command` was admin-only),
+    /// even when every ssh host counted as configured.
+    #[test]
+    fn a_vpn_login_is_refused_for_a_client() {
+        let vpn = serde_json::json!({ "kind": "vpn", "config": "/home/u/work.ovpn" });
+        let mut opts = hostile("root:vpn", vpn);
+        let err = apply_login_with(&mut opts, &client(), as_stored).unwrap_err();
+        assert!(err.contains("client"), "{err}");
+        assert_eq!(opts.cmd, "sh");
+    }
+
+    /// F-d: a browser client's ssh login runs only to a host the owner
+    /// configured; anything else is refused before an argv exists. The desktop
+    /// window is never asked (it logs in to a machine before storing it).
+    #[test]
+    fn a_clients_ssh_login_needs_a_configured_host() {
+        let ssh = serde_json::json!({ "kind": "ssh", "user": "alice", "host": "h.example", "port": 2222 });
+        let mut opts = hostile("root:ssh", ssh.clone());
+        let err = apply_login_with(&mut opts, &client(), |_| None).unwrap_err();
+        assert!(err.contains("browser client") && err.contains("machine"), "{err}");
+        assert_eq!(opts.cmd, "sh", "a refused login changes nothing");
+
+        let mut opts = hostile("root:ssh", ssh.clone());
+        let mut asked = None;
+        assert!(apply_login_with(&mut opts, &client(), |t| {
+            asked = Some(t.clone());
+            as_stored(t)
+        })
+        .unwrap()
+        .is_some());
+        assert_eq!(asked, Some(LoginTarget::Ssh {
+            user: Some("alice".into()),
+            host: "h.example".into(),
+            port: Some(2222),
+        }));
+        assert_eq!(program_stem(&opts.cmd), "ssh");
+
+        let mut opts = hostile("root:ssh", ssh);
+        let target = apply_login_with(&mut opts, &window(), |_| panic!("the desktop is never asked")).unwrap();
+        assert!(target.is_some());
+    }
+
+    /// What counts as configured: a remote project's primary or worker host, or
+    /// a global machine — same user, host and port, spelled as the keychain
+    /// account spells them. Another user, port or host, or a local project, is
+    /// not.
+    #[test]
+    fn a_configured_ssh_host_is_a_projects_or_a_machines() {
+        let list: crate::schema::projects::ProjectsList = serde_json::from_value(serde_json::json!([
+            { "id": "p1", "name": "P1", "status": "active", "position": 0, "local_file": "",
+              "remote": { "user": "alice", "host": "Build.Example", "remote_path": "/srv/p1" },
+              "compute_hosts": [{ "id": "w1", "user": "bob", "host": "gpu.example", "port": 2200,
+                                  "remote_path": "/srv/p1" }] },
+            { "id": "p2", "name": "P2", "status": "active", "position": 1, "local_file": "",
+              "directory": "/home/u/local" },
+        ]))
+        .unwrap();
+        let mut known = crate::services::remote::ssh_addresses_of(&list);
+        known.push((None, "machine.example".into(), Some(2022)));
+        let login = |user: Option<&str>, host: &str, port: Option<u16>| LoginTarget::Ssh {
+            user: user.map(str::to_string),
+            host: host.to_string(),
+            port,
+        };
+        let allowed = |t: LoginTarget| ssh_login_known(&t, known.clone()).is_some();
+
+        assert!(allowed(login(Some("alice"), "build.example", None)), "the primary, host case-folded");
+        assert!(allowed(login(Some("alice"), " build.example ", Some(22))), "port 22 is no port");
+        assert!(allowed(login(Some("bob"), "gpu.example", Some(2200))), "a worker host");
+        assert!(allowed(login(None, "machine.example", Some(2022))), "a global machine");
+        assert!(allowed(login(Some(""), "machine.example", Some(2022))), "a blank user is none");
+
+        assert!(!allowed(login(Some("root"), "build.example", None)), "another user");
+        assert!(!allowed(login(Some("alice"), "build.example", Some(2222))), "another port");
+        assert!(!allowed(login(Some("bob"), "gpu.example", None)), "the worker's port is part of it");
+        assert!(!allowed(login(None, "evil.example", None)), "an unknown host");
+        assert!(!allowed(login(Some("alice"), "machine.example", Some(2022))), "the machine's user is none");
+        assert!(ssh_login_known(&LoginTarget::Vpn { config: "/a.ovpn".into() }, known.clone()).is_none());
+        assert!(ssh_login_known(&login(None, "machine.example", Some(2022)), Vec::new()).is_none(), "nothing configured");
+    }
+
+    /// A per-user server daemon's account owns the hosts it stores, so a host
+    /// stays a host whoever stored it — also one an earlier build marked
+    /// `added_by_client` (that key now rides in `RemoteSpec::extra`).
+    #[test]
+    fn a_host_an_earlier_build_marked_client_added_counts() {
+        let list: crate::schema::projects::ProjectsList = serde_json::from_value(serde_json::json!([
+            { "id": "p1", "name": "P1", "status": "active", "position": 0, "local_file": "",
+              "remote": { "user": "alice", "host": "new.example", "remote_path": "/srv/x",
+                          "added_by_client": true },
+              "compute_hosts": [{ "id": "w1", "host": "w.example", "remote_path": "/srv/x",
+                                  "addedByClient": true }] },
+        ]))
+        .unwrap();
+        let known = crate::services::remote::ssh_addresses_of(&list);
+        let login = |user: Option<&str>, host: &str| LoginTarget::Ssh {
+            user: user.map(str::to_string),
+            host: host.to_string(),
+            port: None,
+        };
+        assert!(ssh_login_known(&login(Some("alice"), "new.example"), known.clone()).is_some());
+        assert!(ssh_login_known(&login(None, "w.example"), known).is_some());
+    }
+
+    /// #12: ssh receives the **stored** spelling of the matched host, not the
+    /// caller's — which only had to compare equal (trimmed, case-folded, port
+    /// 22 = none, and a Unicode case fold: KELVIN SIGN lowercases to `k`).
+    #[test]
+    fn a_clients_login_runs_to_the_stored_spelling() {
+        let stored = vec![(Some("alice".to_string()), "host.example".to_string(), None)];
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "Host.Example ", "port": 22 }),
+        );
+        let target = apply_login_with(&mut opts, &client(), |t| ssh_login_known(t, stored.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            target,
+            LoginTarget::Ssh { user: Some("alice".into()), host: "host.example".into(), port: None }
+        );
+        assert_eq!(opts.args.last().map(String::as_str), Some("alice@host.example"));
+        assert!(!opts.args.iter().any(|a| a == "-p"), "{:?}", opts.args);
+
+        // A caller spelling that only folds to the stored one never reaches ssh.
+        let stored = vec![(Some("alice".to_string()), "kdc.example".to_string(), None)];
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "\u{212A}DC.example", "port": null }),
+        );
+        let target = apply_login_with(&mut opts, &client(), |t| ssh_login_known(t, stored.clone()))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(target, LoginTarget::Ssh { ref host, .. } if host == "kdc.example"));
+        assert_eq!(opts.args.last().map(String::as_str), Some("alice@kdc.example"));
+        assert!(opts.args.iter().all(|a| a.is_ascii()), "{:?}", opts.args);
+
+        // The desktop window's login is never rewritten.
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "Host.Example", "port": 22 }),
+        );
+        let target = apply_login_with(&mut opts, &window(), |_| panic!("the desktop is never asked"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(target, LoginTarget::Ssh { ref host, .. } if host == "Host.Example"));
+    }
+
+    /// The desktop window's VPN login runs the elevated connect argv itself.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_vpn_login_runs_the_connect_argv() {
+        let config = format!(concat!("/tmp/", crate::app_slug!(), "-login-{}.ovpn"), std::process::id());
+        let mut opts = hostile("root:vpn-ok", serde_json::json!({ "kind": "vpn", "config": config }));
+        let target = apply_login(&mut opts, &window()).unwrap();
+        assert_eq!(target, Some(LoginTarget::Vpn { config: config.clone() }));
+        assert_eq!(opts.cmd, "pkexec");
+        assert_eq!(&opts.args[..3], ["openvpn", "--config", config.as_str()]);
+        assert!(opts.env.is_empty());
+    }
+
+    /// The payload is tagged by `kind`; an unknown kind is not a login.
+    #[test]
+    fn login_payload_shape() {
+        let vpn: LoginTarget =
+            serde_json::from_value(serde_json::json!({ "kind": "vpn", "config": "/a.ovpn" })).unwrap();
+        assert_eq!(vpn, LoginTarget::Vpn { config: "/a.ovpn".to_string() });
+        let ssh: LoginTarget =
+            serde_json::from_value(serde_json::json!({ "kind": "ssh", "user": null, "host": "h", "port": 22 }))
+                .unwrap();
+        assert_eq!(ssh, LoginTarget::Ssh { user: None, host: "h".to_string(), port: Some(22) });
+        assert!(serde_json::from_value::<LoginTarget>(serde_json::json!({ "kind": "shell", "cmd": "sh" })).is_err());
+    }
+
+    /// End to end through `pty_spawn`: a refused login spawns nothing — and any
+    /// spawn of an id, refused or not, first drops that id's old mark, so a
+    /// respawn never inherits it.
+    #[tokio::test]
+    async fn pty_spawn_refuses_a_bad_login_and_drops_the_ids_mark() {
+        use std::sync::Arc;
+        let registry: RegistryState = Arc::default();
+        let events = Arc::new(crate::services::mobile_control::web_client::WebEvents::default());
+        let core = app_core::CoreCtx::system(
+            Arc::new(app_core::CoreState::new().manage(registry.clone())),
+            events,
+        );
+        let host = format!("spawn-{}", std::process::id());
+        let account = creds::ssh_account(&Some("alice".to_string()), &host, None);
+
+        note_login_pty_if("t-spawn:vpn", ssh(&host), 1, || true);
+        let ctx = Ctx(core.with_caller(client()));
+        let opts = hostile("t-spawn:vpn", serde_json::json!({ "kind": "vpn", "config": "/home/u/w.ovpn" }));
+        let err = crate::commands::terminal::pty_spawn(ctx, opts, None).await.unwrap_err();
+        assert!(err.contains("client"), "{err}");
+        assert!(!paste_allowed("t-spawn:vpn", &account), "a respawn of the id drops its mark");
+
+        note_login_pty_if("t-spawn:proj", ssh(&host), 1, || true);
+        let ctx = Ctx(core.with_caller(window()));
+        let mut opts = hostile("t-spawn:proj", serde_json::json!({ "kind": "ssh", "host": host }));
+        opts.project_id = Some("p".to_string());
+        assert!(crate::commands::terminal::pty_spawn(ctx, opts, None).await.is_err());
+        assert!(!paste_allowed("t-spawn:proj", &account));
+        assert!(registry.lock_ok().input_sender("t-spawn:proj").is_none(), "nothing spawned");
+    }
+
+    /// Verifier finding (S1): a respawn of the id that began before the login's
+    /// mark went in (its `forget_login_pty` already ran) replaces the login PTY and
+    /// leaves the mark, and the replaced reader's exit is not the current spawn's,
+    /// so it drops nothing. The mark names its spawn; a PTY running another spawn
+    /// takes no secret — refused before the keychain is read.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_paste_into_a_respawn_of_a_login_id_is_refused() {
+        use std::sync::Arc;
+        let registry: RegistryState = Arc::default();
+        let events = Arc::new(crate::services::mobile_control::web_client::WebEvents::default());
+        let core = app_core::CoreCtx::system(
+            Arc::new(app_core::CoreState::new().manage(registry.clone())),
+            events,
+        );
+        let host = format!("race-{}", std::process::id());
+        let id = "t-race:login";
+        // The login ran as spawn 41 and was marked; a racing spawn 42 of the same
+        // id (say `sh -c 'cat > /tmp/loot'`) now holds the PTY.
+        note_login_pty_if(id, ssh(&host), 41, || true);
+        crate::terminal::insert_test_pty_at(&registry, id, crate::terminal::PtyMeta::default(), 42);
+        assert!(paste_allowed(id, &creds::ssh_account(&Some("alice".to_string()), &host, None)));
+        assert!(registry.lock_ok().input_sender_of_spawn(id, 41).is_none());
+        assert!(registry.lock_ok().input_sender_of_spawn(id, 42).is_some());
+
+        let target = PasteCredential::SshPassword {
+            user: Some("alice".to_string()),
+            host: host.clone(),
+            port: None,
+        };
+        let ctx = Ctx(core.with_caller(window()));
+        let err = credential_paste_to_pty(ctx, id.to_string(), target, None).await.unwrap_err();
+        assert!(err.contains("not a login"), "{err}");
+
+        crate::terminal::kill_test_ptys(&registry);
+        forget_login_pty(id);
+    }
+
+    /// A VPN login's claim goes back when its PTY never ran, and stays with a
+    /// login that did; an ssh login holds no claim.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_vpn_login_that_never_ran_hands_its_claim_back() {
+        let config = format!(concat!("/tmp/", crate::app_slug!(), "-claim-{}.ovpn"), std::process::id());
+        let target = LoginTarget::Vpn { config: config.clone() };
+        let connected = || crate::services::openvpn::has_interactive_claim(&config);
+
+        // Spawn failed after the argv was built: the claim is dropped.
+        target.argv().unwrap();
+        assert!(connected(), "building the argv claimed the tunnel");
+        drop(LoginClaim::of(Some(&target)));
+        assert!(!connected(), "a login that never ran leaves no claim");
+
+        // The login runs: the claim stays (the tunnel's teardown needs it).
+        target.argv().unwrap();
+        LoginClaim::of(Some(&target)).keep();
+        assert!(connected());
+        crate::services::openvpn::release_interactive_claim(&config);
+        assert!(!connected());
+
+        // Nothing to hand back for an ssh login.
+        drop(LoginClaim::of(Some(&ssh("claim-ssh"))));
+        drop(LoginClaim::of(None));
+    }
+
+    /// F6: the login's program is pinned to the absolute path found for it; a
+    /// bare or missing one refuses the login rather than leave the lookup to the
+    /// PTY layer.
+    #[test]
+    fn a_login_program_is_pinned_to_an_absolute_path() {
+        let abs = if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\Windows\System32\OpenSSH\ssh.exe")
+        } else {
+            std::path::PathBuf::from("/usr/bin/ssh")
+        };
+        let mut argv = vec!["ssh".to_string(), "alice@h".to_string()];
+        pin_program(&mut argv, |bin| {
+            assert_eq!(bin, "ssh");
+            Some(abs.clone())
+        })
+        .unwrap();
+        assert_eq!(argv, [abs.to_string_lossy().into_owned(), "alice@h".to_string()]);
+
+        let mut argv = vec!["ssh".to_string()];
+        assert!(pin_program(&mut argv, |_| None).is_err());
+        assert!(pin_program(&mut argv, |_| Some(std::path::PathBuf::from("ssh.exe"))).is_err());
+        assert_eq!(argv, ["ssh"], "a refused pin changes nothing");
+        assert!(pin_program(&mut [], |_| Some(abs.clone())).is_err());
     }
 }

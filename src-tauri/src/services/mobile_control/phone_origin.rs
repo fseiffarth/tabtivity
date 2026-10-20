@@ -157,6 +157,7 @@ mod tests {
             last: None,
             origin: None,
             phone_device: phone.map(str::to_string),
+            extra: Default::default(),
         }
     }
 

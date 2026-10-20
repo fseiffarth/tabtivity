@@ -49,7 +49,7 @@ const AFFIRM_WORD = /^(?:yes|allow|approve|accept|proceed|continue|run|apply|ok)
 const DENY_WORD =
   /^(?:no|don'?t|deny|reject|decline|cancel|keep|skip|stop|abort|quit)$/i;
 
-// Codex's startup hook-trust menu (0.160.1–0.162.1): "Hooks need review" over
+// Codex's startup hook-trust menu (0.160.1–0.163.0): "Hooks need review" over
 // "1. Review hooks / 2. Trust all and continue / 3. Continue without trusting".
 // None of its labels is a deny word, so `hasYesNoMenu` misses it, yet Codex
 // waits on it before the session starts. Anchored on the heading as well as a
@@ -58,6 +58,10 @@ const DENY_WORD =
 // spaces.
 const CODEX_HOOK_TRUST_HEADING = /Hooks\s*need\s*review/;
 const TRUST_OPTION = /(\D|^)\d{1,2}[.)][ \t]*Trust/;
+
+// OpenCode questions have no pointer or yes/no pair. Their footer identifies
+// the choice/toggle page and the final review. Cursor moves can omit spaces.
+const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss/u;
 
 /**
  * True when the text holds a numbered menu offering both an affirmative and a
@@ -113,6 +117,7 @@ export function stripAnsi(text: string): string {
  * agent tab, to delete escapes that were never there.
  */
 export function looksLikeDecisionPromptStripped(plain: string): boolean {
+  if (OPENCODE_QUESTION_KEYS.test(plain)) return true;
   if (POINTER_CHOICE.test(plain)) return true;
   if (POINTER_WORD.test(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;

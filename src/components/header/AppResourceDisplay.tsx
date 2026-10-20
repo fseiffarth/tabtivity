@@ -124,8 +124,8 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
       : {
           tone: "off",
           label: [
-            showCpu ? `CPU ${usage.cpu_percent.toFixed(1)}%` : null,
-            showRam ? `RAM ${formatBytes(usage.rss_bytes)}` : null,
+            showCpu ? `${t("appResource.cpuLabel")} ${usage.cpu_percent.toFixed(1)}%` : null,
+            showRam ? `${t("appResource.ramLabel")} ${formatBytes(usage.rss_bytes)}` : null,
           ]
             .filter(Boolean)
             .join(" · "),
@@ -143,14 +143,20 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
       )}
     >
       {showCpu && (
-        <span className={`app-resource-row ${usageTone("cpu", usage.cpu_percent)}`} title="CPU">
-          <span className="app-resource-symbol" aria-hidden>CPU</span>
+        <span
+          className={`app-resource-row ${usageTone("cpu", usage.cpu_percent)}`}
+          title={t("appResource.cpuTitle")}
+        >
+          <span className="app-resource-symbol" aria-hidden>{t("appResource.cpuLabel")}</span>
           <span>{usage.cpu_percent.toFixed(1)}%</span>
         </span>
       )}
       {showRam && (
-        <span className={`app-resource-row ${usageTone("ram", usage.rss_bytes)}`} title="RAM">
-          <span className="app-resource-symbol" aria-hidden>RAM</span>
+        <span
+          className={`app-resource-row ${usageTone("ram", usage.rss_bytes)}`}
+          title={t("appResource.ramTitle")}
+        >
+          <span className="app-resource-symbol" aria-hidden>{t("appResource.ramLabel")}</span>
           <span>{formatBytes(usage.rss_bytes)}</span>
         </span>
       )}
@@ -175,7 +181,7 @@ function GpuRow({ gpus, ollamaBytes }: { gpus: GpuSample[]; ollamaBytes: number 
         className={`app-resource-row ${usageTone("ram", ollamaBytes)}`}
         title={t("appResource.gpuNoDeviceTitle")}
       >
-        <span className="app-resource-symbol" aria-hidden>GPU</span>
+        <span className="app-resource-symbol" aria-hidden>{t("appResource.gpuLabel")}</span>
         <span>{ollamaBytes > 0 ? formatBytes(ollamaBytes) : "—"}</span>
       </span>
     );
@@ -189,7 +195,7 @@ function GpuRow({ gpus, ollamaBytes }: { gpus: GpuSample[]; ollamaBytes: number 
       className={`app-resource-row ${gpuTone(used, total)}`}
       title={gpuTooltip(gpus, ollamaBytes)}
     >
-      <span className="app-resource-symbol" aria-hidden>GPU</span>
+      <span className="app-resource-symbol" aria-hidden>{t("appResource.gpuLabel")}</span>
       <span>
         {busy != null ? `${Math.round(busy)}% · ` : ""}
         {formatBytes(used)} / {formatBytes(total)}

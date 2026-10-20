@@ -6,8 +6,8 @@ import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession"
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
-  RESUMABLE_AGENTS,
   effectiveTabLocation,
   isResumableAgentTab,
   useTabsStore,
@@ -139,13 +139,14 @@ function askPlan(scope: string, tab: TabEntry): Promise<UndoClearPlan | null> {
 
 /** Whether the tab's agent runs on this machine (a local project, or a remote
  * project's local tab) — the only kind this window relaunches. */
-function runsLocally(scope: string, tab: TabEntry): boolean {
+export function runsLocally(scope: string, tab: TabEntry): boolean {
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   return !project?.remote || effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) === "local";
 }
 
-/** Respawn the tab on the args a restore would give it. */
-async function relaunch(scope: string, tab: TabEntry): Promise<UndoClearResult> {
+/** Respawn the tab on the args a restore would give it (also the Reader's
+ * Resume menu's resume of a Codex chat, `lib/agents/agentChats`). */
+export async function relaunch(scope: string, tab: TabEntry): Promise<UndoClearResult> {
   if (!runsLocally(scope, tab)) return "remote_tab";
   const args = tab.cmd in RESUMABLE_AGENTS && tab.sessionId
     ? RESUMABLE_AGENTS[tab.cmd](tab.sessionId)

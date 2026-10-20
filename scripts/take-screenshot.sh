@@ -17,12 +17,17 @@
 # Usage:
 #   scripts/take-screenshot.sh [output_path] [delay_seconds]
 #
-# Defaults: screenshots/eldrun-current.png, 5s delay.
+# Defaults: screenshots/<app slug>-current.png, 5s delay. screenshots/ is
+# gitignored, so the picture stays untracked: a screen grab is private until it
+# has been opened and reviewed (scripts/privacy-reviewed-binaries.txt), then
+# added with `git add -f`.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-$REPO_ROOT/screenshots/eldrun-current.png}"
+# shellcheck source=lib/brand.sh
+. "$REPO_ROOT/scripts/lib/brand.sh"
+OUT="${1:-$REPO_ROOT/screenshots/${APP_SLUG}-current.png}"
 DELAY="${2:-5}"
 
 mkdir -p "$(dirname "$OUT")"

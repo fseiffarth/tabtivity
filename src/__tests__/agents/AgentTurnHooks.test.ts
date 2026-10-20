@@ -229,7 +229,7 @@ describe("activity store — hook verdicts", () => {
     expect(attention()).toBe("interrupted");
   });
 
-  it("marks a turn cut off mid-work interrupted until the agent's next turn", () => {
+  it("marks a turn cut off mid-work interrupted until the tab is opened or the next turn", () => {
     noteUserInput(PTY);
     noteAgentTurn(PTY, "working");
     noteUserInput(PTY, true);
@@ -240,14 +240,24 @@ describe("activity store — hook verdicts", () => {
     // A state, not a call for attention: the project's rollup does not glow.
     expect(state().attentionByScope["proj-a"]).toBeUndefined();
 
-    // Claude's idle notice a minute later is not a finished turn, typing a
-    // draft is not a new one, and looking at the tab does not undo the cut.
+    // Claude's idle notice a minute later is not a finished turn and typing a
+    // draft is not a new one: both leave the mark standing.
     vi.advanceTimersByTime(60_000);
     noteAgentTurn(PTY, "done");
     noteUserInput(PTY);
-    state().clearAttention(PTY);
     state().recompute();
     expect(attention()).toBe("interrupted");
+
+    // Opening the tab retires it, as it does a finished turn — and the idle
+    // notice does not turn it into one.
+    vi.advanceTimersByTime(1_000);
+    state().clearAttention(PTY);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+    vi.advanceTimersByTime(60_000);
+    noteAgentTurn(PTY, "done");
+    state().recompute();
+    expect(attention()).toBeUndefined();
 
     // The next prompt going in is.
     noteAgentTurn(PTY, "working");

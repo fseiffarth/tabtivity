@@ -68,6 +68,7 @@ export type ShortcutAction =
   | "texCompile"
   | "osFullscreen"
   | "togglePanels"
+  | "toggleSidePanel"
   | "exitFullscreen"
   | "zoomIn"
   | "zoomOut"
@@ -353,6 +354,16 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     },
     loneSuper: true,
   },
+  // The side bar, VS Code's Ctrl+B / ⌘B (`ctrl` reads as ⌘ on macOS). Resolved
+  // behind `useKeyboard`'s editable-target guard, so a terminal, input or editor
+  // keeps Ctrl+B (tmux prefix, readline, bold); Alt+1 is the terminal-safe alias.
+  {
+    action: "toggleSidePanel",
+    labelKey: "shortcut.toggleSidePanel",
+    group: "view",
+    default: { key: "b", ctrl: true },
+    untested: "shortcut.toggleSidePanel",
+  },
   {
     action: "exitFullscreen",
     labelKey: "fixedKeys.exitFullscreen.label",
@@ -629,6 +640,7 @@ export function actionChords(
   const chord = resolveChord(action, overrides);
   if (overrides?.[action]) return [chord];
   if (action === "togglePanels" && isLoneSuper(chord)) return [chord, { key: "F9" }];
+  if (action === "toggleSidePanel" && !IS_MAC) return [chord, { key: "1", alt: true }];
   if (action === "editorRedo") return [chord, { key: "z", ctrl: true, shift: true }];
   return [chord];
 }

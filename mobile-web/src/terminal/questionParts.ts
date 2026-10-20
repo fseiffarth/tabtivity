@@ -56,6 +56,13 @@ function withoutEdgeBlanks(lines: readonly ReadableLine[]): ReadableLine[] {
 export function questionParts(tail: readonly ReadableLine[], question: SelectPrompt): QuestionParts {
   let ask = withoutEdgeBlanks(tail.slice(question.question, question.start));
   let context = withoutEdgeBlanks(tail.slice(question.context, question.question));
+  if (question.navigation) {
+    const nav = question.navigation;
+    return {
+      ask: joinProseWraps(dedentLines(ask)), context: [],
+      tabs: nav.tabs, tabFocus: nav.focus, tabSubmit: nav.submit, tabKeys: nav.keys,
+    };
+  }
   let row = ask.length > 1 ? ask[0] : undefined;
   let tabs = row ? readQuestionTabs(row.text) : null;
   if (tabs) {

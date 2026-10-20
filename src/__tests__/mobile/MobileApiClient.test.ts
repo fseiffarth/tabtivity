@@ -60,6 +60,32 @@ describe(`${BRAND.display} Mobile API client`, () => {
     expect(calls).toBe(2);
   });
 
+  it("resends a read whose answer dropped mid-body instead of calling it malformed", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        const cut = new Response("{}", { status: 200 });
+        vi.spyOn(cut, "json").mockRejectedValue(new TypeError("network error"));
+        return cut;
+      }
+      return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+    }));
+    await expect(api("/api/v1/projects")).resolves.toEqual({ projects: [] });
+    expect(calls).toBe(2);
+  });
+
+  it("calls a write whose answer dropped mid-body offline, not malformed, and never resends it", async () => {
+    const fetchMock = vi.fn(async () => {
+      const cut = new Response("{}", { status: 200 });
+      vi.spyOn(cut, "json").mockRejectedValue(new TypeError("network error"));
+      return cut;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api("/api/v1/todo", { method: "POST", body: "{}" })).rejects.toMatchObject({ code: "offline" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("never resends a dropped write, which may have landed", async () => {
     const fetchMock = vi.fn(async () => { throw new TypeError("Failed to fetch"); });
     vi.stubGlobal("fetch", fetchMock);

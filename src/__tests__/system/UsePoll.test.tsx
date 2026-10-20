@@ -117,6 +117,26 @@ describe("startPoll", () => {
     poll.stop();
   });
 
+  it('onBlur: "widen" runs at the Energy Saver cadence while blurred, still pauses when hidden', async () => {
+    const run = vi.fn();
+    const poll = startPoll(run, 1000, { onBlur: "widen" });
+    expect(run).toHaveBeenCalledTimes(1);
+    blur();
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(run).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    // Back in focus with a run due at the normal cadence: the catch-up, once.
+    await vi.advanceTimersByTimeAsync(1500);
+    focus();
+    expect(run).toHaveBeenCalledTimes(3);
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(run).toHaveBeenCalledTimes(3);
+    poll.stop();
+  });
+
   it("never overlaps: a slow run delays the next until it settles", async () => {
     let resolve: () => void = () => {};
     const run = vi.fn(() => new Promise<void>((r) => { resolve = r; }));

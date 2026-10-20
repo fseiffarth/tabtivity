@@ -31,7 +31,7 @@ import {
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
-import { isActionRow, isUnnumberedRow } from "./selectPrompt";
+import { isActionRow, isChatRow, isUnnumberedRow } from "./selectPrompt";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -402,6 +402,25 @@ export function statusModelTag(status: SessionStatus | null | undefined): string
   return status.effort ? `${status.model} · ${status.effort}` : status.model;
 }
 
+/** Claude Code's notice under `/model` (`⎿ Set model to Sonnet 5.5 and saved
+ * as your default…`). */
+const MODEL_SET_NOTICE = /\bSet model to\s+(.+?)(?:\s+(?:and|with|for)\b|\s*[(·]|$)/iu;
+
+/** The model `/model` has just switched to, when that notice is the last thing
+ * printed above the input box (only blank rows and frame strokes between). A
+ * custom statusline refreshes on a timer or the next message, so for a moment
+ * after the switch its row still names the old model; the notice is newer.
+ * Once anything else is printed the footer is the reading again. */
+function modelJustSet(lines: readonly StatusLineLike[], inputIndex: number): string | undefined {
+  for (let index = inputIndex - 1; index >= 0; index -= 1) {
+    const text = lines[index].text.trim();
+    if (!text || /^[─━═\-\s]+$/u.test(text)) continue;
+    const named = MODEL_SET_NOTICE.exec(text)?.[1];
+    return named ? MODEL.exec(named)?.[1] : undefined;
+  }
+  return undefined;
+}
+
 /**
  * The status the session is showing right now, or `null` when the bottom of
  * the screen is not a TUI input frame (mid-scroll output, a full-screen
@@ -417,10 +436,12 @@ export function sessionStatus(
   if (antigravity) return antigravity.status;
   let inputIndex = -1;
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
-    if (isInputLine(lines, index)) {
-      inputIndex = index;
-      break;
-    }
+    if (!isInputLine(lines, index)) continue;
+    // A highlighted dialog row opens with the input line's `❯`; the rows under
+    // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
+    if (OPTION_ROW.test(lines[index].text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return null;
+    inputIndex = index;
+    break;
   }
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
@@ -443,6 +464,8 @@ export function sessionStatus(
     if (mode) status.mode = mode;
   }
   if (!status.mode) status.mode = codexUpdatedMode(lines, inputIndex, agentLabel);
+  const switched = modelJustSet(lines, inputIndex);
+  if (switched && switched !== status.model) status.model = switched;
   return status;
 }
 
@@ -457,7 +480,8 @@ export function shortenPath(path: string): string {
 /** A numbered dialog row (`❯ 1. Yes`), which opens with the same marker as the
  * input line. It is a question waiting for an answer, never the composer —
  * and so is a multi-select question's unnumbered `❯ Submit` (`isActionRow`)
- * and the highlighted row of an unnumbered dialog (`isUnnumberedRow`). */
+ * and the highlighted row of an unnumbered dialog (`isUnnumberedRow`), and a
+ * preview question's `❯ Chat about this` (`isChatRow`). */
 const OPTION_ROW = /^\s*[>›❯*]\s*\d{1,2}[.)]\s/u;
 
 /** The rule an agent draws across the top of its input box, with the project
@@ -498,7 +522,7 @@ export function inputFrameStart(
   for (let index = lines.length - 1; start < 0 && index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return lines.length;
+    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index)) return lines.length;
     start = index;
   }
   if (start < 0) return lines.length;
@@ -616,7 +640,7 @@ export function statusFrameLines(
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return [];
+    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index)) return [];
     inputIndex = index;
     break;
   }

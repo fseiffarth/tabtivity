@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -85,7 +85,7 @@ import { useExperimental } from "../../lib/experimental";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, AssistantIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TerminalIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -270,6 +270,11 @@ export function mtimeDivergenceCue(
 
 type View = FilesPanelView;
 
+// Tabby's view is its own chunk, loaded the first time it is opened.
+const AssistantView = lazy(() =>
+  import("../assistant/AssistantView").then((m) => ({ default: m.AssistantView })),
+);
+
 // A single shared empty array for scopes with no registered tabs. Must be a
 // stable reference — a Zustand selector that returned a fresh `[]` here would
 // make `useSyncExternalStore` see a new snapshot every render and loop forever.
@@ -355,6 +360,12 @@ export interface ProjectFilesViewProps {
    *  each of those is opened for a folder, not resumed. */
   view?: View;
   onViewChange?: (view: View) => void;
+
+  /** Offer the Tabby view (`assistant/AssistantView`). Set by the side panel
+   *  only: Tabby is not a project's, and a chat is drawn by one attach-only
+   *  view at a time (`assistantShownKeys` is a set, not a count), so a Files
+   *  tab beside the panel must not draw a second one. */
+  assistant?: boolean;
 }
 
 export function ProjectFilesView({
@@ -379,6 +390,7 @@ export function ProjectFilesView({
   compact,
   view: hostView,
   onViewChange,
+  assistant,
 }: ProjectFilesViewProps) {
   const t = useT();
   // Sessions/Jobs/workspaces ask their questions in the panel's own chrome, the
@@ -398,6 +410,7 @@ export function ProjectFilesView({
   const remarksEnabled = useExperimental("project_remarks");
   // The checkout's todo groups; only a dev build has a checkout to read.
   const devTodo = useDevTodoAvailable();
+  const assistantEnabled = useExperimental("assistant");
   // A box scope shows a multi-root file view (the box folder + every member
   // project's root) instead of one project tree; the pane renders it. Read here
   // rather than beside the tree because the view switcher below gates half its
@@ -443,6 +456,8 @@ export function ProjectFilesView({
         return !activeBox && remarksEnabled && !!projectId;
       case "todo":
         return !activeBox && devTodo;
+      case "assistant":
+        return !!assistant && assistantEnabled;
       default:
         return true;
     }
@@ -901,6 +916,57 @@ export function ProjectFilesView({
         if (ownerKey) useTabsStore.getState().removeTab(ownerKey);
       })
       .catch(() => {});
+  };
+
+  // A session is "closed" when no tab of this scope owns it and no client is
+  // attached to it — a run whose tab is gone, not one open in another window.
+  const isClosedSession = (hostId: string, s: SessionRow["session"]) =>
+    !s.attached && !sessionOwners.has(`${hostId} ${s.name}`);
+
+  // Kill every session a machine group lists, or only its closed ones (confirmed
+  // once). Exactly the rows shown — this project's, or the whole host's under
+  // "All host sessions" — and each kill settles on its own, so one failure
+  // leaves only its row behind.
+  const killHostSessions = async (
+    hostId: string,
+    hostLabel: string,
+    rows: SessionRow[],
+    closedOnly: boolean,
+  ) => {
+    if (!projectId || rows.length === 0) return;
+    const ok = await confirmAction({
+      title: t(
+        closedOnly
+          ? "projectFilesView.killClosedSessionsDialogTitle"
+          : "projectFilesView.killAllSessionsDialogTitle",
+      ),
+      body: t(
+        closedOnly
+          ? rows.length === 1
+            ? "projectFilesView.confirmKillClosedSessionsOne"
+            : "projectFilesView.confirmKillClosedSessionsMany"
+          : rows.length === 1
+            ? "projectFilesView.confirmKillAllSessionsOne"
+            : "projectFilesView.confirmKillAllSessionsMany",
+        { count: rows.length, host: hostLabel },
+      ),
+      confirmLabel: t(
+        closedOnly ? "projectFilesView.killClosedSessionsAction" : "projectFilesView.killAllSessionsAction",
+      ),
+      danger: true,
+    });
+    if (!ok) return;
+    await Promise.all(
+      rows.map(({ session: s }) => {
+        const ownerKey = sessionOwners.get(`${hostId} ${s.name}`);
+        return invoke("remote_tmux_kill", { projectId, hostId, session: s.name })
+          .then(() => {
+            useHostSessionsStore.getState().dropRow(projectId, hostId, s.name);
+            if (ownerKey) useTabsStore.getState().removeTab(ownerKey);
+          })
+          .catch(() => {});
+      }),
+    );
   };
 
   // Rename a host session (per-row). The name must be tmux-safe; on success the
@@ -1776,8 +1842,9 @@ export function ProjectFilesView({
             aria-pressed={view === "sessions"}
             onClick={() => setView(view === "sessions" ? "files" : "sessions")}
             title={t("projectFilesView.persistentSessionsTitle", { count: sessionRows.length })}
+            aria-label={t("projectFilesView.persistentSessionsTitle", { count: sessionRows.length })}
           >
-            ☰ {sessionRows.length > 0 && <span className="side-panel-orange-count">{sessionRows.length}</span>}
+            <TerminalIcon /> {sessionRows.length > 0 && <span className="side-panel-orange-count">{sessionRows.length}</span>}
           </button>
         )}
         {/* SLURM jobs (HPC): shown only when the host actually has SLURM, so the
@@ -1814,6 +1881,20 @@ export function ProjectFilesView({
             aria-label={t("devTodo.viewTitle")}
           >
             <CheckIcon />
+          </button>
+        )}
+        {/* Tabby: the same view the edge rail's Tabby icon opens. Not tied to
+            the project, so a box scope offers it too. */}
+        {assistant && assistantEnabled && (
+          <button
+            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "assistant" ? " active" : ""}`}
+            style={{ marginLeft: 2 }}
+            aria-pressed={view === "assistant"}
+            onClick={() => setView(view === "assistant" ? "files" : "assistant")}
+            title={t("assistant.title")}
+            aria-label={t("assistant.title")}
+          >
+            <AssistantIcon />
           </button>
         )}
         {/* The tree's search + refresh, hoisted out of the tree itself. Files
@@ -2497,13 +2578,42 @@ export function ProjectFilesView({
               )}
             </div>
           ) : (
-            sessionGroups.map(({ hostId, hostLabel, kindGroups }) => (
+            sessionGroups.map(({ hostId, hostLabel, rows: hostRows, kindGroups }) => (
               <section
                 className="tmux-machine-group"
                 key={hostId}
                 aria-label={t("projectFilesView.persistentSessionsOnHostAria", { host: hostLabel })}
               >
-                <div className="tmux-machine-group-title">{hostLabel}</div>
+                <div className="tmux-machine-group-title">
+                  <span className="tmux-machine-group-name">{hostLabel}</span>
+                  <UntestedTag id="projectFilesView.8" />
+                  <button
+                    type="button"
+                    className="orange-file-act"
+                    title={t("projectFilesView.killClosedSessionsTitle")}
+                    aria-label={t("projectFilesView.killClosedSessionsAria", { host: hostLabel })}
+                    disabled={!hostRows.some((r) => isClosedSession(hostId, r.session))}
+                    onClick={() =>
+                      void killHostSessions(
+                        hostId,
+                        hostLabel,
+                        hostRows.filter((r) => isClosedSession(hostId, r.session)),
+                        true,
+                      )
+                    }
+                  >
+                    {t("projectFilesView.killClosedSessions")}
+                  </button>
+                  <button
+                    type="button"
+                    className="orange-file-act"
+                    title={t("projectFilesView.killAllSessionsTitle")}
+                    aria-label={t("projectFilesView.killAllSessionsAria", { host: hostLabel })}
+                    onClick={() => void killHostSessions(hostId, hostLabel, hostRows, false)}
+                  >
+                    {t("projectFilesView.killAllSessions")}
+                  </button>
+                </div>
                 {kindGroups.map(({ kind, rows }) => (
                   <div className="tmux-kind-group" key={kind}>
                     <div className="tmux-kind-group-title">{t(SESSION_KIND_LABEL[kind])}</div>
@@ -2784,6 +2894,14 @@ export function ProjectFilesView({
       )}
 
       {view === "todo" && <DevTodoView active={active} />}
+
+      {/* Only while shown: the view polls the CLI options and its chat counts
+          as on screen (a closed panel stays mounted). */}
+      {view === "assistant" && active && (
+        <Suspense fallback={null}>
+          <AssistantView />
+        </Suspense>
+      )}
 
       {view === "agents" && <AgentSchedulesView scope={scope} active={active} />}
 

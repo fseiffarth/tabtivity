@@ -6,7 +6,7 @@
  * move on every agent's every turn edge in every project; each move re-rendered
  * the panel and, under it, the entire (unmemoized) file view. These tests pin
  * that an unrelated tab's activity costs the panel no render, while a hidden
- * tab's still lights its chip.
+ * tab's still lights its subwindow's row.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
@@ -114,11 +114,15 @@ describe("side panel activity subscription", () => {
     expect(fileViewRenders.count).toBe(before);
   });
 
-  it("still lights a hidden tab's chip when that tab works or waits", async () => {
-    render(<SidePanel open={true} />);
+  it("still lights a hidden subwindow's row when its tab works or waits", async () => {
+    const { container } = render(<SidePanel open={true} />);
     await act(async () => {});
-    const chip = () => screen.getByText("Parked agent");
-    expect(chip().className).not.toContain("working");
+    // The row is the subwindow, not its tabs: it carries the positional name
+    // and names the tab only in its tooltip.
+    expect(screen.queryByText("Parked agent")).toBeNull();
+    expect(screen.getByText("Hidden 1").title).toContain("Parked agent");
+    const glyph = () => container.querySelector(".hidden-sw-icon")!;
+    expect(glyph().className).not.toContain("working");
 
     act(() => {
       useActivityStore.setState({
@@ -126,8 +130,7 @@ describe("side panel activity subscription", () => {
         busyKindByTab: { [`${SCOPE}:parked`]: "shell" },
       });
     });
-    expect(chip().className).toContain("working");
-    expect(chip().className).toContain("shell");
+    expect(glyph().className).toContain("working");
 
     act(() => {
       useActivityStore.setState({
@@ -136,6 +139,6 @@ describe("side panel activity subscription", () => {
         attentionByTab: { [`${SCOPE}:parked`]: "decision" },
       });
     });
-    expect(chip().className).toContain("needs-decision");
+    expect(glyph().className).toContain("needs-decision");
   });
 });

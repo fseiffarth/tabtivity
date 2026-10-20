@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { useBackLayer } from "../backStack";
 
 export interface AttachTile {
   key: string;
@@ -25,6 +26,7 @@ export function AttachSheet({ title, tiles, onPick, onClose }: {
   onPick: (key: string) => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet attach-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>

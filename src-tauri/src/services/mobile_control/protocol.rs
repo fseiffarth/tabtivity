@@ -113,6 +113,13 @@ pub struct CreateTabRequest {
     /// sign-in rides with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<String>,
+    /// A chat of the assistant scope (`docs/assistant_plan.md`, decision 12):
+    /// the opaque launch id `launch-options` listed, which stands for a CLI
+    /// and, for a local one, a model. The scope takes this and nothing else —
+    /// no agent, mode, worktree, cloud, sign-in or local-model field rides
+    /// with it — and no other scope takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<String>,
     pub idempotency_key: String,
 }
 
@@ -158,6 +165,23 @@ impl CreateTabRequest {
                 || self.task.is_some()
                 || self.sign_in.is_some()
                 || self.like_tab.is_some()
+                || self.assistant.is_some()
+            {
+                return false;
+            }
+        }
+        if let Some(id) = &self.assistant {
+            if !agent
+                || id.is_empty()
+                || id.len() > 128
+                || self.agent_id.is_some()
+                || self.mode.is_some()
+                || self.worktree.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.like_tab.is_some()
+                || self.local.is_some()
             {
                 return false;
             }
@@ -223,7 +247,7 @@ pub struct MobileLocalLaunch {
 }
 
 /// Everything a phone may ask of the desktop's Ollama
-/// (`docs/mobile_local_model_control_plan.md`): load an installed model,
+/// (`docs/done/mobile_local_model_control_plan.md`): load an installed model,
 /// unload one, start the server. There is deliberately no pull, delete, copy
 /// or update variant — downloading and deleting stay desktop-only, so such a
 /// request cannot even be deserialized on either side of the bridge. Strict
@@ -329,7 +353,9 @@ impl From<ScheduledAgentPrompt> for MobileSchedule {
             enabled: schedule.enabled,
             message: schedule.message,
             rule: schedule.rule,
-            last: schedule.last,
+            // A newer build's unknown receipt fields are the file's, not the
+            // phone's: only the fields this build knows cross.
+            last: schedule.last.map(|last| AgentScheduleLastRun { extra: Default::default(), ..last }),
         }
     }
 }
@@ -931,6 +957,12 @@ pub enum DesktopRequest {
     Activate {
         request_id: String,
         project_id: String,
+        /// The tab the phone is opening, by its tmux name: the window starts
+        /// its CLI when the scope runs chats lazily (the assistant's: a chat
+        /// restored at launch has no process until something asks for it).
+        /// Any other scope ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tmux_session: Option<String>,
     },
     Create {
         request_id: String,
@@ -1125,6 +1157,10 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
         message: String,
+        /// The paired phone that sent it, which its history row names
+        /// (`SentAgentPrompt::phone_device`). Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// The phone's composer sent `message` while this agent tab was at work.
     /// Instead of the words going into the CLI's own queue, the desktop holds
@@ -2181,10 +2217,17 @@ mod tests {
         let request = DesktopRequest::Activate {
             request_id: "request-1".into(),
             project_id: "project-1".into(),
+            tmux_session: None,
         };
         let json = serde_json::to_value(&request).expect("serialize activation request");
         assert_eq!(json["type"], "activate");
         assert_eq!(json["project_id"], "project-1");
+        assert!(json.get("tmux_session").is_none(), "the plain activation sends no tab");
+        let named: DesktopRequest = serde_json::from_value(
+            serde_json::json!({ "type": "activate", "request_id": "r", "project_id": "p", "tmux_session": "tab-1" }),
+        )
+        .expect("an activation naming its tab");
+        assert!(matches!(named, DesktopRequest::Activate { tmux_session: Some(ref tab), .. } if tab == "tab-1"));
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize activation request");
         assert_eq!(restored.request_id(), "request-1");
@@ -2201,11 +2244,16 @@ mod tests {
             project_id: "raw-project".into(),
             tmux_session: concat!(crate::app_slug!(), "-project-0--agent-123456789").into(),
             message: "fix the tests".into(),
+            device_id: Some("device-1".into()),
         };
         assert_eq!(request.request_id(), "request-prompt");
         let json = serde_json::to_value(&request).expect("serialize prompt report");
         assert_eq!(json["type"], "tab_prompt");
         assert_eq!(json["message"], "fix the tests");
+        assert_eq!(json["device_id"], "device-1");
+        let mut older = json.clone();
+        older.as_object_mut().unwrap().remove("device_id");
+        assert!(matches!(serde_json::from_value(older), Ok(DesktopRequest::TabPrompt { device_id: None, .. })), "an older sidecar names no phone");
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize prompt report");
         assert!(matches!(restored, DesktopRequest::TabPrompt { .. }));
@@ -2850,8 +2898,28 @@ mod tests {
             json!({"worktree": "w1"}),
             json!({"cloud": "open"}),
             json!({"sign_in": "default"}),
+            json!({"assistant": "c1"}),
         ] {
             let mut body = json!({"project_id": "p", "kind": "agent", "local": "l1", "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
+        // An assistant chat: agent kind, a bounded id, and nothing else.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "assistant": "c1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "assistant": "c1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "assistant": "", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "assistant": "x".repeat(129), "idempotency_key": key})));
+        for extra in [
+            json!({"agent_id": "a"}),
+            json!({"mode": "plan"}),
+            json!({"worktree": "w1"}),
+            json!({"cloud": "open"}),
+            json!({"task": "hi"}),
+            json!({"sign_in": "default"}),
+            json!({"like_tab": "t"}),
+            json!({"local": "l1"}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "assistant": "c1", "idempotency_key": key});
             body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             assert!(!ok(body), "{extra}");
         }

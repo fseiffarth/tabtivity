@@ -8,6 +8,7 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
+import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
@@ -16,7 +17,7 @@ import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen"
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
-import { TerminalReaderStatus } from "./TerminalReaderStatus";
+import { STATUS_AGENTS, TerminalReaderStatus } from "./TerminalReaderStatus";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 
@@ -110,7 +111,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   // --- The session's model / permission picker -------------------------------
   const session = useSessionPicker({ tab, ptyId, agentLabel, typeKeys });
-  const { picking, picker, step, shownStep, busy, choose, close } = session;
+  const { picking, picker, step, shownStep, busy, listing, choose, close } = session;
   const permissionPicking = picking && session.command === "/permissions";
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
@@ -274,21 +275,22 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   return (
     <div className="terminal-reader-facts-wrap">
-      {statusOpen && tab.cmd === "codex" && <TerminalReaderStatus key={ptyId}
-        tab={tab} ptyId={ptyId} visible={visible} request={statusRequest}
+      {statusOpen && STATUS_AGENTS[tab.cmd] && <TerminalReaderStatus key={ptyId}
+        tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         model={modelLabel} effort={effortLabel} path={shownPath} contextLeft={contextLeft} usage={usage}
         onClose={onStatusClose} onRefresh={onStatusRequest}
       />}
       {picking && (
         <div
-          className="terminal-reader-picker"
+          className="terminal-reader-picker terminal-reader-picker-steps"
           role="dialog"
           aria-label={shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } }}
         >
           <div className="terminal-reader-picker-head">
             <strong>{shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}</strong>
+            {isOpenCodeTab(agentLabel) && <UntestedTag id="agents.opencode.modelList" />}
             <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")} title={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")}>✕</button>
           </div>
           {shownStep ? (
@@ -312,7 +314,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           ) : (
             <small className="terminal-reader-question-more">{t(permissionPicking ? "terminal.reader.permissionsWaiting" : "terminal.reader.modelWaiting")}</small>
           )}
-          {step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
+          {listing
+            ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
+            : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
         </div>
       )}
       {effortOpen && (
@@ -378,10 +382,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         </div>
       )}
       <div className="terminal-reader-facts">
-        {tab.cmd === "codex" && <button type="button" className="terminal-reader-fact-model"
+        {STATUS_AGENTS[tab.cmd] && <button type="button" className="terminal-reader-fact-model"
           onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); onStatusRequest(); }}
-          aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint")}>
-          {t("terminal.reader.status.button")} <UntestedTag id="terminal.reader.codexStatus" />
+          aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
+          {t("terminal.reader.status.button")} {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
         </button>}
         {modelPickable ? (
           <button

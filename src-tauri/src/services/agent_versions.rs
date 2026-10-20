@@ -66,7 +66,7 @@ pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const VERSION_ARGV: &[(&str, &[&str])] = &[
     // "2.1.284 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.162.1"
+    // "codex-cli 0.163.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
@@ -112,27 +112,27 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "claude",
-        version: "2.1.300",
+        version: "2.1.303",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
         agent: "codex",
-        version: "0.162.1",
+        version: "0.163.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.162.1",
+        version: "0.163.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.162.1",
+        version: "0.163.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.162.1",
+        version: "0.163.0",
         surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
@@ -789,13 +789,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.162.1"));
+        let (state, stale) = drift("codex", Some("0.163.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.162.2"));
+        let (state, stale) = drift("codex", Some("0.163.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.162.1" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.163.0" && note.direction == Direction::Newer));
     }
 
     #[test]
@@ -807,7 +807,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.300")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.303")).0, DriftState::Match);
         // `muse` has a recipe but no recorded check — the honest answer is
         // "nobody has verified this", not a tick.
         assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);

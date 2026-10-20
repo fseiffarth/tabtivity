@@ -17,8 +17,6 @@ and especially your AI agent terminals.
 · [Source on GitHub](https://github.com/fseiffarth/tabtivity)
 · Linux, Windows, macOS · **Alpha**
 
-![The Tabtivity window: project bar, tiled agent terminals, and the side panel](assets/eldrun-current.png)
-
 ## Three pillars
 
 **One project = one desktop.** Select a project and the desktop becomes that

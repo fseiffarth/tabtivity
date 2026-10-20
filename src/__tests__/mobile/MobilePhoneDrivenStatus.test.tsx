@@ -129,13 +129,13 @@ describe("Mobile bridge — the status of a tab the phone is driving", () => {
     useTabsStore.setState((state) => ({
       tabsByScope: { [project.id]: state.tabsByScope[project.id].map((tab) => ({ ...tab, sessionId: "0f0e0d0c-0b0a-4908-8706-050403020100" })) },
     }));
-    expect(await ask({ type: "tab_prompt", request_id: "p1", project_id: project.id, tmux_session: TMUX, message: "  fix the tests  " }))
+    expect(await ask({ type: "tab_prompt", request_id: "p1", project_id: project.id, tmux_session: TMUX, message: "  fix the tests  ", device_id: "phone-a" }))
       .toEqual({ status: "seen" });
     const recorded = vi.mocked(invoke).mock.calls.filter(([command]) => command === "agent_prompt_record");
     expect(recorded).toHaveLength(1);
     expect(recorded[0][1]).toMatchObject({
       projectId: project.id,
-      entry: { message: "fix the tests", sent: { tab_label: "Claude", session_id: "0f0e0d0c-0b0a-4908-8706-050403020100", agent: "claude", result: "delivered" } },
+      entry: { message: "fix the tests", sent: { tab_label: "Claude", session_id: "0f0e0d0c-0b0a-4908-8706-050403020100", agent: "claude", result: "delivered", phone_device: "phone-a" } },
     });
 
     expect(await ask({ type: "tab_prompt", request_id: "p2", project_id: project.id, tmux_session: TMUX, message: "/model" }))

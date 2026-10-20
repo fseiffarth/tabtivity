@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useT } from "../../../src/lib/i18n";
+import { useBackLayer } from "../backStack";
 
 export interface SheetOption {
   key: string;
@@ -33,6 +34,7 @@ export function OptionSheet({ title, note, children, options, waiting, busy, onP
   onPick: (key: string) => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>

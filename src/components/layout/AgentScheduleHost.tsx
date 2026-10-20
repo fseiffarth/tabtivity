@@ -12,10 +12,12 @@ import {
   type ScheduledAgentPrompt,
 } from "../../lib/agents/agentSchedule";
 import {
+  pressScheduledAgentSubmit,
   scheduledAgentInput,
   submitScheduledAgentMessage,
   type ScheduledAgentInput,
 } from "../../lib/agents/scheduledAgentInput";
+import { confirmFreshSubmit, freshClaude } from "../../lib/agents/freshSubmit";
 import { forgetPhoneHold, onPhoneHoldDue, phoneHoldDue } from "../../lib/agents/phoneHolds";
 import { agentDeliveryReady, agentDeliveryTurn, lastPtyOutputAt, noteScheduleProposal, useActivityStore } from "../../stores/activity";
 import { recordScheduledDelivery, sendCollectedPrompt, useAgentPromptsStore } from "../../stores/agents/agentPrompts";
@@ -177,6 +179,7 @@ async function retire(
       result: last.result,
       scheduledFor: last.occurrence || undefined,
       scheduleOrigin: schedule.origin,
+      phoneDevice: schedule.phone_device,
     },
   );
   if (schedule.rule.type !== "once") return;
@@ -280,6 +283,17 @@ function idleForDelivery(input: ScheduledAgentInput): boolean {
     && Date.now() - (lastPtyOutputAt(input.ptyId) ?? 0) >= OUTPUT_SETTLE_MS;
 }
 
+/** {@link confirmFreshSubmit} for a prompt typed through `input`, while the
+ * tab's input is still that one. */
+function confirmScheduledSubmit(scheduleTargetId: string, input: ScheduledAgentInput, since: number): void {
+  void confirmFreshSubmit(
+    input.ptyId,
+    since,
+    () => pressScheduledAgentSubmit(scheduleTargetId),
+    () => scheduledAgentInput(scheduleTargetId) === input,
+  );
+}
+
 /** The pane takes keystrokes and is not on a question, whose choices a typed
  * line would answer. */
 function queueableWhileBusy(input: ScheduledAgentInput): boolean {
@@ -319,11 +333,14 @@ async function queueDuePhoneHold(
     if (scheduledAgentInput(binding.scheduleTargetId) !== input || !queueableWhileBusy(input)) {
       throw new Error("agent readiness changed");
     }
+    const fresh = freshClaude(input.agent, input.ptyId);
+    const since = Date.now();
     await submitScheduledAgentMessage(binding.scheduleTargetId, schedule.message, {
       preface: schedule.preface,
       settle: settleBetweenSubmissions,
       whileBusy: true,
     });
+    if (fresh) confirmScheduledSubmit(binding.scheduleTargetId, input, since);
   } catch {
     result = "failed";
   }
@@ -493,11 +510,14 @@ export function AgentScheduleHost() {
                   || !agentDeliveryReady(input.ptyId, COMPLETION_STABLE_MS)
                   || useActivityStore.getState().busyByTab[input.ptyId]
                   || useActivityStore.getState().attentionByTab[input.ptyId] === "decision") throw new Error("agent readiness changed");
+              const fresh = freshClaude(input.agent, input.ptyId);
+              const since = Date.now();
               const ptyId = await submitScheduledAgentMessage(
                 binding.scheduleTargetId,
                 schedule.message,
                 { preface: schedule.preface, settle: settleBetweenSubmissions, beforeMessage: () => { submittedAt = Date.now(); } },
               );
+              if (fresh) confirmScheduledSubmit(binding.scheduleTargetId, input, since);
               // Completion after all writes means a partial/write failure becomes
               // `failed`; the durable claim prevents retry in either case.
               await complete(binding, schedule.id, verdict.occurrence.key, "delivered");

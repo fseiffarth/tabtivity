@@ -33,6 +33,7 @@ import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./Mar
 import { EraserIcon } from "../markup/EraserIcon";
 import { OptionSheet } from "./OptionSheet";
 import { bitmapDataUrl, canPrint, MAX_PRINT_PAGES, PRINT_WIDTH, printContent } from "../print";
+import { useBackLayer } from "../backStack";
 
 type Tool = PenTool;
 
@@ -63,10 +64,41 @@ const FIT_WIDTH = 960;
 const MAX_ZOOM = 4;
 /** Page pictures kept alive at once — Safari's canvas memory is the limit. */
 const MAX_ALIVE = 6;
-/** How long the frame may take to open a document before it is given up,
- * and to draw one page before that page is. */
+/** How long the frame may take to open a document once its bytes are in,
+ * and to draw one page before that page is. The download has no limit of
+ * its own: a slow link is fine as long as bytes keep coming, and only
+ * `STALL_TIMEOUT` without one gives it up. */
 const OPEN_TIMEOUT = 45_000;
 const RENDER_TIMEOUT = 20_000;
+const STALL_TIMEOUT = 30_000;
+
+/** `response`'s body as it comes in, `onChunk` told the bytes so far (and the
+ * declared length, 0 when there is none) after each piece; `null` once it
+ * grows past `max`. */
+async function readBody(response: Response, max: number, onChunk: (got: number, total: number) => void): Promise<ArrayBuffer | null> {
+  const total = Number(response.headers.get("content-length")) || 0;
+  if (total > max) { void response.body?.cancel().catch(() => {}); return null; }
+  if (!response.body) {
+    const data = await response.arrayBuffer();
+    return data.byteLength > max ? null : data;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    got += value.byteLength;
+    if (got > max) { void reader.cancel().catch(() => {}); return null; }
+    chunks.push(value);
+    onChunk(got, total);
+  }
+  const whole = new Uint8Array(got);
+  let at = 0;
+  for (const chunk of chunks) { whole.set(chunk, at); at += chunk.byteLength; }
+  return whole.buffer;
+}
+
 /** Remembered once a pen has drawn here: from then on only the pen draws,
  * unless the reader turns "pen only" off again. */
 const PEN_KEY = storageDashKey("markup-pen");
@@ -294,7 +326,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
 
 /**
  * **Mark up** — a PDF's pages or a picture with a layer to write on that
- * lives only on this phone (`docs/mobile_pdf_markup_plan.md`): handwriting
+ * lives only on this phone (`docs/done/mobile_pdf_markup_plan.md`): handwriting
  * with a pen (Apple Pencil, a stylus), highlighter boxes, typed notes, an
  * eraser that takes whole strokes. Saved on the phone as each stroke ends,
  * never sent anywhere until **Submit**, which uploads each marked page's
@@ -321,7 +353,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * switches the markup on and draws, as in the phone's own Markup and Notes.
  * Which mode the reader opens in is this phone's choice (`markupOpen.ts`).
  *
- * Submit keeps the view open (`docs/pdf_markup_rounds_plan.md`): the round's
+ * Submit keeps the view open (`docs/done/pdf_markup_rounds_plan.md`): the round's
  * marks move to the layer's sent side, drawn dimmed and never sent again, and
  * a pill follows the agent (`submitState.ts`) — sent / queued / working /
  * asking / finished. Marking goes on meanwhile; the next Submit sends only
@@ -417,6 +449,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const stem = stemOf(sentName(file));
 
   const [sizes, setSizes] = useState<Size[] | null>(null);
+  /** The PDF's bytes so far while they come in; `null` once they are in. */
+  const [download, setDownload] = useState<{ got: number; total: number } | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [pictures, setPictures] = useState<Record<number, Picture>>({});
   const [pageFailures, setPageFailures] = useState<Set<number>>(() => new Set());
@@ -547,7 +581,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   useEffect(() => () => { printRun.current++; }, []);
   /** A pin tapped: the card opens at its question. */
   const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
-  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): the
+  /** **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`): the
    * tab the last Submit went to — its undo snapshot is that tab's — why an
    * asked-for `apply` round runs as `list`, the confirm sheet with what an
    * undo would put back, and how the last undo went. */
@@ -777,15 +811,37 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!isPdf) return;
     if (file.size > MAX_INBOX_FILE) { setFailure("tooLarge"); return; }
     const controller = new AbortController();
+    let stalled = false;
+    let stallTimer: number | undefined;
+    let openTimer: number | undefined;
+    const arm = () => {
+      window.clearTimeout(stallTimer);
+      stallTimer = window.setTimeout(() => { stalled = true; controller.abort(); }, STALL_TIMEOUT);
+    };
+    arm();
+    setDownload({ got: 0, total: file.size });
+    // Redrawn only when the line's words change: a tenth of a MB, not each piece.
+    let shown = "";
     void fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
-      .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error("fetch"))))
+      .then((response) => (response.ok ? readBody(response, MAX_INBOX_FILE, (got, total) => {
+        arm();
+        const label = sizeLabel(got);
+        if (label === shown) return;
+        shown = label;
+        setDownload({ got, total: total || file.size });
+      }) : Promise.reject(new Error("fetch"))))
       .then((data) => {
-        if (data.byteLength > MAX_INBOX_FILE) { setFailure("tooLarge"); return; }
+        window.clearTimeout(stallTimer);
+        setDownload(null);
+        if (!data) { setFailure("tooLarge"); return; }
         bytes.current = data;
         openIfReady();
-      }, () => { if (!controller.signal.aborted) setFailure("fetch"); });
-    const timer = window.setTimeout(() => { if (awaitingMeta.current) setFailure((was) => was ?? "timeout"); }, OPEN_TIMEOUT);
-    return () => { controller.abort(); window.clearTimeout(timer); };
+        openTimer = window.setTimeout(() => { if (awaitingMeta.current) setFailure((was) => was ?? "timeout"); }, OPEN_TIMEOUT);
+      }, () => {
+        window.clearTimeout(stallTimer);
+        if (stalled || !controller.signal.aborted) { setDownload(null); setFailure("fetch"); }
+      });
+    return () => { controller.abort(); window.clearTimeout(stallTimer); window.clearTimeout(openTimer); };
     // `generation`: a Reload fetches the bytes again, for the new frame.
   }, [isPdf, url, file.size, openIfReady, generation]);
 
@@ -1311,6 +1367,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (note && loaded) void saveLayer(key, next, fingerprint, undefined, next === history.present ? history.past : [...history.past, history.present]).finally(onClose);
     else onClose();
   };
+  // Back is Done, which keeps an open note; a reader not marking closes.
+  useBackLayer(reading && !marking ? onClose : done);
 
   // --- Submit ----------------------------------------------------------------
   /** Print in the reader: every page drawn afresh by the frame at paper
@@ -1879,7 +1937,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     });
   };
   // --- The agent's ticks: a ✓ on each sent mark it says it handled ----------
-  /** The ticked sent marks (`markup_done`, `docs/markup_tick_approve_plan.md`
+  /** The ticked sent marks (`markup_done`, `docs/done/markup_tick_approve_plan.md`
    * §4), while the sent marks show, one badge per group of them that sit
    * together (`tickGroups`: one remark, however many strokes it took). A tap
    * on a badge approves its group — its marks leave the layer, undoably — and
@@ -2169,7 +2227,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {openedTab === linkedTab
           ? t("mobile.markup.linkedTab", { label: openedTab.label })
           : t("mobile.markup.newTabOpened", { label: openedTab.label })}
-        <button className={asking ? "markup-submit" : "outbox-action"} onClick={() => newTab.show(openedTab)}>{t("mobile.markup.openNewTab")}</button>
+        <button className={asking ? "markup-submit" : "outbox-action"} onClick={() => newTab.show(openedTab, { scope, file, place, folder })}>{t("mobile.markup.openNewTab")}</button>
         {(openedTab === linkedTab ? isUntested("mobile.markup.tabs") : isUntested("mobile.markup.newTab")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
       </p>}
       {marking && leftOut > 0 && <p role="status">{t(leftOut === 1 ? "mobile.markup.leftOutOne" : "mobile.markup.leftOut", { count: leftOut })}</p>}
@@ -2184,7 +2242,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     <div ref={scroller} className={`markup-scroller${fingerDrawsRef.current ? " finger-draws" : ""}`}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={() => setPopover(null)}>
       {isPdf ? <>
-        {!sizes && !failure && <p className="markup-loading">{t("mobile.markup.loading")}</p>}
+        {!sizes && !failure && <p className="markup-loading">{download && download.total > 0
+          ? t("mobile.markup.downloading", { got: sizeLabel(download.got), size: sizeLabel(download.total) })
+          : t("mobile.markup.loading")}</p>}
         {sizes && <div className="markup-pages" style={{ width: cssWidth, height: contentHeight, marginLeft: insetAt(zoom) }}>
           {sizes.map((size, i) => {
             const n = i + 1;

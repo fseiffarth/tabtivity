@@ -789,6 +789,12 @@ pub fn route_forget_sleep(id: &str) {
     }
 }
 
+/// Whether spawn `seq` of `id` still runs: its route is open and its reader
+/// has not closed it yet ([`route_close`] zeroes or drops the route first).
+pub fn route_spawn_live(id: &str, seq: u64) -> bool {
+    routes().lock_ok().get(id).is_some_and(|r| r.seq == seq)
+}
+
 /// Task-end cleanup, guarded by generation so an old spawn's exit can never
 /// remove the route a respawn under the same id just opened. Returns whether
 /// this was the current spawn, which makes the lifecycle notification obey the
@@ -1152,6 +1158,21 @@ pub struct PtyOptions {
     /// Chooses a home only; it grants nothing — both homes are fenced alike.
     #[serde(default)]
     pub local_model: bool,
+    /// A **login PTY** (`commands::credentials`): the backend runs the ssh /
+    /// OpenVPN login for this target as the PTY's own program, ignoring `cmd`,
+    /// `args`, `env` and `cwd`, and only such a PTY may receive a saved secret
+    /// (`credential_paste_to_pty`). Refused together with anything that would
+    /// make it more than a plain local root PTY.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::commands::credentials::LoginTarget>,
+    /// A **chat assistant** tab (`services::assistant`, scope
+    /// `storage::ASSISTANT_SCOPE`): the backend ignores `cmd`, `args` and `env`
+    /// and builds the whole launch from this `{ cli, model }`
+    /// (`assistant::launch_line`). Honoured only with `project_id ==
+    /// Some("assistant")`, and required there; any other combination is
+    /// refused at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<crate::services::assistant::AssistantLaunch>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1254,6 +1275,11 @@ fn invalidate_proc_tree_cache() {
 }
 
 /// How aggressively [`reap_child_subtree`] signals a doomed process subtree.
+///
+/// Every signal, the first one included, goes only to a process that is
+/// still the one the walk saw — same pid, same start time ([`Doomed`]) — so
+/// a pid the kernel hands to an unrelated process after a doomed one exited
+/// during the grace period is never killed.
 pub(crate) enum ReapMode {
     /// SIGTERM now, then SIGKILL any survivors after a short grace period on a
     /// detached thread. Used on tab close / respawn, where the app stays alive
@@ -1274,6 +1300,50 @@ pub(crate) enum ReapMode {
     GracefulBlocking(#[cfg_attr(not(unix), allow(dead_code))] Duration),
 }
 
+/// One process of a doomed subtree as the walk saw it. The pid alone is not
+/// an identity: once the process exits the kernel may give the number to an
+/// unrelated one, which a delayed SIGKILL would then hit. With the start time
+/// (`sysstat::process_start`) it names that one process; `None` — the walk
+/// could not read it — is never signalled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Doomed {
+    pid: u32,
+    start: Option<u64>,
+}
+
+impl Doomed {
+    /// Whether `pid` still runs as the walk saw it, per `start_now` (the
+    /// platform's start-time reader, or a test's).
+    #[cfg(unix)]
+    fn is_still(&self, start_now: impl Fn(u32) -> Option<u64>) -> bool {
+        self.start.is_some() && start_now(self.pid) == self.start
+    }
+}
+
+/// The subtrees of `leaders` (leaders included), walked afresh, each process
+/// with its identity. Linux reads the start times from the same table walk
+/// that found the pids, so no pid can be reused in between.
+#[cfg(target_os = "linux")]
+fn doomed_subtree(leaders: &[u32]) -> Vec<Doomed> {
+    // Fresh walk: a cached set may predate a just-spawned child.
+    crate::sysstat::invalidate_descendant_cache();
+    let table = crate::services::proc_table::snapshot_within(Duration::ZERO);
+    table
+        .descendants(leaders)
+        .into_iter()
+        .map(|pid| Doomed { pid, start: table.get(pid).map(|p| p.start).filter(|&start| start != 0) })
+        .collect()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn doomed_subtree(leaders: &[u32]) -> Vec<Doomed> {
+    crate::sysstat::invalidate_descendant_cache();
+    crate::sysstat::descendant_pids(leaders)
+        .into_iter()
+        .map(|pid| Doomed { pid, start: crate::sysstat::process_start(pid) })
+        .collect()
+}
+
 /// Best-effort abort of a PTY child's **entire process subtree**.
 ///
 /// `portable_pty`'s [`Child::kill`] signals only the shell leader; anything it
@@ -1286,67 +1356,87 @@ pub(crate) enum ReapMode {
 /// The leader pid is included in the returned set; re-signalling a leader the
 /// caller also `Child::kill`s is a harmless no-op (a dead pid yields ESRCH).
 pub(crate) fn reap_child_subtree(leader_pid: u32, mode: ReapMode) {
-    // Force a fresh process-tree walk rather than reusing a cached CPU sample
-    // that may predate a just-spawned child.
-    crate::sysstat::invalidate_descendant_cache();
-    let subtree = crate::sysstat::descendant_pids(&[leader_pid]);
-    reap_pids(subtree, mode);
+    reap_pids(doomed_subtree(&[leader_pid]), mode);
 }
 
-/// Signal a set of pids best-effort. Every pid came from a live process walk
-/// moments earlier, so a stale one is expected and ignored (ESRCH on Unix, a
-/// failed `OpenProcess` on Windows).
+/// Signal a doomed subtree best-effort, each process only while it is still
+/// the one the walk saw ([`Doomed`]); one that already exited is skipped.
 #[cfg(unix)]
-fn reap_pids(pids: Vec<u32>, mode: ReapMode) {
-    if pids.is_empty() {
+fn reap_pids(doomed: Vec<Doomed>, mode: ReapMode) {
+    reap_with(doomed, mode, crate::sysstat::process_start, |pid, sig| {
+        // SAFETY: `libc::kill` takes no pointers and a real signal number; a
+        // pid that exited since its identity check returns ESRCH, ignored.
+        unsafe {
+            libc::kill(pid as libc::pid_t, sig);
+        }
+    });
+}
+
+/// [`reap_pids`] with the start-time reader and the signal sender passed in.
+#[cfg(unix)]
+fn reap_with(
+    doomed: Vec<Doomed>,
+    mode: ReapMode,
+    start_now: fn(u32) -> Option<u64>,
+    send: fn(u32, libc::c_int),
+) {
+    if doomed.is_empty() {
         return;
     }
-    // SAFETY: `libc::kill` takes no pointers and a real signal number; a stale
-    // pid returns ESRCH, which we ignore.
-    let signal = |pids: &[u32], sig: libc::c_int| unsafe {
-        for &pid in pids {
-            libc::kill(pid as libc::pid_t, sig);
+    let signal = move |doomed: &[Doomed], sig: libc::c_int| {
+        for d in doomed.iter().filter(|d| d.is_still(start_now)) {
+            send(d.pid, sig);
         }
     };
     match mode {
-        ReapMode::Immediate => signal(&pids, libc::SIGKILL),
+        ReapMode::Immediate => signal(&doomed, libc::SIGKILL),
         ReapMode::Graceful => {
-            signal(&pids, libc::SIGTERM);
+            signal(&doomed, libc::SIGTERM);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(2));
-                signal(&pids, libc::SIGKILL);
+                signal(&doomed, libc::SIGKILL);
             });
         }
         ReapMode::GracefulBlocking(grace) => {
-            signal(&pids, libc::SIGTERM);
+            signal(&doomed, libc::SIGTERM);
             let deadline = Instant::now() + grace;
             while Instant::now() < deadline {
-                // SAFETY: `kill(pid, 0)` probes existence without signalling.
-                let any_alive = pids
-                    .iter()
-                    .any(|&pid| unsafe { libc::kill(pid as libc::pid_t, 0) } == 0);
-                if !any_alive {
+                if !doomed.iter().any(|d| d.is_still(start_now)) {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            signal(&pids, libc::SIGKILL);
+            signal(&doomed, libc::SIGKILL);
         }
     }
 }
 
 /// Windows has no SIGTERM/SIGKILL split — `TerminateProcess` is the only per-pid
-/// primitive — so both modes reap immediately.
+/// primitive — so every mode reaps immediately. The process is opened by pid
+/// and terminated only when that handle's creation time is the walk's: the
+/// open handle pins the process, so the check and the kill see the same one.
 #[cfg(windows)]
-fn reap_pids(pids: Vec<u32>, _mode: ReapMode) {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
-    for pid in pids {
+fn reap_pids(doomed: Vec<Doomed>, _mode: ReapMode) {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
+    for d in doomed {
+        let Some(start) = d.start else { continue };
         // SAFETY: the handle is closed before the next iteration; a failed open
-        // (the pid already exited) is ignored.
+        // (the pid already exited) is skipped. The FILETIME out-params are
+        // valid for the call.
         unsafe {
-            if let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, pid) {
-                let _ = TerminateProcess(handle, 1);
+            if let Ok(handle) = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, d.pid) {
+                let mut creation = FILETIME::default();
+                let mut exit = FILETIME::default();
+                let mut kernel = FILETIME::default();
+                let mut user = FILETIME::default();
+                let same = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user).is_ok()
+                    && ((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime)) == start;
+                if same {
+                    let _ = TerminateProcess(handle, 1);
+                }
                 let _ = CloseHandle(handle);
             }
         }
@@ -1354,7 +1444,7 @@ fn reap_pids(pids: Vec<u32>, _mode: ReapMode) {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn reap_pids(_pids: Vec<u32>, _mode: ReapMode) {}
+fn reap_pids(_doomed: Vec<Doomed>, _mode: ReapMode) {}
 
 // ── PtyRegistry ───────────────────────────────────────────────────────────
 
@@ -1482,6 +1572,16 @@ impl PtyRegistry {
 
     pub fn input_sender(&self, id: &str) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {
         self.entries.get(id).map(|e| e.input_tx.clone())
+    }
+
+    /// [`Self::input_sender`], only while `id` still runs spawn `seq`: a respawn of
+    /// the id is another program, whatever the spawn before it was.
+    pub fn input_sender_of_spawn(
+        &self,
+        id: &str,
+        seq: u64,
+    ) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {
+        self.entries.get(id).filter(|e| e.seq == seq).map(|e| e.input_tx.clone())
     }
 
     /// The registry id `caller` means by `id`: its own attach PTY onto that
@@ -1653,8 +1753,7 @@ impl PtyRegistry {
             .values()
             .filter_map(|e| e.child.process_id())
             .collect();
-        crate::sysstat::invalidate_descendant_cache();
-        let subtree = crate::sysstat::descendant_pids(&leaders);
+        let subtree = doomed_subtree(&leaders);
 
         for (id, mut e) in self.entries.drain() {
             e.dead.store(true, Ordering::SeqCst);
@@ -1734,9 +1833,7 @@ pub fn teardown_taken(taken: Vec<TakenPty>) {
     }
     let leaders: Vec<u32> = taken.iter().filter_map(|t| t.entry.child.process_id()).collect();
     if !leaders.is_empty() {
-        // Fresh walk: a cached set may predate a just-spawned child.
-        crate::sysstat::invalidate_descendant_cache();
-        reap_pids(crate::sysstat::descendant_pids(&leaders), ReapMode::Graceful);
+        reap_pids(doomed_subtree(&leaders), ReapMode::Graceful);
     }
     for TakenPty { id, mut entry } in taken {
         let _ = entry.child.kill();
@@ -1842,6 +1939,8 @@ pub fn join_tab(
     };
     route_move_window_views(&opts.id, &attach_id, client.as_str());
     let attach = PtyOptions {
+        login: None,
+        assistant: None,
         id: attach_id.clone(),
         cmd: "tmux".to_string(),
         local_model: false,
@@ -2020,6 +2119,7 @@ fn launch(
     let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
     let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
     let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
+    let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
     tokio::spawn(async move {
         let emitter = ctx.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
@@ -2060,6 +2160,8 @@ fn launch(
             if is_tab {
                 crate::services::agent_fence::on_tab_gone(&id, route_seq);
             }
+            // A login PTY whose login ended is no paste target any more.
+            crate::commands::credentials::forget_login_pty_spawn(&id, route_seq);
             if let Some(token) = help_token {
                 crate::services::root_mcp::revoke_token(&token);
             }
@@ -2072,6 +2174,10 @@ fn launch(
                 // sweep rings `markup-mcp-changed` through the change hook.
                 crate::services::root_mcp::revoke_token(&token);
                 crate::services::markup_mcp::sweep();
+            }
+            if let Some(token) = web_token {
+                // The assistant's web lane: a chat's token dies with its CLI.
+                crate::services::root_mcp::revoke_token(&token);
             }
             if let Some(token) = mcp_token {
                 let state = crate::storage::state_dir();
@@ -2279,6 +2385,12 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
 /// what owns a PTY (no output, no route, no tab bookkeeping).
 #[cfg(all(test, unix))]
 pub(crate) fn insert_test_pty(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta: PtyMeta) {
+    insert_test_pty_at(registry, id, meta, 0);
+}
+
+/// [`insert_test_pty`] as spawn `seq` of `id`.
+#[cfg(all(test, unix))]
+pub(crate) fn insert_test_pty_at(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta: PtyMeta, seq: u64) {
     let pair = NativePtySystem::default()
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .expect("openpty");
@@ -2289,7 +2401,7 @@ pub(crate) fn insert_test_pty(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta
     registry
         .lock()
         .unwrap()
-        .insert_with(id.to_string(), pair.master, writer, child, Arc::new(AtomicBool::new(false)), meta, 0);
+        .insert_with(id.to_string(), pair.master, writer, child, Arc::new(AtomicBool::new(false)), meta, seq);
 }
 
 /// End every PTY a test left in `registry`, without the tab cleanups.
@@ -3313,6 +3425,8 @@ mod tests {
         // The respawn begins and claims the Codex session it resumes.
         let new = agent_fence::begin_spawn(id);
         let mut opts = PtyOptions {
+            login: None,
+            assistant: None,
             id: id.into(), cmd: "codex".into(), args: vec!["resume".into(), "0199aaaa-0000-7000-8000-00000000c0de".into()],
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
             project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
@@ -3505,6 +3619,110 @@ mod tests {
             }
             assert!(gone, "every taken tab's inner process must be aborted");
         }
+    }
+
+    // ── Reaping by identity (pid + start time) ──────────────────────────
+
+    /// Fake pids far above any real `pid_max`, so the fake signal log is
+    /// never confused with a real process, and parallel tests never share one.
+    const SAME: u32 = 4_100_001;
+    const RECYCLED: u32 = 4_100_002;
+    const GONE: u32 = 4_100_003;
+    const UNREAD: u32 = 4_100_004;
+
+    /// The fake process table: `SAME` still runs as the walk saw it (start
+    /// 10), `RECYCLED`'s number now belongs to a process started at 99 (the
+    /// walk saw 20), `GONE` exited.
+    fn fake_start(pid: u32) -> Option<u64> {
+        match pid {
+            SAME => Some(10),
+            RECYCLED => Some(99),
+            UNREAD => Some(5),
+            _ => None,
+        }
+    }
+
+    fn fake_doomed() -> Vec<Doomed> {
+        vec![
+            Doomed { pid: SAME, start: Some(10) },
+            Doomed { pid: RECYCLED, start: Some(20) },
+            Doomed { pid: GONE, start: Some(30) },
+            Doomed { pid: UNREAD, start: None },
+        ]
+    }
+
+    static SENT: Mutex<Vec<(u32, libc::c_int)>> = Mutex::new(Vec::new());
+
+    fn record_send(pid: u32, sig: libc::c_int) {
+        SENT.lock().unwrap().push((pid, sig));
+    }
+
+    fn sent_to(pid: u32) -> Vec<libc::c_int> {
+        SENT.lock().unwrap().iter().filter(|(p, _)| *p == pid).map(|(_, sig)| *sig).collect()
+    }
+
+    #[test]
+    fn a_doomed_process_is_itself_only_with_the_same_start_time() {
+        let [same, recycled, gone, unread] = fake_doomed()[..] else { panic!() };
+        assert!(same.is_still(fake_start));
+        assert!(!recycled.is_still(fake_start), "a reused pid is another process");
+        assert!(!gone.is_still(fake_start));
+        assert!(!unread.is_still(fake_start), "an identity the walk could not read is never trusted");
+    }
+
+    /// Both graceful modes re-check identity before the SIGKILL (and the
+    /// SIGTERM): a pid recycled during the grace period is never signalled.
+    #[test]
+    fn graceful_reaps_never_signal_a_recycled_pid() {
+        reap_with(fake_doomed(), ReapMode::GracefulBlocking(Duration::from_millis(60)), fake_start, record_send);
+        assert_eq!(sent_to(SAME), vec![libc::SIGTERM, libc::SIGKILL], "the survivor is escalated");
+        for pid in [RECYCLED, GONE, UNREAD] {
+            assert!(sent_to(pid).is_empty(), "pid {pid} was signalled");
+        }
+
+        // The detached escalation of `Graceful` checks again after its sleep.
+        const LATE: u32 = 4_100_005;
+        fn recycled_after_term(pid: u32) -> Option<u64> {
+            // Itself at the SIGTERM, someone else by the SIGKILL.
+            let calls = SENT.lock().unwrap().iter().filter(|(p, _)| *p == pid).count();
+            if pid == LATE { Some(if calls == 0 { 7 } else { 8 }) } else { None }
+        }
+        reap_with(vec![Doomed { pid: LATE, start: Some(7) }], ReapMode::Graceful, recycled_after_term, record_send);
+        std::thread::sleep(Duration::from_millis(2_500));
+        assert_eq!(sent_to(LATE), vec![libc::SIGTERM], "no SIGKILL for the pid's new owner");
+    }
+
+    #[test]
+    fn an_immediate_reap_signals_only_the_walks_processes() {
+        const SAME_NOW: u32 = 4_100_006;
+        fn start(pid: u32) -> Option<u64> {
+            if pid == SAME_NOW { Some(1) } else { fake_start(pid) }
+        }
+        let mut doomed = fake_doomed();
+        doomed.retain(|d| d.pid != SAME);
+        doomed.push(Doomed { pid: SAME_NOW, start: Some(1) });
+        reap_with(doomed, ReapMode::Immediate, start, record_send);
+        assert_eq!(sent_to(SAME_NOW), vec![libc::SIGKILL]);
+        for pid in [RECYCLED, GONE, UNREAD] {
+            assert!(sent_to(pid).is_empty(), "pid {pid} was signalled");
+        }
+    }
+
+    /// End to end against a real process: a recorded start time that is not
+    /// the process's own (what a recycled pid looks like) spares it; its own
+    /// start time kills it.
+    #[test]
+    fn a_real_process_with_a_changed_start_time_survives_the_reap() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn sleep");
+        let pid = child.id();
+        let start = crate::sysstat::process_start(pid).expect("start time of a live child");
+
+        reap_pids(vec![Doomed { pid, start: Some(start + 1) }], ReapMode::GracefulBlocking(Duration::from_millis(100)));
+        assert!(child.try_wait().unwrap().is_none(), "another process's pid must not be killed");
+
+        reap_pids(vec![Doomed { pid, start: Some(start) }], ReapMode::GracefulBlocking(Duration::from_millis(100)));
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "the process itself is reaped");
     }
 }
 
@@ -3776,6 +3994,8 @@ mod client_tests {
     #[cfg(unix)]
     fn test_opts() -> PtyOptions {
         PtyOptions {
+            login: None,
+            assistant: None,
             id: String::new(),
             cmd: "sh".to_string(),
             local_model: false,
@@ -3826,6 +4046,51 @@ mod client_tests {
         kill_test_ptys(&registry);
     }
 
+    /// The assistant's web-lane token is revoked when its process ends, like the
+    /// help, push and markup tokens: a finished chat's bearer opens nothing.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_chats_web_lane_token_dies_with_its_process() {
+        use crate::services::root_mcp::{authenticate, test_session_for_tab, WEB_TOKEN_ENV};
+        let (token, _) = test_session_for_tab(crate::services::root_mcp::Caller::Web, "assistant:revoke-t", std::path::Path::new("/nonexistent"));
+        let header = format!("Bearer {token}");
+        assert!(authenticate(Some(&header)).is_some(), "minted");
+        let tab = "assistant:revoke-t";
+        let opts = PtyOptions {
+            login: None,
+            assistant: None,
+            id: tab.to_string(),
+            cmd: "sh".to_string(),
+            local_model: false,
+            args: vec!["-c".to_string(), "exit 0".to_string()],
+            env: HashMap::from([(WEB_TOKEN_ENV.to_string(), token.clone())]),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            local_only: true,
+            sandbox: false,
+            agent: false,
+            project_id: None,
+            schedule_target_id: None,
+            host_session: false,
+            remote_host_id: None,
+            tmux_session: None,
+            tmux_attach: None,
+            host_bound_uid: None,
+        };
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let ctx = ctx_as(Caller::Local(ClientId::main()), RecordingEvents::new());
+        let seq = crate::services::agent_fence::begin_spawn(tab);
+        spawn_pty(ctx, registry, opts, seq).unwrap();
+        for _ in 0..200 {
+            if authenticate(Some(&header)).is_none() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the web token still opens the lane after its process ended");
+    }
+
     /// The whole of #2347 against a real tmux server of the test's own (`-L`,
     /// no config): two clients on one tab, each its own size; output to each
     /// client from its own PTY only; one client closing leaves the other's
@@ -3873,6 +4138,8 @@ mod client_tests {
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let policy = crate::services::tmux_local::window_size_policy(true);
         let opts = |cols: u16, rows: u16| PtyOptions {
+            login: None,
+            assistant: None,
             id: tab.to_string(),
             cmd: "tmux".to_string(),
             local_model: false,

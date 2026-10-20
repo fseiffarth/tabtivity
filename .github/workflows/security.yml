@@ -47,8 +47,13 @@ jobs:
       # - RUSTSEC-2023-0071 `rsa` Marvin timing oracle: `pgp` pulls `rsa` in
       #   unconditionally and no patched version exists. Mitigated by defaulting
       #   key generation to Curve25519; see the note on `pgp` in Cargo.toml.
+      # - RUSTSEC-2026-0367/0368/0369 `zip` 8.6 `extract()` symlink/SUID flaws,
+      #   patched in 9: our own `zip` is 9, but `calamine` (spreadsheet reading,
+      #   no newer release) still pulls 8.6. It only reads entries through
+      #   `ZipArchive` and never calls `extract()`. Drop these when `calamine`
+      #   moves to zip 9.
       - name: Audit Rust dependencies
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369
 
       # The release binary, checksum pinned to the version, as for gitleaks in
       # ci-cd.yml.
@@ -152,3 +157,28 @@ jobs:
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: /language:${{ matrix.language }}
+          output: ${{ runner.temp }}/codeql-results
+          upload: failure-only
+
+      # Exact rule + location + source hash; an edit expires the review.
+      # No query or source tree is excluded from analysis. The original
+      # reviewed results and reasons remain in reviewed-results.json.
+      - name: Apply reviewed false positives
+        run: |
+          python3 -m unittest discover -s scripts -p test_codeql_reviewed.py
+          python3 scripts/codeql_reviewed.py "$RUNNER_TEMP/codeql-results"
+
+      - name: Upload analysis
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-results
+          category: /language:${{ matrix.language }}
+
+      - name: Preserve reviewed findings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-reviewed-${{ matrix.language }}
+          path: ${{ runner.temp }}/codeql-results/reviewed-results.json
+          if-no-files-found: ignore
+          retention-days: 30

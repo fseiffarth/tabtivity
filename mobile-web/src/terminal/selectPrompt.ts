@@ -20,6 +20,7 @@
  */
 
 import { busyRow } from "./agentBusy";
+import { readOpenCodeQuestion } from "./openCodeQuestion";
 
 export interface SelectOption {
   /** Position in the run, 0-based. The caller moves the highlight by the
@@ -32,9 +33,19 @@ export interface SelectOption {
   label: string;
   /** The note the dialog printed in the row's second column, if any. */
   description?: string;
+  /** The keys that answer this row, sent as they are, on a page whose rows
+   * are its footer's keys rather than a highlight to walk
+   * (`readCodexHooksPage`). Without them a row is answered by walking there
+   * (`answerRowKeys`). */
+  keys?: string[];
+  /** OpenCode opens an editor before a custom answer can be typed. */
+  input?: "opencode";
 }
 
 export interface SelectPrompt {
+  source?: "opencode";
+  /** Navigation read from a CLI whose headers have no status glyphs. */
+  navigation?: { tabs: QuestionTab[]; focus: number | null; submit: boolean; keys: QuestionStepKeys };
   options: SelectOption[];
   /** Index of the row the dialog is highlighting — where the cursor starts. */
   current: number;
@@ -75,7 +86,7 @@ export interface SelectStep {
   options: SelectOption[];
 }
 
-interface SelectLineLike { text: string; afterRule?: boolean }
+interface SelectLineLike { text: string; afterRule?: boolean; spans?: readonly ReadableSpanLike[] }
 
 /** How far up from the bottom a dialog may sit. Below it the TUI still draws
  * its footer ("Esc to cancel") and, in Codex, the input box — and at phone
@@ -118,6 +129,25 @@ const RADIO_AGENT = /gemini|qwen/iu;
 const ACTION_ROW = /^\s*([❯▸▶›>→])?\s*(Submit|Next)$/u;
 const CHECKBOX_LABEL = /^\[[^\]]\]\s/u;
 const CHECKBOX_ROW = /^\s*[❯▸▶›>→]?\s*\d{1,2}[.)]\s+\[[^\]]\]\s/u;
+/** Claude Code's agent question (2.1.300) draws `Chat about this` under a rule,
+ * apart from the answers — numbered on a plain question, unnumbered and below
+ * the panel's notes line on one with previews. One ↓ past the last answer
+ * highlights it; with previews that answer keeps its own `❯`, since the panel
+ * still shows its preview:
+ *
+ *       3. Type something.
+ *     ──────────────────────────────
+ *     ❯ 4. Chat about this
+ *
+ *     ❯ 2. Green              │ ---       │
+ *                             └───────────┘
+ *                             Notes: press n to add notes
+ *     ──────────────────────────────
+ *     ❯ Chat about this
+ *
+ * The rule ends the answers' run, and the phone could only pick an answer,
+ * never talk the question over. */
+const CHAT_ROW = /^\s*([❯▸▶›>→])?\s*(?:(\d{1,2})[.)]\s+)?Chat about this$/u;
 /** `SelectOption.number` of a row the dialog printed no number beside. */
 export const UNNUMBERED = 0;
 
@@ -135,6 +165,24 @@ export function isActionRow(lines: readonly { text: string }[], index: number): 
 export function isUnnumberedRow(lines: readonly { text: string }[], index: number): boolean {
   const prompt = readUnnumberedPrompt(lines, Math.max(0, lines.length - SEARCH_WINDOW));
   return prompt !== null && index >= prompt.start;
+}
+
+/** Whether `lines[index]` is an agent question's `Chat about this` row
+ * (`CHAT_ROW`) — highlighted, it too opens with the input line's `❯`. */
+export function isChatRow(lines: readonly { text: string }[], index: number): boolean {
+  return CHAT_ROW.test(lines[index].text) && dialogFooterShown(lines);
+}
+
+/** The `Chat about this` row (`CHAT_ROW`) between the answers' run, which
+ * starts at `start`, and the dialog's footer — or `null`. */
+function readChatRow(lines: readonly SelectLineLike[], start: number): { marked: boolean; number: number } | null {
+  for (let index = start; index < lines.length; index += 1) {
+    const text = lines[index].text;
+    if (DIALOG_FOOTER.test(text)) return null;
+    const chat = CHAT_ROW.exec(text);
+    if (chat) return { marked: chat[1] !== undefined, number: chat[2] ? Number(chat[2]) : UNNUMBERED };
+  }
+  return null;
 }
 
 /** Whether the tab's agent marks a dialog's highlighted row with `●` — and so
@@ -419,6 +467,10 @@ export function readSelectPrompt(
   agentLabel?: string,
   columns?: number,
 ): SelectPrompt | null {
+  if (/opencode/iu.test(agentLabel ?? "")) {
+    const question = readOpenCodeQuestion(lines);
+    if (question) return question;
+  }
   const option = radioMarkerAgent(agentLabel) ? RADIO_OPTION : OPTION;
   const first = Math.max(0, lines.length - SEARCH_WINDOW);
   type Run = {
@@ -505,10 +557,17 @@ export function readSelectPrompt(
     // edge marker. Its heading and the caller's agent identify that slice.
     const codexModelSlice = /codex/iu.test(agentLabel ?? "") && title?.startsWith("Select Model") === true;
     if (candidate.options[0].number !== 1 && !windowed && !codexModelSlice) continue;
-    if (candidate.options.length >= MIN_OPTIONS && candidate.marked.length === 1) {
+    // Read once: a dialog that draws it in the run has it among the rows.
+    const chat = candidate.options.some((entry) => CHAT_ROW.test(entry.label)) ? null : readChatRow(lines, candidate.start);
+    // Highlighted, it may be the one row marked.
+    const marks = candidate.marked.length + (chat?.marked && candidate.marked.length === 0 ? 1 : 0);
+    if (candidate.options.length >= MIN_OPTIONS && marks === 1) {
+      const options = chat
+        ? [...candidate.options, { index: candidate.options.length, number: chat.number, label: "Chat about this" }]
+        : candidate.options;
       return {
-        options: candidate.options,
-        current: candidate.marked[0],
+        options,
+        current: chat?.marked ? candidate.options.length : candidate.marked[0],
         title,
         start: candidate.start,
         ...readContext(lines, candidate.start),
@@ -522,7 +581,7 @@ export function readSelectPrompt(
 /** The key hints a select dialog prints under its rows: Claude Code's
  * `Enter to select · ↑/↓ to navigate`, its `Enter to confirm`, Codex's
  * `Press enter to confirm`. The input box's own hints name none of these. */
-const DIALOG_FOOTER = /\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
+const DIALOG_FOOTER = /(?:↑↓\s+select|⇆\s+tab)\s+enter\s+(?:submit|confirm|toggle)\s+esc\s+dismiss|\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
 /** Non-blank lines from the bottom the footer may sit above: a status line or
  * two the CLI keeps drawing under a dialog. */
 const FOOTER_REACH = 4;
@@ -637,6 +696,67 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
   };
 }
 
+const CODEX_HOOKS_HEADING = /^\s*Hooks\s*$/u;
+const CODEX_HOOKS_TABLE = /^\s*Event\s{2,}Installed\s{2,}Active\b/u;
+/** The page's footer: `t trust all · enter review · esc close` while hooks
+ * wait on a verdict, `enter details · esc close` once none does. */
+const CODEX_HOOKS_FOOTER = /^\s*(?:t (trust all)\s*·\s*)?enter (?:review|details)\s*·\s*esc (close)\s*$/u;
+
+/**
+ * Codex's hooks page (0.163.0): what `Review hooks` on its startup "Hooks need
+ * review" menu opens, and `/hooks`. A table of hook events under its heading,
+ * its highlight on an event row, its answers in the footer:
+ *
+ *     Hooks
+ *     Lifecycle hooks from config and enabled plugins.
+ *
+ *     ⚠ 5 hooks need review before they can run.
+ *
+ *     Event                 Installed   Active      Review      Description
+ *
+ *     PreToolUse            0           0           0           Before a tool executes
+ *   › PostToolUse           1           0           1           After a tool executes
+ *     …
+ *
+ *     t trust all · enter review · esc close
+ *
+ * It has no numbered rows, so a reader showed nothing while the session
+ * waited on it — and from the chat the startup menu's first row, a click away
+ * from its `Trust all and continue`, lands here. Read as a dialog of the
+ * footer's own answers: `t` trusts every hook and `esc` then closes the page
+ * (where `Trust all and continue` would have got to), or `esc` alone. `enter`
+ * opens one event's hooks, a page further down that this does not follow.
+ * Codex tabs only; the whole screen, since the page replaces the input box
+ * and its `›` row reads as one.
+ */
+export function readCodexHooksPage(lines: readonly SelectLineLike[], agentLabel?: string): SelectPrompt | null {
+  if (!/codex/iu.test(agentLabel ?? "")) return null;
+  let footer = lines.length - 1;
+  while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  const keys = footer >= 0 ? CODEX_HOOKS_FOOTER.exec(lines[footer].text) : null;
+  if (!keys) return null;
+  let heading = -1;
+  let table = -1;
+  for (let index = footer - 1; index >= 0 && footer - index <= DIALOG_LINES; index -= 1) {
+    if (table < 0 && CODEX_HOOKS_TABLE.test(lines[index].text)) table = index;
+    if (table >= 0 && CODEX_HOOKS_HEADING.test(lines[index].text)) {
+      heading = index;
+      break;
+    }
+  }
+  if (heading < 0) return null;
+  // The rows are the footer's own words, as the CLI printed them.
+  const [, trustAll, close] = keys;
+  const rows = trustAll ? [{ label: trustAll, keys: ["t", "\u001b"] }, { label: close, keys: ["\u001b"] }] : [{ label: close, keys: ["\u001b"] }];
+  const options = rows.map((row, index): SelectOption => ({
+    index,
+    number: index + 1,
+    label: row.label.charAt(0).toUpperCase() + row.label.slice(1),
+    keys: row.keys,
+  }));
+  return { options, current: 0, title: lines[heading].text.trim(), start: table, question: heading, context: heading };
+}
+
 /** What the list on screen *is*, as opposed to where its highlight sits: the
  * heading and the rows. A caller that answered a dialog compares this to tell
  * the list it answered — still painted while the TUI catches up — from the
@@ -726,6 +846,12 @@ export function selectKeys(current: number, target: number): string[] {
   return [...selectMoveKeys(current, target), "\r"];
 }
 
+/** The keystrokes that answer `prompt` with `option`: the row's own keys when
+ * the page names them (`SelectOption.keys`), else the walk to it. */
+export function answerRowKeys(prompt: SelectPrompt, option: SelectOption): string[] {
+  return option.keys ? [...option.keys] : selectKeys(prompt.current, option.index);
+}
+
 /** Claude Code's free-text row under an agent's question (AskUserQuestion,
  * 2.1.287): `4. Type something.`, or `4. [ ] Type something` on a multi-select
  * one. It is a text field, not a choice — Enter on it while empty answers
@@ -735,7 +861,7 @@ const FREE_TEXT = /^(?:\[[^\]]\]\s+)?Type something\.?$/u;
 
 /** Whether `option` is the question's free-text row (`FREE_TEXT`). */
 export function freeTextRow(option: SelectOption): boolean {
-  return FREE_TEXT.test(option.label);
+  return option.input === "opencode" || FREE_TEXT.test(option.label);
 }
 
 /** The writes that answer a question's free-text row with `text`: walk the
@@ -745,6 +871,16 @@ export function freeTextRow(option: SelectOption): boolean {
 export function freeTextWrites(current: number, option: SelectOption, text: string): string[] {
   const line = text.replace(/\s+/gu, " ").trim();
   if (!line) return [];
+  if (option.input === "opencode") {
+    // Enter (or the number shortcut) opens the editor. Clear a previous
+    // answer only when one is shown: Ctrl+U on an empty editor closes it.
+    // Enter saves the words, also on multi-select questions.
+    const open = option.keys ?? selectKeys(current, option.index);
+    // A selected multi-select custom row first unticks; selecting it again
+    // opens its editor. The previous words remain as the editor's value.
+    const reopen = /^\[[✓xX]\]\s/u.test(option.label) && option.description;
+    return [...open, ...(reopen ? (option.keys ?? ["\r"]) : []), ...(option.description ? ["\u0015"] : []), line, "\r"];
+  }
   const writes = [...selectMoveKeys(current, option.index), line];
   return CHECKBOX_LABEL.test(option.label) ? writes : [...writes, "\r"];
 }

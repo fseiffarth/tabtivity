@@ -161,7 +161,7 @@ export function LocalModelMenu() {
     useModelsOverlayStore.getState().openOverlay("agents");
   };
 
-  // The Skills library (`docs/skills_plan.md`) → the Skills tab. It sits in
+  // The Skills library (`docs/done/skills_plan.md`) → the Skills tab. It sits in
   // this menu beside "Manage CLIs…" because a skill is the same kind of object
   // as the agent CLIs above it: installed per machine, then available to every
   // project — and because two thirds of the library (the sources and their

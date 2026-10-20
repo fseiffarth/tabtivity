@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -21,6 +21,7 @@ import { dragPreviewLayout } from "../tabs/dragPreview";
 import {
   BLOB_TAB_CMD,
   ROOT_SCOPE,
+  activeLayoutPersistTarget,
   DEFAULT_MIN_SUBWINDOW_PX,
   EMPTY_GROUP_ID,
   allGroups,
@@ -31,6 +32,7 @@ import {
   type DetachedDockTarget,
   type LayoutNode,
 } from "../../stores/tabs";
+import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
@@ -71,7 +73,10 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
+import { requestNewTab } from "../../lib/shortcuts/newTabChord";
+import { UntestedTag } from "../common/UntestedTag";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
+import { mobileAgentTmuxReady } from "../../lib/terminal/mobileTmuxReady";
 
 /** Pixel coordinates of a group's pane region, relative to the center panel. */
 interface Rect {
@@ -83,12 +88,6 @@ interface Rect {
 
 function CenterPanelImpl() {
   const t = useT();
-  // A live local agent that was already running when Mobile access was enabled
-  // must not be respawned merely to put tmux underneath it. Record eligibility
-  // the first time this CenterPanel sees a tab: new/restored tabs first seen
-  // while opted in are wrapped; tabs first seen before opt-in wait for their
-  // next ordinary reopen (which mints a fresh tab key).
-  const mobileAgentTmuxReady = useRef(new Map<string, boolean>());
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
   const scope = useTabsStore((s) => s.scope);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
@@ -97,6 +96,12 @@ function CenterPanelImpl() {
   // Root tab keys an app overlay's docked agent column is drawing right now
   // (`OverlayAgentColumn`); their copy here stands down, like the root console.
   const overlayAgentShown = useOverlayAgentStore((st) => st.shownKeys);
+  // The same for Tabby chat keys (assistant scope): the overlay draws them
+  // attach-only; this panel never shows that scope at all (below).
+  const assistantShown = useOverlayAgentStore((st) => st.assistantShownKeys);
+  // A restored Tabby chat spawns its CLI only once it was shown or made
+  // (`startAssistantChat`); until then it has no pane here at all.
+  const assistantStarted = useOverlayAgentStore((st) => st.assistantStartedKeys);
   const layout = useTabsStore((s) => s.layout);
   const layoutByScope = useTabsStore((s) => s.layoutByScope);
   const setScope = useTabsStore((s) => s.setScope);
@@ -109,6 +114,8 @@ function CenterPanelImpl() {
   // this array's identity) — otherwise bounds drags wouldn't reach project.json
   // until the next tab/layout change or app quit.
   const detachedGroups = useTabsStore((s) => s.detachedGroupsByScope[s.scope]);
+  // A hidden subwindow's rename moves nothing else, so it triggers the save itself.
+  const hiddenGroups = useTabsStore((s) => s.hiddenGroupsByScope[s.scope]);
   // `persistScope`, not `saveLayout`: the latter persists the tab store's CURRENT
   // scope into whatever `localFile` it is handed, and those are two independently
   // tracked values. `activeId` and `localFile` both come from `activeProject` here,
@@ -343,15 +350,14 @@ function CenterPanelImpl() {
     // way — `storage::project_key` maps it to `sessions/box_<id>/` and an empty
     // localFile skips the project-tree export copy. A project without a
     // `local_file` isn't ready to persist yet.
-    const isBoxScope = scope.startsWith(BOX_SCOPE_PREFIX);
-    if (!isBoxScope && activeId && !localFile) return;
-    const scopeToPersist = isBoxScope ? scope : (activeId ?? "root");
-    const file = isBoxScope ? "" : (localFile ?? "");
+    // (`activeLayoutPersistTarget`: the rule AppShell's quit flush shares.)
+    const target = activeLayoutPersistTarget(scope, activeId, localFile);
+    if (!target) return;
     const timer = window.setTimeout(() => {
-      persistScope(scopeToPersist, file).catch(() => {});
+      persistScope(target.scope, target.localFile).catch(() => {});
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [scope, activeId, localFile, tabs, layout, detachedGroups, persistScope]);
+  }, [scope, activeId, localFile, tabs, layout, detachedGroups, hiddenGroups, persistScope]);
 
   // #42: re-open popouts that were detached when this scope was last saved. The
   // groups were restored DOCKED (above) so their panes mount and spawn their
@@ -482,9 +488,17 @@ function CenterPanelImpl() {
         }
         return end;
       };
+      // A subwindow dragged by its grip has no target on itself: no preview
+      // there, and the drop leaves it where it is.
+      const d = useDragStore.getState().drag;
+      const ownGroup = d?.kind === "group" ? d.fromGroup : null;
       const el = document.elementFromPoint(x, y);
       const tabBar = el?.closest(".tab-bar");
-      if (tabBar instanceof HTMLElement && tabBar.dataset.groupId) {
+      if (
+        tabBar instanceof HTMLElement &&
+        tabBar.dataset.groupId &&
+        tabBar.dataset.groupId !== ownGroup
+      ) {
         setTarget({
           overGroup: null,
           edge: null,
@@ -499,6 +513,7 @@ function CenterPanelImpl() {
         const px = x - base.left;
         const py = y - base.top;
         for (const [gid, r] of Object.entries(groupRects)) {
+          if (gid === ownGroup) continue;
           if (px >= r.left && px <= r.left + r.width && py >= r.top && py <= r.top + r.height) {
             setTarget({
               overGroup: gid,
@@ -1087,10 +1102,12 @@ function CenterPanelImpl() {
     () =>
       Object.entries(tabsByScope).flatMap(([s, scopeTabs]) =>
         !inactiveScopes.has(s)
-          ? scopeTabs.map((tab) => ({ tab, scopeKey: s }))
+          ? scopeTabs
+              .filter((tab) => s !== ASSISTANT_SCOPE || assistantStarted.has(tab.key))
+              .map((tab) => ({ tab, scopeKey: s }))
           : [],
       ),
-    [tabsByScope, inactiveScopes],
+    [tabsByScope, inactiveScopes, assistantStarted],
   );
   // For each current-scope group: its active (visible) tab key, and the group id
   // holding each visible tab key. Rebuilt only when the current scope's layout
@@ -1174,11 +1191,17 @@ function CenterPanelImpl() {
             style={{ height: "100%" }}
           >
             <div className="center-placeholder-card">
-              <div className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</div>
+              <h2 className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</h2>
               <div className="center-placeholder-hint">
-                {t("centerPanel.noTabsHintPre")} <span className="center-placeholder-key">+</span>{" "}
-                {t("centerPanel.noTabsHintPost")}
+                {t("centerPanel.noTabsGuidance")}
               </div>
+              <button
+                className="center-placeholder-action"
+                aria-label={t("centerPanel.openTab")}
+                onClick={() => requestNewTab({ kind: "menu" }, { groupId: EMPTY_GROUP_ID })}
+              >
+                {t("centerPanel.openTab")} <UntestedTag id="centerPanel.openTab" />
+              </button>
             </div>
           </div>
         </Subwindow>
@@ -1189,7 +1212,10 @@ function CenterPanelImpl() {
           to that group's measured body rect. */}
       <div className="pane-layer">
         {allTabs.map(({ tab, scopeKey }) => {
-          const isCurrentScope = scopeKey === scope;
+          // The Tabby scope is never the panel's scope (it is no project and
+          // opening Tabby never switches): its chats are mounted here only to
+          // own their PTYs, and the side panel's Tabby view draws them attach-only.
+          const isCurrentScope = scopeKey === scope && scopeKey !== ASSISTANT_SCOPE;
           const groupId = isCurrentScope ? groupOfKey.get(tab.key) : undefined;
           // While a group is fullscreen, only that group's active pane shows.
           const visible =
@@ -1269,13 +1295,14 @@ function CenterPanelImpl() {
                 hostSsh={remoteSshByHost[scopeKey]}
                 localPersistEnabled={localPersistEnabled}
                 onConnect={getConnect(scopeKey)}
-                mobileAgentTmuxReady={mobileAgentTmuxReady.current}
+                mobileAgentTmuxReady={mobileAgentTmuxReady}
                 sleepAfterMs={sleepAfterMs}
                 inPopout={popoutTabKeys.has(`${scopeKey}/${tab.key}`)}
                 // The root console / a docked agent column draws this PTY:
                 // its owning pane here stays mounted (§5.3, terminal kinds).
                 drawnElsewhere={
-                  scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))
+                  (scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))) ||
+                  (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key))
                 }
               />
             </div>
@@ -1695,7 +1722,11 @@ function SplitView(props: TreeProps & { node: Extract<LayoutNode, { type: "split
       if (rafId != null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        props.onResized();
+        // Commit the new pane rects before this frame paints. A plain state
+        // write is scheduled after the paint, so the flex-sized chrome (tab
+        // bars, borders) moved a frame ahead of the flat pane layer and the two
+        // overdrew each other for as long as the drag lasted.
+        flushSync(() => props.onResized());
       });
     };
 

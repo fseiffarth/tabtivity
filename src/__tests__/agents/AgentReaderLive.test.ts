@@ -125,6 +125,23 @@ describe("the desktop Reader's live screen", () => {
     ]);
   });
 
+  it("cuts the diff panel off a question whose screen has rows without its divider", () => {
+    // Rows printed before the pane opened sit above it (the phone's replayed
+    // history), and a row caught mid-repaint lacks the bar: either one left
+    // the whole panel glued into the question.
+    const rows = [
+      "● Earlier output that ran the whole width of the pane before the diff panel opened, long ago.",
+      ...DIFF_PANEL_QUESTION.slice(0, 7),
+      `${"│ syncing, so `ollama launch cline` can't push its Ollama setting into".padEnd(73)}New file not yet staged.`,
+      ...DIFF_PANEL_QUESTION.slice(8),
+    ];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 130);
+    expect(live.ask).toEqual([
+      "How should local-model agent homes (<scope>.local) take part in login syncing, so `ollama launch cline` can't push its Ollama setting into your normal Cline tabs?",
+    ]);
+    expect(live.question?.options[0]).toMatchObject({ label: "Receive-only, all CLIs (Recommended)" });
+  });
+
   it("reads a permission prompt as its question, its context and its options", () => {
     const live = readReaderLive(plainBuffer(PERMISSION), "Claude");
     expect(live.question?.options.map((option) => option.label)).toEqual([
@@ -227,6 +244,87 @@ describe("the desktop Reader's live screen", () => {
     expect(tabStepKeys(live, 2, 1)).toEqual(["\u001b[Z"]);
   });
 
+  // Captured live from Codex 0.163.0 at 100 columns: a fresh folder with five
+  // untrusted hooks asks the folder question, then the hooks menu, in place.
+  const CODEX_FOLDER = [
+    "",
+    "  Folder access",
+    "  /home/u/projects/new",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your permission",
+    "  settings. Folder settings can run code automatically, even without a model request. Continue",
+    "  only if you trust these files. Your trust decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Quit",
+    "",
+    "  enter continue · esc quit",
+  ];
+  const CODEX_HOOKS_MENU = [
+    "",
+    "  Hooks need review",
+    "  5 hooks are new or changed.",
+    "  Hooks can run outside the sandbox after you trust them.",
+    "",
+    "",
+    "› 1. Review hooks",
+    "  2. Trust all and continue",
+    "  3. Continue without trusting (hooks won't run)",
+    "",
+    "  enter confirm · esc skip",
+  ];
+  const codexHooksPage = (footer: string, review: boolean) => [
+    "  >_ OpenAI Codex (v0.163.0)",
+    "     ~/projects/new",
+    "",
+    "  To get started, describe a task or try one of these commands:",
+    "",
+    "  /init - create an AGENTS.md file with instructions for Codex",
+    "",
+    "  Hooks",
+    "  Lifecycle hooks from config and enabled plugins.",
+    "",
+    ...(review ? ["  ⚠ 5 hooks need review before they can run.", ""] : []),
+    `  Event                 Installed   Active${review ? "      Review" : ""}      Description`,
+    "",
+    "  PreToolUse            0           0           0           Before a tool executes",
+    "› PostToolUse           1           0           1           After a tool executes",
+    "  SessionStart          1           0           1           When a new session starts",
+    "↓",
+    "",
+    footer,
+  ];
+
+  it("reads Codex's startup folder question and hooks menu, each answered from its own highlight", () => {
+    const folder = readReaderLive(plainBuffer(CODEX_FOLDER), "Codex", 100).question!;
+    expect(folder.options.map((option) => option.label)).toEqual(["Trust and continue", "Quit"]);
+    expect(answerKeys(folder, folder.options[0])).toEqual(["\r"]);
+    const menu = readReaderLive(plainBuffer(CODEX_HOOKS_MENU), "Codex", 100);
+    const hooks = menu.question!;
+    expect(hooks.options.map((option) => option.label)).toEqual([
+      "Review hooks", "Trust all and continue", "Continue without trusting (hooks won't run)",
+    ]);
+    expect(menu.ask[0]).toBe("Hooks need review");
+    expect(answerKeys(hooks, hooks.options[1])).toEqual(["\u001b[B", "\r"]);
+  });
+
+  it("reads Codex's hooks page, which has no numbered rows, as a card of its footer's answers", () => {
+    const live = readReaderLive(plainBuffer(codexHooksPage("  t trust all · enter review · esc close", true)), "Codex", 100);
+    const page = live.question!;
+    expect(page.title).toBe("Hooks");
+    expect(page.options.map((option) => option.label)).toEqual(["Trust all", "Close"]);
+    expect(live.ask).toEqual(["Hooks", "Lifecycle hooks from config and enabled plugins.", "", "⚠ 5 hooks need review before they can run."]);
+    // Trust every hook, then close the page — where `Trust all and continue`
+    // would have got to; or close it as it is.
+    expect(answerKeys(page, page.options[0])).toEqual(["t", "\u001b"]);
+    expect(answerKeys(page, page.options[1])).toEqual(["\u001b"]);
+    // Nothing left to review (`/hooks` after trusting): only Close.
+    const done = readReaderLive(plainBuffer(codexHooksPage("  enter details · esc close", false)), "Codex", 100).question!;
+    expect(done.options.map((option) => option.label)).toEqual(["Close"]);
+    // Another agent's screen of that shape is not Codex's page.
+    expect(readReaderLive(plainBuffer(codexHooksPage("  t trust all · enter review · esc close", true)), "Claude", 100).question).toBeNull();
+  });
+
   it("walks a several-question dialog's tabs with the arrows", () => {
     expect(tabStepKeys({ tabKeys: "arrows" }, 2, 1)).toEqual(["\u001b[D"]);
     expect(tabStepKeys({ tabKeys: "arrows" }, 0, 2)).toEqual(["\u001b[C", "\u001b[C"]);
@@ -271,6 +369,24 @@ describe("the desktop Reader's live screen", () => {
     const idle = readReaderLive(plainBuffer(["> fix it", "", "⏺ Done.", "", "> ", "  ? for shortcuts"]), "Claude");
     expect(idle.question).toBeNull();
     expect(idle.working).toBeNull();
+  });
+
+  it("calls a screen it cannot read stray, and nothing it reads or a blank one", () => {
+    const busy = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const idle = ["> fix it", "", "⏺ Done.", "", "> ", "  ? for shortcuts"];
+    expect(readReaderLive(plainBuffer(busy), "Claude").stray).toBe(false);
+    expect(readReaderLive(plainBuffer(idle), "Claude").stray).toBe(false);
+    expect(readReaderLive(plainBuffer(PERMISSION), "Claude").stray).toBe(false);
+    expect(readReaderLive(plainBuffer(["", ""]), "Claude").stray).toBe(false);
+    // A panel of the CLI's own over the input box, and a session that ended.
+    const panel = readReaderLive(plainBuffer([
+      "> fix it", "", "⏺ Done.", "", " Settings", "   Auto-compact          true", "   Theme                 dark", "", "  Esc to close",
+    ]), "Claude");
+    expect(panel.question).toBeNull();
+    expect(panel.stray).toBe(true);
+    const ended = readReaderLive(plainBuffer(["⏺ Done.", "", "Error: connection lost", "user@host:~/project$"]), "Claude");
+    expect(ended.stray).toBe(true);
+    expect(sameReaderLive(ended, readReaderLive(plainBuffer(idle), "Claude"))).toBe(false);
   });
 
   it("leaves a dialog answered before the last prompt alone", () => {

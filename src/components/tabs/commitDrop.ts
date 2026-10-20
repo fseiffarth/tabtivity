@@ -31,6 +31,17 @@ export function commitDrop(d: TabDrag | null) {
     return;
   }
   const store = useTabsStore.getState();
+  // A whole subwindow dragged by its grip: a bar slot or a body's center
+  // merges its tabs in, an edge moves the subwindow there. Dropped on itself
+  // (or nowhere) it stays put — this drag never pops out.
+  if (d.kind === "group") {
+    if (d.reorderGroup && d.reorderIndex != null) {
+      store.moveGroup(d.fromGroup, d.reorderGroup, "center", d.reorderIndex);
+    } else if (d.overGroup && d.edge) {
+      store.moveGroup(d.fromGroup, d.overGroup, d.edge);
+    }
+    return;
+  }
   if (d.reorderGroup && d.reorderIndex != null) {
     if (d.reorderGroup === d.fromGroup) {
       const found = findGroupOfTab(store.layout, d.key);

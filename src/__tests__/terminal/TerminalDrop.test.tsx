@@ -82,21 +82,27 @@ function giveLayout() {
   });
 }
 
-/** A drop event as WebKitGTK delivers an OS file drag: the path only inside a
- *  `file://` URL among the text payloads. */
-function fileDrop(type: string, uri: string): Event {
+/** A drop event as WebKitGTK delivers an OS file drag: the first file's path
+ *  only inside a `file://` URL among the text payloads, every file in `files`
+ *  by name and size. */
+function fileDrop(type: string, uri: string, files: { name: string; size: number }[] = []): Event {
   const e = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(e, "dataTransfer", {
     value: {
-      types: ["text/uri-list"],
+      types: ["text/uri-list", "Files"],
       dropEffect: "none",
+      files,
       getData: (format: string) => (format === "text/uri-list" ? uri : ""),
     },
   });
   return e;
 }
 
-async function dropOnto(cmd: string, answer: unknown): Promise<{ drop: Event; over: Event }> {
+async function dropOnto(
+  cmd: string,
+  answer: unknown,
+  files: { name: string; size: number }[] = [],
+): Promise<{ drop: Event; over: Event }> {
   invoke.mockImplementation((name: unknown) =>
     name !== "pty_drop_files" ? Promise.resolve(undefined)
       // A bare string is the command's refusal.
@@ -108,7 +114,7 @@ async function dropOnto(cmd: string, answer: unknown): Promise<{ drop: Event; ov
   });
   const pane = host!.firstElementChild!;
   const over = fileDrop("dragover", "file:///home/u/a%20shot.png");
-  const drop = fileDrop("drop", "file:///home/u/a%20shot.png");
+  const drop = fileDrop("drop", "file:///home/u/a%20shot.png", files);
   await act(async () => {
     pane.dispatchEvent(over);
     pane.dispatchEvent(drop);
@@ -129,8 +135,23 @@ describe("TerminalView — files dropped from the file manager", () => {
     expect(over.defaultPrevented).toBe(true);
     expect(drop.defaultPrevented).toBe(true);
     const call = invoke.mock.calls.find((c) => c[0] === "pty_drop_files");
-    expect(call?.[1]).toEqual({ id: "p:drop", paths: ["/home/u/a shot.png"], agent: true });
+    expect(call?.[1]).toEqual({ id: "p:drop", paths: ["/home/u/a shot.png"], agent: true, sizes: [null] });
     expect(pasted).toEqual(["@.app/inbox/x.png "]);
+  });
+
+  it("a multi-file drop sends every file, the unleaked ones as siblings with their size", async () => {
+    await dropOnto("claude", { items: [".app/inbox/a.png", ".app/inbox/b.png"], error: null }, [
+      { name: "a shot.png", size: 10 },
+      { name: "b.png", size: 20 },
+    ]);
+    const call = invoke.mock.calls.find((c) => c[0] === "pty_drop_files");
+    expect(call?.[1]).toEqual({
+      id: "p:drop",
+      paths: ["/home/u/a shot.png", "/home/u/b.png"],
+      agent: true,
+      sizes: [null, 20],
+    });
+    expect(pasted).toEqual(["@.app/inbox/a.png @.app/inbox/b.png "]);
   });
 
   it("a shell tab gets the quoted path", async () => {

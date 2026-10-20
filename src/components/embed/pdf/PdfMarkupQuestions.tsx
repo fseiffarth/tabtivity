@@ -1,6 +1,6 @@
 /**
  * The agent's markup questions on the desktop (`markup_ask`,
- * `docs/markup_questions_mcp_plan.md` P2): the card under the markup strip
+ * `docs/done/markup_questions_mcp_plan.md` P2): the card under the markup strip
  * (`PdfMarkupBar`) and the numbered pins over the pages.
  *
  * The card is the reader's question card (`TerminalReaderView`'s

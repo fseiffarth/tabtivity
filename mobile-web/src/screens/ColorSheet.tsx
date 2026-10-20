@@ -3,6 +3,7 @@ import { ApiError, setTabColor, type TabRow } from "../api";
 import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS } from "../tabColors";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { useBackLayer } from "../backStack";
 
 /** Paint one tab from the phone, or clear its colour (#264).
  *
@@ -22,6 +23,7 @@ export function ColorSheet({ tab, onClose, onColored }: {
   onClose: () => void;
   onColored: (color: string | undefined) => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [current, setCurrent] = useState<string | undefined>(tab.color);
   const [busy, setBusy] = useState(false);

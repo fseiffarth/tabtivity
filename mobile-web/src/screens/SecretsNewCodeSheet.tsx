@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { makeNewRecoveryCode } from "../secrets";
+import { useBackLayer } from "../backStack";
 
 /** A device was disconnected after the recovery code was made (user
  * decision 2026-10-03): the old code's re-pin check is known to whoever
@@ -13,6 +14,8 @@ export function SecretsNewCodeSheet({ onClose }: { onClose: () => void }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState<string | null>(null);
+  // A code on screen is closed only by its own button, once written down.
+  useBackLayer(code ? null : onClose);
   const [error, setError] = useState<string | null>(null);
 
   const make = async () => {

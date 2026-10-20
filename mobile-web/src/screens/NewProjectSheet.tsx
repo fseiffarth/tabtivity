@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ApiError, createProject, MAX_PROJECT_NAME, projectFolderName, type ProjectRow } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { useBackLayer } from "../backStack";
 
 /** Make a new project from the phone. Only its name crosses: the desktop
  * creates it as a folder of that name in its projects folder — never an
@@ -10,6 +11,7 @@ export function NewProjectSheet({ onClose, onCreated }: {
   onClose: () => void;
   onCreated: (project: ProjectRow) => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);

@@ -15,7 +15,7 @@ const PLAY = "svg";
 
 function marks(stateClass: string) {
   const { container } = render(<TabStatusMark stateClass={stateClass} />);
-  return [...container.querySelectorAll(".tab-status-mark:not(.reserved)")].map((el) => ({
+  return [...container.querySelectorAll(".tab-status-mark")].map((el) => ({
     glyph: el.querySelector("svg") ? (el.textContent ? `svg+${el.textContent}` : "svg") : el.textContent,
     shell: el.classList.contains("shell"),
   }));
@@ -37,12 +37,31 @@ describe("TabStatusMark", () => {
     ]);
   });
 
-  it("holds the command mark's slot while an agent works, so the mark coming and going keeps the tab's width", () => {
-    const slots = (stateClass: string) =>
-      render(<TabStatusMark stateClass={stateClass} />).container.querySelectorAll(".tab-status-mark").length;
-    expect(slots(" working")).toBe(slots(" working job"));
-    const { container } = render(<TabStatusMark stateClass=" working" />);
-    expect(container.querySelector(".tab-status-mark.reserved")?.getAttribute("aria-hidden")).toBe("true");
+  it("keeps a tab strip's mark cells fixed, so no mark coming, going or swapping resizes the tab", () => {
+    // What a cell holds, per cell; `""` is an empty cell.
+    const cells = (stateClass: string, slots: 1 | 2) =>
+      [...render(<TabStatusMark stateClass={stateClass} slots={slots} />).container.querySelectorAll(".tab-status-slot")].map(
+        (cell) => {
+          const mark = cell.querySelector(".tab-status-mark");
+          return mark ? (mark.classList.contains("shell") ? "cmd" : (mark.textContent || "play")) : "";
+        },
+      );
+    // An agent tab: its turn in the first cell, a command of its own always in
+    // the second — idle, asking, working, working with a command, or only the
+    // command left running after the turn ended.
+    expect(cells("", 2)).toEqual(["", ""]);
+    expect(cells(" needs-decision", 2)).toEqual(["?", ""]);
+    expect(cells(" working", 2)).toEqual(["play", ""]);
+    expect(cells(" working job", 2)).toEqual(["play", "cmd"]);
+    expect(cells(" working shell", 2)).toEqual(["", "cmd"]);
+    expect(cells(" finished", 2)).toEqual(["✓", ""]);
+    // A shell tab: one cell, kept while it is idle too.
+    expect(cells("", 1)).toEqual([""]);
+    expect(cells(" working shell", 1)).toEqual(["cmd"]);
+  });
+
+  it("draws nothing for an idle tab outside a tab strip", () => {
+    expect(render(<TabStatusMark stateClass="" />).container.innerHTML).toBe("");
   });
 
   it("keeps the other two states one mark each", () => {

@@ -63,6 +63,7 @@ import { TerminalView } from "../../components/terminal/TerminalView";
 import { HPC_GUARD } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
+import { onTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
 
 function giveLayout() {
   Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: 800 });
@@ -144,6 +145,25 @@ describe("TerminalView — silent start notice", () => {
     expect(written()).toContain("[spawn error:");
     expect(written()).not.toContain("Still starting");
     expect(written()).not.toContain("has shown nothing");
+  });
+
+  it("reports a launch that ended without a PTY — no terminal-exit will ever say so", async () => {
+    // A root login tab's dedupe mark waits on this (lib/remote/remoteConnect).
+    const failed = vi.fn();
+    const off = onTerminalSpawnFailed("p:oc", failed);
+    backend(() => Promise.reject(new Error("bad config")));
+    await mountAndWait();
+    expect(failed).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("reports nothing for a launch that got its PTY", async () => {
+    const failed = vi.fn();
+    const off = onTerminalSpawnFailed("p:oc", failed);
+    backend(() => Promise.resolve(undefined));
+    await mountAndWait();
+    expect(failed).not.toHaveBeenCalled();
+    off();
   });
 
   it("speaks for a tab the HPC connect-then-spawn retry started, and lifts its launch hold", async () => {

@@ -363,7 +363,14 @@ export function RunHostPicker({
  *  one per colour: the two things are happening at once, and a single glyph
  *  could only name one of them. (The tool call an agent waits on is not a second
  *  thing — it IS the turn.) */
-export function TabStatusMark({ stateClass }: { stateClass: string }) {
+/** How many fixed mark cells a tab of `kind` keeps (see {@link TabStatusMark}'s
+ *  `slots`): an agent tab two (its turn, and a command of its own beside it), a
+ *  shell tab one (the command), and a tab that never runs anything none. */
+export function statusMarkSlots(kind: TabEntry["kind"]): 0 | 1 | 2 {
+  return kind === "agent" || kind === "local_agent" ? 2 : kind === "shell" ? 1 : 0;
+}
+
+export function TabStatusMark({ stateClass, slots }: { stateClass: string; slots?: 0 | 1 | 2 }) {
   const t = useT();
   const state = stateClass.includes("working")
     ? "working"
@@ -374,7 +381,7 @@ export function TabStatusMark({ stateClass }: { stateClass: string }) {
         : stateClass.includes("interrupted")
           ? "interrupted"
           : null;
-  if (!state) return null;
+  if (!state && !slots) return null;
   // ▶ is drawn (`PlayMark`): as a character, a window's font fallback could
   // swap it for a colour emoji. ■ (the stop square) is not emoji-capable.
   const glyph =
@@ -402,23 +409,35 @@ export function TabStatusMark({ stateClass }: { stateClass: string }) {
       <PlayMark />
     </span>
   );
-  if (commandOnly) return shellMark;
+  const ownMark = state ? (
+    <span className={`tab-status-mark ${state}`} title={label} aria-label={label}>
+      {glyph}
+    </span>
+  ) : null;
+  if (!slots) {
+    if (commandOnly) return shellMark;
+    return (
+      <>
+        {ownMark}
+        {alsoCommand && shellMark}
+      </>
+    );
+  }
+  // In a tab strip every mark has its own fixed cell, laid out whether or not
+  // anything is in it: a command coming and going, or a turn swapping `?` for
+  // ▶, must not change the tab's width — that shifts every tab after it, and a
+  // busy agent did it several times a second. An agent tab's command mark
+  // keeps the second cell even when it is the only mark, so it never jumps.
+  const cells: ReactNode[] =
+    slots === 2 ? [commandOnly ? null : ownMark, commandOnly || alsoCommand ? shellMark : null] : [commandOnly ? shellMark : ownMark];
   return (
-    <>
-      <span className={`tab-status-mark ${state}`} title={label} aria-label={label}>
-        {glyph}
-      </span>
-      {alsoCommand ? (
-        shellMark
-      ) : state === "working" ? (
-        // The command mark's slot, kept while the agent works: a command it
-        // backgrounds comes and goes mid-turn, and the tab must not change
-        // width (shifting every tab after it) each time it does.
-        <span className="tab-status-mark working shell reserved" aria-hidden="true">
-          <PlayMark />
+    <span className="tab-status-marks">
+      {cells.map((cell, i) => (
+        <span key={i} className="tab-status-slot">
+          {cell}
         </span>
-      ) : null}
-    </>
+      ))}
+    </span>
   );
 }
 

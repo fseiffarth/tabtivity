@@ -12,7 +12,7 @@
  *  so xterm neither sends it to the PTY nor cancels the event, and the window's
  *  keyboard handler — main window and popout alike — resolves it from xterm's
  *  textarea (`terminalMayTakeChord`). */
-import { chordMatches, resolveChord, type ShortcutAction, type ShortcutMap } from "./shortcuts";
+import { actionChords, chordMatches, resolveChord, type ShortcutAction, type ShortcutMap } from "./shortcuts";
 
 const TERMINAL_TAB_ACTIONS: readonly ShortcutAction[] = ["prevTab", "nextTab"];
 
@@ -27,7 +27,11 @@ export function isPaneTerminalTarget(target: EventTarget | null): boolean {
 /** Whether the window's handler may resolve `action` for a keydown typed into
  *  a pane terminal. */
 export function terminalMayTakeChord(action: ShortcutAction, e: KeyboardEvent): boolean {
-  return TERMINAL_TAB_ACTIONS.includes(action) && isPaneTerminalTarget(e.target);
+  if (!isPaneTerminalTarget(e.target)) return false;
+  // The side-panel toggle only reaches the window from a terminal on an Alt
+  // chord (Alt+1 by default); Ctrl+B stays tmux's and readline's.
+  if (action === "toggleSidePanel") return e.altKey;
+  return TERMINAL_TAB_ACTIONS.includes(action);
 }
 
 /** Whether a pane terminal hands this keydown to the window instead of the PTY.
@@ -37,6 +41,12 @@ export function terminalMayTakeChord(action: ShortcutAction, e: KeyboardEvent): 
  *  toggle's F9 is not: htop and mc answer F9 themselves.) */
 export function terminalYieldsChord(e: KeyboardEvent, overrides: ShortcutMap | undefined | null): boolean {
   if (chordMatches(resolveChord("osFullscreen", overrides), e)) return true;
+  if (
+    isPaneTerminalTarget(e.target) &&
+    actionChords("toggleSidePanel", overrides).some((c) => c.alt && chordMatches(c, e))
+  ) {
+    return true;
+  }
   return (
     isPaneTerminalTarget(e.target) &&
     TERMINAL_TAB_ACTIONS.some((action) => chordMatches(resolveChord(action, overrides), e))

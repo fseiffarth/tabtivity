@@ -10,6 +10,8 @@ import { useTabsStore } from "../../stores/tabs";
 import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
+import { TerminalReaderChats } from "./TerminalReaderChats";
+import { chatsOffered } from "../../lib/agents/agentChats";
 
 /**
  * The strip docked between an agent pane's tab bar and its terminal: the last
@@ -63,8 +65,10 @@ export function TerminalPromptStrip({
   onReturnFocus: () => void;
   /** The Reader switch (`TerminalReaderView`), for an agent whose stored
    * conversation Tabtivity reads; absent for any other. `changes` is the
-   * Diffs switch (`TerminalReaderChanges`), beside the chat or the terminal. */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void } };
+   * Diffs switch (`TerminalReaderChanges`), beside the chat or the terminal;
+   * `cwd`, the pane's resolved folder, is whose earlier chats the Resume menu
+   * lists (`TerminalReaderChats`). */
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void }; cwd?: string };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -226,6 +230,9 @@ export function TerminalPromptStrip({
           <span>{t("terminal.promptStrip.markup", { name: markupLink.name })}</span>
           <UntestedTag id="desktop.markup.link" />
         </button>
+      )}
+      {reader && chatsOffered(scope, tab) && (
+        <TerminalReaderChats ptyId={ptyId} scope={scope} tab={tab} cwd={reader.cwd} onReturnFocus={onReturnFocus} />
       )}
       {reader?.changes && (
         <button

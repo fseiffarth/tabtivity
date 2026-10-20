@@ -65,6 +65,24 @@ change was not run live.
   With a VM already there, a call asks: keep it (a stopped one boots with the
   package installed over it; a running one gets the app started inside it via
   the QEMU guest agent socket `qga.sock`), or delete it and start a new VM.
+  The guest login is `tester` / `tester`. Bake and desktop use the same
+  standard VGA so the GPU and NIC PCI slots stay stable; boot output is
+  saved in `<VM folder>/serial.log` (cloud images direct it to the serial
+  console, leaving the QEMU window looking stuck during package installation).
+  The bake explicitly registers GDM and verifies the display-manager unit and
+  graphical boot target before accepting the base. Each package disc repeats
+  that registration before checking the package stamp, repairing older bases
+  without deleting the VM. Unfinished desktop packages are repaired first;
+  package installs keep the prewritten GDM config without prompting and
+  temporarily block service starts (restoring the guest's prior policy), so
+  GDM cannot wait on the install hook that must finish before it starts.
+  `fresh-vm.sh repair` performs the same repair in the running guest through
+  the guest agent, then starts GDM; run it from a host terminal to avoid typing
+  in the guest console. It returns package errors and GDM status to the host.
+  A timeout before command submission reports that no repair started: close
+  QEMU, then run the launcher with `latest` and keep the VM to repair from the
+  package disc instead (no working guest agent required). Desktop setup also
+  enables the agent service and starts it when its virtio channel is present.
 - `npm run package:dev` freezes the *current working tree* as a release binary
   behind the "Tabtivity (dev)" desktop entry (`start-tabtivity-dev-build.sh`, binary
   at `~/.local/share/tabtivity/tabtivity-dev`). No hot reload: the user works and
@@ -200,7 +218,10 @@ change was not run live.
   otherwise it skips the settle wait and leaves `package-dev-auto.once`, which
   only the running loop reads (never `queue()`, so a stale one cannot let
   commits build while paused) and drops after one pass; pausing again removes
-  it and cancels the pass;
+  it and cancels the pass. `--build-now` and `--resume` return only once the
+  detached run holds the lock (at most 5 s; `await_run`), since the chip
+  re-reads at once and an earlier read still said idle — "Build now" looked
+  like it needed a second click (2026-10-20); the hook's `--queue` never waits;
   `scripts/package-dev-auto.sh --status` says what it is doing and
   `~/.local/share/tabtivity/package-dev-auto.log` holds the last build's output.
   The header's dev-build chip (`header/DevBuildIndicator.tsx`,

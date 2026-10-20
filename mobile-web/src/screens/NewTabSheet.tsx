@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getLaunchOptions, type AgentRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
+import { useBackLayer } from "../backStack";
 
 /** How the tap wants the agent started, beyond which agent and mode. */
 export interface NewTabLaunch {
@@ -13,6 +14,8 @@ export interface NewTabLaunch {
   sign_in?: "default" | "alternate";
   /** A local-model agent: the opaque id `launch-options` listed. */
   local?: string;
+  /** A chat of the assistant scope: the opaque launch id its sheet listed. */
+  assistant?: string;
 }
 
 /**
@@ -44,7 +47,7 @@ export interface NewTabLaunch {
  * new session, and the sheet closes on the tap rather than waiting for the
  * desktop, so a slow create is a screen the reader can still read.
  */
-export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, onPick, onSendFile, onClose }: {
+export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, defaultAgent, onDefault, onPick, onSendFile, onClose }: {
   projectId: string;
   agents: AgentRow[];
   /** The desktop lets the phone open shells (off by default). */
@@ -61,11 +64,16 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
    *  the sheet is the send-a-file row alone, titled as such, since the
    *  project inbox is a file the sidecar writes and needs no tab. */
   creates?: boolean;
+  /** The agent a tap on the screen's ＋ starts (`newTabDefault.ts`); with
+   *  `onDefault`, each agent tile gets a ★ that makes it that agent. */
+  defaultAgent?: string;
+  onDefault?: (agent: AgentRow) => void;
   onPick: (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => void;
   /** Opens the phone's file picker; runs inside the tap, which the picker needs. */
   onSendFile: () => void;
   onClose: () => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [options, setOptions] = useState<LaunchOptions>({ worktrees: [], cloud: [], sign_in: [] });
   const [signingIn, setSigningIn] = useState(false);
@@ -88,6 +96,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
     onPick("agent", agent, undefined, { cloud: launch.action });
   };
   const title = t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send");
+  const starred = onDefault ? agents.find((agent) => agent.id === defaultAgent) : undefined;
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet new-tab-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
@@ -117,7 +126,15 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         <div className="new-tab-agents">{agents.map((agent) => <div className="agent-create" key={agent.id}>
           <button disabled={busy} onClick={() => pickAgent(agent)}>{agent.label}</button>
           {!headless && agent.modes.map((mode) => <button className="mode" disabled={busy} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
+          {onDefault && <button
+            className="new-tab-default"
+            aria-pressed={agent.id === defaultAgent}
+            aria-label={t(agent.id === defaultAgent ? "mobile.newTab.isDefault" : "mobile.newTab.setDefault", { agent: agent.label })}
+            title={t(agent.id === defaultAgent ? "mobile.newTab.isDefault" : "mobile.newTab.setDefault", { agent: agent.label })}
+            onClick={() => onDefault(agent)}
+          ><span aria-hidden="true">{agent.id === defaultAgent ? "★" : "☆"}</span></button>}
         </div>)}</div>
+        {starred && <p className="sheet-note">{t("mobile.newTab.defaultNote", { agent: starred.label })}{isUntested("mobile.project.fabQuick") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
         {/* A desktop that reports no agents still opens shells — say so, rather
             than leaving the sheet looking half-loaded. */}
         {agents.length === 0 && <p className="sheet-note">{t("mobile.newTab.noAgents")}</p>}

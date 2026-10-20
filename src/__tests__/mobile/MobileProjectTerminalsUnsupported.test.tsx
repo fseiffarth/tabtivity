@@ -58,7 +58,11 @@ describe("Mobile project screen — a host with no tmux", () => {
     await screen.findByText("Claude");
     expect(screen.getByText(/attach through tmux, which it does not have/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Scheduled prompts for Claude" })).toBeNull();
-    // The header's ＋ is still there, named for what it can do, and its sheet
+    fireEvent.click(screen.getByRole("button", { name: "More for Claude" }));
+    const more = screen.getByRole("dialog", { name: "Claude" });
+    expect(within(more).queryByRole("button", { name: "Scheduled prompts" })).toBeNull();
+    fireEvent.click(within(more).getByRole("button", { name: "Close" }));
+    // The ＋ is still there, named for what it can do, and its sheet
     // is the send-a-file row alone: no shell, no agent, no cloud or sign-in
     // rows, and `launch-options` is never asked for.
     expect(screen.queryByRole("button", { name: "New tab" })).toBeNull();
@@ -94,7 +98,11 @@ describe("Mobile project screen — a host with no tmux", () => {
       await screen.findByText("Claude");
       expect(screen.queryByText(/attach through tmux/)).toBeNull();
       expect(screen.getByRole("button", { name: "New tab" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Scheduled prompts for Claude" })).toBeTruthy();
+      // The card has no schedules, so its ◷ is the ⋯ sheet's row.
+      fireEvent.click(screen.getByRole("button", { name: "More for Claude" }));
+      const more = screen.getByRole("dialog", { name: "Claude" });
+      expect(within(more).getByRole("button", { name: "Scheduled prompts" })).toBeTruthy();
+      fireEvent.click(within(more).getByRole("button", { name: "Close" }));
       const viewer = await openPicture();
       expect(within(viewer).getByRole("button", { name: /^Mark up/ })).toBeTruthy();
       cleanup();

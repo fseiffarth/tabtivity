@@ -9,6 +9,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
 import { useTabsStore } from "../../stores/tabs";
+import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
 import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
@@ -99,6 +100,8 @@ interface BackupRef {
 /** Mirrors `services::git_peer::GitPeerState` (camelCase). */
 interface GitPeerState {
   enabled: boolean;
+  /** "Local wins": commits go mirror → host only (`GitPeerState::local_authoritative`). */
+  localAuthoritative?: boolean;
   status: LockstepStatus;
   detail: string | null;
   localHead: HeadRef | null;
@@ -413,6 +416,9 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
   const [loadingMore, setLoadingMore] = useState(false);
   /** Cleared when a page fails, so the observer stops retrying on every scroll. */
   const [autoPage, setAutoPage] = useState(true);
+  // Remote-tracking branches (`origin/dependabot/…`) can outnumber the local
+  // ones by far, so they stay folded until asked for.
+  const [showRemoteBranches, setShowRemoteBranches] = useState(false);
   // Read inside `loadMore` rather than closed over, so paging never re-creates
   // (and re-fires) the callback the scroll sentinel is watching with.
   const commitsRef = useRef<GitCommit[]>([]);
@@ -489,6 +495,16 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
   useEffect(() => {
     onWorktreeChanged?.(worktreeSelection);
   }, [onWorktreeChanged, worktreeSelection]);
+
+  // The "+" menu starts agents in the worktree selected here. Only a local
+  // checkout counts: a host-side path means nothing to a local agent, whose
+  // cwd on a remote project is pinned to the mirror root anyway.
+  const setSelectedWorktree = useGitWorktreeSelectionStore((s) => s.setSelected);
+  useEffect(() => {
+    if (!projectDir) return;
+    const local = !remote || worktreeSelection?.site === "mirror";
+    setSelectedWorktree(projectDir, local ? worktreeSelection?.path || null : null);
+  }, [projectDir, remote, setSelectedWorktree, worktreeSelection]);
 
   const selectWorktree = (wt: Worktree) => {
     if (!selectionSupported || loading || fetching || actionsBusy || !connected || wt.is_prunable || wt.is_bare) return;
@@ -690,6 +706,36 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
       setLockstepBusy(false);
     }
   }, [projectId, lockstep?.enabled]);
+
+  // "Local wins": turning it on can reset host branches (backed up), so it asks first;
+  // turning it off only goes back to two-way sync and needs no confirmation.
+  const toggleLocalAuthoritative = useCallback(async () => {
+    if (!projectId) return;
+    const next = !(lockstep?.localAuthoritative ?? false);
+    if (next) {
+      const ok = await confirmAction({
+        title: t("gitHistory.localAuthConfirmTitle"),
+        body: t("gitHistory.localAuthConfirmBody"),
+        confirmLabel: t("gitHistory.localAuthConfirm"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setLockstepBusy(true);
+    setError(null);
+    try {
+      const s = await invoke<GitPeerState>("git_peer_set_local_authoritative", {
+        projectId,
+        enabled: next,
+      });
+      setLockstep(s);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLockstepBusy(false);
+    }
+  }, [projectId, lockstep?.localAuthoritative, confirmAction, t, load]);
 
   const lockstepSyncNow = useCallback(async () => {
     if (!projectId) return;
@@ -1163,6 +1209,19 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
           </button>
           {lockstep?.enabled && (
             <>
+              <button
+                className={`toolbar-btn${lockstep.localAuthoritative ? " active" : ""}`}
+                onClick={toggleLocalAuthoritative}
+                disabled={lockstepBusy}
+                aria-pressed={!!lockstep.localAuthoritative}
+                title={t(
+                  lockstep.localAuthoritative
+                    ? "gitHistory.localAuthOnTitle"
+                    : "gitHistory.localAuthOffTitle",
+                )}
+              >
+                {t("gitHistory.localAuthLabel")} <UntestedTag id="gitHistory.localAuthoritative" />
+              </button>
               <span
                 title={lockstep.detail ?? undefined}
                 style={{
@@ -1339,7 +1398,17 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
               </button>,
             ];
           })}
-          {remoteBranches.map((b) => (
+          {remoteBranches.length > 0 && (
+            <button
+              className="git-branch-pill git-branch-remote-toggle"
+              onClick={() => setShowRemoteBranches((v) => !v)}
+              aria-expanded={showRemoteBranches}
+              title={t(showRemoteBranches ? "gitHistory.hideRemoteBranches" : "gitHistory.showRemoteBranches")}
+            >
+              {showRemoteBranches ? "▾" : "▸"} {t("gitHistory.remoteBranches", { count: remoteBranches.length })}
+            </button>
+          )}
+          {showRemoteBranches && remoteBranches.map((b) => (
             <button
               key={b.name}
               className="git-branch-pill remote"

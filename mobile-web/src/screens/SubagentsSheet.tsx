@@ -4,6 +4,7 @@ import { openSubagent, subagentAtWork, subagentsIn, type SubagentStep } from "..
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { useBackLayer } from "../backStack";
 
 /** As many turns as the Reader first reads (`Terminal`'s TRANSCRIPT_STEP), so
  * the siblings the opened subagent's bar steps through are the Reader's own. */
@@ -19,6 +20,7 @@ export function SubagentsSheet({ tab, onClose, onOpen }: {
   onClose: () => void;
   onOpen: (step: SubagentStep) => void;
 }) {
+  useBackLayer(onClose);
   const t = useT();
   const [entries, setEntries] = useState<TranscriptEntry[] | null>(null);
   const [failed, setFailed] = useState(false);

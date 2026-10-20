@@ -432,13 +432,22 @@ function dropLeading(spans: readonly ReadableSpan[], count: number): ReadableSpa
  * list is one block, the full TUI's is several, and a blank row in the middle
  * of the dialog's own column band is a separator, not the end of the list.
  *
- * A group header (`OpenCode Zen`) is listed like any other row — nothing but
- * its colour tells it from a model. Tapping one types its name, which filters
- * the picker to that group instead of picking anything, and the sheet reads
- * the narrowed list as the next step. That is the graceful end of the one
- * ambiguity here.
+ * A group heading (`OpenCode Zen`, `Recent`) is told from a model by the
+ * blank row the dialog leaves above it, or — at a frame's top, where there is
+ * none — by being bold on the dialog's own background. It is no row to pick
+ * (`openCodePickerPrompt`): typed, it matched its group's first model, which
+ * Enter then picked.
+ *
+ * The list is a scroll box about half the pane tall, so a frame is a slice of
+ * it; `OpenCodePickerWalk` puts the slices together.
  */
 const PICKER_TITLE = /^(\s+)(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\/\d+)?)?(?:\s+esc)?$/u;
+/** The same title row with the screen behind the overlay showing on either
+ * side of it: the full TUI dims its session rather than clearing it, so over a
+ * conversation the title row carries the transcript's words to its left and
+ * the sidebar's to its right. Only with its `esc`, which is what tells the
+ * dialog's title from those words — and where the dialog's right edge is. */
+const PICKER_TITLE_OVER = /^(.*?\S\s{2,})(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\/\d+)?)?\s+esc(?=\s{2,}|\s*[│┃]|\s*$)/u;
 /** Rows read out of one picker. The full TUI lists every provider's models on
  * a tall pane; the cap only bounds a misread. */
 const MAX_PICKER_ROWS = 40;
@@ -452,6 +461,7 @@ const PICKER_FOOTER = /(?:^|\s)ctrl\+\p{L}\b/u;
 /** The full TUI's highlight, drawn left of the labels' column. Mini draws no
  * marker at all, so a picker without one simply reports no current row. */
 const PICKER_MARK = /[●▸❯>]/u;
+const MARK_REACH = 3;
 /** Narrower than any picker OpenCode draws: a title row that ends before this
  * is not the overlay's right edge. */
 const MIN_PICKER_WIDTH = 24;
@@ -459,11 +469,62 @@ const MIN_PICKER_WIDTH = 24;
 const COLUMN_SPLIT = /\s{2,}/u;
 const MAX_LABEL = 80;
 
-export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPrompt | null {
+/** A row as the screen has it, column for column. `readableScreen` takes a
+ * frame edge off the front of a row (`edge`), which is right for a box's own
+ * rows but not for a dialog drawn over one: on a narrow pane the composer's
+ * `┃` sits three columns in, and the dialog rows beside it came out five
+ * columns short — `Muse Spark 1.3 Free` read as `Spark 1.3 Free`, `Recent` as
+ * `t`. The edge is put back as blanks, so every row lines up with the title. */
+function screenText(line: { text: string; edge?: number }): string {
+  return line.edge ? " ".repeat(line.edge) + line.text : line.text;
+}
+
+/** A row of OpenCode's picker as the dialog drew it. */
+export interface OpenCodePickerRow {
+  /** The row's own words, as printed: a Recent or Favorites row carries its
+   * provider after the model's name (`Muse Spark 1.3 Free OpenCode Zen`). */
+  text: string;
+  /** The second column (`Free`). */
+  tag?: string;
+  /** A group heading (`OpenCode Zen`, `Recent`) rather than a model: the rows
+   * under it are its, and it is not something to pick. */
+  heading: boolean;
+  /** The full TUI's `●`: the model the session is on. */
+  marked: boolean;
+}
+
+/** The part of the list one frame shows. The dialog is a scroll box about
+ * half the pane tall (`floor(rows / 2) - 6` lines, 1.18.31), with no
+ * scrollbar, so a frame is a slice of a list that can be several times
+ * longer: what the chooser lists is the slices put together
+ * (`OpenCodePickerWalk`). */
+export interface OpenCodePickerPage {
+  title: string;
+  rows: OpenCodePickerRow[];
+  /** Index, in the lines read, of the title row. */
+  start: number;
+}
+
+type PickerLine = { text: string; edge?: number; spans?: readonly ReadableSpan[] };
+
+/** The span drawn at screen `column` of `line`, if the line kept its styles. */
+function spanAt(line: PickerLine, column: number): ReadableSpan | undefined {
+  if (!line.spans) return undefined;
+  let offset = column - (line.edge ?? 0);
+  if (offset < 0) return undefined;
+  for (const span of line.spans) {
+    if (offset < span.text.length) return span;
+    offset -= span.text.length;
+  }
+  return undefined;
+}
+
+export function readOpenCodePickerPage(lines: readonly PickerLine[]): OpenCodePickerPage | null {
   let title = -1;
   let heading: RegExpExecArray | null = null;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    heading = PICKER_TITLE.exec(lines[index].text);
+    const text = screenText(lines[index]);
+    heading = PICKER_TITLE.exec(text) ?? PICKER_TITLE_OVER.exec(text);
     if (heading) {
       title = index;
       break;
@@ -477,59 +538,132 @@ export function readOpenCodePicker(lines: readonly { text: string }[]): SelectPr
    * paints over the session's status bar as well as its composer box, and
    * without this the bar's tail rode into a row's second column (`GitHub
    * Copilot` · `ommands`). A title too short to bound anything — a dialog this
-   * has misread, or one drawn without the hint — bounds nothing. */
-  const right = lines[title].text.trimEnd().length;
+   * has misread, or one drawn without the hint — bounds nothing. A title row
+   * over the screen behind it ends at its `esc` (`PICKER_TITLE_OVER`). */
+  const right = heading[0].trimEnd().length;
   const end = right >= column + MIN_PICKER_WIDTH ? right : Number.POSITIVE_INFINITY;
+  /** The dialog's own background, read off its title: a heading is drawn on
+   * it, the highlighted row on a colour of its own. */
+  const panel = spanAt(lines[title], column)?.background;
   /** The row as the dialog drew it: what stands between the dialog's own two
    * columns, with whatever the screen behind it left on either side dropped. */
   const cell = (text: string) => (text.length > column ? text.slice(column, end).trimEnd() : "");
   let index = title + 1;
-  const skipBlank = () => { while (index < lines.length && !lines[index].text.trim()) index += 1; };
+  // Blank within the dialog's own band: over a conversation, the rows the
+  // dialog leaves empty still carry the transcript beside it.
+  const skipBlank = () => { while (index < lines.length && !cell(screenText(lines[index]))) index += 1; };
   skipBlank();
   // The search field, whether it holds the placeholder or a typed query.
   if (index >= lines.length) return null;
   index += 1;
   skipBlank();
-  const options: SelectPrompt["options"] = [];
-  let current = -1;
+  const rows: OpenCodePickerRow[] = [];
   let gap = 0;
-  for (; index < lines.length && options.length < MAX_PICKER_ROWS; index += 1) {
-    const text = lines[index].text;
-    if (!text.trim()) {
-      // Between two groups of the same list; past the list, the end of it.
+  for (; index < lines.length && rows.length < MAX_PICKER_ROWS; index += 1) {
+    const text = screenText(lines[index]);
+    const row = cell(text);
+    // Nothing in the dialog's band — a blank row, or the screen behind the
+    // overlay showing past its left edge: between two groups of the same
+    // list; past the list, the end of it.
+    if (!row) {
       gap += 1;
-      if (gap > MAX_LIST_GAP || options.length === 0) break;
+      if (gap > MAX_LIST_GAP || rows.length === 0) break;
       continue;
     }
-    const row = cell(text);
-    // A line that reaches the dialog's column with nothing on it is the screen
-    // behind the overlay showing past its left edge, not a row of the list.
-    if (!row) break;
     if (PICKER_FOOTER.test(row)) break;
     const columns = row.split(COLUMN_SPLIT);
     const label = columns[0].trim();
     if (!label) break;
+    // The dialog leaves a blank row above every group's heading but the
+    // first, and nowhere else. A heading at the top of a frame has none
+    // there: it is the one row drawn bold on the dialog's own background
+    // (the highlighted row is bold too, on its own colour).
+    const span = spanAt(lines[index], column);
+    const bold = span?.className?.split(" ").includes("b") === true;
+    const isHeading = gap > 0 || (bold && span?.background === panel);
     gap = 0;
-    if (PICKER_MARK.test(text.slice(0, column))) current = options.length;
+    rows.push({
+      text: label.slice(0, MAX_LABEL),
+      tag: columns.slice(1).join(" · ").trim() || undefined,
+      heading: isHeading,
+      // Two columns left of the labels; further left is the screen behind.
+      marked: PICKER_MARK.test(text.slice(Math.max(0, column - MARK_REACH), column)),
+    });
+  }
+  if (rows.length === 0) return null;
+  return { title: heading[2].trim(), rows, start: title };
+}
+
+/** The headings of the sections OpenCode lists above its providers: their
+ * rows carry the provider in their own words. */
+const SECTIONS = new Set(["Recent", "Favorites"]);
+/** What a favourite row carries after its name in a provider's group. */
+const FAVORITE_NOTE = /\s+\(Favorite\)$/u;
+const ELLIPSIS = /\s*(?:…|\.\.\.)$/u;
+
+/**
+ * The rows as a list to pick from: one entry per model, under the provider it
+ * belongs to. A heading is no row of its own — typed into the search field it
+ * only matched its group's first model, which Enter then picked — but the
+ * provider of every row under it, shown beside the model and typed after it:
+ * the picker filters on a model's name and its provider together (`Grok 4.5
+ * GitHub Copilot` finds the one row), and one name can stand in two groups. A
+ * Recent or Favorites row prints its provider itself, which is split off for
+ * the label wherever a provider's heading names it.
+ */
+export function openCodePickerPrompt(page: OpenCodePickerPage, rows: readonly OpenCodePickerRow[] = page.rows): SelectPrompt {
+  const providers = rows
+    .filter((row) => row.heading && !SECTIONS.has(row.text))
+    .map((row) => row.text)
+    .sort((a, b) => b.length - a.length);
+  const options: SelectPrompt["options"] = [];
+  let current = -1;
+  let group: string | undefined;
+  for (const row of rows) {
+    if (row.heading) {
+      group = row.text;
+      continue;
+    }
+    const printed = row.text.replace(FAVORITE_NOTE, "");
+    // Rows above every provider's heading are a section's, whether or not
+    // its own heading was seen: once the highlight wraps to the list's first
+    // model, the dialog centres on it and can leave `Recent` above the frame.
+    const section = group === undefined || SECTIONS.has(group);
+    let label = printed;
+    let provider = section ? undefined : group;
+    if (section) {
+      const named = providers.find((name) => printed.endsWith(` ${name}`) && printed.length > name.length + 1);
+      if (named) {
+        label = printed.slice(0, printed.length - named.length - 1);
+        provider = named;
+      }
+    }
+    const query = section ? printed : `${printed.replace(ELLIPSIS, "")} ${group}`;
+    if (row.marked) current = options.length;
     options.push({
       index: options.length,
       number: options.length + 1,
-      label: label.slice(0, MAX_LABEL),
-      description: columns.slice(1).join(" · ").trim() || undefined,
+      label,
+      description: [provider, row.tag].filter(Boolean).join(" · ") || undefined,
+      keys: openCodePickKeys(query),
     });
   }
-  if (options.length === 0) return null;
   // The picker's own heading is the line `start` points at, so it has no
   // question block above its rows: the model sheet reads the rows and the
   // heading, never the screen around them.
   return {
     options,
     current,
-    start: title,
-    question: title,
-    context: title,
-    title: heading[2].trim(),
+    start: page.start,
+    question: page.start,
+    context: page.start,
+    title: page.title,
   };
+}
+
+export function readOpenCodePicker(lines: readonly PickerLine[]): SelectPrompt | null {
+  const page = readOpenCodePickerPage(lines);
+  return page ? openCodePickerPrompt(page) : null;
 }
 
 /** ctrl+p — the only way into OpenCode mini's commands. */
@@ -548,4 +682,244 @@ export const OPENCODE_MODEL_KEYS = [PALETTE, "model", "\r"];
  * still finds the row, while the `…` itself would match nothing. */
 export function openCodePickKeys(label: string): string[] {
   return [CLEAR_SEARCH, label.replace(/\s*(?:…|\.\.\.)$/u, "").trim(), "\r"];
+}
+
+/** ↓ — moves the picker's highlight, which scrolls its list along. */
+const WALK_DOWN = "\u001b[B";
+/** How long a step is given to show before it is taken to have moved
+ * nothing: the list is at its end, or fits the dialog whole. A phone's frame
+ * comes over the network, so this is not a desktop repaint. */
+const WALK_STEP_WAIT_MS = 600;
+/** Steps in a row that moved nothing before the walk ends. The dialog keeps
+ * its highlight centred, so at either end of the list it moves the
+ * highlight without scrolling for up to half a frame — two steps. */
+const WALK_STILL_STEPS = 3;
+const MAX_WALK_STEPS = 200;
+const MAX_WALK_ROWS = 600;
+
+/** The rows the walk has seen. `main` runs from the frame the dialog opened on
+ * (centred on the session's model) down to where the walk is. The highlight
+ * wraps from the last row to the first, so once the walk passes the end the
+ * frames come from the list's top: `top`, until it reaches `main` again. */
+export interface OpenCodeWalkRows {
+  main: OpenCodePickerRow[];
+  top: OpenCodePickerRow[] | null;
+  done: boolean;
+}
+
+const sameRow = (a: OpenCodePickerRow, b: OpenCodePickerRow) => a.text === b.text && a.tag === b.tag;
+
+/** Where `known` runs on into `page`: the index from which every row of
+ * `known` is `page`'s next, the longest such overlap. -1 when `page` does not
+ * pick up where `known` ends. */
+function continuation(known: readonly OpenCodePickerRow[], page: readonly OpenCodePickerRow[]): number {
+  for (let from = Math.max(0, known.length - page.length); from < known.length; from += 1) {
+    let match = true;
+    for (let offset = 0; from + offset < known.length; offset += 1) {
+      if (!sameRow(known[from + offset], page[offset])) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return from;
+  }
+  return -1;
+}
+
+/** Whether `page` stands whole inside `known`, and where. */
+function within(known: readonly OpenCodePickerRow[], page: readonly OpenCodePickerRow[]): number {
+  for (let from = 0; from + page.length <= known.length; from += 1) {
+    if (page.every((row, offset) => sameRow(known[from + offset], row))) return from;
+  }
+  return -1;
+}
+
+/** `known` up to `from`, then `page`. A row both have is a heading if either
+ * frame could tell: one at a frame's top has no blank above it to say so. */
+function joinAt(known: readonly OpenCodePickerRow[], from: number, page: readonly OpenCodePickerRow[]): OpenCodePickerRow[] {
+  return [
+    ...known.slice(0, from),
+    ...page.map((row, offset) => {
+      const seen = known[from + offset];
+      return seen && seen.heading && !row.heading ? { ...row, heading: true } : row;
+    }),
+  ];
+}
+
+/** `page` before `known`, where `page` runs on into `known`'s start. */
+function joinBefore(page: readonly OpenCodePickerRow[], from: number, known: readonly OpenCodePickerRow[]): OpenCodePickerRow[] {
+  const overlap = page.length - from;
+  return [...joinAt(page, from, known.slice(0, overlap)), ...known.slice(overlap)];
+}
+
+/** One more frame of the list, put in its place among those seen. */
+export function mergeOpenCodePage(rows: OpenCodeWalkRows | null, page: readonly OpenCodePickerRow[]): OpenCodeWalkRows {
+  if (!rows) return { main: [...page], top: null, done: false };
+  if (rows.done) return rows;
+  const { main, top } = rows;
+  if (top === null) {
+    const from = continuation(main, page);
+    if (from >= 0) {
+      const next = joinAt(main, from, page);
+      return { main: next, top: null, done: next.length >= MAX_WALK_ROWS };
+    }
+    // Back on rows already seen: the walk passed the end, and the list's top
+    // is the frame it opened on.
+    if (within(main, page) >= 0) return { main, top: null, done: true };
+    // The list's top, running on into the frame it opened on.
+    const before = continuation(page, main);
+    if (before >= 0) return { main: joinBefore(page, before, main), top: null, done: true };
+    return { main, top: [...page], done: false };
+  }
+  const from = continuation(top, page);
+  const grown = from >= 0 ? joinAt(top, from, page) : within(top, page) >= 0 ? top : [...top, ...page];
+  const meets = continuation(grown, main);
+  if (meets >= 0) return { main: joinBefore(grown, meets, main), top: null, done: true };
+  if (within(grown, main) >= 0) return { main: grown, top: null, done: true };
+  return { main, top: grown, done: grown.length + main.length >= MAX_WALK_ROWS };
+}
+
+/** The rows in the list's own order: its top, then from the frame it opened on. */
+function walkedRows(rows: OpenCodeWalkRows): OpenCodePickerRow[] {
+  return rows.top ? [...rows.top, ...rows.main] : rows.main;
+}
+
+/** A step of the walk: a third of a frame. The dialog centres its highlight,
+ * so a step scrolls the list by the rows it crosses — a heading and the blank
+ * above it count as rows but take no step — and a third keeps each frame
+ * overlapping the one before, which is how the frames are put together. */
+function walkKeys(page: OpenCodePickerPage): string[] {
+  return Array.from({ length: Math.max(1, Math.floor(page.rows.length / 3)) }, () => WALK_DOWN);
+}
+
+/**
+ * Lists the whole of OpenCode's picker, not the slice its frame shows: walks
+ * the highlight down with ↓ — nothing is picked, and the search field never
+ * sees a key — and puts the frames together until the list has come round to
+ * where it started. Fed every frame the screen draws (`read`); a tap stops it
+ * (`hold`) before its own keys go in, and keys sent before those are harmless:
+ * typing into the search field moves the highlight to the first match.
+ */
+export class OpenCodePickerWalk {
+  private page: OpenCodePickerPage | null = null;
+  private rows: OpenCodeWalkRows | null = null;
+  private seen = "";
+  private still = 0;
+  private steps = 0;
+  private held = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  /** `send` types keys into the session; `changed` says the list grew or the
+   * walk ended without a new frame (a caller that reads only on frames). */
+  constructor(
+    private readonly send: (keys: string[]) => void,
+    private readonly changed: () => void = () => {},
+  ) {}
+
+  /** The picker the screen shows now, or null when it shows none. */
+  read(page: OpenCodePickerPage | null): void {
+    if (!page) {
+      this.reset();
+      return;
+    }
+    // Another step of the dialog (its variant list): a list of its own.
+    if (this.page && this.page.title !== page.title) this.reset();
+    this.page = page;
+    if (this.held) return;
+    const seen = page.rows.map((row) => `${row.text}\u0000${row.tag ?? ""}`).join("\u0001");
+    if (this.rows && seen === this.seen) return;
+    this.seen = seen;
+    this.rows = mergeOpenCodePage(this.rows, page.rows);
+    this.still = 0;
+    this.step();
+  }
+
+  /** The list as far as it is known, or the frame alone once a tap has
+   * filtered it into something else. */
+  prompt(): SelectPrompt | null {
+    const page = this.page;
+    if (!page) return null;
+    if (!this.rows) return openCodePickerPrompt(page);
+    const rows = walkedRows(this.rows);
+    if (this.held && within(rows, page.rows) < 0) return openCodePickerPrompt(page);
+    const prompt = openCodePickerPrompt(page, rows);
+    return this.walking() ? { ...prompt, hidden: 1 } : prompt;
+  }
+
+  /** Still putting the list together. */
+  walking(): boolean {
+    return !!this.rows && !this.rows.done && !this.held;
+  }
+
+  /** No more keys: a row was tapped, or the picker is being closed. */
+  hold(): void {
+    this.held = true;
+    this.clearTimer();
+  }
+
+  reset(): void {
+    this.clearTimer();
+    this.page = null;
+    this.rows = null;
+    this.seen = "";
+    this.still = 0;
+    this.steps = 0;
+    this.held = false;
+  }
+
+  private step(): void {
+    this.clearTimer();
+    if (!this.page || !this.rows || this.rows.done || this.held) return;
+    if (this.steps >= MAX_WALK_STEPS) {
+      this.finish();
+      return;
+    }
+    this.steps += 1;
+    this.send(walkKeys(this.page));
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.still += 1;
+      if (this.still >= WALK_STILL_STEPS) this.finish();
+      else this.step();
+    }, WALK_STEP_WAIT_MS);
+  }
+
+  private finish(): void {
+    if (this.rows) this.rows = { ...this.rows, done: true };
+    this.changed();
+  }
+
+  private clearTimer(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+  }
+}
+
+/** The top row of any dialog OpenCode draws over its session — `DialogSelect`
+ * (the pickers, "Connect a provider"), its alerts, confirms and prompts: the
+ * title, then the `esc` that closes it at the dialog's far edge, with whatever
+ * the dimmed screen behind shows on either side. The working row's
+ * `esc interrupt` and shell mode's `esc exit shell mode` are hints, not this. */
+const DIALOG_HEADER = /\S\s{2,}esc(?=\s{2,}|\s*[│┃]|\s*$)/u;
+const DIALOG_CLOSE = "\u001b";
+
+/**
+ * The keys that clear a dialog OpenCode has open over its composer before a
+ * message goes in: one Escape, which closes the top dialog and hands focus
+ * back to the prompt — or none, with no dialog on `rows`.
+ *
+ * Typed into a dialog, a message never reaches the agent: its search field
+ * takes the words, Enter picks whatever row they matched, and the composer's
+ * line reset (Ctrl+A) is the model picker's own "Connect provider" key — a
+ * "yes" sent from the Chat view showed as sent, the agent never answered, and
+ * the terminal had "Connect a provider" up (1.18.32). A picker the model chip
+ * opened and could not read back was left up exactly so. With no dialog the
+ * Escape is withheld: a working session reads it as half an interrupt.
+ *
+ * `rows` are the screen as it stands, the viewport only — a mini session's
+ * scrollback can still hold an overlay it has since closed.
+ */
+export function openCodeDialogCloseKeys(rows: readonly (string | { text: string })[]): string[] {
+  const open = rows.some((row) => DIALOG_HEADER.test((typeof row === "string" ? row : row.text).trimEnd()));
+  return open ? [DIALOG_CLOSE] : [];
 }

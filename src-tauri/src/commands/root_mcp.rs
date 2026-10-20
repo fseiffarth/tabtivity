@@ -128,6 +128,19 @@ struct ServerState {
 }
 
 static REQUESTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+/// The web lane's own global pool. A web call holds its permits for up to 15 s
+/// of network I/O (the other lanes' calls are local and short), so on the
+/// shared pool of 8 a handful of concurrent chats would starve root, schedule,
+/// push, markup and help calls into `429`. A web token waits only here.
+static WEB_REQUESTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+const REQUEST_SLOTS: usize = 8;
+const WEB_REQUEST_SLOTS: usize = 8;
+
+/// The global pool a caller's requests are counted in.
+fn request_pool(caller: root_mcp::Caller) -> Arc<tokio::sync::Semaphore> {
+    let (pool, slots) = if caller == root_mcp::Caller::Web { (&WEB_REQUESTS, WEB_REQUEST_SLOTS) } else { (&REQUESTS, REQUEST_SLOTS) };
+    pool.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(slots))).clone()
+}
 /// How long a request may wait for a worker slot. With the 5 s upload and the
 /// 15 s of work it stays inside a socket's 30 s lifetime.
 const PERMIT_WAIT: Duration = Duration::from_secs(8);
@@ -165,8 +178,7 @@ async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Res
     // The rate limit above and the socket bound still cap what can queue.
     let permits = async {
         let own = session.permits.clone().acquire_owned().await.ok()?;
-        let global = REQUESTS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(8))).clone()
-            .acquire_owned().await.ok()?;
+        let global = request_pool(session.identity.caller).acquire_owned().await.ok()?;
         Some((global, own))
     };
     let (global, own) = tokio::time::timeout(PERMIT_WAIT, permits).await
@@ -209,6 +221,29 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
     if message.is_array() {
         security::audit_reason(&audit_session, "", "refused", started.elapsed(), Some("batch"));
         return Json(root_mcp::rpc_error(Value::Null, -32600, "batch requests are not supported: one message per request")).into_response();
+    }
+    if session.identity.caller == root_mcp::Caller::Web {
+        // The assistant's web lane (`services::web_lane`): the guarded fetch
+        // and the search, nothing else. This branch always returns, so a web
+        // token never falls through to a registry below. The switch is read
+        // per call and answered as a normal `off` result. Calls and refusals
+        // are audited as session, tool and a fixed category only — never the
+        // URL or the query (the audit ring takes neither) — but not the
+        // handshake every new chat sends. The permits stay held across the
+        // fetch; a tab that outlives its token is refused at `check`.
+        if session.check().is_err() {
+            security::audit_reason(&audit_session, &tool, "denied", started.elapsed(), Some("revoked"));
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let reply = {
+            let (_global, _own) = (global, own);
+            crate::services::web_lane::handle_message(&session, &message).await
+        };
+        let reason = reply.as_ref().and_then(crate::services::web_lane::refusal_reason);
+        if crate::services::web_lane::audited(&message, reason) {
+            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+        }
+        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
     if session.identity.caller == root_mcp::Caller::Helper {
         // The help identity (`services::help_mcp`): the compiled-in corpus and
@@ -428,7 +463,7 @@ pub fn start(ctx: CoreCtx) {
     let notify = serve_everything(&ctx, Arc::new(|_| {}));
     let handle = app_core::rt::spawn(async move {
         let served = match bind(LOOPBACK).await {
-            Ok(listener) => serve(listener, Some(ctx), notify, async { SHUTDOWN.notified().await }),
+            Ok(listener) => serve(listener, Some(ctx), true, notify, async { SHUTDOWN.notified().await }),
             Err(error) => Err(error),
         };
         match served {
@@ -499,7 +534,7 @@ async fn start_headless_on(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
     let first = match bind(addr).await {
-        Ok(listener) => serve(listener, ctx.clone(), notify.clone(), until_true(shutdown.clone())),
+        Ok(listener) => serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())),
         Err(error) => Err(error),
     };
     match first {
@@ -520,7 +555,7 @@ async fn start_headless_on(
                     }
                     attempt = attempt.saturating_add(1);
                     let Ok(listener) = bind(addr).await else { continue };
-                    if let Ok((port, server)) = serve(listener, ctx.clone(), notify.clone(), until_true(shutdown.clone())) {
+                    if let Ok((port, server)) = serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())) {
                         eprintln!("[root-mcp] bound on port {port} after {attempt} retries");
                         server.await;
                         return;
@@ -547,7 +582,7 @@ async fn until_true(mut flag: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-/// The routes a listener answers: the schedule, push and help lanes
+/// The routes a listener answers: the schedule, push, help and web lanes
 /// everywhere, the root (and reader) and markup lanes where this process
 /// serves the views and controls they need — the window, or a server daemon,
 /// which has no window ([`ServerState::ctx`]).
@@ -555,7 +590,10 @@ fn router(state: ServerState) -> Router {
     let mut router = Router::new()
         .route("/mcp/schedule", post(handle))
         .route("/mcp/git", post(handle))
-        .route("/mcp/help", post(handle));
+        .route("/mcp/help", post(handle))
+        // The assistant's web lane is served by every listener, the window's
+        // and the Mobile host's: a phone chat runs with no window.
+        .route("/mcp/web", post(handle));
     if state.ctx.is_some() {
         router = router.route("/mcp", post(handle)).route("/mcp/markup", post(handle));
     }
@@ -567,16 +605,20 @@ async fn bind(addr: std::net::SocketAddr) -> Result<tokio::net::TcpListener, Str
 }
 
 /// Publish a bound listener as this process's [`Runtime`] and hand back its
-/// port and the server, which stops on `shutdown`.
+/// port and the server, which stops on `shutdown`. `serves_web`: this process
+/// grants the assistant's web lane to the tabs it spawns — the window and a
+/// desktop's Mobile host, never a server daemon (the assistant is not offered
+/// on a hosted server in v1).
 fn serve(
     listener: tokio::net::TcpListener,
     ctx: Option<CoreCtx>,
+    serves_web: bool,
     notify: NoticeSink,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves });
+    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
@@ -867,13 +909,15 @@ pub(crate) async fn admission(store: &root_mcp::TokenStore, path: &str, token: &
 
 fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
     match path {
-        // A negative list: every lane class with its own route must be named
-        // here, or the root registry would serve it.
-        "/mcp" => !matches!(caller, root_mcp::Caller::Scheduler | root_mcp::Caller::Pusher | root_mcp::Caller::Helper | root_mcp::Caller::Marker),
+        // A positive list: only the classes that read the root registry are
+        // named, so a class added later (the web lane was the fifth) defaults
+        // to refused here instead of being served the root tools.
+        "/mcp" => matches!(caller, root_mcp::Caller::Agent | root_mcp::Caller::LocalModel | root_mcp::Caller::Reader),
         "/mcp/schedule" => caller == root_mcp::Caller::Scheduler,
         "/mcp/git" => caller == root_mcp::Caller::Pusher,
         "/mcp/help" => caller == root_mcp::Caller::Helper,
         "/mcp/markup" => caller == root_mcp::Caller::Marker,
+        "/mcp/web" => caller == root_mcp::Caller::Web,
         _ => false,
     }
 }
@@ -924,6 +968,91 @@ mod security_tests {
             root_mcp::revoke_tab(&session.identity.tab);
         }
     }
+    /// The web identity reaches `/mcp/web` and nothing else — not the root
+    /// registry, not another lane's route — and no other class reaches
+    /// `/mcp/web`. Refused at admission, before the body; every route is a
+    /// positive list over the classes, so each class reaches its own path.
+    #[tokio::test]
+    async fn web_route_is_its_own_lane() {
+        let post = |path: &str, token: &str| Request::builder().method("POST").uri(path).header("host", "127.0.0.1:8765")
+            .header("content-type", "application/json").header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from("not json")).unwrap();
+        let (token, web) = root_mcp::test_session(root_mcp::Caller::Web);
+        for path in ["/mcp", "/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/markup", "/mcp/other", "/"] {
+            assert!(!path_serves(path, root_mcp::Caller::Web), "{path}");
+            assert!(matches!(admit(post(path, &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "{path}");
+        }
+        assert!(path_serves("/mcp/web", root_mcp::Caller::Web));
+        // Right lane: admitted as far as the body, which is not JSON.
+        assert!(matches!(admit(post("/mcp/web", &token), 8765, root_mcp::tokens()).await, Err(StatusCode::BAD_REQUEST)));
+        let mut req = post("/mcp/web", &token);
+        req.headers_mut().insert(header::ORIGIN, "http://127.0.0.1:8765".parse().unwrap());
+        assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::FORBIDDEN)));
+        let mut req = post("/mcp/web", &token);
+        req.headers_mut().insert(header::HOST, format!("{}:{}", root_mcp::READER_GUEST_HOST, root_mcp::READER_GUEST_PORT).parse().unwrap());
+        assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::FORBIDDEN)), "the VM channel is the reader's alone");
+        assert!(matches!(admit(post("/mcp/web", "0".repeat(64).as_str()), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)));
+        root_mcp::revoke_tab(&web.identity.tab);
+        assert!(matches!(admit(post("/mcp/web", &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "a closed tab's token");
+        // The other direction: nobody else reaches `/mcp/web`, and the root
+        // route serves exactly the three root-registry classes.
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher, root_mcp::Caller::Helper, root_mcp::Caller::Marker] {
+            let (token, session) = root_mcp::test_session(caller);
+            assert!(!path_serves("/mcp/web", caller), "{caller:?}");
+            assert!(matches!(admit(post("/mcp/web", &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "{caller:?}");
+            let root = matches!(caller, root_mcp::Caller::Agent | root_mcp::Caller::LocalModel | root_mcp::Caller::Reader);
+            assert_eq!(path_serves("/mcp", caller), root, "{caller:?}");
+            root_mcp::revoke_tab(&session.identity.tab);
+        }
+    }
+    /// The web lane end to end through the router and `handle`: a web token
+    /// is answered as JSON-RPC (a refusal in a fixed category, never the
+    /// URL), the handshake is not audited but a tool call is, and the row
+    /// carries the tool and the category only.
+    #[tokio::test]
+    async fn the_web_lane_answers_through_the_router_and_audits_only_a_category() {
+        use tower::ServiceExt;
+        let state = ServerState { ctx: None, port: 8765, store: root_mcp::tokens(), notify: Arc::new(|_| {}) };
+        let (token, web) = root_mcp::test_session(root_mcp::Caller::Web);
+        let call = |body: &str| Request::builder().method("POST").uri("/mcp/web").header("host", "127.0.0.1:8765")
+            .header("content-type", "application/json").header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from(body.to_string())).unwrap();
+        let answer = |response: Response| async move {
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        };
+        let (status, list) = answer(router(state.clone()).oneshot(call(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list["result"]["tools"].as_array().map(Vec::len), Some(2));
+        let secret_url = "http://127.0.0.1:1/a-secret-path-to-a-private-service";
+        let body = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"web_fetch","arguments":{"url": secret_url}}}).to_string();
+        let (status, reply) = answer(router(state.clone()).oneshot(call(&body)).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(reply["result"]["isError"], true);
+        // Off in a test state (the flag is unset), or refused as not public if
+        // a developer's own settings have the assistant on: both fixed.
+        let category = reply["result"]["structuredContent"]["category"].as_str().unwrap().to_string();
+        assert!(matches!(category.as_str(), "off" | "not_public"), "{category}");
+        assert!(!reply.to_string().contains("a-secret-path"), "{reply}");
+        // A notification is accepted without a body.
+        let (status, _) = answer(router(state.clone()).oneshot(call(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)).await.unwrap()).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        // A batch is refused as JSON-RPC, not served.
+        let (_, batch) = answer(router(state.clone()).oneshot(call(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#)).await.unwrap()).await;
+        assert_eq!(batch["error"]["code"], -32600);
+        let rows: Vec<_> = security::audit_rows().into_iter().filter(|r| r.session == web.id).collect();
+        let calls: Vec<_> = rows.iter().filter(|r| r.tool == "web_fetch").collect();
+        assert_eq!(calls.len(), 1, "{}", serde_json::to_string(&rows).unwrap());
+        assert_eq!((calls[0].outcome, calls[0].reason), ("refused", Some(if category == "off" { "off" } else { "not_public" })));
+        assert!(rows.iter().all(|r| !serde_json::to_string(r).unwrap().contains("a-secret-path")), "no URL in the audit ring");
+        assert!(rows.iter().all(|r| r.tool != "protocol" || r.reason.is_some()), "the handshake is not recorded");
+        // A revoked tab's token stops at admission.
+        root_mcp::revoke_tab(&web.identity.tab);
+        let (status, _) = answer(router(state).oneshot(call(&body)).await.unwrap()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
     /// The markup identity reaches `/mcp/markup` and nothing else — the root
     /// route's negative list names it — and no other class reaches
     /// `/mcp/markup`. Refused at admission, before the body.
@@ -962,7 +1091,7 @@ mod security_tests {
     async fn a_token_is_admitted_only_by_the_listener_whose_process_minted_it() {
         let host: &'static root_mcp::TokenStore = Box::leak(Box::default());
         let window: &'static root_mcp::TokenStore = Box::leak(Box::default());
-        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false };
+        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false, serves_web: false };
         let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
             "id": "headless:t", "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
             "local_only": false, "sandbox": false, "agent": true, "project_id": "p", "schedule_target_id": "target-1",
@@ -1019,7 +1148,7 @@ mod security_tests {
         assert_eq!(root.status(), StatusCode::NOT_FOUND);
         let markup = router(state.clone()).oneshot(req("/mcp/markup")).await.unwrap();
         assert_eq!(markup.status(), StatusCode::NOT_FOUND, "a desktop's Mobile host never serves the markup lane");
-        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help"] {
+        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/web"] {
             let side = router(state.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(side.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
@@ -1028,7 +1157,7 @@ mod security_tests {
         let events = Arc::new(crate::services::mobile_control::web_client::WebEvents::default());
         let ctx = CoreCtx::system(Arc::new(app_core::CoreState::new()), events);
         let server = ServerState { ctx: Some(ctx), ..state };
-        for path in ["/mcp", "/mcp/markup", "/mcp/schedule", "/mcp/git", "/mcp/help"] {
+        for path in ["/mcp", "/mcp/markup", "/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/web"] {
             let served = router(server.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(served.status(), StatusCode::UNAUTHORIZED, "a server daemon serves {path}");
         }
@@ -1091,6 +1220,26 @@ mod security_tests {
         assert!(message.is_array());
         assert_eq!(admit(request(&token, Body::from("\"just a string\"")), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::BAD_REQUEST));
         root_mcp::revoke_tab(&session.identity.tab);
+    }
+
+    /// A web call holds its permits across up to 15 s of network I/O; with
+    /// every web slot taken, the other lanes are admitted all the same.
+    #[tokio::test]
+    async fn a_busy_web_lane_cannot_starve_the_other_lanes() {
+        assert!(!Arc::ptr_eq(&request_pool(root_mcp::Caller::Web), &request_pool(root_mcp::Caller::Agent)));
+        let held = request_pool(root_mcp::Caller::Web).try_acquire_many_owned(WEB_REQUEST_SLOTS as u32).expect("web slots free");
+        let body = || Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::Helper, root_mcp::Caller::Marker] {
+            let (token, session) = root_mcp::test_session(caller);
+            let mut req = request(&token, body());
+            if caller != root_mcp::Caller::Agent {
+                *req.uri_mut() = match caller { root_mcp::Caller::Helper => "/mcp/help", _ => "/mcp/markup" }.parse().unwrap();
+            }
+            let admitted = admit(req, 4321, root_mcp::tokens()).await;
+            assert!(admitted.is_ok(), "{caller:?}: {:?}", admitted.err());
+            root_mcp::revoke_tab(&session.identity.tab);
+        }
+        drop(held);
     }
 
     #[tokio::test(start_paused = true)]

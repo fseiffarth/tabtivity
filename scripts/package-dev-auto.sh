@@ -151,6 +151,19 @@ queue() {
   printf '%s (dev): rebuilding the frozen snapshot in the background (%s)\n' "$APP_DISPLAY" "$LOG"
 }
 
+# For the chip's own buttons, never the commit hook: return only once the
+# detached --run holds the lock (or already took the pending marker). The chip
+# re-reads the moment its command returns, and before the lock it still reads
+# idle — with an idle poll 20 s off, "Build now" looked like it needed a second
+# click. Bounded, so a run that never starts cannot hang the button.
+await_run() {
+  local i
+  for ((i = 0; i < 50; i++)); do
+    { [ -f "$LOCK_DIR/pid" ] || [ ! -f "$PENDING" ]; } && return 0
+    sleep 0.1
+  done
+}
+
 # One build attempt. Prints into the (already redirected) log; returns the
 # build's own status.
 build_once() {
@@ -313,6 +326,7 @@ resume() {
   head="$(tree_signature)" || return 0
   [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$head" ] && return 0
   queue
+  await_run
 }
 
 # While paused: build HEAD once, now (no settle wait), when the installed
@@ -337,6 +351,7 @@ build_now() {
   touch -d "@$(( $(date +%s) - SETTLE_SECONDS ))" "$PENDING" 2>/dev/null || true
   setsid nohup "$SELF" --run </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
+  await_run
   printf '%s (dev): building HEAD once while paused (%s)\n' "$APP_DISPLAY" "$LOG"
 }
 

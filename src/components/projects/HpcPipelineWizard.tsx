@@ -38,10 +38,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { RemoteProjectSection } from "./RemoteProjectSection";
 import { useRemoteSession } from "./useRemoteSession";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
-import { useProjectsStore, stashRemotePassword, stashRemoteViaLogin } from "../../stores/projects";
+import { useProjectsStore } from "../../stores/projects";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { resolveProjectDirectory, resolveLocalMirror, type ProjectEntry } from "../../types";
 import { basename } from "../../lib/paths";
+import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { writeFileText } from "../embed/fileAccess";
 import { UntestedTag } from "../common/UntestedTag";
 import {
@@ -275,16 +276,12 @@ function HpcPipelineWizard({ onClose }: { onClose: () => void }) {
           mirrorParent,
         },
       });
-      // Hand the just-authenticated credential to the project's first pooled
-      // connect (single-use, never persisted — see stashRemotePassword).
-      if (remotePassword) stashRemotePassword(project.id, remotePassword);
-      // A login typed into the embedded terminal leaves no credential to stash, and
-      // headless mode alone doesn't say so — mark it, or the credential-less first
-      // connect is recorded as key auth on a password host.
-      if (remote.sshTerm) stashRemoteViaLogin(project.id);
       rememberChosenPath();
-      await addProject(project); // adds + activates (which connects)
+      await addProject(project); // adds + activates
       setCreated(project);
+      // Its first pooled connect, with the password typed here or, with none,
+      // `viaLogin` (it rides the login terminal's master) — see the helper.
+      void connectCreatedRemoteProject(project.id, remotePassword);
       // The "keep it in $HOME" layout still wants the workspace reachable from
       // the project — a symlink the host's own tools (job scripts, `cd`) follow.
       // Best-effort: a failed link must not undo a created project, so it only

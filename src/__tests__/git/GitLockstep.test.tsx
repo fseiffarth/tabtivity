@@ -137,6 +137,41 @@ describe("#28n git lockstep UI", () => {
     expect(mockInvoke).not.toHaveBeenCalledWith("git_peer_resolve", expect.anything());
   });
 
+  it("turns Local wins on only after a confirm, and off without one", async () => {
+    setup(ENABLED);
+    const user = userEvent.setup();
+    await renderRemote(ENABLED);
+
+    await user.click(await screen.findByRole("button", { name: /Local wins/ }));
+    await answerDialog(user, "Cancel");
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "git_peer_set_local_authoritative",
+      expect.anything(),
+    );
+
+    mockInvoke.mockImplementation((cmd: string) =>
+      cmd === "git_peer_set_local_authoritative"
+        ? Promise.resolve({ ...ENABLED, localAuthoritative: true })
+        : cmd === "git_peer_status"
+          ? Promise.resolve(ENABLED)
+          : Promise.resolve(cmd === "git_log" ? COMMITS : cmd === "git_branches" ? BRANCHES : []),
+    );
+    await user.click(screen.getByRole("button", { name: /Local wins/ }));
+    await answerDialog(user, "Make local authoritative");
+    expect(mockInvoke).toHaveBeenCalledWith("git_peer_set_local_authoritative", {
+      projectId: "proj1",
+      enabled: true,
+    });
+
+    // Back to two-way: no question asked.
+    mockInvoke.mockClear();
+    await user.click(screen.getByRole("button", { name: /Local wins/, pressed: true }));
+    expect(mockInvoke).toHaveBeenCalledWith("git_peer_set_local_authoritative", {
+      projectId: "proj1",
+      enabled: false,
+    });
+  });
+
   it("does not render the lockstep bar for a local project", async () => {
     setup(null);
     await act(async () => {

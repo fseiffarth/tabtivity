@@ -1,6 +1,6 @@
 /**
  * The agent's ticks on the desktop (`markup_done`,
- * `docs/markup_tick_approve_plan.md` §3): a ✓ badge just outside the
+ * `docs/done/markup_tick_approve_plan.md` §3): a ✓ badge just outside the
  * top-right corner of each group of sent marks the agent says it handled —
  * the ticked marks that sit together (`tickGroups`: one remark, however many
  * strokes it took) — never over their words (`tickBadgeSpot`), over the

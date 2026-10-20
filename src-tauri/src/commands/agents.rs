@@ -18,7 +18,11 @@ struct AgentSpec {
     /// Human-readable label.
     label: &'static str,
     /// Binary name to probe on `PATH` (`where` on Windows, `which` elsewhere).
+    /// Also the agent tab's `cmd`, which is how a restored tab is known to be
+    /// an agent (the frontend's generated `agentCliTable.ts`).
     bin: &'static str,
+    /// How a restarted tab of this CLI gets its conversation back.
+    resume: Resume,
     /// Official non-interactive install command (Linux/macOS, run in `sh`).
     install_cmd: &'static str,
     /// Official non-interactive install command on Windows, when one exists.
@@ -46,6 +50,24 @@ struct AgentSpec {
     /// file names it shares (`agent_auth::DirNames`).
     auth_paths: &'static [AuthPath],
 }
+
+/// How a restarted agent tab brings its conversation back — the frontend's
+/// `RESUMABLE_AGENTS`, generated from this table (`agent_clis_ts`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Resume {
+    /// No per-session resume: the tab is not kept across a restart.
+    No,
+    /// Relaunch with these args, [`SESSION_ID`] replaced by the tab's session
+    /// id. Two styles: an id the launch captured (Claude), or the CLI's own
+    /// "continue the cwd's most recent session" flag — each agent tab starts in
+    /// its project directory, so that session IS the tab's (two tabs of one
+    /// agent in one project cannot be told apart on restore). Empty args: the
+    /// backend injects them at spawn from a hook record (Codex).
+    Args(&'static [&'static str]),
+}
+
+/// The placeholder a [`Resume::Args`] entry uses for the tab's session id.
+const SESSION_ID: &str = "{sessionId}";
 
 use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath, DirNames};
 use app_core::CoreCtx;
@@ -108,6 +130,9 @@ const AGENTS: &[AgentSpec] = &[
         id: "claude",
         label: "Claude",
         bin: "claude",
+        // `--resume <launch id>`; the backend upgrades the id to the live one
+        // after `/clear` (`launch_prep`).
+        resume: Resume::Args(&["--resume", SESSION_ID]),
         install_cmd: "curl -fsSL https://claude.ai/install.sh | bash",
         install_cmd_windows: Some("irm https://claude.ai/install.ps1 | iex"),
         extra_paths: &[".local/bin/claude"],
@@ -118,6 +143,10 @@ const AGENTS: &[AgentSpec] = &[
         id: "codex",
         label: "Codex",
         bin: "codex",
+        // Codex mints its own session id: the tab's id is only the
+        // `<APP>_TAB_UID` key, and `terminal::resolve_codex_session` injects
+        // `codex resume <live id>` at spawn — no args from here.
+        resume: Resume::Args(&[]),
         install_cmd: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
         install_cmd_windows: Some("irm https://chatgpt.com/codex/install.ps1 | iex"),
         extra_paths: &[".local/bin/codex"],
@@ -128,6 +157,8 @@ const AGENTS: &[AgentSpec] = &[
         id: "antigravity",
         label: "Google Antigravity",
         bin: "agy",
+        // `-c`/`--continue` resumes the most recent conversation.
+        resume: Resume::Args(&["--continue"]),
         install_cmd: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
         install_cmd_windows: Some("irm https://antigravity.google/cli/install.ps1 | iex"),
         extra_paths: &[".local/bin/agy", "AppData/Local/agy/bin/agy"],
@@ -138,11 +169,29 @@ const AGENTS: &[AgentSpec] = &[
         id: "gemini",
         label: "Google Gemini",
         bin: "gemini",
+        // `--resume` takes "latest" (or an index), not the uuid its launch
+        // `--session-id` minted: continue-last like the others.
+        resume: Resume::Args(&["--resume", "latest"]),
         install_cmd: "npm install -g @google/gemini-cli",
         install_cmd_windows: Some("npm install -g @google/gemini-cli"),
         extra_paths: &[".local/bin/gemini"],
         docs: "https://github.com/google-gemini/gemini-cli",
         auth_paths: &[auth_file(".gemini/oauth_creds.json")],
+    },
+    AgentSpec {
+        id: "vibe",
+        label: "Mistral",
+        bin: "vibe",
+        // Vibe mints its own id; the backend replaces this fallback with
+        // `--resume <live id>` once its post-agent hook has recorded a turn.
+        resume: Resume::Args(&["--continue"]),
+        install_cmd: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
+        // No one-line Windows installer; the UI points at `docs`.
+        install_cmd_windows: None,
+        extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
+        docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
+        // `~/.vibe/.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "kiro",
@@ -153,6 +202,7 @@ const AGENTS: &[AgentSpec] = &[
         // installed Kiro as missing, and launched a tab on a command that is
         // not there.
         bin: "kiro-cli",
+        resume: Resume::No,
         install_cmd: "curl -fsSL https://cli.kiro.dev/install | bash",
         install_cmd_windows: None,
         extra_paths: &[".local/bin/kiro-cli"],
@@ -163,6 +213,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "cline",
         label: "Cline",
         bin: "cline",
+        resume: Resume::No,
         install_cmd: "npm install -g cline",
         install_cmd_windows: Some("npm install -g cline"),
         extra_paths: &[],
@@ -172,21 +223,11 @@ const AGENTS: &[AgentSpec] = &[
         auth_paths: &[],
     },
     AgentSpec {
-        id: "vibe",
-        label: "Mistral",
-        bin: "vibe",
-        install_cmd: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
-        // No one-line Windows installer; the UI points at `docs`.
-        install_cmd_windows: None,
-        extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
-        docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
-        // `~/.vibe/.env` is loaded as environment: per scope.
-        auth_paths: &[],
-    },
-    AgentSpec {
         id: "aider",
         label: "Aider",
         bin: "aider",
+        // No per-session resume (only `--restore-chat-history`).
+        resume: Resume::No,
         // Use Aider's official uv-based one-liners. Unlike the pip bootstrap,
         // these do not assume the host provides a `python` alias (many Linux
         // distributions only ship `python3`) or permits writes to its
@@ -205,6 +246,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "opencode",
         label: "OpenCode",
         bin: "opencode",
+        resume: Resume::Args(&["--continue"]),
         install_cmd: "curl -fsSL https://opencode.ai/install | bash",
         install_cmd_windows: Some("npm install -g opencode-ai"),
         extra_paths: &[".opencode/bin/opencode", ".local/bin/opencode"],
@@ -215,6 +257,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "cursor-agent",
         label: "Cursor",
         bin: "cursor-agent",
+        resume: Resume::Args(&["--continue"]),
         install_cmd: "curl https://cursor.com/install -fsS | bash",
         // No one-line Windows installer; the UI points at `docs`.
         install_cmd_windows: None,
@@ -226,6 +269,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "copilot",
         label: "Copilot",
         bin: "copilot",
+        resume: Resume::Args(&["--continue"]),
         install_cmd: "npm install -g @github/copilot",
         install_cmd_windows: Some("npm install -g @github/copilot"),
         extra_paths: &[".local/bin/copilot"],
@@ -236,6 +280,8 @@ const AGENTS: &[AgentSpec] = &[
         id: "droid",
         label: "Droid",
         bin: "droid",
+        // `--resume` with no id loads the cwd's most recent session.
+        resume: Resume::Args(&["--resume"]),
         install_cmd: "curl -fsSL https://app.factory.ai/cli | sh",
         install_cmd_windows: Some("irm https://app.factory.ai/cli/windows | iex"),
         extra_paths: &[".local/bin/droid"],
@@ -246,6 +292,9 @@ const AGENTS: &[AgentSpec] = &[
         id: "grok",
         label: "Grok",
         bin: "grok",
+        // Grok Build: `-c/--continue` takes the cwd's most recent session;
+        // its `--resume <id>` wants Grok's own id, which a launch cannot supply.
+        resume: Resume::Args(&["--continue"]),
         // xAI's own Grok Build, not `@xai-official/grok` — the third-party
         // client this row used to install. Both install as `grok`, which is
         // what made the wrong one invisible: a stale 0.0.34 that keeps no
@@ -260,6 +309,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "qwen",
         label: "Qwen",
         bin: "qwen",
+        resume: Resume::Args(&["--continue"]),
         install_cmd: "npm install -g @qwen-code/qwen-code",
         install_cmd_windows: Some("npm install -g @qwen-code/qwen-code"),
         extra_paths: &[".local/bin/qwen"],
@@ -270,6 +320,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "openclaw",
         label: "OpenClaw",
         bin: "openclaw",
+        resume: Resume::No,
         // OpenClaw's own local-prefix installer, not `npm install -g openclaw`:
         // the package demands Node >=24.16, newer than most distro Node, and a
         // system-wide npm prefix is root-owned (EACCES). This one fetches a
@@ -288,6 +339,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "auggie",
         label: "Auggie",
         bin: "auggie",
+        resume: Resume::No,
         install_cmd: "npm install -g @augmentcode/auggie",
         install_cmd_windows: Some("npm install -g @augmentcode/auggie"),
         extra_paths: &[],
@@ -298,6 +350,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "kilo",
         label: "Kilo Code",
         bin: "kilo",
+        resume: Resume::No,
         install_cmd: "curl -fsSL https://kilo.ai/cli/install | bash",
         install_cmd_windows: Some("npm install -g @kilocode/cli"),
         extra_paths: &[".kilo/bin/kilo"],
@@ -310,6 +363,7 @@ const AGENTS: &[AgentSpec] = &[
         // `cn`, not `continue`: the package is @continuedev/cli and the
         // executable it installs is the two-letter one.
         bin: "cn",
+        resume: Resume::No,
         install_cmd: "npm install -g @continuedev/cli",
         install_cmd_windows: Some("npm install -g @continuedev/cli"),
         extra_paths: &[],
@@ -320,6 +374,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "junie",
         label: "JetBrains Junie",
         bin: "junie",
+        resume: Resume::No,
         install_cmd: "curl -fsSL https://junie.jetbrains.com/install.sh | bash",
         install_cmd_windows: Some("npm install -g @jetbrains/junie-cli"),
         extra_paths: &[".local/bin/junie"],
@@ -330,6 +385,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "codebuddy",
         label: "CodeBuddy",
         bin: "codebuddy",
+        resume: Resume::No,
         install_cmd: "npm install -g @tencent-ai/codebuddy-code",
         install_cmd_windows: Some("npm install -g @tencent-ai/codebuddy-code"),
         extra_paths: &[],
@@ -340,6 +396,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "goose",
         label: "Goose",
         bin: "goose",
+        resume: Resume::No,
         install_cmd: "curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash",
         install_cmd_windows: None,
         extra_paths: &[".local/bin/goose"],
@@ -350,6 +407,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "pi",
         label: "Pi",
         bin: "pi",
+        resume: Resume::No,
         install_cmd: "npm install -g @earendil-works/pi-coding-agent",
         install_cmd_windows: Some("npm install -g @earendil-works/pi-coding-agent"),
         extra_paths: &[],
@@ -360,6 +418,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "plandex",
         label: "Plandex",
         bin: "plandex",
+        resume: Resume::No,
         install_cmd: "curl -sL https://plandex.ai/install.sh | bash",
         install_cmd_windows: None,
         extra_paths: &[],
@@ -370,6 +429,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "swe-agent",
         label: "SWE-agent",
         bin: "sweagent",
+        resume: Resume::No,
         install_cmd: "pip install swe-agent",
         install_cmd_windows: Some("pip install swe-agent"),
         extra_paths: &[".local/bin/sweagent"],
@@ -380,6 +440,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "mini-swe-agent",
         label: "mini-SWE-agent",
         bin: "mini",
+        resume: Resume::No,
         install_cmd: "pip install mini-swe-agent",
         install_cmd_windows: Some("pip install mini-swe-agent"),
         extra_paths: &[".local/bin/mini"],
@@ -391,6 +452,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "crush",
         label: "Crush",
         bin: "crush",
+        resume: Resume::No,
         install_cmd: "npm install -g @charmland/crush",
         install_cmd_windows: Some("npm install -g @charmland/crush"),
         extra_paths: &[],
@@ -401,6 +463,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "amp",
         label: "Amp",
         bin: "amp",
+        resume: Resume::No,
         install_cmd: "npm install -g @ampcode/cli",
         install_cmd_windows: Some("npm install -g @ampcode/cli"),
         extra_paths: &[],
@@ -411,6 +474,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "kimi",
         label: "Kimi Code",
         bin: "kimi",
+        resume: Resume::No,
         // `/kimi-code/`, not the bare host path: that one serves the
         // deprecated Python `kimi-cli` (whose own installer renames it to
         // `kimi-legacy` when Kimi Code lands beside it). Both put `kimi` in
@@ -425,6 +489,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "qoder",
         label: "Qoder",
         bin: "qoder",
+        resume: Resume::No,
         install_cmd: "curl -fsSL https://qoder.com/install | bash",
         install_cmd_windows: Some("irm https://qoder.com/install.ps1 | iex"),
         extra_paths: &[".local/bin/qoder"],
@@ -435,6 +500,7 @@ const AGENTS: &[AgentSpec] = &[
         id: "muse",
         label: "Meta Muse Code",
         bin: "muse",
+        resume: Resume::No,
         install_cmd: "curl -fsSL https://dev.meta.ai/install.sh | bash",
         install_cmd_windows: None,
         extra_paths: &[".local/bin/muse"],
@@ -493,6 +559,73 @@ fn find_spec(id: &str) -> Option<&'static AgentSpec> {
 /// silently start running outside the container.
 pub fn agent_bins() -> Vec<&'static str> {
     AGENTS.iter().map(|a| a.bin).collect()
+}
+
+/// The launch args that bring a resumable built-in agent tab's conversation
+/// back (`Resume`), or `None` for a CLI with no per-session resume or a
+/// command the registry does not list.
+pub fn resume_args_for_bin(bin: &str, session_id: &str) -> Option<Vec<String>> {
+    match AGENTS.iter().find(|a| a.bin == bin)?.resume {
+        Resume::No => None,
+        Resume::Args(args) => Some(
+            args.iter()
+                .map(|a| if *a == SESSION_ID { session_id.to_string() } else { (*a).to_string() })
+                .collect(),
+        ),
+    }
+}
+
+/// Whether a built-in agent tab running `bin` resumes across a restart.
+pub fn is_resumable_bin(bin: &str) -> bool {
+    AGENTS.iter().any(|a| a.bin == bin && a.resume != Resume::No)
+}
+
+/// `src/lib/agents/agentCliTable.ts`: the registry as the frontend's static
+/// table, for the synchronous paths that cannot await `list_agents` (a
+/// restored tab's kind, its resume args, the + menu's rows). One source, so a
+/// CLI added here restores as an agent rather than a shell.
+/// `the_generated_agent_cli_table_ts_is_current` holds the file to this.
+pub fn agent_cli_table_ts() -> String {
+    fn quoted(s: &str) -> String {
+        serde_json::to_string(s).expect("a string serializes")
+    }
+    let mut out = String::from(
+        "// Generated from src-tauri/src/commands/agents.rs (`AGENTS`) — do not edit.\n\
+         // Regenerate: UPDATE_AGENT_CLI_TABLE=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_agent_cli_table_ts_is_current\n\
+         //\n\
+         // The built-in agent CLIs in menu order: registry id, the binary a tab\n\
+         // runs (its `cmd`), display name, and the args that resume a restarted\n\
+         // tab (`null`: not resumable; `SESSION_ID_ARG` stands for the tab's\n\
+         // session id). Read through `lib/agents/agentClis.ts`.\n\n\
+         export const SESSION_ID_ARG = ",
+    );
+    out.push_str(&quoted(SESSION_ID));
+    out.push_str(
+        ";\n\n\
+         export interface AgentCliRow {\n\
+         \x20 readonly id: string;\n\
+         \x20 readonly bin: string;\n\
+         \x20 readonly label: string;\n\
+         \x20 readonly resume: readonly string[] | null;\n\
+         }\n\n\
+         export const AGENT_CLI_ROWS: readonly AgentCliRow[] = [\n",
+    );
+    for a in AGENTS {
+        let resume = match a.resume {
+            Resume::No => "null".to_string(),
+            Resume::Args(args) => {
+                format!("[{}]", args.iter().map(|x| quoted(x)).collect::<Vec<_>>().join(", "))
+            }
+        };
+        out.push_str(&format!(
+            "  {{ id: {}, bin: {}, label: {}, resume: {resume} }},\n",
+            quoted(a.id),
+            quoted(a.bin),
+            quoted(a.label)
+        ));
+    }
+    out.push_str("];\n");
+    out
 }
 
 /// The registry's display name for an agent CLI's binary ("claude" → "Claude"),
@@ -594,11 +727,13 @@ pub async fn install_agent_remote(agent_id: String, machine_id: String) -> Resul
 /// into a root-scope shell tab, where the user reads the output and answers what
 /// it asks.
 ///
-/// Deliberately **not** registered with `credentials::note_minted_login`: this
-/// command line does not stop at a login prompt, it goes on to run an installer,
-/// so a "type my saved password" paste aimed at it could land in whatever prompt
-/// the installer happens to be showing. The interactive login is still typed by
-/// hand, or ridden for free off the shared ControlMaster.
+/// Deliberately **not** a login PTY (`commands::credentials`, `pty_spawn`'s
+/// `login`): this command line does not stop at a login prompt, it goes on to run
+/// an installer, so a "type my saved password" paste aimed at it could land in
+/// whatever prompt the installer happens to be showing. The tab it is typed into
+/// is an ordinary shell, never marked, so no saved secret can be pasted there; the
+/// interactive login is still typed by hand, or ridden for free off the shared
+/// ControlMaster.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn install_agent_remote_command(
     agent_id: String,
@@ -1521,9 +1656,33 @@ pub async fn agent_tab_transcript(
     limit: Option<usize>,
     local_model: Option<bool>,
     watch: Option<String>,
+    chat: Option<String>,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
     app_core::rt::spawn_blocking(move || {
+        if let Some(chat) = chat {
+            let mut read = agent_transcript::stored_chat_transcript(
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+            read.watched = arm_stored_chat_watch(
+                watch.as_deref(),
+                read.unchanged,
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+            );
+            return read;
+        }
         let local = local_model == Some(true) && agent == "opencode";
         let mut read = if local {
             agent_transcript::local_opencode_transcript(
@@ -1587,6 +1746,30 @@ fn arm_transcript_watch(
     transcript_watch::arm(id, targets)
 }
 
+/// [`arm_transcript_watch`] for `chat`, an earlier conversation of the tab's
+/// folder the Reader shows.
+#[allow(clippy::too_many_arguments)]
+fn arm_stored_chat_watch(
+    watch: Option<&str>,
+    unchanged: bool,
+    agent: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    session_id: &str,
+    chat: &str,
+    subagent: Option<&str>,
+) -> bool {
+    use crate::services::{agent_transcript, transcript_watch};
+    let Some(id) = watch.filter(|id| transcript_watch::valid_id(id)) else {
+        return false;
+    };
+    if unchanged && transcript_watch::keep(id) {
+        return true;
+    }
+    let targets = agent_transcript::stored_chat_watch_targets(agent, project_id, tab_dir, session_id, chat, subagent);
+    transcript_watch::arm(id, targets)
+}
+
 /// Stop the Reader's watch `watch_id` (its pane hid, or it moved to another
 /// conversation).
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1611,9 +1794,33 @@ pub async fn agent_tab_changes(
     limit: Option<usize>,
     watch: Option<String>,
     local_model: Option<bool>,
+    chat: Option<String>,
 ) -> crate::services::agent_changes::AgentChanges {
     use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
     app_core::rt::spawn_blocking(move || {
+        if let Some(chat) = chat {
+            let mut read = agent_changes::stored_chat_changes(
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+            read.watched = arm_stored_chat_watch(
+                watch.as_deref(),
+                read.unchanged,
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                &session_id,
+                &chat,
+                subagent.as_deref(),
+            );
+            return read;
+        }
         // A local-model OpenCode tab's changes come from its own store and arm
         // no watch: `watched` stays false, so the panel keeps its 2 s poll.
         if local_model == Some(true) && agent == "opencode" {
@@ -1664,6 +1871,55 @@ pub async fn agent_tab_undo_clear(
 ) -> Option<crate::services::agent_session::UndoClearPlan> {
     app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::undo_clear_plan(&agent, project_id.as_deref(), &session_id)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// The earlier conversations of the folder the tab launched as `agent` with
+/// launch id `session_id` runs in (`services::agent_chats`): the Reader's
+/// Resume menu, a page from the `offset`-th stored session on, newest first.
+/// Never reaches the phone.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_chats(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    session_id: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> crate::services::agent_chats::ChatList {
+    use crate::services::agent_chats;
+    app_core::rt::spawn_blocking(move || {
+        agent_chats::list_chats(
+            &agent,
+            project_id.as_deref(),
+            tab_dir.as_deref(),
+            &session_id,
+            offset.unwrap_or(0),
+            limit.unwrap_or(agent_chats::PAGE),
+        )
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// How to take the tab onto `chat`, one of its folder's earlier conversations
+/// (`agent_tab_chats`): `agent_tab_undo_clear`'s two ways
+/// (`services::agent_session::resume_chat_plan`). `None` when `chat` is not
+/// one of the folder's chats, or the agent resumes none by id.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_resume_chat(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    session_id: String,
+    chat: String,
+) -> Option<crate::services::agent_session::UndoClearPlan> {
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_chats::chat_file(&agent, project_id.as_deref(), tab_dir.as_deref(), &session_id, &chat)?;
+        crate::services::agent_session::resume_chat_plan(&agent, project_id.as_deref(), &session_id, &chat)
     })
     .await
     .ok()
@@ -2212,6 +2468,43 @@ pub async fn agent_global_open() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_generated_agent_cli_table_ts_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("src")
+            .join("lib")
+            .join("agents")
+            .join("agentCliTable.ts");
+        let expected = agent_cli_table_ts();
+        if std::env::var_os("UPDATE_AGENT_CLI_TABLE").is_some() {
+            std::fs::write(&path, &expected).expect("write agentCliTable.ts");
+        }
+        // Compared without carriage returns: a Windows checkout may convert.
+        let actual = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+        assert_eq!(
+            actual, expected,
+            "src/lib/agents/agentCliTable.ts is stale; regenerate with\n  UPDATE_AGENT_CLI_TABLE=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_agent_cli_table_ts_is_current"
+        );
+    }
+
+    #[test]
+    fn resume_args_come_from_the_registry() {
+        assert_eq!(resume_args_for_bin("claude", "abc"), Some(vec!["--resume".to_string(), "abc".to_string()]));
+        assert_eq!(resume_args_for_bin("codex", "abc"), Some(Vec::new()));
+        assert_eq!(resume_args_for_bin("gemini", "abc"), Some(vec!["--resume".to_string(), "latest".to_string()]));
+        assert_eq!(resume_args_for_bin("agy", "abc"), Some(vec!["--continue".to_string()]));
+        assert_eq!(resume_args_for_bin("aider", "abc"), None);
+        assert_eq!(resume_args_for_bin("not-an-agent", "abc"), None);
+        assert!(is_resumable_bin("droid"));
+        assert!(!is_resumable_bin("kiro-cli"));
+        // Every bin and id is unique: a tab's `cmd` names one agent.
+        let bins: std::collections::HashSet<_> = AGENTS.iter().map(|a| a.bin).collect();
+        let ids: std::collections::HashSet<_> = AGENTS.iter().map(|a| a.id).collect();
+        assert_eq!(bins.len(), AGENTS.len());
+        assert_eq!(ids.len(), AGENTS.len());
+    }
 
     #[test]
     fn every_warmup_recipe_names_a_registry_agent_and_puts_the_message_last() {

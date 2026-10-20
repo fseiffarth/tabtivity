@@ -7,8 +7,14 @@ import { pathLinkContext, type PathLinkContext } from "./pathLinks";
 
 /** A pane's path-link context (`pathLinks`), shared by the terminal and the
  *  Reader. The project is read as one string — its folder, "" when remote,
- *  null when unknown — so a pane re-renders only when that changes. */
-export function usePathLinkContext(projectId: string | null | undefined, cwd: string | undefined): PathLinkContext {
+ *  null when unknown — so a pane re-renders only when that changes.
+ *  `runsLocal`: the tab runs on this machine (`localOnly`), so a remote
+ *  project's tab works in its local mirror. */
+export function usePathLinkContext(
+  projectId: string | null | undefined,
+  cwd: string | undefined,
+  runsLocal = false,
+): PathLinkContext {
   const projectDir = useProjectsStore((s) => {
     if (!projectId) return null;
     const project = s.projects.find((p) => p.id === projectId);
@@ -16,7 +22,7 @@ export function usePathLinkContext(projectId: string | null | undefined, cwd: st
   });
   const viewerPrefs = useSettingsStore((s) => s.settings?.viewer_prefs);
   return useMemo(
-    () => pathLinkContext(projectId, projectDir, cwd, disabledViewers(viewerPrefs)),
-    [projectId, projectDir, cwd, viewerPrefs],
+    () => pathLinkContext(projectId, projectDir, cwd, disabledViewers(viewerPrefs), runsLocal),
+    [projectId, projectDir, cwd, viewerPrefs, runsLocal],
   );
 }

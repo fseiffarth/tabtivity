@@ -59,6 +59,47 @@ pub async fn git_peer_set_enabled(
     Ok(git_peer::load_state(&project_id))
 }
 
+/// Turn "Local is authoritative" on or off (see `GitPeerState::local_authoritative`).
+/// Held under the reconcile lock, so an in-flight pass can't persist the old value over
+/// it. When lockstep is on, a pass runs at once in the new mode, so a host it can't
+/// reset says why right away. Returns the resulting state.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn git_peer_set_local_authoritative(
+    ctx: Ctx,
+    project_id: String,
+    enabled: bool,
+) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
+    let target = remote_target_for(&project_id)
+        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let _reconcile = git_peer::reconcile_guard(&project_id).await;
+    let mut state = git_peer::load_state(&project_id);
+    state.local_authoritative = enabled;
+    // A mode change voids the early-out: the cached green was judged by the old rules.
+    state.local_sig = None;
+    state.remote_sig = None;
+    git_peer::save_state(&project_id, &state)?;
+    if !state.enabled {
+        return Ok(state);
+    }
+    let state = git_peer::detect_and_sync(
+        pool,
+        manifest,
+        auto,
+        &project_id,
+        &target.spec,
+        ReconcileOpts {
+            forced: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    git_peer::emit_status(&ctx, &project_id, &state);
+    Ok(state)
+}
+
 /// Manually reconcile now (the Retry / "Sync git" action). Runs a detection pass and
 /// emits the new status.
 #[cfg_attr(feature = "desktop", tauri::command)]

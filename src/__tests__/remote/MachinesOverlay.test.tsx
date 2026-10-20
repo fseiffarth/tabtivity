@@ -12,7 +12,9 @@
  *  - Escape and a press on the backdrop close it, a press inside does not;
  *  - it never takes over the header's status report: unmounting it leaves the
  *    `machines` key the header's own instance published;
- *  - a hand Check made in it is the header's answer too (shared checks).
+ *  - a hand Check made in it is the header's answer too (shared checks);
+ *  - handing a machine to a project opens that project's window ON TOP of it:
+ *    the overlay stays open to come back to.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
@@ -31,6 +33,11 @@ import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusStore } from "../../stores/headerStatus";
+import { useHostBusyStore } from "../../stores/remote/hostBusy";
+import { targetKey } from "../../lib/remote/machineSync";
+import { useProjectsStore } from "../../stores/projects";
+import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
+import type { ProjectEntry } from "../../types";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -54,6 +61,7 @@ beforeEach(() => {
   useMachinesOverlayStore.setState({ open: false });
   useHeaderHoverMenuStore.setState({ openId: null });
   useHeaderStatusStore.setState({ reports: {} });
+  useHostBusyStore.setState({ readings: {}, inFlight: {}, probeGlobal: vi.fn(async () => {}) });
 });
 
 afterEach(() => {
@@ -68,9 +76,10 @@ describe("Machines overlay", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("lays every machine out as a tile with its target, state and actions", () => {
+  it("lays every machine out as a tile with its target, state and actions", async () => {
     useMachinesOverlayStore.setState({ open: true });
     const { container } = render(<MachinesOverlayHost />);
+    await act(async () => {});
     const grid = container.querySelector(".machines-grid");
     expect(grid).not.toBeNull();
     const tiles = grid!.querySelectorAll(".machines-tile.models-tile");
@@ -89,6 +98,36 @@ describe("Machines overlay", () => {
     expect(tiles[0].lastElementChild?.classList.contains("machines-row-actions")).toBe(true);
 
     expect(within(tiles[1] as HTMLElement).getByText("build.example.org:2222")).toBeTruthy();
+  });
+
+  it.each(["menu", "overlay"] as const)("puts creation controls and the add form before machines in the %s", (surface) => {
+    useMachinesOverlayStore.setState({ open: surface === "overlay" });
+    useHeaderHoverMenuStore.setState({ openId: surface === "menu" ? "machines" : null });
+    const { container } = render(surface === "overlay" ? <MachinesOverlayHost /> : <MachinesIndicator />);
+    const firstMachine = container.querySelector(".machines-indicator-row")!;
+    const add = screen.getByRole("button", { name: "Add machine…" });
+    for (const control of [add, screen.getByRole("button", { name: "Import…" }), screen.getByRole("button", { name: "Export…" })]) {
+      expect(control.compareDocumentPosition(firstMachine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+
+    fireEvent.click(add);
+    const address = screen.getByRole("textbox", { name: "SSH address" });
+    expect(address.compareDocumentPosition(firstMachine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.activeElement).toBe(address);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Add machine…" })).toBeTruthy();
+  });
+
+  it.each([1, 4])("summarizes %i running sessions without filling the card with session names", (count) => {
+    const names = Array.from({ length: count }, (_, i) => `session-${i}-${"long-id-".repeat(30)}`);
+    useHostBusyStore.setState({
+      readings: { [targetKey(MACHINES[0])]: { sessions: count, names, at: Date.now() } },
+    });
+    useMachinesOverlayStore.setState({ open: true });
+    render(<MachinesOverlayHost />);
+    const summary = dialog().querySelector(".machines-tile-busy")!;
+    expect(summary.textContent).toBe(`${count} session${count === 1 ? "" : "s"} running`);
+    expect(summary.getAttribute("title")).toContain(names.join(", "));
   });
 
   it("closes on Escape and on a backdrop press, not on a press inside", () => {
@@ -158,5 +197,29 @@ describe("Machines overlay", () => {
       .join("\n");
     expect(labels).toMatch(/up, not connected — build\.example\.org/);
     expect(labels).not.toMatch(/not checked/i);
+  });
+
+  it("stays open when a machine is handed to a project", () => {
+    useProjectsStore.setState({
+      projects: [
+        {
+          id: "p1",
+          name: "Proj",
+          status: "current",
+          position: 0,
+          remote: { host: "login.example.org", user: "ada", remote_path: "/work/proj" },
+        } as unknown as ProjectEntry,
+      ],
+      activeId: "p1",
+    });
+    useRemoteMachinesStore.setState({ projectId: null, pendingDrop: null, extendTarget: null });
+    useMachinesOverlayStore.setState({ open: true });
+    render(<MachinesOverlayHost />);
+    const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[0]);
+    fireEvent.click(tile.getByRole("button", { name: "Add this machine to a project" }));
+    fireEvent.click(tile.getByRole("button", { name: /Proj/ }));
+    expect(useRemoteMachinesStore.getState().projectId).toBe("p1");
+    expect(useRemoteMachinesStore.getState().pendingDrop?.id).toBe("m1");
+    expect(useMachinesOverlayStore.getState().open).toBe(true);
   });
 });

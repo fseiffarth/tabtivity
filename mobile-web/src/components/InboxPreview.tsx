@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -27,6 +27,28 @@ export function fileBadge(kind: string): string {
 /** Whether the viewer can show `file` (else it is a download). */
 export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/") || file.kind.startsWith("text/") || file.kind === "application/pdf";
 
+/** Where an album gets its bytes and what a tap on a file does. The phone's
+ * is its HTTP route; the desktop Chat (`ReaderInbox`) reads the project's
+ * folder itself, so its pictures may still be on their way (`picture` is
+ * `null`), and a file its viewers cannot show is a plain card. */
+export interface InboxSource {
+  /** Where `file`'s picture loads from; `null` while it is being fetched. */
+  picture(file: OutboxFile): string | null;
+  /** Whether a tap opens `file` in a viewer (`onOpen`). */
+  openable(file: OutboxFile): boolean;
+  /** Where a file that cannot be opened downloads from; none = a plain card. */
+  download?(file: OutboxFile): string;
+}
+
+/** The phone's source: `tabId`'s inbox over the sidecar's route. */
+export function phoneInboxSource(tabId: string): InboxSource {
+  return {
+    picture: (file) => inboxFileUrl(tabId, file.name),
+    openable: viewableFile,
+    download: (file) => inboxFileUrl(tabId, file.name, true),
+  };
+}
+
 /**
  * The files a prompt carried into the project inbox, drawn inside the
  * prompt's own bubble the way a messenger draws a picture with its caption —
@@ -35,10 +57,15 @@ export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/")
  * holds a picture's place, and one the inbox no longer holds says so.
  *
  * A tap opens the file in the viewer (`onOpen`), or downloads bytes the
- * phone cannot show.
+ * phone cannot show. The desktop Chat draws the same album from its own
+ * `source`, with its own untested pill (`tag`).
  */
-export function InboxAlbum({ tabId, leaves, files, onOpen, onSettle }: {
-  tabId: string;
+export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle }: {
+  /** The phone's tab (names the route); not needed with a `source`. */
+  tabId?: string;
+  source?: InboxSource;
+  /** What stands in for the phone's "Untested" note. */
+  tag?: ReactNode;
   leaves: readonly string[];
   /** What the desktop said per leaf; absent = not answered yet. */
   files: ReadonlyMap<string, OutboxFile | null>;
@@ -46,6 +73,7 @@ export function InboxAlbum({ tabId, leaves, files, onOpen, onSettle }: {
   onSettle?: () => void;
 }) {
   const t = useT();
+  const from = source ?? phoneInboxSource(tabId ?? "");
   const [ratio, setRatio] = useState(4 / 3);
   const pictures: Array<{ leaf: string; file: OutboxFile | undefined }> = [];
   const others: Array<{ leaf: string; file: OutboxFile | null }> = [];
@@ -63,12 +91,15 @@ export function InboxAlbum({ tabId, leaves, files, onOpen, onSettle }: {
   };
   return <div className="inbox-album" role="group" aria-label={t("mobile.inbox.album", { count: leaves.length })}>
     {tiles.length > 0 && <div className={`outbox-post-album tiles-${tiles.length}`} style={tiles.length === 1 ? { aspectRatio: String(ratio) } : undefined}>
-      {tiles.map(({ leaf, file }, i) => file
-        ? <button key={leaf} type="button" className="outbox-post-picture" onClick={() => onOpen(file)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
-            <img src={inboxFileUrl(tabId, file.name)} alt="" loading="lazy" decoding="async" onLoad={(event) => settle(event.currentTarget)} />
-            {more > 0 && i === tiles.length - 1 && <span className="outbox-post-more" aria-hidden="true">+{more}</span>}
-          </button>
-        : <span key={leaf} className="outbox-post-picture pending" aria-label={leafName(leaf)} />)}
+      {tiles.map(({ leaf, file }, i) => {
+        const url = file ? from.picture(file) : null;
+        return file && url
+          ? <button key={leaf} type="button" className="outbox-post-picture" onClick={() => onOpen(file)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
+              <img src={url} alt="" loading="lazy" decoding="async" onLoad={(event) => settle(event.currentTarget)} />
+              {more > 0 && i === tiles.length - 1 && <span className="outbox-post-more" aria-hidden="true">+{more}</span>}
+            </button>
+          : <span key={leaf} className="outbox-post-picture pending" aria-label={leafName(leaf)} />;
+      })}
     </div>}
     {others.map(({ leaf, file }) => {
       if (!file) {
@@ -84,11 +115,12 @@ export function InboxAlbum({ tabId, leaves, files, onOpen, onSettle }: {
         <small>{sizeLabel(file.size)}</small>
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
-      return viewableFile(file)
-        ? <button key={leaf} type="button" className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>
-        : <a key={leaf} className="outbox-post-file" href={inboxFileUrl(tabId, file.name, true)} download={sentName(file)} aria-label={label}>{card}</a>;
+      if (from.openable(file)) return <button key={leaf} type="button" className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>;
+      return from.download
+        ? <a key={leaf} className="outbox-post-file" href={from.download(file)} download={sentName(file)} aria-label={label}>{card}</a>
+        : <span key={leaf} className="outbox-post-file" title={sentName(file)}>{card}</span>;
     })}
-    {isUntested("mobile.chat.inboxPreviews") && <small className="inbox-album-untested">{t("mobile.outbox.untested")}</small>}
+    {tag !== undefined ? tag : isUntested("mobile.chat.inboxPreviews") && <small className="inbox-album-untested">{t("mobile.outbox.untested")}</small>}
   </div>;
 }
 

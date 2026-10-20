@@ -60,6 +60,14 @@ pub struct AppMobileHostSettings {
     /// which also holds the review gate) and repeated by the desktop bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_access: Option<bool>,
+    /// May a paired phone use the chat assistant (`services::assistant`)?
+    /// Unset is **on**: the assistant holds no right the phone should not
+    /// reach; `false` closes it. In effect only while the experimental
+    /// `assistant` flag is on too ([`Settings::assistant_phone_open`]). Read
+    /// by the sidecar per catalog load (raw JSON, like `root_access`) and
+    /// repeated by the desktop bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_access: Option<bool>,
     /// May a paired phone browse and read (never change) the files of its
     /// Mobile projects? Default off. Read by the sidecar per request
     /// (`mobile_control::files::files_open`).
@@ -67,7 +75,7 @@ pub struct AppMobileHostSettings {
     pub project_files: Option<bool>,
     /// Does the Mobile host keep running when Tabtivity quits, so the phone,
     /// scheduled prompts and calendar reminders go on with no window
-    /// (`docs/headless_owner_plan.md`)? Default off: a quit stops it. Read by
+    /// (`docs/done/headless_owner_plan.md`)? Default off: a quit stops it. Read by
     /// the quit path (`commands::mobile_control::stop_host_for_exit`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stay_after_quit: Option<bool>,
@@ -100,6 +108,46 @@ pub struct AppMobileHostSettings {
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
+
+/// The chat assistant's options (`Settings::assistant_settings`, plan A3). An
+/// absent block is the defaults; unknown keys survive a patch.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AssistantSettings {
+    /// The CLI a new chat starts with (a `services::assistant::AssistantCli`
+    /// id). Unset: the first offered, logged-in one. Validated when set
+    /// (`assistant_new_chat`), never trusted when read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_cli: Option<String>,
+    /// The model a new chat starts with (a local Ollama model name, or a cloud
+    /// CLI's model id). Unset: the CLI's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    /// Where the web lane's `web_search` looks (plan decision 7). Unset:
+    /// no backend, and the lane answers `search_not_configured`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<AssistantSearchSettings>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+/// The web lane's search backend choice. The Ollama search key lives in the
+/// keychain (`remote_credentials`, account `web-search:ollama`), never here.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AssistantSearchSettings {
+    /// `"searxng"` or `"ollama"` ([`ASSISTANT_SEARCH_KINDS`]); anything else
+    /// reads as "none" and is kept on disk as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The SearXNG instance's base URL (`http`/`https`, no userinfo; validated
+    /// when set by `assistant_set_search`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub searxng_url: Option<String>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+/// The values `AssistantSearchSettings::kind` may hold.
+pub const ASSISTANT_SEARCH_KINDS: [&str; 2] = ["searxng", "ollama"];
 
 /// Cloud completion authority lives in Tabtivity's settings, never project.json.
 /// Bind consent to a directory as well as the id so moving/repointing a project
@@ -440,7 +488,7 @@ pub struct Settings {
     /// back to `"claude"` when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_agent_cmd: Option<String>,
-    /// The desktop PDF viewer's Mark up prompts (`docs/pdf_markup_rounds_plan.md`
+    /// The desktop PDF viewer's Mark up prompts (`docs/done/pdf_markup_rounds_plan.md`
     /// §2.8), the desktop's own as the phone keeps its own: what a Submit tells
     /// the agent after the file references (`None`/blank = `markup::
     /// DEFAULT_INSTRUCTION`), and what **Make these changes** sends once the
@@ -466,7 +514,7 @@ pub struct Settings {
     /// round at once. `None` = off. The phone keeps its own (⋯ switch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_markup_subagents: Option<bool>,
-    /// **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`):
+    /// **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`):
     /// a Submit asks `pdf_markup_submit` for `mode: "apply"` — the agent makes
     /// the changes in one turn and the strip offers **Undo** — rather than
     /// `list` (**Make these changes**). `None` = on, so a settings file from
@@ -617,7 +665,7 @@ pub struct Settings {
     pub terminal_webgl: Option<bool>,
     /// EXPERIMENTAL, default OFF, Linux only. Start WebKitGTK on its GPU paint
     /// path: `run()` stops forcing `WEBKIT_DISABLE_DMABUF_RENDERER=1`
-    /// (`services::webkit_gpu`, `docs/gpu_compositing_plan.md`). Read once, at
+    /// (`services::webkit_gpu`, `docs/done/gpu_compositing_plan.md`). Read once, at
     /// launch, before GTK/WebKit init, so a change applies after a restart. The
     /// 2D-canvas acceleration that made this path drop content is off on every
     /// webview regardless. Read via `gpu_compositing()`, strict default-off.
@@ -633,6 +681,17 @@ pub struct Settings {
     /// EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_remarks: Option<bool>,
+    /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
+    /// `services::assistant`): chats in a scope of its own that reach the web
+    /// and nothing else. Read via [`Settings::assistant_enabled`]; the
+    /// commands, the spawn and the web lane refuse while it is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<bool>,
+    /// The assistant's options (default CLI and model, search backend). Not
+    /// `assistant`: that key is the flag's, and `EXPERIMENTAL_FLAGS` are the
+    /// `boolean | undefined` keys of `Settings`. Absent is the defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_settings: Option<AssistantSettings>,
     /// Marker (tab cost plan step 3): this profile's experimental flags are
     /// explicit, so an unset flag is off whatever `debug` says. Written once by
     /// the frontend's `migrateExperimentalOnce` (`src/lib/experimental.ts`),
@@ -1144,6 +1203,22 @@ impl Settings {
     /// host asks (`src/components/mail/MailOverlay.tsx`).
     pub fn mail_client(&self) -> bool {
         self.experimental(self.mail_client)
+    }
+
+    /// Whether the experimental chat assistant is on — the one gate the
+    /// commands, the spawn and the web lane ask, read per request. Same rule
+    /// as every experimental flag ([`Self::experimental`]).
+    pub fn assistant_enabled(&self) -> bool {
+        self.experimental(self.assistant)
+    }
+
+    /// Whether a paired phone may use the assistant: the flag on and the
+    /// Mobile switch `assistant_access` not `false` (unset is on). The one
+    /// spelling of the rule; `mobile_control::discovery::assistant_open` reads
+    /// the raw JSON and a test holds the two together.
+    pub fn assistant_phone_open(&self) -> bool {
+        self.assistant_enabled()
+            && self.app_mobile_host.as_ref().and_then(|host| host.assistant_access) != Some(false)
     }
 
     /// Whether the root console's MCP tools are served. On unless switched off.
@@ -1831,5 +1906,57 @@ mod default_rule_tests {
         let s: Settings = serde_json::from_str(raw).unwrap();
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.ide_launchers.unwrap()["pycharm"], "/opt/pycharm/bin/pycharm.sh");
+    }
+
+    /// The assistant's flag and options are named fields that an older
+    /// settings file does without, and both survive a round trip with the
+    /// unknown keys a newer build wrote beside them.
+    #[test]
+    fn assistant_settings_round_trip_and_stay_absent_when_unset() {
+        let old: Settings = serde_json::from_str(r#"{"debug":true}"#).unwrap();
+        assert!(old.assistant.is_none() && old.assistant_settings.is_none());
+        let raw = serde_json::to_string(&old).unwrap();
+        assert!(!raw.contains("assistant"), "{raw}");
+        assert!(old.extra.is_empty());
+
+        let raw = r#"{"assistant":true,"assistant_settings":{"default_cli":"claude","default_model":"m","future":1,
+            "search":{"kind":"searxng","searxng_url":"http://s.example/","future":2}}}"#;
+        let s: Settings = serde_json::from_str(raw).unwrap();
+        assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+        let block = s.assistant_settings.as_ref().unwrap();
+        assert_eq!(block.default_cli.as_deref(), Some("claude"));
+        assert_eq!(block.search.as_ref().unwrap().searxng_url.as_deref(), Some("http://s.example/"));
+        let back: serde_json::Value = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["assistant_settings"]["future"], 1);
+        assert_eq!(back["assistant_settings"]["search"]["future"], 2);
+        assert_eq!(back["assistant"], true);
+    }
+
+    /// The assistant follows the rule of every experimental flag: unset is
+    /// off (Debug mode decides only on a profile not yet marked explicit), an
+    /// explicit value wins. The phone gate adds `assistant_access`, which is
+    /// on unless written `false`.
+    #[test]
+    fn the_assistant_gates_follow_the_flag_and_the_phone_switch() {
+        assert!(!Settings::default().assistant_enabled());
+        assert!(!Settings::default().assistant_phone_open());
+        let marked = Settings { debug: Some(true), experimental_explicit: Some(true), ..Default::default() };
+        assert!(!marked.assistant_enabled());
+        let unmarked_debug = Settings { debug: Some(true), ..Default::default() };
+        assert!(unmarked_debug.assistant_enabled());
+        let on = Settings { assistant: Some(true), ..Default::default() };
+        assert!(on.assistant_enabled() && on.assistant_phone_open(), "the phone switch is on unless written false");
+        let host = |access: Option<bool>| AppMobileHostSettings { assistant_access: access, ..Default::default() };
+        for (access, open) in [(None, true), (Some(true), true), (Some(false), false)] {
+            let s = Settings { assistant: Some(true), app_mobile_host: Some(host(access)), ..Default::default() };
+            assert!(s.assistant_enabled());
+            assert_eq!(s.assistant_phone_open(), open, "{access:?}");
+        }
+        let off = Settings { assistant: Some(false), debug: Some(true), app_mobile_host: Some(host(Some(true))), ..Default::default() };
+        assert!(!off.assistant_enabled() && !off.assistant_phone_open(), "the flag outranks the switch");
+        // The key is the phone switch's, under the brand-built host key.
+        let json = format!(r#"{{"{}":{{"assistant_access":false}}}}"#, crate::brand::MOBILE_HOST_KEY);
+        let s: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(s.app_mobile_host.unwrap().assistant_access, Some(false));
     }
 }

@@ -10,6 +10,7 @@ import type { AgentSignal } from "../markup/submitState";
 import type { FileTabFile } from "../filesPlace";
 import { openingOutsideStrands } from "../platform";
 import { canPrint, clearPrint, printContent } from "../print";
+import { useBackLayer } from "../backStack";
 
 /** How a markup prompt left: into the agent's queue (it was working), typed
  * straight in, or not at all. */
@@ -19,7 +20,7 @@ export type MarkupSend = "queued" | "sent" | false;
  * the prompt goes to, the project the phone-side layer is kept under, a
  * project file's folder trail, the send into the chat, what the agent is
  * doing now (the round's pill), and how to find the file's newest version
- * for **Reload** (`docs/pdf_markup_rounds_plan.md` §2.2–2.3). */
+ * for **Reload** (`docs/done/pdf_markup_rounds_plan.md` §2.2–2.3). */
 export type MarkupTarget = {
   tabId: string;
   projectId: string;
@@ -51,11 +52,16 @@ export type MarkupTarget = {
  * `projectId` and hands it the prompt; the view stays open, and its Open tab
  * button `show`s that tab (`markup/newTab.ts`).
  * `place`, `folder` and `refresh` are a project file's, as in `MarkupTarget`. */
+/** The file a markup view was on when its Open tab showed the tab its Submit
+ * went to: the tab's chat opens with that view tucked away under its bar,
+ * so the way back to the marks is there (`Terminal`'s `markupBack`). */
+export type MarkupBack = { scope: ViewerScope; file: OutboxFile; place?: string; folder?: string };
+
 export type MarkupNewTab = {
   projectId: string;
   place?: string;
   folder?: string;
-  show: (tab: TabRow) => void;
+  show: (tab: TabRow, back?: MarkupBack) => void;
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
   /** The open agent tab the file's card says its earlier rounds went to
    * (`filesPlace.ts`): Submit sends there rather than opening another. */
@@ -352,6 +358,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   }, [row?.token, row?.name, row?.kind, row?.size, row?.modified, row?.place, row?.folder, inFiles, target, file.name]);
   /** What Mark up (and a PDF's reader) shows: the project file, or the file. */
   const marked = shared ?? { scope, file, place: markup?.place ?? fresh?.place, folder: markup?.folder ?? fresh?.folder, refresh: markup?.refresh ?? fresh?.refresh, adoptFrom: undefined };
+  // Mark up and a PDF's reader are a `MarkupView`, which takes Back itself.
+  useBackLayer(onClose, !(marking && (markup || fresh)) && !isPdf);
   if (marking && (markup || fresh)) {
     return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
       onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;
@@ -395,7 +403,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     {isText ? <div className="outbox-text-body">
       <pre>{text ?? (failure ? "" : t("mobile.outbox.loading"))}</pre>
       {file.size > INLINE_LIMIT && !whole && (file.size <= WHOLE_LIMIT || !strands) && <button className="outbox-open"
-        onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url); }}>{t("mobile.outbox.whole")}</button>}
+        onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url).then((opened) => { if (opened === "host_outdated") setFailure(t("mobile.open.hostOutdated")); }); }}>{t("mobile.outbox.whole")}</button>}
     </div> : isImage ? <div ref={stage} className={`outbox-viewer-stage${zoomed ? " zoomed" : ""}`}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
       <img ref={image} src={url} alt={sentName(file)} draggable={false}

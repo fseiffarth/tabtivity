@@ -554,6 +554,11 @@ export function agentDeliveryTurn(ptyId: string) {
   return turn;
 }
 
+/** When {@link noteUserInput} last saw input to the tab, if ever. */
+export function lastUserInputAt(ptyId: string): number | undefined {
+  return inputByPty[ptyId];
+}
+
 /** Whether automation may type a prompt into the tab. With a hook verdict on
  * record, only the agent's own stable completion opens the gate. Without one —
  * an agent that fires no hooks, or a tab nothing has been asked of yet — the
@@ -903,11 +908,12 @@ function attentionFor(
   ) {
     return "decision";
   }
-  // A cut-off turn is a state of the tab, not output waiting to be read: it
-  // holds while watched (the strips leave it off the viewed tab themselves, as
-  // they do `done`) and until the agent's next turn begins. It outranks the
-  // idle notice's `done`, which is all Claude reports after an interrupt.
-  if (interruptedByPty[ptyId] !== undefined) return "interrupted";
+  // A cut-off turn holds until the agent's next turn begins or somebody opens
+  // the tab (`clearAttention`), as a finished one does: once opened it goes
+  // quiet, and the idle notice's `done` — all Claude reports after an interrupt
+  // — must not raise it again, so the flag stays and this answers null.
+  const interruptedAt = interruptedByPty[ptyId];
+  if (interruptedAt !== undefined) return (readAtByPty[ptyId] ?? 0) >= interruptedAt ? null : "interrupted";
   // Past here everything is inferred from silence, which a watched tab's own
   // screen already tells the user better than a lamp could.
   if (lookedAt) return null;
@@ -1242,9 +1248,6 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
     // `attentionFor`). Keep it, so the lamp holds steady instead of blinking off
     // and on at the switch. Input is what retires it.
     if (kind === "decision" && tailLooksLikeDecision(ptyId)) return;
-    // Nor does it undo an interruption, which is a state rather than unread
-    // output (the strips already leave it off the viewed tab).
-    if (kind === "interrupted") return;
     const attentionByTab = { ...get().attentionByTab };
     delete attentionByTab[ptyId];
     const status = computeStatusScopes(

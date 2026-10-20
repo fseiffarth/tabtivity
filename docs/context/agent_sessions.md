@@ -8,7 +8,14 @@ the copy inside a project folder is export-only). Shell/files tabs are always
 restored on relaunch; agent tabs are normally dropped, **except resumable agent
 tabs** — Claude and Codex tabs that carry a `sessionId` are persisted (with
 their `sessionId`) and restored, respawning the agent so the prior conversation
-comes back (see `isRestorableTab`/`RESUMABLE_AGENTS` in `src/stores/tabs.ts`).
+comes back (see `isRestorableTab` in `src/stores/tabs.ts` and `RESUMABLE_AGENTS`
+in `src/lib/agents/agentClis.ts`). Which CLIs are agents and how each resumes
+is the backend registry's (`commands/agents.rs` `AGENTS`, its `resume` field):
+the frontend reads it as the generated `src/lib/agents/agentCliTable.ts`
+(`UPDATE_AGENT_CLI_TABLE=1 cargo test … the_generated_agent_cli_table_ts_is_current`),
+and the restore allow-list (`terminal_service`) and the phone's resumable set
+(`mobile_control`) read it directly — one table, so a new CLI never restores
+as a shell.
 
 ## Mechanism
 
@@ -107,6 +114,21 @@ also retain `--continue`, since no Tabtivity hook is installed on the host. Vibe
 session logging must be enabled for either flag. Fenced/container tabs receive
 a per-project shadow of `hooks.toml`, like Claude/Codex hook config, so they can
 record their live ID without editing the host hook registration.
+
+OpenCode mints its own ids (`ses_…`) and has no session hook, and its old
+`--continue` put every OpenCode tab of one folder into the same newest
+session. `services::opencode_session` writes a plugin to
+`<state_dir>/hooks/` and lists it (`file://`) in each home's
+`.config/opencode/opencode.json` `plugin`; its `chat.message` hook records
+the session each prompt goes to under the tab's `TABTIVITY_TAB_UID`
+(`TABTIVITY_TAB_AGENT=opencode` only, a nested OpenCode claimed out, `task`
+child sessions skipped). A restored tab with a recorded, still-present,
+top-level session gets `--session <id>`; one noted at an earlier launch
+(host-only `live_sessions/<uid>.opencode`) without a record never took a
+prompt and starts fresh; a tab from before the plugin keeps `--continue`. The
+Reader reads the same record (`opencode_store`), else the folder's newest
+since the last fresh launch. Remote and local-model OpenCode tabs are as
+before.
 
 ### The phone send hint
 

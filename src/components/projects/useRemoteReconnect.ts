@@ -11,6 +11,12 @@ import {
 } from "../../types";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { forgetConnection, markConnectionOpened } from "../../lib/remote/remoteConnect";
+import {
+  loginDedupeKey,
+  sshLogin,
+  vpnLogin,
+  type LoginTarget,
+} from "../../lib/remote/loginTarget";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
@@ -45,12 +51,12 @@ interface TerminalOutput {
 let reconnectTermSeq = 0;
 const nextReconnectTermId = (kind: string) => `reconnect-${kind}-${++reconnectTermSeq}`;
 
-/** An embedded interactive login terminal: `{ id, command, key }` for a
- *  `TerminalView` that runs `command`, plus the activation dedupe `key` it
- *  pre-marked so the matching stop forgets exactly that key. `adopted` marks a
+/** An embedded login terminal: `{ id, login, key }` for a `TerminalView` whose
+ *  PTY runs `login` (`lib/remote/loginTarget`), plus the activation dedupe `key`
+ *  it pre-marked so the matching stop forgets exactly that key. `adopted` marks a
  *  terminal this hook instance did *not* spawn — it inherited a still-running one
  *  (see `liveTerms`), so it must re-attach rather than spawn a second PTY. */
-type LoginTerm = { id: string; command: string; key: string; adopted?: boolean };
+type LoginTerm = { id: string; login: LoginTarget; key: string; adopted?: boolean };
 
 /**
  * Login terminals outlive the Connect dialog: their PTYs are spawned
@@ -66,7 +72,7 @@ type LoginTerm = { id: string; command: string; key: string; adopted?: boolean }
  * So park them per project here (module scope, surviving the remount) and re-adopt
  * on mount. Re-adopted terminals render `attachOnly`, which skips `pty_spawn` — a
  * duplicate spawn on the same id would start a *second* `pkexec openvpn` — and, with
- * no spawn, no `terminal-ready` fires, so the login command isn't re-typed either.
+ * no spawn, the login isn't started a second time either.
  */
 const liveTerms = new Map<string, { vpn?: LoginTerm; ssh?: LoginTerm }>();
 
@@ -470,25 +476,24 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
     // vpnTerm is ref-held; re-run when its identity changes via the force tick.
   }, [vpnTermRef.current?.id, projectId, vpnConfig]);
 
-  // Bring the OpenVPN tunnel up in an embedded terminal. The connect command
-  // runs interactively so the user types the passphrase in that visible terminal
+  // Bring the OpenVPN tunnel up in an embedded login terminal. OpenVPN is the
+  // PTY's own program, so the user types the passphrase in that visible terminal
   // — Tabtivity never handles it. The PTY persists past this panel so the tunnel
   // stays up for the reconnected project; we pre-mark the dedupe key so any later
   // activation root-terminal fallback is suppressed.
   const startVpnTerm = async () => {
     if (!vpnConfig || vpnTermRef.current) return;
-    try {
-      const command = await invoke<string>("openvpn_login_command", { config: vpnConfig });
-      const key = `vpn:${vpnConfig}`;
-      markConnectionOpened(key);
-      const term = { id: nextReconnectTermId("vpn"), command, key };
-      vpnTermRef.current = term;
-      rememberTerm(projectId, "vpn", term);
-      markVpnConnecting(projectId, vpnConfig);
-      force();
-    } catch {
-      markVpnError(projectId, vpnConfig);
-    }
+    // A config the backend cannot build a login for shows as the terminal's spawn
+    // error; the lamp then reads as a login not yet authenticated ("connecting")
+    // until Disconnect resets it.
+    const login = vpnLogin(vpnConfig);
+    const key = loginDedupeKey(login);
+    markConnectionOpened(key);
+    const term = { id: nextReconnectTermId("vpn"), login, key };
+    vpnTermRef.current = term;
+    rememberTerm(projectId, "vpn", term);
+    markVpnConnecting(projectId, vpnConfig);
+    force();
   };
 
   // Stop the OpenVPN channel: cancel any in-flight connect (headless invoke or the
@@ -598,15 +603,10 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
       // readiness probe rides the resulting master with, and what the pooled
       // `remote_connect` re-reads from the spec. All three must agree.
       const user = await commitSshUser();
-      const command = await invoke<string>("remote_login_command", {
-        user,
-        host: remote.host,
-        port: remote.port ?? null,
-      });
-      const target = `${user ? `${user}@` : ""}${remote.host}`;
-      const key = `ssh:${target}:${remote.port ?? ""}`;
+      const login = sshLogin(user, remote.host, remote.port);
+      const key = loginDedupeKey(login);
       markConnectionOpened(key);
-      const term = { id: nextReconnectTermId("ssh"), command, key };
+      const term = { id: nextReconnectTermId("ssh"), login, key };
       sshTermRef.current = term;
       rememberTerm(projectId, "ssh", term);
       const gen = ++sshGen.current;

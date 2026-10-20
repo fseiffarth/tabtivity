@@ -27,6 +27,29 @@ export function readCodexStatus(lines: readonly StatusLineLike[]): CodexStatusCa
   return { heading: raw[0], fields, raw: raw.join("\n").trim() };
 }
 
+/** Claude Code's /status is its Settings dialog on the Status page, drawn
+ * over the composer until Esc. Only that page counts: it alone carries the
+ * model and working directory together. */
+export function readClaudeStatus(lines: readonly StatusLineLike[]): CodexStatusCard | null {
+  let tabsRow = -1;
+  for (let row = lines.length - 1; row >= 0; row -= 1) {
+    if (/^Settings\s+Status\s+Config\s+Usage\b/u.test(lines[row].text.trim())) { tabsRow = row; break; }
+  }
+  if (tabsRow < 0) return null;
+  const fields: CodexStatusField[] = [];
+  const raw: string[] = [];
+  for (const line of lines.slice(tabsRow + 1, tabsRow + 80)) {
+    const text = line.text.trim();
+    if (/^Esc to (?:cancel|close|exit)\b/u.test(text) || /^[›>❯](?:\s|$)/u.test(text)) break;
+    raw.push(text);
+    const field = /^([A-Za-z0-9][A-Za-z0-9 ()/_-]{0,48}):\s+(.*)$/u.exec(text);
+    if (field) fields.push({ label: field[1].trim(), value: field[2].trim() });
+    else if (text && fields.length > 0) fields[fields.length - 1].value += ` ${text}`;
+  }
+  if (!fields.some((field) => field.label === "Model") || !fields.some((field) => field.label === "cwd")) return null;
+  return { heading: lines[tabsRow].text.trim(), fields, raw: raw.join("\n").trim() };
+}
+
 /** Codex prints remaining percentages, unlike the rollout's percent used.
  * Keep unknown or malformed figures absent, including out-of-range ones. */
 export function codexRemaining(value: string | undefined): number | undefined {

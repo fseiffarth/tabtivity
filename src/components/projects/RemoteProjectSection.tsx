@@ -508,7 +508,7 @@ export function RemoteProjectSection({
                             id={vpnTerm.id}
                             cmd=""
                             cwd=""
-                            initialInput={vpnTerm.command}
+                            login={vpnTerm.login}
                             visible
                             focused
                             persistOnUnmount
@@ -706,7 +706,7 @@ export function RemoteProjectSection({
                           id={sshTerm.id}
                           cmd=""
                           cwd=""
-                          initialInput={sshTerm.command}
+                          login={sshTerm.login}
                           visible
                           focused
                           persistOnUnmount

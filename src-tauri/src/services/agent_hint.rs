@@ -280,7 +280,7 @@ fn write_if_changed(file: &HomeFile, bytes: &[u8]) -> io::Result<()> {
 /// Read a JSON config, let `edit` add Tabtivity's hook, write it back only when
 /// that changed something. A file that is there but isn't plain JSON (some
 /// CLIs accept comments) is left alone rather than replaced.
-fn merge_json(file: &HomeFile, edit: impl FnOnce(&mut Value) -> bool) -> io::Result<()> {
+pub(crate) fn merge_json(file: &HomeFile, edit: impl FnOnce(&mut Value) -> bool) -> io::Result<()> {
     let mut root = match file.read() {
         None => json!({}),
         Some(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => json!({}),
@@ -297,7 +297,7 @@ fn merge_json(file: &HomeFile, edit: impl FnOnce(&mut Value) -> bool) -> io::Res
 }
 
 /// Make `object[key]` a JSON value of `default`'s kind, keeping one that already is.
-fn slot<'a>(object: &'a mut Value, key: &str, default: Value) -> &'a mut Value {
+pub(crate) fn slot<'a>(object: &'a mut Value, key: &str, default: Value) -> &'a mut Value {
     let map = object.as_object_mut().expect("callers pass objects");
     let entry = map.entry(key).or_insert_with(|| default.clone());
     if std::mem::discriminant(entry) != std::mem::discriminant(&default) {

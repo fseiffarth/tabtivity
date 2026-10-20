@@ -1,5 +1,5 @@
 /**
- * The tab hover card's memory row (`lib/tabCost`, `docs/tab_cost_plan.md`
+ * The tab hover card's memory row (`lib/tabCost`, `docs/done/tab_cost_plan.md`
  * step 1): a terminal's estimate with its scrollback rows, a sleeping
  * terminal's "keeps running", a PDF's pages and file size, a released PDF's
  * "Unloaded" — and no row at all for a kind with nothing to estimate.

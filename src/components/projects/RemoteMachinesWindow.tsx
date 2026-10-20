@@ -12,9 +12,10 @@ import { rememberArg, useSavedCredential } from "./useSavedCredential";
 import { CredentialPasteBar, sshPasteEntries } from "./CredentialPasteBar";
 import { TerminalView } from "../terminal/TerminalView";
 import { forgetConnection, markConnectionOpened, resolveRemoteStartDir } from "../../lib/remote/remoteConnect";
+import { loginDedupeKey, sshLogin, type LoginTarget } from "../../lib/remote/loginTarget";
 import { formatBytes } from "../../lib/formatBytes";
 import { withHostKeyConfirm } from "../../lib/remote/hostKey";
-import { sameTarget } from "../../lib/remote/machineSync";
+import { sameTarget, type Target } from "../../lib/remote/machineSync";
 import { useConnectDialogStore } from "../../stores/remote/connectDialog";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useRemoteStatusStore, PRIMARY_HOST, type ConnState } from "../../stores/remote/remoteStatus";
@@ -30,6 +31,7 @@ import { formatRemoteTarget, resolveLocalMirror } from "../../types";
 import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 
 /** Distinct PTY id per login terminal opened here — the id is the handle
  *  `pty_kill` and the output stream use, so it must never be reused. */
@@ -80,6 +82,7 @@ export function RemoteMachinesWindow({
 }) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
+  const { confirmAction, dialogs } = useDialogs();
   const workers = project.compute_hosts ?? [];
   const openConnect = useConnectDialogStore((s) => s.open);
   const byHost = useRemoteStatusStore((s) => s.byHost[project.id]);
@@ -134,14 +137,11 @@ export function RemoteMachinesWindow({
   const [dropPath, setDropPath] = useState(project.remote?.remote_path ?? "");
   const [dropBusy, setDropBusy] = useState(false);
   const [dropError, setDropError] = useState("");
-  // The dropped machine's lamp used to be hardcoded `connected` — it is a global
-  // machine, so it *usually* is, but "usually" is not a status. Before the add it
-  // reads the machine's real state from the global list; during/after the add it
-  // reads this dialog's own attempt, which is the thing the user is watching.
+  // The panel's lamp is this dialog's own add-and-connect attempt and nothing
+  // else. Before the add it has none: borrowing the global machine's green lamp
+  // made the not-yet-added panel read as an added, connected worker card, so a
+  // user closed the hub believing the machine was in the project.
   const dropMachineId = pendingDrop?.id;
-  const globalStatus = useGlobalMachinesStore((s) =>
-    dropMachineId ? s.status[dropMachineId] : undefined,
-  );
   const [dropConn, setDropConn] = useState<ConnState | null>(null);
   // The panel is rendered above the worker list, so a machine picked from the
   // list *inside* the add-form below would otherwise land off screen.
@@ -166,6 +166,10 @@ export function RemoteMachinesWindow({
 
   const addDroppedMachine = async () => {
     if (!pendingDrop) return;
+    if (alreadyAHost(pendingDrop)) {
+      setDropError(t("remoteMachines.globalAlreadyAddedTitle"));
+      return;
+    }
     const path = dropPath.trim();
     if (!path.startsWith("/")) {
       setDropError(t("remoteMachines.enterAbsolutePath"));
@@ -279,7 +283,7 @@ export function RemoteMachinesWindow({
   // is the mode, and only here was it missing.
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   const [viaTerminal, setViaTerminal] = useState(!headless);
-  const [loginTerm, setLoginTerm] = useState<{ id: string; command: string; key: string } | null>(
+  const [loginTerm, setLoginTerm] = useState<{ id: string; login: LoginTarget; key: string } | null>(
     null,
   );
   const loginPoll = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -350,6 +354,7 @@ export function RemoteMachinesWindow({
         remember: rememberArg(savePassword),
         startPath: remotePath.trim() || null,
       });
+      if (!outcome) return;
       // What the backend actually did, not what the box asked for.
       credential.applyOutcome(outcome);
       setBrowsing(true);
@@ -425,23 +430,14 @@ export function RemoteMachinesWindow({
     }
     setAddError("");
     browse.setError("");
-    try {
-      const command = await invoke<string>("remote_login_command", {
-        user: parsed.user,
-        host: parsed.host,
-        port: parsed.port,
-      });
-      // Pre-mark the activation dedupe key this login satisfies, so the project's
-      // own root-terminal login isn't opened a second time for the same target.
-      const target = `${parsed.user ? `${parsed.user}@` : ""}${parsed.host}`;
-      const key = `ssh:${target}:${parsed.port ?? ""}`;
-      markConnectionOpened(key);
-      setLoginTerm({ id: nextMachineTermId(), command, key });
-      setBrowseConnecting(true);
-      pollLoginReady(parsed);
-    } catch (e) {
-      setAddError(String(e));
-    }
+    const login = sshLogin(parsed.user, parsed.host, parsed.port);
+    // Pre-mark the activation dedupe key this login satisfies, so the project's
+    // own root-terminal login isn't opened a second time for the same target.
+    const key = loginDedupeKey(login);
+    markConnectionOpened(key);
+    setLoginTerm({ id: nextMachineTermId(), login, key });
+    setBrowseConnecting(true);
+    pollLoginReady(parsed);
   };
 
   /** Re-arm the readiness poll — for a login finished after the bound ran out. */
@@ -509,7 +505,7 @@ export function RemoteMachinesWindow({
    *  target, never by id (a project host is a copy by value; `lib/remote/machineSync`).
    *  Such a row offers no action: adding the same machine twice would give it two
    *  cards, two lamps and two sync paths for one host. */
-  const alreadyAHost = (m: GlobalMachine) =>
+  const alreadyAHost = (m: Target) =>
     (project.remote ? sameTarget(project.remote, m) : false) ||
     workers.some((w) => sameTarget(w, m));
 
@@ -544,6 +540,10 @@ export function RemoteMachinesWindow({
     const parsed = parseTarget();
     if (!parsed) {
       setAddError(t("remoteMachines.enterHost"));
+      return;
+    }
+    if (alreadyAHost({ user: parsed.user ?? undefined, host: parsed.host, port: parsed.port ?? undefined })) {
+      setAddError(t("remoteMachines.globalAlreadyAddedTitle"));
       return;
     }
     const path = remotePath.trim();
@@ -623,9 +623,11 @@ export function RemoteMachinesWindow({
         setPullNote((p) => ({ ...p, [hostId]: t("remoteMachines.noOutputFiles") }));
         return;
       }
-      const ok = window.confirm(
-        t("remoteMachines.pullConfirm", { files: preview.files, bytes: formatBytes(preview.bytes) }),
-      );
+      const ok = await confirmAction({
+        title: t("remoteMachines.pullConfirmTitle"),
+        body: t("remoteMachines.pullConfirm", { files: preview.files, bytes: formatBytes(preview.bytes) }),
+        confirmLabel: t("remoteMachines.pullConfirmTitle"),
+      });
       if (!ok) return;
       const rep = await invoke<{ pulled: number; bytes: number; dest: string; errors: string[] }>(
         "worker_pull_outputs",
@@ -728,15 +730,19 @@ export function RemoteMachinesWindow({
             worker. */}
         {pendingDrop && (
           <div className="remote-machine-card remote-machine-drop-panel" ref={dropPanelRef}>
+            {/* Says outright that nothing is saved yet: drawn like a worker card,
+                this panel was taken for an added machine and closed unconfirmed. */}
+            <div className="remote-machine-add-title">
+              {t("remoteMachines.dropPendingTitle", {
+                name: pendingDrop.label || pendingDrop.host,
+              })}
+              <UntestedTag id="remoteMachinesWindow.5" />
+            </div>
             <div className="remote-machine-head">
-              {/* Was hardcoded `connected`. A dropped machine is *usually* live —
-                  that is why it is droppable — but "usually" is not a status, and
-                  once this panel's own connect is in flight (or has failed) the
-                  attempt the user is watching is the only honest thing to show. */}
-              <ConnLamp
-                status={dropConn ?? globalStatus ?? "off"}
-                label={pendingDrop.label || pendingDrop.host}
-              />
+              {/* Only this panel's own attempt, once there is one (see `dropConn`). */}
+              {dropConn && (
+                <ConnLamp status={dropConn} label={pendingDrop.label || pendingDrop.host} />
+              )}
               <span className="remote-machine-name">
                 {pendingDrop.label || pendingDrop.host}
               </span>
@@ -747,8 +753,19 @@ export function RemoteMachinesWindow({
                 {pendingDrop.port ? `:${pendingDrop.port}` : ""}
               </span>
             </div>
+            {alreadyAHost(pendingDrop) ? (
+              <>
+                <p className="settings-help">{t("remoteMachines.globalAlreadyAddedTitle")}</p>
+                <div className="project-dialog-actions">
+                  <button type="button" onClick={() => setPendingDrop(null)}>
+                    {t("common.close")}
+                  </button>
+                </div>
+              </>
+            ) : (
+            <>
             <p className="settings-help">
-              {t("remoteMachines.dropIntro")}
+              {t("remoteMachines.dropPendingNote")} {t("remoteMachines.dropIntro")}
             </p>
             <label>
               <span className="remote-machine-add-label">{t("remoteMachines.pathOnMachine")}</span>
@@ -772,6 +789,8 @@ export function RemoteMachinesWindow({
                 {dropBusy ? t("remoteMachines.adding") : t("remoteMachines.addMachineBtn")}
               </button>
             </div>
+            </>
+            )}
           </div>
         )}
 
@@ -1031,7 +1050,7 @@ export function RemoteMachinesWindow({
                       id={loginTerm.id}
                       cmd=""
                       cwd=""
-                      initialInput={loginTerm.command}
+                      login={loginTerm.login}
                       visible
                       focused
                       persistOnUnmount
@@ -1169,9 +1188,9 @@ export function RemoteMachinesWindow({
           )}
         </div>
         </div>
+        {dialogs}
       </div>
     </div>,
     document.body,
   );
 }
-

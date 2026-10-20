@@ -45,7 +45,7 @@ use crate::services::{agent_prompts, agent_tasks, schedule_mcp};
 use crate::storage;
 
 /// The desktop's cap on one month answer (`MOBILE_CALENDAR_EVENTS`).
-const MOBILE_CALENDAR_EVENTS: usize = 80;
+const MOBILE_CALENDAR_EVENTS: usize = 400;
 
 /// The category keys with a colour of their own (`calendarCategories.ts`).
 const CATEGORY_KEYS: &[&str] = &["work", "personal", "meeting", "travel", "birthday", "holiday", "important"];
@@ -183,7 +183,18 @@ pub fn calendar_month(state_dir: &Path, host_key: &[u8], month: &str) -> Result<
     let week_start = calendar_week_start(state_dir);
     let (window_start, window_end) = month_window(year, mon, u32::from(week_start), 6);
     let visible: HashSet<String> = data.calendars.iter().filter(|c| c.visible).map(|c| c.id.clone()).collect();
-    let occurrences = expand_events(&data.events, &window_start, &window_end, Some(&visible));
+    let mut occurrences = expand_events(&data.events, &window_start, &window_end, Some(&visible));
+    // Cut day by day (`sortOccurrencesByDay`): `expand_events` puts every
+    // all-day row of the window first, so a cap on it dropped later weeks'
+    // timed events.
+    occurrences.sort_by(|a, b| {
+        a.start
+            .get(..10)
+            .cmp(&b.start.get(..10))
+            .then_with(|| b.all_day.cmp(&a.all_day))
+            .then_with(|| a.start.cmp(&b.start))
+            .then_with(|| a.title.cmp(&b.title))
+    });
     let shown = &occurrences[..occurrences.len().min(MOBILE_CALENDAR_EVENTS)];
     let id = |domain: &str, value: &str| key_id(host_key, domain, &[value]);
     let optional = |value: &str, max: usize| (!value.is_empty()).then(|| bounded(value, max));
@@ -290,7 +301,7 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 // ── Transcript ──────────────────────────────────────────────────────────────
 
 /// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode"];
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
@@ -318,7 +329,7 @@ pub fn transcript(
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or((tab.cmd == "opencode").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -388,12 +399,12 @@ fn default_agent(state_dir: &Path) -> String {
 pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> bool) -> Vec<AgentChoice> {
     let disabled = disabled_agents(state_dir);
     let default = default_agent(state_dir);
-    super::discovery::RESUMABLE_BUILTINS
-        .iter()
+    super::discovery::resumable_builtins()
+        .into_iter()
         .filter_map(|bin| {
             let label = crate::commands::agents::agent_label_for_bin(bin)?;
             let id = crate::commands::agents::agent_id_for_bin(bin)?;
-            if disabled.contains(id) || disabled.contains(*bin) || !installed(bin) {
+            if disabled.contains(id) || disabled.contains(bin) || !installed(bin) {
                 return None;
             }
             Some(AgentChoice {
@@ -401,7 +412,7 @@ pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> boo
                     id: key_id(host_key, "agent", &[bin]),
                     label: label.to_string(),
                     modes: Vec::new(),
-                    default: default == *bin || default == id,
+                    default: default == bin || default == id,
                 },
                 bin,
             })
@@ -641,6 +652,10 @@ pub enum CreateRefusal {
     /// a local model, a mode, a sign-in like a tab, or the root console.
     DesktopUnavailable,
     UnknownAgent,
+    /// The assistant service or the scope's gate refused the chat: a fixed
+    /// category (`assistant::Refusal::code`, or `assistant_off`), never text a
+    /// client sent.
+    Assistant(&'static str),
     /// The tab was minted and then taken back out: the spawn failed.
     LaunchFailed(String),
     Persist(String),
@@ -651,6 +666,7 @@ impl CreateRefusal {
         match self {
             Self::DesktopUnavailable => "desktop_unavailable",
             Self::UnknownAgent => "unknown_agent",
+            Self::Assistant(code) => code,
             Self::LaunchFailed(_) => "launch_failed",
             Self::Persist(_) => "persist_failed",
         }
@@ -669,6 +685,53 @@ pub struct HeadlessCreated {
 /// A scope's session file under `state_dir`, as `terminal_service` keys it.
 pub fn session_file(state_dir: &Path, raw_id: &str) -> std::path::PathBuf {
     state_dir.join("sessions").join(storage::project_key(raw_id)).join("terminals.json")
+}
+
+/// The assistant arm of [`create_tab`]: resolve the opaque launch, build the
+/// record with `assistant::new_chat_record` (one path for the desktop command
+/// and this), append it under the session file's lock and start it detached.
+async fn create_chat(
+    state_dir: &Path,
+    host_key: &[u8],
+    project: &ResolvedProject,
+    request: &CreateTabRequest,
+    choices: &[super::assistant::Choice],
+    launch: &HeadlessLaunch,
+) -> Result<HeadlessCreated, CreateRefusal> {
+    let (Some(handle), true, CreateTabKind::Agent) =
+        (request.assistant.as_deref(), project.public.kind == ScopeKind::Assistant, &request.kind)
+    else {
+        return Err(CreateRefusal::UnknownAgent);
+    };
+    // The perimeter again, at the point of use: the catalog that listed the
+    // scope may be a few seconds old.
+    if !super::discovery::assistant_open(state_dir) {
+        return Err(CreateRefusal::Assistant("assistant_off"));
+    }
+    let chosen = super::assistant::resolve(choices, handle).ok_or(CreateRefusal::UnknownAgent)?;
+    let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
+    let uid = crate::commands::projects::uuid_v4();
+    let record = crate::services::assistant::new_chat_record(state_dir, &chosen, &uid, Some(&request_hash))
+        .map_err(|refusal| CreateRefusal::Assistant(refusal.code()))?;
+    let path = session_file(state_dir, &project.raw_id);
+    let created = crate::services::workspace::create_tab_in(&path, &project.raw_id, record, Some(&request_hash))
+        .map_err(CreateRefusal::Persist)?;
+    let tmux_session = crate::services::workspace::tmux_of(&created.tab)
+        .ok_or_else(|| CreateRefusal::Persist("the owner minted no tmux name".to_string()))?
+        .to_string();
+    if created.existed {
+        return Ok(HeadlessCreated { tmux_session, existed: true });
+    }
+    if let Err(reason) = launch(launch_options(&project.raw_id, &created.tab)).await {
+        let id = crate::services::workspace::tab_id(&created.tab).map(str::to_string);
+        let _ = crate::services::workspace::edit_in(&path, &project.raw_id, |session| {
+            // project-tree-read: ok — the state-dir session file the owner just wrote, keyed by scope id.
+            session.tab_layout.retain(|tab| crate::services::workspace::tab_id(tab) != id.as_deref());
+            Ok(())
+        });
+        return Err(CreateRefusal::LaunchFailed(reason));
+    }
+    Ok(HeadlessCreated { tmux_session, existed: false })
 }
 
 /// The tab record a headless create appends — `buildStaticTabSpec`'s shape:
@@ -735,6 +798,14 @@ pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 /// through the same filter here (`terminal_service::strip_persisted_env`):
 /// no loader or control variable from a stored layout reaches the spawn.
 pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
+    // The chat assistant's scope trusts nothing of the record but the validated
+    // launch block and the chat's uid: the CLI line, its env and its folder are
+    // rebuilt by `launch_prep`'s assistant gate from `PtyOptions.assistant` and
+    // `TAB_UID`. This seam serves a create, a reopen, an undo-clear relaunch and
+    // the scheduler's relaunch alike, so none of them can feed it `args`/`env`.
+    if super::discovery::is_assistant_scope_id(project_id) {
+        return assistant_launch_options(tab);
+    }
     let mut filtered = tab.clone();
     crate::services::terminal_service::strip_persisted_env(
         &mut filtered,
@@ -761,6 +832,8 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
     let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
     PtyOptions {
+        login: None,
+        assistant: None,
         id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),
@@ -782,6 +855,40 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     }
 }
 
+/// [`launch_options`] for a chat of the assistant scope. A record without a
+/// valid launch (`assistant::record_launch`: strict block, offered profile,
+/// good model, matching `cmd`, uuid `sessionId`) gets `assistant: None`, which
+/// the spawn gate refuses — a plain shell or agent never starts in this scope.
+fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
+    let launch = crate::services::assistant::record_launch(tab);
+    let uid = launch.as_ref().and(tab.session_id.clone());
+    let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
+    PtyOptions {
+        login: None,
+        id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
+        // The gate rewrites these from the launch; they are only the record's
+        // honest values, never `args`/`env` from the file.
+        cmd: launch.as_ref().map(|l| l.cli.bin().to_string()).unwrap_or_default(),
+        args: Vec::new(),
+        env: uid.map(|uid| HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid)])).unwrap_or_default(),
+        cwd: tab.cwd.clone(),
+        cols: HEADLESS_COLS,
+        rows: HEADLESS_ROWS,
+        local_only: false,
+        sandbox: false,
+        agent: true,
+        project_id: Some(crate::storage::ASSISTANT_SCOPE.to_string()),
+        schedule_target_id: None,
+        remote_host_id: None,
+        tmux_session: Some(tmux),
+        tmux_attach: None,
+        host_bound_uid: None,
+        local_model: false,
+        host_session: false,
+        assistant: launch,
+    }
+}
+
 /// `Create` with no window (headless owner plan, H1b): what the window's
 /// bridge does for a shell or a plain agent tab, done by the owner — the
 /// tab is minted into the scope's session file first (so a window opening
@@ -797,8 +904,18 @@ pub async fn create_tab(
     project: &ResolvedProject,
     request: &CreateTabRequest,
     agents: &[AgentChoice],
+    assistant: &[super::assistant::Choice],
     launch: &HeadlessLaunch,
 ) -> Result<HeadlessCreated, CreateRefusal> {
+    // The chat assistant (decision 12): the one scope that may start with no
+    // window besides a project or box. Its tab is a chat record built by the
+    // assistant service from a launch the phone named by opaque id — the
+    // request's `agent_id`, `mode`, `local` and the rest are not read, and
+    // `launch_shape_ok` already refused a body that carries them. A plain
+    // shell or agent in the scope is refused, and so is a chat anywhere else.
+    if project.public.kind == ScopeKind::Assistant || request.assistant.is_some() {
+        return create_chat(state_dir, host_key, project, request, assistant, launch).await;
+    }
     if request.sign_in.is_some()
         || request.cloud.is_some()
         || request.worktree.is_some()
@@ -862,19 +979,13 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
         .collect()
 }
 
-/// `RESUMABLE_AGENTS` (`stores/tabs.ts`): the launch args that bring a
-/// resumable agent tab's conversation back. Claude's `--resume <launch id>`
-/// is upgraded to the live id by `launch_prep` as at every restart; Codex
-/// resolves its own from `<UPPER>_TAB_UID`; the rest continue their latest.
+/// The launch args that bring a resumable agent tab's conversation back — the
+/// registry's `Resume` (`commands::agents`, the frontend's `RESUMABLE_AGENTS`).
+/// Claude's `--resume <launch id>` is upgraded to the live id by `launch_prep`
+/// as at every restart; Codex resolves its own from `<UPPER>_TAB_UID`; the
+/// rest continue their latest.
 pub(super) fn resume_args(cmd: &str, session_id: &str) -> Vec<String> {
-    match cmd {
-        "claude" => vec!["--resume".into(), session_id.into()],
-        "codex" => Vec::new(),
-        "qwen" | "opencode" | "copilot" | "cursor-agent" | "grok" | "agy" | "vibe" => vec!["--continue".into()],
-        "droid" => vec!["--resume".into()],
-        "gemini" => vec!["--resume".into(), "latest".into()],
-        _ => Vec::new(),
-    }
+    crate::commands::agents::resume_args_for_bin(cmd, session_id).unwrap_or_default()
 }
 
 /// `ReopenTab` with no window: the closed record comes back as a new tab
@@ -912,6 +1023,39 @@ pub async fn reopen_tab(
         return Err(CreateRefusal::LaunchFailed(reason));
     }
     Ok(Some(HeadlessCreated { tmux_session, existed: false }))
+}
+
+/// `Activate` of one chat of the assistant's scope with no window: a chat's
+/// process (and tmux session) ends with its CLI, and a restored one has none
+/// until asked for, so the owner starts the stored chat again, detached, from
+/// the record's validated launch (`launch_options`, which `launch_prep`'s gate
+/// turns into the pinned line; Claude resumes by its uid). The caller has
+/// checked the chat is not running. Refused when the gate is closed, the tab
+/// is not one of the scope's chats, or its record no longer validates.
+pub async fn start_chat(
+    state_dir: &Path,
+    project: &ResolvedProject,
+    tmux_session: &str,
+    launch: &HeadlessLaunch,
+) -> Result<(), CreateRefusal> {
+    if project.public.kind != ScopeKind::Assistant {
+        return Err(CreateRefusal::UnknownAgent);
+    }
+    if !super::discovery::assistant_open(state_dir) {
+        return Err(CreateRefusal::Assistant("assistant_off"));
+    }
+    let path = session_file(state_dir, &project.raw_id);
+    // project-tree-read: ok — the state-dir session file, keyed by scope id.
+    let session: crate::schema::session::TerminalSession = storage::read_json(&path).map_err(|e| CreateRefusal::Persist(format!("read session: {e}")))?;
+    let record = session
+        .tab_layout
+        .iter()
+        .find(|tab| crate::services::workspace::tmux_of(tab) == Some(tmux_session))
+        .ok_or(CreateRefusal::UnknownAgent)?;
+    if crate::services::assistant::record_launch(record).is_none() {
+        return Err(CreateRefusal::Assistant(crate::services::assistant::Refusal::Config.code()));
+    }
+    launch(launch_options(&project.raw_id, record)).await.map_err(CreateRefusal::LaunchFailed)
 }
 
 /// `Activate` with no window: the registry entry's `status` becomes
@@ -972,9 +1116,11 @@ pub fn is_session_command(prompt: &str) -> bool {
 /// project's prompt history as delivered, the way the desktop records them
 /// (`recordTabPrompt`). A session command is not a prompt and is not
 /// recorded. `Ok(false)` when nothing was recorded.
-pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str) -> Result<bool, String> {
+/// `phone`: the paired device that sent it.
+pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str, phone: Option<&str>) -> Result<bool, String> {
     let text = message.trim();
-    if text.is_empty() || is_session_command(text) {
+    // The chat assistant's scope keeps no prompt history (`agent_prompts`).
+    if text.is_empty() || is_session_command(text) || storage::is_assistant_scope(project_id) {
         return Ok(false);
     }
     agent_prompts::record_at(
@@ -996,6 +1142,8 @@ pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, mess
                 result: Some("delivered".to_string()),
                 scheduled_for: None,
                 sent_at: None,
+                phone_device: phone.map(str::to_string),
+                phone_name: None,
             },
         },
     )
@@ -1124,6 +1272,7 @@ pub fn schedule_mutate(
                 last: None,
                 origin: None,
                 phone_device: phone.map(str::to_string),
+                extra: Default::default(),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1141,6 +1290,7 @@ pub fn schedule_mutate(
                 last: None,
                 origin: None,
                 phone_device: phone.map(str::to_string),
+                extra: Default::default(),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1215,6 +1365,8 @@ pub fn prompt_mutate(
                     result: None,
                     scheduled_for: None,
                     sent_at: None,
+                    phone_device: phone.map(str::to_string),
+                    phone_name: None,
                 },
             )
         }
@@ -1255,6 +1407,7 @@ fn queue_prompt(
         last: None,
         origin: None,
         phone_device: phone.map(str::to_string),
+        extra: Default::default(),
     };
     agent_tasks::upsert_in(&path, project_id, target_id, rule, None)?;
     Ok(id)
@@ -1560,6 +1713,39 @@ mod tests {
     }
 
     #[test]
+    fn a_capped_month_drops_its_last_days_not_its_timed_events() {
+        let dir = state_dir();
+        let calendar = dir.path().join("calendar.json");
+        // Ten daily all-day series fill more than the cap over six weeks.
+        for n in 0..10 {
+            create_event_at(
+                &calendar,
+                CalendarEvent {
+                    title: format!("daily {n}"),
+                    start: "2026-09-01".into(),
+                    end: "2026-09-02".into(),
+                    all_day: true,
+                    rrule: Some(Rrule { freq: Freq::Daily, interval: 1, ..Default::default() }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        create_event_at(
+            &calendar,
+            CalendarEvent { title: "dentist".into(), start: "2026-10-16T08:00".into(), end: "2026-10-16T09:00".into(), ..Default::default() },
+        )
+        .unwrap();
+
+        let month = calendar_month(dir.path(), &KEY, "2026-10").unwrap();
+        assert!(month.truncated);
+        assert_eq!(month.events.len(), MOBILE_CALENDAR_EVENTS);
+        assert!(month.events.iter().any(|e| e.title == "dentist"), "a mid-month timed event survives the cap");
+        let days: Vec<&str> = month.events.iter().map(|e| &e.start[..10]).collect();
+        assert!(days.windows(2).all(|w| w[0] <= w[1]), "day by day");
+    }
+
+    #[test]
     fn schedules_and_prompts_come_off_their_files_with_next_runs() {
         let dir = state_dir();
         std::fs::write(
@@ -1595,16 +1781,49 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut gemini = tab("gemini", None);
         gemini.schedule_target_id = Some("target-gemini".into());
-        assert!(record_prompt(dir.path(), "p1", &gemini, "look at the logs").unwrap());
+        assert!(record_prompt(dir.path(), "p1", &gemini, "look at the logs", None).unwrap());
         let mut claude = tab("claude", Some("launch-1"));
         claude.schedule_target_id = Some("target-claude".into());
-        assert!(record_prompt(dir.path(), "p1", &claude, "run the tests").unwrap());
+        assert!(record_prompt(dir.path(), "p1", &claude, "run the tests", None).unwrap());
         let file: serde_json::Value = crate::storage::read_json(&agent_prompts::file_path(dir.path())).unwrap();
         let rows = file["history"]["p1"].as_array().unwrap();
         let row = |message: &str| rows.iter().find(|row| row["message"] == message).unwrap().clone();
         // The window's `historyTabId`: the launch id, else the binding.
         assert_eq!(row("look at the logs")["tab_id"], "target-gemini");
         assert_ne!(row("run the tests")["tab_id"], "target-claude");
+    }
+
+    /// A phone's prompt names the phone, and the phone's name as it was then:
+    /// renaming or unpairing it later leaves the row saying which phone it was.
+    #[test]
+    fn a_phone_prompt_names_the_phone_that_sent_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        std::fs::create_dir_all(&control).unwrap();
+        let devices = control.join("devices.json");
+        let phone = |name: &str| serde_json::json!({ "schema": 1, "devices": [
+            { "id": "phone-a", "name": name, "public_key": "k", "created_at": 1, "last_seen_at": null }
+        ] });
+        std::fs::write(&devices, serde_json::to_vec(&phone("Pixel\n 9 ")).unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&devices, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut claude = tab("claude", Some("launch-1"));
+        claude.schedule_target_id = Some("target-claude".into());
+        assert!(record_prompt(dir.path(), "p1", &claude, "from the phone", Some("phone-a")).unwrap());
+        assert!(record_prompt(dir.path(), "p1", &claude, "from a revoked phone", Some("phone-gone")).unwrap());
+        assert!(record_prompt(dir.path(), "p1", &claude, "from the desktop", None).unwrap());
+        let file: serde_json::Value = crate::storage::read_json(&agent_prompts::file_path(dir.path())).unwrap();
+        let rows = file["history"]["p1"].as_array().unwrap();
+        let row = |message: &str| rows.iter().find(|row| row["message"] == message).unwrap().clone();
+        assert_eq!(row("from the phone")["phone_device"], "phone-a");
+        assert_eq!(row("from the phone")["phone_name"], "Pixel 9", "folded to one line");
+        assert_eq!(row("from a revoked phone")["phone_device"], "phone-gone");
+        assert!(row("from a revoked phone").get("phone_name").is_none());
+        assert!(row("from the desktop").get("phone_device").is_none());
+        assert!(row("from the desktop").get("phone_name").is_none());
     }
 
     #[test]
@@ -1691,6 +1910,7 @@ mod tests {
             last: None,
             origin: None,
             phone_device: None,
+            extra: Default::default(),
         };
         agent_tasks::upsert_in(&agent_tasks::file_path(dir.path()), "p1", "target-gemini", desk, None).unwrap();
         schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Update { schedule_id: "desk-rule".into(), schedule: input("nightly, phone words") }, phone, Local::now()).unwrap();
@@ -1829,6 +2049,109 @@ mod tests {
         assert!(record.extra["env"].get("PATH").is_some());
     }
 
+    const CHAT: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+
+    fn chat_record(state: &Path, launch: &crate::services::assistant::AssistantLaunch) -> TabEntry {
+        let mut record = crate::services::assistant::new_chat_record(state, launch, CHAT, Some("h")).expect("chat record");
+        record.extra.insert("tmuxSession".into(), serde_json::json!(format!("{}assistant--agent-1", crate::brand::TMUX_PREFIX)));
+        record
+    }
+
+    /// `launch_options` is the one seam a create, a reopen, an undo-clear
+    /// relaunch and the scheduler's relaunch share. For the assistant's scope
+    /// it takes the validated launch block and the chat's uid from the record
+    /// and nothing else: a hand-edited `args`, `env`, `scheduleTargetId`,
+    /// `sandbox` or `localLaunch` never reaches the spawn, and a record that is
+    /// not a chat comes out with no launch, which the spawn gate refuses.
+    #[test]
+    fn an_assistant_record_is_launched_from_its_block_and_uid_alone() {
+        use crate::services::assistant::{AssistantCli, AssistantLaunch};
+        let state = tempfile::tempdir().expect("state");
+        let launch = AssistantLaunch { cli: AssistantCli::OpenCodeLocal, model: Some("qwen3:8b".into()) };
+        let mut record = chat_record(state.path(), &launch);
+        record.extra.insert("args".into(), serde_json::json!(["--dangerously-skip-permissions", "--session-id", "other"]));
+        record.extra.insert("env".into(), serde_json::json!({ "LD_PRELOAD": "/tmp/x.so", "PATH": "/tmp/evil", crate::app_env!("TAB_UID"): "other" }));
+        record.extra.insert("scheduleTargetId".into(), serde_json::json!("target-1"));
+        record.extra.insert("sandbox".into(), serde_json::json!(true));
+        record.extra.insert("localLaunch".into(), serde_json::json!({ "driver": "claude", "model": "m", "args": [] }));
+        record.extra.insert("loginTab".into(), serde_json::json!(true));
+        let tmux = format!("{}assistant--agent-1", crate::brand::TMUX_PREFIX);
+        // Every spelling of the scope id is the scope.
+        for scope in ["assistant", "Assistant", " assistant"] {
+            let opts = launch_options(scope, &record);
+            assert_eq!(opts.assistant.as_ref(), Some(&launch), "{scope}");
+            assert_eq!(opts.project_id.as_deref(), Some("assistant"), "{scope}");
+            assert_eq!(opts.cmd, "opencode");
+            assert!(opts.args.is_empty());
+            assert_eq!(opts.env, HashMap::from([(crate::app_env!("TAB_UID").to_string(), CHAT.to_string())]));
+            assert!(opts.agent && !opts.local_model && !opts.sandbox && !opts.host_session);
+            assert!(opts.schedule_target_id.is_none() && opts.login.is_none() && opts.tmux_attach.is_none() && opts.host_bound_uid.is_none());
+            assert_eq!(opts.tmux_session.as_deref(), Some(tmux.as_str()));
+        }
+        // Not a chat: a bad block, another cmd, a session id that is no uuid.
+        let launched = |edit: &dyn Fn(&mut TabEntry)| {
+            let mut bad = chat_record(state.path(), &launch);
+            edit(&mut bad);
+            launch_options("assistant", &bad)
+        };
+        assert!(launched(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "claude", "args": ["-x"] })); }).assistant.is_none());
+        assert!(launched(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "opencode_local", "model": "--evil" })); }).assistant.is_none());
+        assert!(launched(&|t| t.cmd = "bash".into()).assistant.is_none());
+        assert!(launched(&|t| t.session_id = Some("../../x".into())).assistant.is_none());
+        assert!(launched(&|t| { t.extra.remove("assistant"); }).assistant.is_none());
+        let opts = launched(&|t| { t.extra.remove("assistant"); t.extra.insert("args".into(), serde_json::json!(["--x"])); });
+        assert!(opts.assistant.is_none() && opts.args.is_empty() && opts.env.is_empty());
+        // Any other scope still reads its record as before.
+        assert!(launch_options("p1", &record).assistant.is_none());
+        assert_eq!(launch_options("p1", &record).args, vec!["--dangerously-skip-permissions", "--session-id", "other"]);
+    }
+
+    /// A closed chat comes back through the same seam: the owner puts resume
+    /// args on a reopened record (`resume_args`), and the spawn never sees them.
+    #[tokio::test]
+    async fn a_reopened_chat_is_launched_without_the_resume_args() {
+        use crate::services::assistant::{AssistantCli, AssistantLaunch};
+        let state = tempfile::tempdir().expect("state");
+        let launch = AssistantLaunch { cli: AssistantCli::Claude, model: None };
+        let path = session_file(state.path(), "assistant");
+        let created = crate::services::workspace::create_tab_in(&path, "assistant", chat_record(state.path(), &launch), Some("h")).expect("create");
+        let tmux = crate::services::workspace::tmux_of(&created.tab).expect("tmux").to_string();
+        crate::services::workspace::close_tab_in(&path, "assistant", &tmux, 1).expect("close");
+        let chat_folder = crate::services::assistant::chat_dir(state.path(), CHAT).expect("folder");
+        std::fs::create_dir_all(&chat_folder).expect("chat folder");
+        let project = ResolvedProject {
+            public: super::super::discovery::PublicProject {
+                id: "a".into(),
+                label: "Tabby".into(),
+                status: "active".into(),
+                kind: ScopeKind::Assistant,
+                live_sessions: 0,
+                last_activity: None,
+                pending_reviews: None,
+                git: None,
+                agents: None,
+            },
+            raw_id: "assistant".into(),
+            root: state.path().to_path_buf(),
+            roots: vec![state.path().to_path_buf()],
+            tabs: Vec::new(),
+            devices: None,
+        };
+        let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
+        let sink = seen.clone();
+        let launcher: HeadlessLaunch = Arc::new(move |opts| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        });
+        let reopened = reopen_tab(state.path(), &project, None, &launcher).await.expect("reopen").expect("a closed tab");
+        assert!(!reopened.existed);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].assistant.as_ref(), Some(&launch));
+        assert!(seen[0].args.is_empty(), "{:?}", seen[0].args);
+        assert_eq!(seen[0].env.get(crate::app_env!("TAB_UID")).map(String::as_str), Some(CHAT));
+    }
+
     #[test]
     fn a_transcript_answers_the_same_not_yet_reasons_as_the_window() {
         assert_eq!(transcript("p1", &tab("claude", None), None, None, None).reason.as_deref(), Some("no_session"));
@@ -1836,6 +2159,11 @@ mod tests {
         // OpenCode is read by folder, so a tab without a session id (a
         // local-model one) still reaches the reader instead of waiting on one.
         assert_ne!(transcript("p1", &tab("opencode", None), None, None, None).reason.as_deref(), Some("no_session"));
+        for cmd in ["gemini", "agy"] {
+            let read = transcript("p1", &tab(cmd, None), None, None, None);
+            assert_ne!(read.reason.as_deref(), Some("no_session"));
+            assert_ne!(read.reason.as_deref(), Some("unsupported"));
+        }
         let mut local = tab("opencode", None);
         local.local_model = true;
         assert_ne!(transcript("p1", &local, None, None, None).reason.as_deref(), Some("no_session"));

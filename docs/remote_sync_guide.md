@@ -65,6 +65,14 @@ Both engines run only while the project's pooled SSH session is up
 | `auto_off` | carve-out: overrides an ancestor's (or the project-wide) `auto_sync` |
 | `excluded` | out of byte-sync entirely — skipped by auto-sync **and** by *Sync all* / *Push all* |
 
+A transfer whose record cannot be saved (`sync.json` unwritable, or rewritten
+by the app's other process meanwhile) never leaves a base that reads clean:
+`remote_sync::save_manifest_or_mark_stale` forgets the moved files' bases, in
+the cache and, where it can, in the file, so they read as moved on both sides
+(amber; auto-sync skips them; a push asks) until a status pass verifies their
+bytes or they are transferred again. A manual pull, push or delete reports the
+failure; the background engines log it.
+
 Divergence is always judged **side against its own base**, never host mtime
 against local mtime (clocks differ). For one file:
 
@@ -99,12 +107,17 @@ Right-click a file or folder in the **Remote** tree:
 | *Auto-sync this file/folder* | `sync_set_auto(true)` | background engine keeps it in step; folder markers cover the subtree; also lifts the path's own exclusion |
 | the same item again | `sync_set_auto(false)` | writes an `auto_off` carve-out (an ancestor's auto no longer applies) |
 | *Exclude from sync* / *Include in sync* | `sync_set_excluded` | the strong marker: skipped by auto-sync **and** by whole-project transfers |
+| *Download folder (stays excluded)* (Remote tree, and Local tree for an excluded folder) | `sync_pull` | one-off pull of an excluded folder — or one inside an excluded tree, e.g. the data an agent needs; the exclusion stays, so auto-sync and *Sync all* keep skipping it |
 | *Auto-sync all* (view header) | `sync_set_auto("")` | the project-wide root marker |
 | *Large folders…* (view header) | `sync_big_folders` | census of both sides; ticked folders become `excluded` |
 
 Nearest marker wins, walking from the path's own entry up through ancestor
 **folder** markers to the root `""`. So a project-wide auto-sync with `data/`
 excluded and `data/configs/` auto-synced does exactly what it says.
+A transfer you start on a path waives the exclusion markers **on and above**
+that path (`remote_sync::is_excluded`'s `under`), never the ones below it: pulling
+`data/raw` out of an excluded `data/` works, and `data/raw/cache/` excluded on
+its own still stays on the host.
 
 Auto-syncing a folder that would pull more than 200 files or 100 MB asks first
 (`sync_auto_preview`); byte-sync ignores `.gitignore`, so this is the click that
@@ -153,7 +166,11 @@ what SFTP would: `-t -c --no-links --no-devices --no-specials
 --max-size=<64 MiB>`, no `-a` and no recursion past the list
 (`remote_sync::rsync_pull_flags`), files over the cap left out of the list, and
 only a regular file within the cap recorded afterwards. Any rsync error (an old
-or foreign rsync refusing a flag included) falls back to SFTP. Locally edited
+or foreign rsync refusing a flag included) falls back to SFTP. The SFTP path
+gives each mirror copy the host file's permission bits through the umask (what
+rsync gives a new file), so a host `0755` script stays executable; with no host
+mode it keeps the mirror copy's own. Never a setuid/setgid/sticky bit, from
+either side. Locally edited
 files it overwrites are logged. Files over the 64 MiB cap stay on the host on
 either path; the pull returns them (`remote_sync::PullOutcome`:
 `pulled` + `skippedTooLarge`, path and size), and the result line under the
@@ -283,8 +300,15 @@ When both sides committed on the same branch:
   to the winner's commit after the overwritten tip is saved to
   `refs/tabtivity/backup/<ts>/<branch>`. A checked-out loser branch is
   `reset --hard` (the mirror side logs what that deleted). The reset is refused
-  if an **untracked** file on the loser differs from the incoming tree — those
-  were never git objects and no backup could cover them.
+  if the loser has **uncommitted changes to tracked files**, or if an
+  **untracked** file on the loser differs from the incoming tree — neither was
+  ever a git object, so no backup could cover them. A backup, reset or fetch
+  that fails is reported with git's message; it is never counted as applied.
+- **Local wins** (opt-in per project, beside the Git sync toggle): commits travel
+  mirror → host only. Each pass fast-forwards the host; a branch the host moved
+  on its own is handled like *Use local* (backed up, reset, same refusals), and
+  a branch switch on the host is undone by checking the mirror's branch out
+  there. Host commits never come back to the mirror.
 - **Resolve in terminal**: opens a shell in the mirror; the host's tip is at
   `refs/tabtivity/peer/<branch>`, so `git merge refs/tabtivity/peer/main` or a rebase
   works as usual, and the next pass fast-forwards the host.
@@ -306,9 +330,19 @@ altogether.
 
 Extra compute hosts receive the **mirror's** current HEAD one way
 (`worker_sync`): bundle → SFTP → `git fetch` → `reset --hard FETCH_HEAD`,
-never `git clean`, so their untracked outputs survive. Triggered on worker
-connect, on every commit the lockstep watcher sees (so it needs lockstep
-enabled), and by *Sync code now*. A shared-filesystem worker gets nothing —
+never `git clean`. Before reset, a collision check refuses incoming paths that
+would overwrite untracked outputs, including ignored files and file/directory
+replacements; it guards every apply, the full-bundle fallback included. The
+check and reset are separate operations; pause output writers while syncing to
+avoid a new collision after the check. An incremental bundle excludes the
+worker's last synced commit; when that comes out empty although the mirror's
+HEAD is a different commit (the mirror was reset backwards), the full bundle is
+sent, so the worker moves back with it and its record stays true. Triggered on
+worker connect, on every commit the lockstep watcher sees (so it needs lockstep
+enabled), and by *Sync code now*. The manual action sends a full bundle even at
+an unchanged source HEAD to repair tracked worker drift. A removed repository is
+rebuilt only when existing files do not collide with incoming code. A
+shared-filesystem worker gets nothing —
 it already sees the primary's folder. *Pull outputs* is the only worker → local
 byte path, into `<state_dir>/remote-projects/<id>/outputs/<label>/`, never
 into the mirror.
@@ -337,6 +371,8 @@ into the mirror.
 | ⬆ "new local" on a file the host already has | never synced on either side, so no base | push it once (accept the conflict prompt) or pull it once |
 | lockstep red: *untracked file(s) on the peer differ* | a file byte-synced or created before its commit, with different content | commit, move or delete it on that side, *Retry* |
 | lockstep red: *Diverged* | both sides committed | Use local / Use remote / merge in terminal |
+| lockstep red: *Diverged: … — Sync … failed: bundle fetch failed* | the transfer itself broke, so ancestry couldn't be checked | fix what git names; Use local cannot help until the fetch works |
+| *Refusing: the host has uncommitted changes to N tracked file(s)* | Use local / Local wins would `reset --hard` over them | commit or stash them on the host, then Retry |
 | lockstep red: *Out of step* | the two sides sit on different branches and no side is authoritative | pick a branch in the Git panel; that checkout replays on the peer |
 | lockstep red: *Pairing would overwrite N file(s)* | the empty side already holds differing files | inspect, then *Overwrite* if they are disposable |
 | lockstep *disconnected* | the pool is cold | reconnect; nothing was claimed or written |

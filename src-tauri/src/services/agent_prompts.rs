@@ -50,13 +50,20 @@ static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// writes this file too (a fired schedule's history row, headless owner
 /// plan H2), so the transaction has to hold across processes.
 struct Guard {
-    _file: Option<storage::FileLock>,
+    _file: storage::FileLock,
     _mutex: std::sync::MutexGuard<'static, ()>,
 }
 
-fn lock() -> Guard {
+fn lock() -> Result<Guard, String> {
     let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
-    Guard { _file: storage::FileLock::exclusive(&path()).ok(), _mutex: mutex }
+    Ok(Guard { _file: file_lock(&path())?, _mutex: mutex })
+}
+
+/// The cross-process lock beside `path`. The file carries no revision a
+/// writer could check, so a lock that cannot be taken fails the transaction
+/// rather than letting two processes interleave their read-modify-writes.
+fn file_lock(path: &std::path::Path) -> Result<storage::FileLock, String> {
+    storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))
 }
 
 /// `<state_dir>/agent_prompts.json`.
@@ -260,8 +267,18 @@ fn validate_sent(input: SentAgentPromptInput) -> Result<SentAgentPromptInput, St
             return Err(format!("invalid sent time: {sent_at}"));
         }
     }
+    if let Some(device) = &input.phone_device {
+        validate_id("phone device", device)?;
+    }
     Ok(SentAgentPromptInput {
-        schedule_origin: input.schedule_origin,
+        // `ScheduleOrigin` keeps unknown fields in a flattened map so an older
+        // build writes `agent_tasks.json` back whole; that map holds only what
+        // a file held, never what a caller sent (`agent_tasks::apply_upsert`
+        // clears it the same way). Only the fields this build knows are copied
+        // into the history.
+        schedule_origin: input.schedule_origin.map(|origin| {
+            crate::schema::agent_tasks::ScheduleOrigin { extra: Default::default(), ..origin }
+        }),
         tab_label,
         session_id: input.session_id,
         tab_id: input.tab_id,
@@ -270,7 +287,23 @@ fn validate_sent(input: SentAgentPromptInput) -> Result<SentAgentPromptInput, St
         result: input.result,
         scheduled_for: input.scheduled_for,
         sent_at: input.sent_at,
+        phone_device: input.phone_device,
+        phone_name: None,
     })
+}
+
+/// Name the phone the prompt came from as the paired-device list knows it
+/// now, so the row keeps saying which phone after a rename or an unpairing.
+/// An id no paired phone holds (revoked in between) keeps no name; an
+/// unreadable list costs the name, never the record.
+fn resolve_phone_name(state_dir: &std::path::Path, mut input: SentAgentPromptInput) -> SentAgentPromptInput {
+    input.phone_name = input.phone_device.as_deref().and_then(|device| {
+        let paired = crate::services::mobile_control::auth::read_paired_devices(&state_dir.join("mobile-control")).ok()?;
+        let name = paired.into_iter().find(|phone| phone.id == device)?.name;
+        let name = sanitize_message(&name).split_whitespace().collect::<Vec<_>>().join(" ");
+        Some(name.chars().take(64).collect::<String>()).filter(|name| !name.is_empty())
+    });
+    input
 }
 
 /// Push one entry onto a project's history, replacing an entry with the same
@@ -345,6 +378,8 @@ fn apply_archive(
         files: Vec::new(),
         files_at: None,
         model: None,
+        phone_device: input.phone_device.clone(),
+        phone_name: input.phone_name.clone(),
     };
     push_history(file, project_id, sent.clone());
     link_session_roll(file, project_id, &sent, roll);
@@ -414,6 +449,12 @@ fn apply_record(
             .map(|item| item.files.clone())
             .unwrap_or_default(),
         model: existing.as_ref().and_then(|item| item.model.clone()),
+        // A delivery that names no phone keeps the one its send recorded.
+        phone_device: input.phone_device.clone().or_else(|| existing.as_ref().and_then(|item| item.phone_device.clone())),
+        phone_name: match &input.phone_device {
+            Some(_) => input.phone_name.clone(),
+            None => existing.as_ref().and_then(|item| item.phone_name.clone()),
+        },
         files_at: existing.and_then(|item| item.files_at),
     };
     push_history(file, project_id, sent.clone());
@@ -720,7 +761,7 @@ fn apply_link_delete(
 
 pub fn list(project_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     Ok(read()?
         .projects
         .get(project_id)
@@ -747,7 +788,7 @@ pub fn upsert(
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     let input = validate_input(input)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_upsert(&mut file, project_id, input, &storage::iso_now())?;
     write(&file)?;
@@ -765,7 +806,7 @@ pub fn upsert_at(
     validate_id("project id", project_id)?;
     let input = validate_input(input)?;
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     let result = apply_upsert(&mut file, project_id, input, &storage::iso_now())?;
     write_at(&path, &file)?;
@@ -784,11 +825,11 @@ pub fn archive_at(
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
-    let input = validate_sent(input)?;
+    let input = resolve_phone_name(state_dir, validate_sent(input)?);
     let (input, roll) = resolve_live_session(project_id, input);
     let head = prompt_blame::head(project_id);
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     apply_archive(&mut file, project_id, prompt_id, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
     write_at(&path, &file)?;
@@ -798,7 +839,7 @@ pub fn archive_at(
 pub fn delete(project_id: &str, prompt_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     apply_delete(&mut file, project_id, prompt_id);
     write(&file)?;
@@ -807,7 +848,7 @@ pub fn delete(project_id: &str, prompt_id: &str) -> Result<Vec<ProjectAgentPromp
 
 pub fn links(project_id: &str) -> Result<Vec<PromptLink>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     prune_links(&mut file, project_id);
     Ok(file.links.get(project_id).cloned().unwrap_or_default())
@@ -816,7 +857,7 @@ pub fn links(project_id: &str) -> Result<Vec<PromptLink>, String> {
 pub fn link_upsert(project_id: &str, input: PromptLinkInput) -> Result<Vec<PromptLink>, String> {
     validate_id("project id", project_id)?;
     let link = validate_link(input)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     prune_links(&mut file, project_id);
     let result = apply_link_upsert(&mut file, project_id, link)?;
@@ -827,7 +868,7 @@ pub fn link_upsert(project_id: &str, input: PromptLinkInput) -> Result<Vec<Promp
 pub fn link_delete(project_id: &str, link_id: &str) -> Result<Vec<PromptLink>, String> {
     validate_id("project id", project_id)?;
     validate_id("link id", link_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_link_delete(&mut file, project_id, link_id);
     write(&file)?;
@@ -842,7 +883,7 @@ pub fn reorder(project_id: &str, ids: Vec<String>) -> Result<Vec<ProjectAgentPro
     for id in &ids {
         validate_id("prompt id", id)?;
     }
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_reorder(&mut file, project_id, &ids);
     write(&file)?;
@@ -851,7 +892,7 @@ pub fn reorder(project_id: &str, ids: Vec<String>) -> Result<Vec<ProjectAgentPro
 
 pub fn history(project_id: &str) -> Result<Vec<SentAgentPrompt>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     Ok(read()?.history.get(project_id).cloned().unwrap_or_default())
 }
 
@@ -864,12 +905,12 @@ pub fn archive(
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
-    let input = validate_sent(input)?;
+    let input = resolve_phone_name(&storage::state_dir(), validate_sent(input)?);
     let (input, roll) = resolve_live_session(project_id, input);
     // Read before the lock: it spawns git (local projects only), and nothing
     // in the file depends on it.
     let head = prompt_blame::head(project_id);
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     apply_archive(
         &mut file,
@@ -884,14 +925,24 @@ pub fn archive(
     Ok(file.projects.get(project_id).cloned().unwrap_or_default())
 }
 
+/// Whether the scope keeps no prompt history. The chat assistant's chat lives
+/// in the CLI's own transcript; its words are not a project's prompts, and
+/// the history is where prompts are kept for re-use and for the user's review.
+fn records_nothing_for(scope_id: &str) -> bool {
+    storage::is_assistant_scope(scope_id)
+}
+
 /// Record one delivery straight onto the history. Returns the project's
 /// history, since — unlike `archive` — nothing on the active list moved.
 pub fn record(
     project_id: &str,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
-    let (entry, input, head, roll) = prepare_record(project_id, entry)?;
-    let _guard = lock();
+    if records_nothing_for(project_id) {
+        return Ok(Vec::new());
+    }
+    let (entry, input, head, roll) = prepare_record(&storage::state_dir(), project_id, entry)?;
+    let _guard = lock()?;
     let mut file = read()?;
     apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
     write(&file)?;
@@ -908,9 +959,12 @@ pub fn record_at(
     project_id: &str,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
-    let (entry, input, head, roll) = prepare_record(project_id, entry)?;
+    if records_nothing_for(project_id) {
+        return Ok(Vec::new());
+    }
+    let (entry, input, head, roll) = prepare_record(state_dir, project_id, entry)?;
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
     write_at(&path, &file)?;
@@ -927,7 +981,7 @@ pub fn delete_at(
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     apply_delete(&mut file, project_id, prompt_id);
     write_at(&path, &file)?;
@@ -938,7 +992,7 @@ type PreparedRecord = (RecordedAgentPromptInput, SentAgentPromptInput, Option<Re
 
 /// The validation and the reads outside the lock that [`record`] and
 /// [`record_at`] share.
-fn prepare_record(project_id: &str, entry: RecordedAgentPromptInput) -> Result<PreparedRecord, String> {
+fn prepare_record(state_dir: &std::path::Path, project_id: &str, entry: RecordedAgentPromptInput) -> Result<PreparedRecord, String> {
     validate_id("project id", project_id)?;
     validate_id("history entry id", &entry.id)?;
     let message = sanitize_message(&entry.message);
@@ -948,7 +1002,7 @@ fn prepare_record(project_id: &str, entry: RecordedAgentPromptInput) -> Result<P
     if message.len() > MAX_MESSAGE_BYTES {
         return Err(format!("prompt exceeds {MAX_MESSAGE_BYTES} bytes"));
     }
-    let input = validate_sent(entry.sent.clone())?;
+    let input = resolve_phone_name(state_dir, validate_sent(entry.sent.clone())?);
     let (input, roll) = resolve_live_session(project_id, input);
     let entry = RecordedAgentPromptInput { message, ..entry };
     let head = prompt_blame::head(project_id);
@@ -969,7 +1023,7 @@ pub fn blame(
     validate_id("project id", project_id)?;
     validate_id("history entry id", entry_id)?;
     let (commit, sent_at, agent, launch_id) = {
-        let _guard = lock();
+        let _guard = lock()?;
         let file = read()?;
         let entry = file
             .history
@@ -1001,7 +1055,7 @@ pub fn blame(
     let model = agent.zip(launch_id).and_then(|(agent, launch_id)| {
         crate::services::agent_session::agent_session_model(&agent, Some(project_id), &launch_id)
     });
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     if apply_blame(&mut file, project_id, entry_id, files, model, &storage::iso_now()).is_some() {
         write(&file)?;
@@ -1016,7 +1070,7 @@ pub fn clear_history(
     entry_id: Option<&str>,
 ) -> Result<Vec<SentAgentPrompt>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     match entry_id {
         Some(entry_id) => {
@@ -1429,6 +1483,24 @@ mod tests {
         assert!(!file.projects.contains_key("q"));
     }
 
+    /// A phone's send-now is archived naming the phone; the scheduler's
+    /// delivery of it, from a rule that predates the field, must not wipe
+    /// that, while a delivery that names a phone is the one that counts.
+    #[test]
+    fn a_delivery_keeps_the_phone_its_send_named() {
+        let mut file = AgentPromptsFile::default();
+        let from_phone = SentAgentPromptInput { phone_device: Some("phone-a".into()), phone_name: Some("Pixel".into()), ..sent("Claude") };
+        let entry = RecordedAgentPromptInput { sent: from_phone.clone(), ..recorded("q", "go", "delivered") };
+        apply_record(&mut file, "p", &entry, &from_phone, None, None, "t1");
+        let silent = sent("Claude");
+        let row = apply_record(&mut file, "p", &entry, &silent, None, None, "t2");
+        assert_eq!((row.phone_device.as_deref(), row.phone_name.as_deref()), (Some("phone-a"), Some("Pixel")));
+        let other = SentAgentPromptInput { phone_device: Some("phone-b".into()), ..sent("Claude") };
+        let row = apply_record(&mut file, "p", &entry, &other, None, None, "t3");
+        assert_eq!((row.phone_device.as_deref(), row.phone_name.as_deref()), (Some("phone-b"), None));
+        assert!(validate_sent(SentAgentPromptInput { phone_device: Some(String::new()), ..sent("Claude") }).is_err());
+    }
+
     fn sent(label: &str) -> SentAgentPromptInput {
         SentAgentPromptInput {
             schedule_origin: None,
@@ -1440,6 +1512,8 @@ mod tests {
             result: None,
             scheduled_for: None,
             sent_at: None,
+            phone_device: None,
+            phone_name: None,
         }
     }
 
@@ -1639,6 +1713,20 @@ mod tests {
         .unwrap();
         assert_eq!(clean.tab_label, "Claude[31m");
         assert_eq!(clean.preface, vec!["/clear".to_string()]);
+
+        // A caller's schedule origin carries no unknown field into the
+        // history: `ScheduleOrigin`'s flattened map is the file's, never the
+        // caller's (screen 2026-10-15 follow-up F-b).
+        let planted: SentAgentPromptInput = serde_json::from_value(serde_json::json!({
+            "schedule_origin": { "by": "agent", "session": "s", "at": "a", "planted": true },
+            "tab_label": "Claude",
+        }))
+        .unwrap();
+        assert_eq!(planted.schedule_origin.as_ref().unwrap().extra.len(), 1);
+        let clean = validate_sent(planted).unwrap();
+        let origin = clean.schedule_origin.expect("the origin itself stays");
+        assert_eq!(origin.session, "s");
+        assert!(origin.extra.is_empty(), "{:?}", origin.extra);
     }
 
     #[test]
@@ -1648,5 +1736,23 @@ mod tests {
         assert!(validate_input(input("a", &"x".repeat(MAX_MESSAGE_BYTES + 1))).is_err());
         let clean = validate_input(input("a", "one\r\ntwo\u{1b}[31m  ")).unwrap();
         assert_eq!(clean.message, "one\ntwo[31m");
+    }
+    #[test]
+    fn the_assistant_scope_keeps_no_prompt_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrote = record_at(dir.path(), crate::storage::ASSISTANT_SCOPE, recorded("a", "what is a monad", "delivered")).unwrap();
+        assert!(wrote.is_empty());
+        assert!(!file_path(dir.path()).exists(), "nothing was written for the chat assistant");
+        // Another scope still records.
+        let kept = record_at(dir.path(), "p1", recorded("b", "hello", "delivered")).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(list_at(dir.path(), crate::storage::ASSISTANT_SCOPE).unwrap().is_empty());
+        // Any spelling of the id is the same folder on a case-folding filesystem.
+        for id in ["Assistant", " assistant", "ASSISTANT"] {
+            let wrote = record_at(dir.path(), id, recorded("c", "what is a monad", "delivered")).unwrap();
+            assert!(wrote.is_empty(), "{id:?}");
+        }
+        assert!(list_at(dir.path(), "Assistant").unwrap().is_empty());
+        assert!(records_nothing_for("Assistant") && !records_nothing_for("p1"));
     }
 }

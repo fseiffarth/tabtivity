@@ -4,6 +4,8 @@
  * family with the rest of the chrome. Each is 16px, `aria-hidden`: the button
  * around it carries the accessible name.
  */
+import { AssistantIcon } from "./icons/Icon";
+
 interface IconProps {
   className?: string;
 }
@@ -79,6 +81,12 @@ export function RailAgentsIcon({ className }: IconProps) {
       <path d="M12.5 13h3.5" />
     </Frame>
   );
+}
+
+/** Tabby, the chat assistant: the shared `AssistantIcon` at the rail's size
+ *  (the panel's switcher shows the same one). */
+export function RailAssistantIcon({ className }: IconProps) {
+  return <AssistantIcon className={className} size={16} />;
 }
 
 /**

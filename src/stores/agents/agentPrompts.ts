@@ -68,6 +68,12 @@ export interface SentAgentPrompt {
   /** The model that answered, as the transcript names it; recorded with the
    *  blame. Absent until then, and for an agent whose transcript is not read. */
   model?: string;
+  /** The paired phone the prompt came from — it sent it, or wrote the
+   *  collected prompt or schedule it went out as. Absent from the desktop. */
+  phone_device?: string;
+  /** That phone's name when the row was written (the backend looks it up);
+   *  absent when the phone was no longer paired. */
+  phone_name?: string;
 }
 
 export interface PromptLink {
@@ -99,6 +105,8 @@ export interface SentPromptFacts {
   /** When it went, for a prompt recorded after the fact (ISO). Absent, the
    *  backend stamps now. */
   sentAt?: string;
+  /** The paired phone the prompt came from (`SentAgentPrompt.phone_device`). */
+  phoneDevice?: string;
 }
 
 function sentPayload(sent: SentPromptFacts) {
@@ -114,6 +122,7 @@ function sentPayload(sent: SentPromptFacts) {
     scheduled_for: sent.scheduledFor ?? null,
     // Only when set: a backend predating the field refuses the key outright.
     ...(sent.sentAt ? { sent_at: sent.sentAt } : {}),
+    ...(sent.phoneDevice ? { phone_device: sent.phoneDevice } : {}),
   };
 }
 
@@ -349,10 +358,11 @@ export async function sendCollectedPrompt(
   // entry is written under. When the scheduler delivers it, the record it
   // writes lands on that same row and turns "queued" into "delivered" —
   // without the shared id the same prompt would be listed twice.
+  const phoneDevice = options.phoneDevice ?? prompt.phone_device;
   const result = await queuePromptForTab(projectId, target.scheduleTargetId, prompt.message, {
     preface,
     id: prompt.id,
-    phoneDevice: options.phoneDevice ?? prompt.phone_device,
+    phoneDevice,
   });
   await useAgentPromptsStore
     .getState()
@@ -362,6 +372,7 @@ export async function sendCollectedPrompt(
       tabId: target.scheduleTargetId,
       preface,
       agent: target.agent,
+      phoneDevice,
     })
     .catch(() => []);
   return result;

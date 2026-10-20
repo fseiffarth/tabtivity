@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { basename, fromFileUri } from "../../lib/paths";
+import { basename, dirname, fromFileUri, resolvePath } from "../../lib/paths";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
@@ -44,8 +44,8 @@ export function isExternalFileDrag(dt: DataTransfer): boolean {
 /** Extract absolute local paths from an OS HTML5 file drop. WebKitGTK withholds
  *  `Files`/`text/uri-list` data here but leaks the `file://` URL inside
  *  `text/html`, so scan every text payload for `file://` URIs and dedupe.
- *  NOTE: this drag path is best-effort — some file managers only expose ONE
- *  file this way. Use the Import button for reliable multi-file selection. */
+ *  Of a multi-file drop it leaks only the first file: `parseDroppedFiles`
+ *  infers the rest. */
 export function parseDroppedFilePaths(dataTransfer: DataTransfer): string[] {
   const sources = [
     dataTransfer.getData("text/uri-list"),
@@ -66,6 +66,39 @@ export function parseDroppedFilePaths(dataTransfer: DataTransfer): string[] {
     }
   }
   return paths;
+}
+
+/** One file of an OS drop: its path, and — when the path was inferred rather
+ *  than read off the drag — the size of the dropped `File`, for the backend to
+ *  check the inferred path against before using it. */
+export interface DroppedFile {
+  path: string;
+  size: number | null;
+}
+
+/** Every file of an OS drop. WebKitGTK leaks only the first file's path of a
+ *  multi-file drop (`parseDroppedFilePaths`) but lists every file in
+ *  `dataTransfer.files`, by name and size only; a file manager drags one
+ *  folder's selection, so the rest are inferred as siblings of the first, in
+ *  the order `files` lists them. A drop from several folders (search results)
+ *  infers a wrong path for some, which the size check refuses. */
+export function parseDroppedFiles(dataTransfer: DataTransfer): DroppedFile[] {
+  const leaked = parseDroppedFilePaths(dataTransfer);
+  const files = Array.from(dataTransfer.files ?? []);
+  if (leaked.length === 0 || files.length <= leaked.length) return leaked.map((path) => ({ path, size: null }));
+  const byName = new Map(leaked.map((path) => [basename(path), path]));
+  const dir = dirname(leaked[0]);
+  const seen = new Set<string>();
+  const dropped: DroppedFile[] = [];
+  for (const file of files) {
+    const { name } = file;
+    if (!name || name === "." || name === ".." || /[/\\]/.test(name) || seen.has(name)) continue;
+    seen.add(name);
+    const known = byName.get(name);
+    dropped.push(known ? { path: known, size: null } : { path: resolvePath(dir, name), size: file.size });
+  }
+  for (const path of leaked) if (!seen.has(basename(path))) dropped.push({ path, size: null });
+  return dropped;
 }
 
 /** A name's stem and extension, split the way Rust's `Path::extension` does —
@@ -177,7 +210,8 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
     });
 
   // Copy each absolute source path into the project, prompting on collisions.
-  const importPaths = (paths: string[]) => {
+  // A dropped path that was inferred carries the size it must have.
+  const importPaths = (paths: string[], sizes: readonly (number | null)[] = []) => {
     if (!canImport || !projectDir || paths.length === 0) return;
     flashDrop();
     const destRelAtDrop = destRelRef.current;
@@ -213,6 +247,7 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
             destRel: destRelAtDrop,
             replace: choice === "replace",
             destName: destName ?? null,
+            expectedSize: sizes[i] ?? null,
           });
         } catch (err) {
           // Quoted: a dropped file's name may hold a line break (CodeQL js/log-injection).
@@ -226,9 +261,10 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
   };
 
   // HTML5 drag-and-drop (dragDropEnabled stays false so pointer drags — tabs,
-  // splits, pills — keep working). Best-effort: WebKitGTK only leaks file paths
-  // via text/html and sometimes just one; the Import button is the reliable
-  // multi-file path.
+  // splits, pills — keep working). WebKitGTK leaks only the first file's path;
+  // `parseDroppedFiles` infers the rest from one folder, so a drop from several
+  // folders imports only the files it could place — the Import button is the
+  // reliable multi-folder path.
   const onDragOver = (e: React.DragEvent) => {
     if (!canImport || !isExternalFileDrag(e.dataTransfer)) return;
     e.preventDefault();
@@ -245,7 +281,8 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
     setDropActive(false);
     if (!canImport || !isExternalFileDrag(e.dataTransfer)) return;
     e.preventDefault();
-    importPaths(parseDroppedFilePaths(e.dataTransfer));
+    const files = parseDroppedFiles(e.dataTransfer);
+    importPaths(files.map((f) => f.path), files.map((f) => f.size));
   };
 
   // Reliable multi-file import: native OS file picker → same copy+conflict flow.

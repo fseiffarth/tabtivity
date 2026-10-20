@@ -42,7 +42,7 @@ import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { NewTabMenu } from "../tabs/NewTabMenu";
 import { TabScopeContext } from "../tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
-import { TabAgentModeMarks, TabStatusMark } from "../tabs/TabLocalityBadges";
+import { TabAgentModeMarks, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
 import { pickEdge, previewInset } from "../tabs/dragGeometry";
 import { dragPreviewLayout } from "../tabs/dragPreview";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -1013,7 +1013,7 @@ function GroupStrip({
               useTabsStore.getState().setGroupActiveInScope(ROOT_SCOPE, groupId, tab.key);
             }}
           >
-            <TabStatusMark stateClass={stateClass} />
+            <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
             <span className="tab-label">{tab.label}</span>
             <TabAgentModeMarks scope={ROOT_SCOPE} tab={tab} isActive={isActive} />
             {install && <UntestedTag id="rootConsole.installTabTitle" />}

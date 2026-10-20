@@ -195,9 +195,7 @@ fn mirror_repo(project_id: &str) -> Option<PathBuf> {
 /// one here.
 fn has_origin(dir: &Path) -> bool {
     use crate::services::git_bounded::BoundedOutput;
-    crate::paths::command_no_window("git")
-        .current_dir(dir)
-        .args(["remote", "get-url", "origin"])
+    crate::commands::git::hardened_git_command_in(dir, &["remote", "get-url", "origin"])
         .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -528,9 +526,7 @@ fn unpublish_project_blocking(project_id: String) -> Result<(), String> {
         PublishSite::Local(dir) => {
             // Ignore failure (e.g. origin already absent) — desired end state is "no origin".
             let _ = crate::services::git_bounded::BoundedOutput::bounded_output(
-                crate::paths::command_no_window("git")
-                    .current_dir(&dir)
-                    .args(["remote", "remove", "origin"]),
+                &mut crate::commands::git::hardened_git_command_in(&dir, &["remote", "remove", "origin"]),
             );
         }
         PublishSite::Host => {
@@ -750,13 +746,9 @@ fn rename_origin_aside(site: PublishSite, project: &Project) -> Result<(), Strin
     match site {
         PublishSite::Local(dir) => {
             use crate::services::git_bounded::BoundedOutput;
-            let _ = crate::paths::command_no_window("git")
-                .current_dir(&dir)
-                .args(["remote", "remove", "origin-old"])
+            let _ = crate::commands::git::hardened_git_command_in(&dir, &["remote", "remove", "origin-old"])
                 .bounded_output();
-            let _ = crate::paths::command_no_window("git")
-                .current_dir(&dir)
-                .args(["remote", "rename", "origin", "origin-old"])
+            let _ = crate::commands::git::hardened_git_command_in(&dir, &["remote", "rename", "origin", "origin-old"])
                 .bounded_output();
         }
         PublishSite::Host => {

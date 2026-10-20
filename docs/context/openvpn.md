@@ -18,10 +18,11 @@ Referenced from `AGENTS.md`.
   `useVpnSectionVisible` gate + `VpnTunnelUpNotice`. The exception the gate keeps:
   a tunnel *that* dialog itself brought up stays expanded, so its log and its
   Disconnect remain where the user started it.
-  Interactive (non-headless) tunnels are *armed* at command-build time —
-  `interactive_connect_command` appends a `--writepid` Tabtivity owns and registers it —
-  so a tunnel typed into a terminal tab is as visible and as killable as a headless
-  one, and no longer outlives the app still owning the routing. Split-tunnelling is
+  Interactive (non-headless) tunnels are *armed* when their login PTY is built —
+  `interactive_connect_argv` appends a `--writepid` Tabtivity owns and registers it, and
+  refuses while a tunnel for that config is already up (a second claim would delete the
+  live one's pidfile) — so a tunnel started in a login terminal is as visible and as
+  killable as a headless one, and no longer outlives the app still owning the routing. Split-tunnelling is
   **not** implemented: whatever the `.ovpn` pushes still applies (TODO #82).
 - **A headless login that cannot work is escapable, per tunnel.** Tabtivity's own login
   models exactly two secrets (account password, key passphrase); a config whose server
@@ -47,8 +48,9 @@ Referenced from `AGENTS.md`.
   promise — *it never prompts*: the opt-in is only offered when the credentials make
   the connect silent, and it is re-checked at launch, so a stale opt-in leaves the
   tunnel down. One config, not a set: two would be two claims on one machine's routing.
-  With `connections_headless` off it instead opens the connect command in the root
-  terminal, since Tabtivity handles no passwords in that mode.
+  With `connections_headless` off it instead opens a login tab in the root console
+  (a PTY running `openvpn` itself, `pty_spawn`'s `login: vpn` — no shell; see
+  `remote_credentials.md`), since Tabtivity handles no passwords in that mode.
 - **Never elevate on a connect that cannot succeed.** `pkexec` authenticates the user
   *before* OpenVPN reads the config, so a doomed attempt is not a cheap failure — it
   costs a polkit dialog, and the modal that then collects the missing credential costs
@@ -60,7 +62,7 @@ Referenced from `AGENTS.md`.
   and cleared by the same opt-in checkbox as the secrets.
 - **One polkit prompt per tunnel, on connect — and closing Tabtivity never traps you.**
   Elevation is unavoidable to *build* a tunnel (tun device + routing), but stopping
-  one is not: every tunnel Tabtivity starts, headless or typed into a terminal tab,
+  one is not: every tunnel Tabtivity starts, headless or from a login terminal,
   carries an owner-only `--management` socket on loopback, and teardown asks the root
   daemon to `signal SIGTERM` **itself** — nothing to elevate, so no second password.
   The endpoint sits beside the pidfile so a tunnel from a previous run stays
@@ -72,6 +74,11 @@ Referenced from `AGENTS.md`.
   the quit: Tabtivity warns that the tunnel stays up and closes anyway, and records the
   refusal so the exit-time teardown does not raise a second, parentless polkit dialog
   after the window is gone (which is what used to leave the machine unusable).
+  No teardown waits on the root child unboundedly (Linux): a connect that fails or
+  times out is stopped by the socket, then the pidfile's elevated kill, then reaped
+  within `REAP_TIMEOUT` (5 s); a child still alive then is **registered** like an up
+  tunnel, never left running unregistered. A refused kill in `disconnect` keeps the
+  entry and reports an error instead of forgetting a live tunnel (screen 2026-10-15 #9).
 - **A VPN-only mail or CalDAV account** (`require_vpn` on `MailAccount` /
   `CalDavAccount`, 2026-09-09) is the tunnel's one consumer outside remote projects.
   An institutional mailbox or calendar server is often reachable only from inside

@@ -50,6 +50,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::services::ssh_common::validate_arg;
+#[cfg(any(target_os = "macos", test))]
 use crate::services::ssh_exec::shell_quote;
 use crate::storage;
 
@@ -84,7 +85,7 @@ fn registry() -> &'static Mutex<HashMap<String, VpnProc>> {
 /// Without this, an interactive tunnel was invisible and unkillable: absent from
 /// [`registry`], it could not be seen by [`is_connected`] / [`active_configs`], nor
 /// killed by [`disconnect`] / [`disconnect_all`] — so it **outlived Tabtivity with the
-/// machine's routing still changed**. [`interactive_connect_command`] now appends a
+/// machine's routing still changed**. [`interactive_connect_argv`] now appends a
 /// `--writepid` we own and registers it here, which closes all four gaps at once.
 ///
 /// Not cfg-gated (unlike [`registry`]) so the bookkeeping unit-tests run anywhere.
@@ -148,11 +149,16 @@ fn interactive_state(config: &str) -> Interactive {
     };
     match pidfile_pid(&pidfile) {
         Some(pid) if pid_alive(pid) => Interactive::Alive(pid),
-        Some(_) => {
+        Some(dead) => {
             // The pid was written and is now gone: the tunnel died (or the user
-            // closed its terminal). Reap the entry and its stale pidfile.
-            interactive_registry().lock_ok().remove(config);
-            let _ = std::fs::remove_file(&pidfile);
+            // closed its terminal). Reap the entry and its stale pidfile under one
+            // lock, so a concurrent caller never sees the entry gone but the file
+            // still there. A re-arm since our read owns a fresh claim: leave it.
+            let mut reg = interactive_registry().lock_ok();
+            if reg.get(config) == Some(&pidfile) && pidfile_pid(&pidfile) == Some(dead) {
+                reg.remove(config);
+                let _ = std::fs::remove_file(&pidfile);
+            }
             Interactive::None
         }
         None => Interactive::Pending,
@@ -439,74 +445,99 @@ fn display_name(file_name: &str) -> String {
         .unwrap_or_else(|| file_name.to_string())
 }
 
-/// Build a ready-to-run shell command string that brings up the OpenVPN tunnel
-/// for `config` **interactively**, so the encrypted-key passphrase is typed
-/// directly into a visible terminal (no `--askpass` temp file, nothing for Tabtivity
-/// to handle). Typed into a root-scope shell tab (see the frontend
-/// `openConnectionInRoot`) when headless connections are turned off.
+/// The argv that brings up the OpenVPN tunnel for `config` **interactively**, so
+/// the encrypted-key passphrase is typed directly into a visible terminal (no
+/// `--askpass` temp file, nothing for Tabtivity to handle). It is the program of a
+/// root-console **login PTY** (`pty_spawn` with `login: vpn`, see
+/// `commands::credentials`), spawned as this argv directly — no shell runs before
+/// or after it — when headless connections are turned off.
 ///
 /// Linux launches it elevated via `pkexec` (the tun device / routing need root);
 /// the polkit prompt comes first, then OpenVPN prompts for the passphrase on the
 /// same tty. `--auth-nocache` keeps the passphrase out of OpenVPN's memory across
-/// re-keys. Windows runs `openvpn.exe` directly (it must be started elevated).
-/// The config path is validated and shell-quoted as a single argument.
+/// re-keys. Windows runs `openvpn.exe` directly (it must be started elevated);
+/// macOS runs it under `sudo` on the visible tty. Each item is one argv entry, so
+/// no quoting is involved and a path with spaces stays one argument on every OS.
 ///
 /// **Side effect (deliberate):** every variant appends `--writepid <pidfile>` and
 /// registers that pidfile in [`interactive_registry`] via [`arm_interactive`]. The
-/// tunnel this command starts is not Tabtivity's child, so the pid it records is the
-/// *only* handle on a root process that is rerouting the whole machine. Without it,
-/// the tunnel is invisible to [`is_connected`] / [`active_configs`] and unkillable
-/// by [`disconnect`] / [`disconnect_all`] — it outlives the app with the routing
-/// still changed. Building the command is therefore also *claiming* it.
+/// tunnel this argv starts is not Tabtivity's child process handle, so the pid it
+/// records is the *only* handle on a root process that is rerouting the whole
+/// machine. Without it, the tunnel is invisible to [`is_connected`] /
+/// [`active_configs`] and unkillable by [`disconnect`] / [`disconnect_all`] — it
+/// outlives the app with the routing still changed. Building the argv is therefore
+/// also *claiming* it — and is refused while a tunnel for `config` is up, whose
+/// claim a second one would overwrite. A login whose PTY then fails to spawn hands
+/// the claim back ([`release_interactive_claim`]).
+pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
+    // The launcher first: a missing `openvpn.exe` must not leave a claim behind.
+    let mut argv = interactive_launcher()?;
+    let arm = arm_interactive(config)?;
+    argv.extend([
+        "--config".to_string(),
+        arm.config,
+        "--script-security".to_string(),
+        "1".to_string(),
+        "--auth-nocache".to_string(),
+        "--writepid".to_string(),
+        arm.pidfile.to_string_lossy().into_owned(),
+    ]);
+    argv.extend(arm.management);
+    Ok(argv)
+}
+
+/// How each OS starts the elevated `openvpn` of [`interactive_connect_argv`].
 #[cfg(target_os = "linux")]
-pub fn interactive_connect_command(config: &str) -> Result<String, String> {
-    let arm = arm_interactive(config)?;
-    Ok(format!(
-        "pkexec openvpn --config {} --script-security 1 --auth-nocache --writepid {}{}",
-        shell_quote(&arm.config),
-        shell_quote(&arm.pidfile.to_string_lossy()),
-        arm.management
-    ))
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    Ok(vec!["pkexec".to_string(), "openvpn".to_string()])
 }
 
-/// Windows variant: no `pkexec`; `openvpn.exe` must already be running elevated.
+/// Windows: no `pkexec`; `openvpn.exe` must already be running elevated. Resolved
+/// like a headless connect's, since a GUI app's `PATH` usually omits its dir.
 #[cfg(target_os = "windows")]
-pub fn interactive_connect_command(config: &str) -> Result<String, String> {
-    let arm = arm_interactive(config)?;
-    Ok(format!(
-        "openvpn --config {} --script-security 1 --auth-nocache --writepid {}{}",
-        shell_quote(&arm.config),
-        shell_quote(&arm.pidfile.to_string_lossy()),
-        arm.management
-    ))
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    let exe = resolve_openvpn().ok_or_else(|| OPENVPN_MISSING.to_string())?;
+    Ok(vec![exe.to_string_lossy().into_owned()])
 }
 
-/// macOS variant: `sudo` on the visible tty (no `pkexec`/polkit on macOS; the
-/// interactive root-tab path types the password straight into the terminal).
+/// macOS: `sudo` on the visible tty (no `pkexec`/polkit on macOS; the user types
+/// the password straight into the terminal). The binary is resolved to an absolute
+/// path because a GUI app's `PATH` lacks the Homebrew prefixes.
 #[cfg(target_os = "macos")]
-pub fn interactive_connect_command(config: &str) -> Result<String, String> {
-    let arm = arm_interactive(config)?;
-    Ok(format!(
-        "sudo openvpn --config {} --script-security 1 --auth-nocache --writepid {}{}",
-        shell_quote(&arm.config),
-        shell_quote(&arm.pidfile.to_string_lossy()),
-        arm.management
-    ))
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    let exe = resolve_openvpn()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "openvpn".to_string());
+    Ok(vec!["sudo".to_string(), exe])
+}
+
+/// Any other OS has no interactive tunnel.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    Err("OpenVPN is not supported on this platform".to_string())
 }
 
 /// Validate `config` and claim an interactive tunnel for it: pick the pidfile,
 /// delete any stale one (a leftover from a previous run would otherwise read as a
 /// live tunnel), ensure the runtime dir exists for root to write into, and register
-/// the claim. Returns the trimmed config and the pidfile the command must use.
+/// the claim. Returns the trimmed config and the pidfile the argv must use.
 ///
-/// Shared by all three [`interactive_connect_command`] variants so a platform
-/// cannot forget the `--writepid` bookkeeping. Compiled cfg-free so the claim logic
-/// is unit-testable on any host.
+/// Called by [`interactive_connect_argv`] on every platform so none can forget the
+/// `--writepid` bookkeeping. Compiled cfg-free so the claim logic is unit-testable
+/// on any host.
 fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     let config = config.trim();
     validate_arg("OpenVPN config", config)?;
     if config.is_empty() {
         return Err("OpenVPN config path must not be empty".to_string());
+    }
+    // A tunnel for this config that is already up (either flavour, or one adopted
+    // from a previous run) keeps its claim. Arming again would delete its pidfile
+    // and rewrite its management endpoint, so a root tunnel still rerouting the
+    // machine would drop out of `is_connected` and `disconnect_all`, and outlive
+    // the app. (A Pending claim is re-armed: a cancelled login leaves one behind.)
+    if tunnel_up(config) {
+        return Err("this VPN is already connected; disconnect it before signing in again".to_string());
     }
     let pidfile = interactive_pidfile(config);
     prepare_root_pidfile(&pidfile)?;
@@ -516,19 +547,11 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
         .insert(config.to_string(), pidfile.clone());
     // A terminal-started tunnel gets the same management socket a headless one does,
     // so stopping it costs no second elevation either. Best-effort: if no endpoint
-    // can be armed the fragment is empty and the command is exactly what it was.
+    // can be armed there are no extra items and the argv is exactly what it was.
     #[cfg(unix)]
-    let management = arm_management(config)
-        .map(|a| match a.as_slice() {
-            // Shape is fixed by `management_args`: flag, ip, port, pwfile. Only the
-            // last can contain shell metacharacters, and leaving the first three bare
-            // keeps the command legible in the terminal tab the user actually reads.
-            [flag, ip, port, pwfile] => format!(" {flag} {ip} {port} {}", shell_quote(pwfile)),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
+    let management = arm_management(config).unwrap_or_default();
     #[cfg(not(unix))]
-    let management = String::new();
+    let management = Vec::new();
     Ok(InteractiveArm {
         config: config.to_string(),
         pidfile,
@@ -536,14 +559,46 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     })
 }
 
-/// What [`arm_interactive`] hands each platform's [`interactive_connect_command`]:
-/// the validated config, the pidfile the command must `--writepid` to, and the
-/// pre-quoted `--management …` fragment (leading space included, empty when none
-/// could be armed) to append verbatim.
+/// Whether a tunnel for `config` is up, whichever flavour started it.
+fn tunnel_up(config: &str) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    {
+        is_connected(config)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        interactive_connected(config)
+    }
+}
+
+/// Drop the claim [`interactive_connect_argv`] made for a login that never ran (its
+/// PTY failed to spawn): the registry entry, the pidfile slot and the management
+/// endpoint. Only a still-Pending claim is dropped, never one whose tunnel is up.
+pub fn release_interactive_claim(config: &str) {
+    let config = config.trim();
+    if interactive_state(config) != Interactive::Pending {
+        return;
+    }
+    if let Some(pidfile) = interactive_registry().lock_ok().remove(config) {
+        let _ = std::fs::remove_file(pidfile);
+    }
+    #[cfg(unix)]
+    clear_management(config);
+}
+
+/// Whether an interactive claim (Pending or up) is recorded for `config`.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn has_interactive_claim(config: &str) -> bool {
+    interactive_registry().lock_ok().contains_key(config.trim())
+}
+
+/// What [`arm_interactive`] hands [`interactive_connect_argv`]: the validated
+/// config, the pidfile the argv must `--writepid` to, and the `--management …`
+/// argv items (empty when none could be armed) to append.
 struct InteractiveArm {
     config: String,
     pidfile: PathBuf,
-    management: String,
+    management: Vec<String>,
 }
 
 /// True if `openvpn` and `pkexec` are both available on `PATH` (both are needed:
@@ -1508,10 +1563,55 @@ pub fn connect_streaming(
             Ok(())
         }
         Err(msg) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_failed_connect(config, child, pidfile);
             // Say which secret was wrong; fall back to the raw handshake tail.
             Err(explain_openvpn_error(&msg).unwrap_or(msg))
+        }
+    }
+}
+
+/// How long a teardown waits for the tunnel's child to exit before it stops
+/// waiting and keeps the child registered instead.
+#[cfg(target_os = "linux")]
+const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Stop a connect that timed out or failed. Once polkit has authorized it, the
+/// child (`pkexec` execs `openvpn`) is **root**: our plain `kill` gets EPERM, so
+/// a bare `kill(); wait()` blocked the connect thread forever on a tunnel that
+/// was still running. So: the management socket first (no elevation), then the
+/// elevated kill by the pidfile — a no-op if OpenVPN has not written it yet —
+/// then our own `kill` (enough while `pkexec` still waits on its prompt), and a
+/// bounded reap. A child still alive after that is registered like an up tunnel,
+/// so `disconnect`/`disconnect_all` can still end it: a root tunnel is never left
+/// running unregistered.
+#[cfg(target_os = "linux")]
+fn stop_failed_connect(config: &str, mut child: Child, pidfile: PathBuf) {
+    management_shutdown(config);
+    let _ = kill_pidfile(&pidfile);
+    let _ = child.kill();
+    reap_or_register(config, VpnProc { child, pidfile }, REAP_TIMEOUT);
+}
+
+/// Wait up to `timeout` for `proc`'s child to exit, polling `try_wait` — never an
+/// unbounded `wait` on a child we may not be allowed to signal. Reaped: its
+/// pidfile is removed. Still running: it goes (back) into [`registry`] under
+/// `config`, visible to `is_connected`/`active_configs` and killable by the next
+/// teardown. Returns whether it was reaped.
+#[cfg(target_os = "linux")]
+fn reap_or_register(config: &str, mut proc: VpnProc, timeout: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        match proc.child.try_wait() {
+            // Exited, or no longer ours to wait for (already reaped): done.
+            Ok(Some(_)) | Err(_) => {
+                let _ = std::fs::remove_file(&proc.pidfile);
+                return true;
+            }
+            Ok(None) if start.elapsed() >= timeout => {
+                registry().lock_ok().insert(config.to_string(), proc);
+                return false;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
         }
     }
 }
@@ -1608,9 +1708,12 @@ fn wait_for_ready(child: &mut Child, on_line: &dyn Fn(&str)) -> Result<(), Strin
     }
 }
 
-/// Tear down the tunnel for `config` if it is up. Best-effort: signals the root
-/// OpenVPN process via `pkexec kill` (reading the pid OpenVPN wrote), then reaps
-/// our child. A missing/already-dead tunnel is treated as success.
+/// Tear down the tunnel for `config` if it is up: signals the root OpenVPN process
+/// via `pkexec kill` (reading the pid OpenVPN wrote), then reaps our child within
+/// [`REAP_TIMEOUT`]. A missing/already-dead tunnel is treated as success. A
+/// refused elevated kill (a dismissed polkit prompt) leaves the tunnel up, so it
+/// stays registered — visible and killable — and is reported as an error; the
+/// child is not waited on, since nothing we may send would end it.
 #[cfg(target_os = "linux")]
 pub fn disconnect(config: &str) -> Result<(), String> {
     // First ask the daemon to stop over its own management socket — no elevation,
@@ -1620,14 +1723,23 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     management_shutdown(config);
     // An interactive tunnel has no child of ours — kill it by the pid it wrote.
     disconnect_interactive(config);
-    let proc = registry().lock_ok().remove(config);
-    let Some(mut proc) = proc else {
+    // Peek, don't remove: a refused kill must leave the entry in place.
+    let pidfile = registry()
+        .lock_ok()
+        .get(config)
+        .map(|p| p.pidfile.clone());
+    let Some(pidfile) = pidfile else {
         return Ok(());
     };
-    let _ = kill_pidfile(&proc.pidfile);
-    let _ = proc.child.kill();
-    let _ = proc.child.wait();
-    let _ = std::fs::remove_file(&proc.pidfile);
+    if !kill_pidfile(&pidfile) {
+        return Err("openvpn teardown was not authorized".into());
+    }
+    // Bound first: the guard must be gone before `reap_or_register` relocks.
+    let proc = registry().lock_ok().remove(config);
+    if let Some(mut proc) = proc {
+        let _ = proc.child.kill();
+        reap_or_register(config, proc, REAP_TIMEOUT);
+    }
     Ok(())
 }
 
@@ -1714,11 +1826,12 @@ pub fn disconnect_checked(config: &str) -> Result<(), String> {
         mark_declined(config);
         return Err("openvpn teardown was not authorized".into());
     }
-    // TERM delivered — now reap our child and forget it.
-    if let Some(mut proc) = registry().lock_ok().remove(config) {
+    // TERM delivered — now reap our child (bounded) and forget it.
+    // Bound first: the guard must be gone before `reap_or_register` relocks.
+    let proc = registry().lock_ok().remove(config);
+    if let Some(mut proc) = proc {
         let _ = proc.child.kill();
-        let _ = proc.child.wait();
-        let _ = std::fs::remove_file(&proc.pidfile);
+        reap_or_register(config, proc, REAP_TIMEOUT);
     }
     Ok(())
 }
@@ -2816,11 +2929,11 @@ mod tests {
         let cfg = "/store/test-claims.ovpn";
         forget_interactive(cfg);
 
-        let cmd = interactive_connect_command(cfg).unwrap();
+        let argv = interactive_connect_argv(cfg).unwrap();
         let pidfile = interactive_pidfile(cfg);
 
-        assert!(cmd.contains("--writepid"));
-        assert!(cmd.contains(&shell_quote(&pidfile.to_string_lossy())));
+        let at = argv.iter().position(|a| a == "--writepid").expect("--writepid");
+        assert_eq!(argv[at + 1], pidfile.to_string_lossy());
         // Claimed, but OpenVPN hasn't written a pid yet — the user is still at the
         // polkit prompt. Pending is NOT dead: reaping here would forget a tunnel in
         // the seconds before it comes up.
@@ -2837,7 +2950,7 @@ mod tests {
     fn interactive_tunnel_with_a_live_pid_is_up() {
         let cfg = "/store/test-live.ovpn";
         forget_interactive(cfg);
-        let _ = interactive_connect_command(cfg).unwrap();
+        let _ = interactive_connect_argv(cfg).unwrap();
 
         // Our own pid is, definitionally, alive.
         let me = std::process::id();
@@ -2858,7 +2971,7 @@ mod tests {
     fn interactive_tunnel_with_a_dead_pid_is_reaped() {
         let cfg = "/store/test-dead.ovpn";
         forget_interactive(cfg);
-        let _ = interactive_connect_command(cfg).unwrap();
+        let _ = interactive_connect_argv(cfg).unwrap();
 
         // A pid that is *certainly* dead: spawn a process and reap it.
         let mut child = std::process::Command::new("true").spawn().unwrap();
@@ -2887,10 +3000,77 @@ mod tests {
         let _ = std::fs::create_dir_all(runtime_dir());
         std::fs::write(&pidfile, format!("{}\n", std::process::id())).unwrap();
 
-        let _ = interactive_connect_command(cfg).unwrap();
+        let _ = interactive_connect_argv(cfg).unwrap();
 
         assert!(!pidfile.exists());
         assert_eq!(interactive_state(cfg), Interactive::Pending);
+
+        forget_interactive(cfg);
+    }
+
+    /// A second login for a config whose tunnel is up is refused and leaves the live
+    /// tunnel's claim alone: re-arming deleted its pidfile (so `is_connected` and
+    /// `disconnect_all` lost a root tunnel still rerouting the machine) and rewrote
+    /// its management endpoint.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_login_for_a_live_tunnel_is_refused() {
+        let cfg = "/store/test-relogin-live.ovpn";
+        forget_interactive(cfg);
+        let _ = interactive_connect_argv(cfg).unwrap();
+        let pidfile = interactive_pidfile(cfg);
+        let me = std::process::id();
+        std::fs::write(&pidfile, format!("{me}\n")).unwrap();
+        let endpoint = management_endpoint(cfg);
+        assert_eq!(interactive_state(cfg), Interactive::Alive(me as i32));
+
+        let err = interactive_connect_argv(cfg).unwrap_err();
+        assert!(err.contains("already connected"), "{err}");
+        assert!(pidfile.exists(), "the live tunnel's pidfile must survive");
+        assert_eq!(interactive_state(cfg), Interactive::Alive(me as i32));
+        assert_eq!(management_endpoint(cfg), endpoint, "its management endpoint too");
+        // Releasing a claim never touches a live tunnel either.
+        release_interactive_claim(cfg);
+        assert!(is_connected(cfg));
+
+        forget_interactive(cfg);
+    }
+
+    /// A tunnel adopted from a previous run (its headless pidfile seated in the
+    /// interactive registry) is just as live: a login for it is refused too.
+    #[cfg(unix)]
+    #[test]
+    fn a_login_for_an_adopted_tunnel_is_refused() {
+        let cfg = "/store/test-relogin-adopted.ovpn";
+        forget_interactive(cfg);
+        let headless = runtime_dir().join(format!("{}.pid", safe_stem(cfg)));
+        let _ = std::fs::create_dir_all(runtime_dir());
+        std::fs::write(&headless, format!("{}\n", std::process::id())).unwrap();
+        assert!(adopt_config(cfg));
+
+        assert!(interactive_connect_argv(cfg).is_err());
+        assert!(headless.exists());
+        assert!(is_connected(cfg));
+
+        forget_interactive(cfg);
+        let _ = std::fs::remove_file(&headless);
+    }
+
+    /// A Pending claim (a login that never authenticated) is re-armed, and a claim
+    /// whose login never ran is handed back whole.
+    #[cfg(unix)]
+    #[test]
+    fn a_pending_claim_is_rearmed_and_released() {
+        let cfg = "/store/test-relogin-pending.ovpn";
+        forget_interactive(cfg);
+        let _ = interactive_connect_argv(cfg).unwrap();
+        assert_eq!(interactive_state(cfg), Interactive::Pending);
+        let _ = interactive_connect_argv(cfg).expect("a pending claim is no live tunnel");
+
+        release_interactive_claim(cfg);
+        assert_eq!(interactive_state(cfg), Interactive::None);
+        assert!(!interactive_registry().lock().unwrap().contains_key(cfg));
+        assert_eq!(management_endpoint(cfg), None);
 
         forget_interactive(cfg);
     }
@@ -2958,21 +3138,20 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn interactive_connect_command_linux_shape() {
-        let cmd = interactive_connect_command("/home/u/work.ovpn").unwrap();
+    fn interactive_connect_argv_linux_shape() {
+        let cfg = "/home/u/my work.ovpn";
+        let argv = interactive_connect_argv(cfg).unwrap();
         // Elevated via pkexec; passphrase typed interactively (no --askpass file).
-        assert!(cmd.starts_with("pkexec openvpn --config "));
-        assert!(cmd.contains("'/home/u/work.ovpn'"));
+        assert_eq!(&argv[..4], ["pkexec", "openvpn", "--config", cfg]);
         // #868: the config's own scripts never run as root — and the override
         // follows the config, so the file's `script-security 2` cannot win.
-        assert!(
-            cmd.contains("--config '/home/u/work.ovpn' --script-security 1 "),
-            "{cmd}"
-        );
-        assert!(cmd.contains("--auth-nocache"));
-        assert!(!cmd.contains("--askpass"));
+        assert_eq!(&argv[4..6], ["--script-security", "1"]);
+        assert!(argv.iter().any(|a| a == "--auth-nocache"));
+        assert!(!argv.iter().any(|a| a == "--askpass"));
+        // An argv, not a shell line: nothing is quoted.
+        assert!(!argv.iter().any(|a| a.contains('\'')), "{argv:?}");
 
-        forget_interactive("/home/u/work.ovpn");
+        forget_interactive(cfg);
     }
 
     /// The whole point of the management socket: a terminal-started tunnel carries
@@ -2980,23 +3159,24 @@ mod tests {
     /// interactive flavour would silently keep the old double-password teardown.
     #[cfg(target_os = "linux")]
     #[test]
-    fn interactive_connect_command_arms_a_management_socket() {
+    fn interactive_connect_argv_arms_a_management_socket() {
         // Skipped while the A/B kill switch is on (no `--management` is appended).
         if MANAGEMENT_SOCKET_DISABLED {
             return;
         }
         let cfg = "/home/u/mgmt-interactive.ovpn";
         forget_interactive(cfg);
-        let cmd = interactive_connect_command(cfg).unwrap();
-        assert!(
-            cmd.contains("--management 127.0.0.1 "),
-            "interactive tunnels need a management socket too: {cmd}"
-        );
+        let argv = interactive_connect_argv(cfg).unwrap();
+        let at = argv
+            .iter()
+            .position(|a| a == "--management")
+            .unwrap_or_else(|| panic!("interactive tunnels need a management socket too: {argv:?}"));
+        assert_eq!(argv[at + 1], "127.0.0.1");
         // The endpoint it armed is the one teardown will read back.
         let (port, password) = management_endpoint(cfg).expect("endpoint recorded");
         assert!(port > 0);
         assert!(!password.is_empty());
-        assert!(cmd.contains(&port.to_string()));
+        assert_eq!(argv[at + 2], port.to_string());
 
         forget_interactive(cfg);
     }
@@ -3177,10 +3357,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn interactive_connect_command_rejects_bad_config() {
-        assert!(interactive_connect_command("-evil").is_err());
-        assert!(interactive_connect_command("/a\nb.ovpn").is_err());
-        assert!(interactive_connect_command("   ").is_err());
+    fn interactive_connect_argv_rejects_bad_config() {
+        assert!(interactive_connect_argv("-evil").is_err());
+        assert!(interactive_connect_argv("/a\nb.ovpn").is_err());
+        assert!(interactive_connect_argv("   ").is_err());
     }
 
     #[test]
@@ -3849,5 +4029,42 @@ mod tests {
         );
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed connect's child that will not exit in time (the root `openvpn`
+    /// our `kill` cannot reach) is never waited on unboundedly: the reap gives up
+    /// after its timeout and keeps the child registered, visible and killable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_that_outlives_the_reap_stays_registered() {
+        let cfg = "/store/test-reap-timeout.ovpn";
+        let dir = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let start = Instant::now();
+        let proc = VpnProc { child, pidfile: dir.path().join("t.pid") };
+        assert!(!reap_or_register(cfg, proc, Duration::from_millis(200)));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(is_connected(cfg), "a still-running tunnel child stays registered");
+
+        let mut proc = registry().lock_ok().remove(cfg).expect("registered");
+        let _ = proc.child.kill();
+        let _ = proc.child.wait();
+    }
+
+    /// The timeout path of `connect_streaming`: with no pidfile written yet (the
+    /// polkit prompt was never answered) and no management endpoint, the stop
+    /// raises no elevated kill, our own kill ends the child, and it is reaped —
+    /// not registered.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_connect_child_we_can_kill_is_reaped_not_registered() {
+        let cfg = "/store/test-failed-connect.ovpn";
+        let dir = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let start = Instant::now();
+        stop_failed_connect(cfg, child, dir.path().join("never-written.pid"));
+        assert!(start.elapsed() < REAP_TIMEOUT);
+        assert!(registry().lock_ok().get(cfg).is_none());
+        assert!(!is_connected(cfg));
     }
 }

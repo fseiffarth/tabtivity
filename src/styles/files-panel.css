@@ -9,7 +9,8 @@
 .side-panel {
   position: absolute;
   top: 0;
-  right: 0;
+  /* Beside the always-present edge rail (`--side-rail-w`), never under it. */
+  right: var(--side-rail-w);
   bottom: 0;
   width: 280px;
   /* Its own token (themes.css), following --bg-panel until something sets it:
@@ -19,8 +20,10 @@
   border-left: 1px solid var(--side-panel-border);
   display: flex;
   flex-direction: column;
-  transform: translateX(calc(100% + 2px));
-  transition: transform var(--transition-slow);
+  transform: translateX(calc(100% + var(--side-rail-w) + 2px));
+  /* Docked (the default) opens and closes with no slide: the workspace reflows
+     at once. Only the Auto-hide overlay eases (`.overlay`, below). */
+  transition: none;
   /* Above all subwindow/tab-bar chrome (active tab 11, sticky ×/hide/files
      toggle/scroll chevrons 12, docked-sidebar resize grip 13) — which all
      resolve in this same stacking context — so the slid-out overlay fully
@@ -46,8 +49,12 @@
   --bg-panel: var(--bg-side-panel);
 }
 
+.side-panel.overlay {
+  transition: transform var(--transition-slow);
+}
+
 .side-panel:not(.open) {
-  transform: translateX(calc(100% + 2px));
+  transform: translateX(calc(100% + var(--side-rail-w) + 2px));
   border-left-color: transparent;
 }
 
@@ -61,14 +68,14 @@
    (inner) edge. Two-class selectors beat the base `.side-panel` rules. */
 .side-panel.left {
   right: auto;
-  left: 0;
+  left: var(--side-rail-w);
   border-left: none;
   border-right: 1px solid var(--side-panel-border);
-  transform: translateX(calc(-100% - 2px));
+  transform: translateX(calc(-100% - var(--side-rail-w) - 2px));
 }
 
 .side-panel.left:not(.open) {
-  transform: translateX(calc(-100% - 2px));
+  transform: translateX(calc(-100% - var(--side-rail-w) - 2px));
   border-right-color: transparent;
 }
 
@@ -390,9 +397,12 @@
   border-radius: var(--radius-sm);
   padding: 4px 6px;
 }
+/* Fixed, not max-height: the search filters it, and a shrinking list moved the
+   centered dialog with every keystroke. */
 .set-default-app-list {
+  flex: 0 1 auto;
   margin: 6px 0;
-  max-height: 220px;
+  height: 220px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -545,9 +555,13 @@
   font-size: var(--text-md);
   color: var(--text-muted);
 }
+/* A fixed height, not a max-height: a list that sized to each folder's entries
+   resized (and, centered, re-positioned) the dialog on every step through the
+   tree. It still shrinks toward min-height when the window is too short. */
 .folder-picker-list {
+  flex: 0 1 auto;
   min-height: 180px;
-  max-height: 320px;
+  height: 320px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -789,7 +803,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: 4px;
   /* Left padding is 6px, not the block's 12px, ON PURPOSE: every child here is
      a `.toolbar-btn` carrying its own 6px inner padding, so 12px would push the
      first LABEL to 18px while the project name one row up and the file names
@@ -802,6 +816,11 @@
   /* Second row of the same header block — shares `.side-panel-header`'s fill. */
   background-color: var(--bg-subheader);
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.side-panel-toolbar .toolbar-btn:focus-visible {
+  outline-color: var(--accent);
+  outline-offset: -1px;
 }
 
 /* The SIDE PANEL's header block specifically. The two rules above paint every
@@ -908,10 +927,9 @@
    here either. This one glyph is the ONE place the working/finished distinction
    cannot be drawn: it is a single character, so it has no stroke to break into
    dashes and no fill to hollow out, and the two states share a colour by design.
-   It is a row-level ROLLUP — "something in this collapsed group wants you" — and
-   the chips beside it carry which state each tab is actually in, so the glyph
-   deliberately says the coarser thing rather than inventing a fourth encoding
-   nobody would learn. */
+   It is a row-level ROLLUP — "something in this collapsed group wants you" —
+   and deliberately says the coarser thing rather than inventing a fourth
+   encoding nobody would learn; restoring the subwindow shows each tab's own. */
 .hidden-sw-icon.working {
   color: var(--status-working);
 }
@@ -948,60 +966,28 @@
 .hidden-sw-status-dot.interrupted {
   background: var(--status-interrupted);
 }
-.hidden-sw-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
+/* A row's name: one subwindow, however many tabs it holds (the tooltip names
+   them). A click restores it, like the ↶ beside it. */
+.hidden-sw-name {
   flex: 1;
   min-width: 0;
-}
-.hidden-sw-chip {
-  max-width: 100%;
-  padding: 0 6px;
-  height: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--bg-main);
+  padding: 0 2px;
+  border: none;
+  background: transparent;
   color: var(--text-primary);
   font-size: var(--text-sm);
-  line-height: 16px;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: var(--cur-pointer, pointer);
 }
-/* Same ring as `.tab.working`/`.needs-decision`/`.finished` — a hidden tab's PTY
-   is still mounted and running, so its chip keeps reporting status, and it has
-   to say which of the three states it is in the same way a visible tab does. A
-   chip already has a border of its own, so the state recolours that border (and
-   for working, breaks it into dots) rather than adding a second ring inside it.
-   Declared ABOVE `:hover`, which carries the same specificity: a pointer on a
-   chip has to be able to say "this one" over the top of whatever state it is
-   in. */
-.hidden-sw-chip.working {
-  border-style: dotted;
-  border-color: var(--status-working);
-  background: color-mix(in srgb, var(--status-working) 12%, var(--bg-main));
-}
-.hidden-sw-chip.working.shell {
-  border-color: var(--status-shell-working);
-  background: color-mix(in srgb, var(--status-shell-working) 12%, var(--bg-main));
-}
-.hidden-sw-chip.needs-decision {
-  border-color: var(--status-decision);
-  background: color-mix(in srgb, var(--status-decision) 12%, var(--bg-main));
-}
-.hidden-sw-chip.finished {
-  border-color: var(--status-done);
-  background: color-mix(in srgb, var(--status-done) 12%, var(--bg-main));
-}
-.hidden-sw-chip.interrupted {
-  border-color: var(--status-interrupted);
-  background: color-mix(in srgb, var(--status-interrupted) 12%, var(--bg-main));
-}
-.hidden-sw-chip:hover {
-  border-color: var(--accent);
+.hidden-sw-name:hover {
   color: var(--accent);
+}
+/* Rides the tab strip's `.tab-label-edit`, so the two renames look alike. */
+.hidden-sw-name-edit {
+  font-size: var(--text-sm);
 }
 .hidden-sw-btn {
   flex-shrink: 0;
@@ -1065,14 +1051,11 @@
   background: var(--bg-hover);
 }
 
-/* Pinned wakes the pin to full opacity AND paints it accent: the drawn pin is
-   currentColor line-art, so the colour alone says "pinned" at a glance where
-   the 0.55→1 step alone was too quiet next to the flip. Still no fill and no
-   frame, so nothing theme-dependent beyond the accent the hover already uses.
-   `aria-pressed` on the button carries the state for anyone colour misses. */
-.side-panel-pin.pinned {
-  opacity: 1;
-  color: var(--accent);
+/* The hide-panel chevron shares the pin's box (it replaced the 📌). */
+.side-panel-pin svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 /* The Files (Project) tab: the side panel's file view hosted in a pane. The
@@ -1297,6 +1280,13 @@
   font-size: var(--text-sm);
   padding: 4px 0;
 }
+/* Once it lists rows, a fixed box: folding a folder changed the max-content
+   width and the height, and anchored bottom-right that moved every row —
+   the folder just clicked included — out from under the pointer. */
+.git-change-tree:has(> .git-change-rows) {
+  width: min(480px, calc(100vw - 16px));
+  height: 320px;
+}
 
 .git-change-empty {
   padding: 8px 12px;
@@ -1425,6 +1415,12 @@
 .git-branch-pill.remote {
   opacity: 0.7;
   border-style: dashed;
+}
+
+/* Folds the remote-tracking pills away; same dashed look, but not dimmed. */
+.git-branch-pill.git-branch-remote-toggle {
+  border-style: dashed;
+  color: var(--text-secondary);
 }
 
 /* "↓N" after a branch that is behind its upstream: opens the pull preview. */

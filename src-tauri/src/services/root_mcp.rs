@@ -71,6 +71,11 @@ pub const HELP_URL_ENV: &str = crate::app_env!("HELP_MCP_URL");
 /// project-agent tab with a schedule target while the server is on.
 pub const MARKUP_TOKEN_ENV: &str = crate::app_env!("MARKUP_MCP_TOKEN");
 pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
+/// The web lane's pair (`services::web_lane`), set for a chat-assistant tab
+/// only (`PtyOptions.assistant`), and the only MCP token such a tab gets.
+/// `services::assistant::LaneGrant::from_env` reads them back.
+pub const WEB_TOKEN_ENV: &str = crate::app_env!("WEB_MCP_TOKEN");
+pub const WEB_URL_ENV: &str = crate::app_env!("WEB_MCP_URL");
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 
@@ -88,8 +93,13 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// window, and a server daemon, which has no window and answers both the
 /// browser client and the phone itself. A desktop's Mobile host does not:
 /// the window's markup view could never see its asks.
+/// `serves_web`: this process serves the chat assistant's web lane
+/// (`services::web_lane`, `/mcp/web`) and so grants its token
+/// ([`grant_lanes`]'s assistant arm). The window and a desktop's Mobile host
+/// do; the server daemon never does (the assistant is not offered on a hosted
+/// server in v1).
 #[derive(Debug, Clone)]
-pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool }
+pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool, pub serves_web: bool }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -139,7 +149,7 @@ pub struct PushBinding {
 /// The lane a caller class occupies on its tab: a tab holds at most one
 /// session per lane, and a respawn replaces only the session of its own lane.
 /// Root, local-model and reader tokens share the root lane; the schedule,
-/// push, help and markup identities each ride beside it.
+/// push, help, markup and web identities each ride beside it.
 fn lane(caller: Caller) -> u8 {
     match caller {
         Caller::Agent | Caller::LocalModel | Caller::Reader => 0,
@@ -147,6 +157,7 @@ fn lane(caller: Caller) -> u8 {
         Caller::Pusher => 2,
         Caller::Helper => 3,
         Caller::Marker => 4,
+        Caller::Web => 5,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -239,7 +250,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -266,11 +277,11 @@ pub fn revoke_tab(tab: &str) -> bool {
     });
     held
 }
-/// Whether a spawn of `tab` still holds a root-lane session (the help and
-/// markup lanes own no sandbox view, so they never keep one alive).
+/// Whether a spawn of `tab` still holds a root-lane session (the help, markup
+/// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -407,6 +418,11 @@ pub enum Caller {
     /// `markup_ask` / `markup_withdraw` / `markup_done` on `/mcp/markup` and
     /// nothing else.
     Marker,
+    /// A chat-assistant tab's web identity (`services::web_lane`), bound at
+    /// spawn to the tab: served `web_fetch` / `web_search` on `/mcp/web` and
+    /// nothing else. The root registry's route and policy are positive lists
+    /// that do not name it, so it reaches no other path.
+    Web,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -458,6 +474,26 @@ pub struct Session {
     schedule_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
     push_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
 }
+
+/// The most tabs the web lane's hourly budget remembers at once.
+const WEB_BUDGET_TABS: usize = 512;
+/// `web_fetch` / `web_search` call times per tab id, newest last. Keyed by the
+/// tab, not by the [`Session`]: a respawn mints a new session (and token) for
+/// the same tab, and the budget must not reset with it. Entries older than an
+/// hour are pruned on every admit; past [`WEB_BUDGET_TABS`] the tab that
+/// called longest ago is dropped.
+fn web_budgets() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>> {
+    static BUDGETS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>>> = OnceLock::new();
+    BUDGETS.get_or_init(Default::default)
+}
+
+/// How many tabs the web budget map holds now.
+#[cfg(test)]
+pub(crate) fn web_budget_tabs() -> usize { web_budgets().lock_ok().len() }
+/// The cap on [`web_budget_tabs`].
+#[cfg(test)]
+pub(crate) const WEB_BUDGET_TABS_MAX: usize = WEB_BUDGET_TABS;
+
 impl Session {
     pub fn admit_schedule_rate(&self) -> bool {
         let mut calls = self.schedule_rate.lock_ok();
@@ -471,6 +507,24 @@ impl Session {
         let mut calls = self.push_rate.lock_ok();
         calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
         if calls.len() >= 6 { return false; }
+        calls.push_back(std::time::Instant::now());
+        true
+    }
+    /// [`crate::services::web_lane::CALLS_PER_HOUR`] `web_fetch` / `web_search`
+    /// calls per tab per rolling hour, counted together
+    /// (`services::web_lane`), per tab id and so across respawns. A call that
+    /// is refused for any other reason than this budget still spent one: the
+    /// count is of attempts.
+    pub fn admit_web_rate(&self) -> bool {
+        let hour = std::time::Duration::from_secs(3600);
+        let mut map = web_budgets().lock_ok();
+        map.retain(|_, calls| { calls.retain(|at| at.elapsed() < hour); !calls.is_empty() });
+        if !map.contains_key(&self.identity.tab) && map.len() >= WEB_BUDGET_TABS {
+            let oldest = map.iter().filter_map(|(tab, calls)| calls.back().map(|at| (*at, tab.clone()))).min().map(|(_, tab)| tab);
+            if let Some(tab) = oldest { map.remove(&tab); }
+        }
+        let calls = map.entry(self.identity.tab.clone()).or_default();
+        if calls.len() >= super::web_lane::CALLS_PER_HOUR { return false; }
         calls.push_back(std::time::Instant::now());
         true
     }
@@ -518,10 +572,10 @@ pub struct SessionInfo {
     pub access: Access,
     pub project: Option<String>,
 }
-/// Help and markup sessions are left out: one per agent tab, nothing to
+/// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -530,7 +584,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -747,7 +801,7 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, armed: bool }
+pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
@@ -755,18 +809,19 @@ impl SpawnTokenGuard {
             push: opts.env.get(GIT_TOKEN_ENV).cloned(),
             help: opts.env.get(HELP_TOKEN_ENV).cloned(),
             markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
+            web: opts.env.get(WEB_TOKEN_ENV).cloned(),
             armed: true,
         }
     }
     pub fn keep(&mut self) { self.armed = false; }
     /// Whether this spawn was handed a listed token (root, reader, schedule
-    /// or push); the help and markup tokens alone do not count.
+    /// or push); the help, markup and web tokens alone do not count.
     pub fn holds_token(&self) -> bool { self.token.is_some() || self.push.is_some() }
 }
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help, &self.markup].into_iter().flatten() { revoke_token(token); }
+            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web].into_iter().flatten() { revoke_token(token); }
         }
     }
 }
@@ -852,7 +907,8 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// - every other local **project** agent: the schedule lane (a schedule target,
 ///   `schedule_mcp` on and the project's level not off) and the push lane
 ///   (`git_push_mcp` on, the trusted entry's directory);
-/// - every local agent: the **help** lane while `help_mcp` is on;
+/// - every local agent, assistant chats included: the **help** lane while
+///   `help_mcp` is on;
 /// - those project agents with a schedule target: the **markup** lane while
 ///   `markup_mcp` is on (the window, or a server daemon).
 ///
@@ -862,6 +918,12 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// [`Runtime::serves_markup`]. Tokens go into `store`, the one that
 /// listener authenticates against. Returns whether the spawn is a root agent.
 pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) -> bool {
+    // An assistant chat gets the web and help lanes and nothing else (plan
+    // "Call sites" row 5): no root, reader, schedule, push or markup lane.
+    if opts.assistant.is_some() {
+        grant_assistant(opts, runtime, store, state);
+        return false;
+    }
     let root_agent = is_root_agent(opts, agent_spawn);
     let Some(runtime) = runtime else { return root_agent };
     let trusted = Trusted::read(state, opts.project_id.as_deref());
@@ -908,6 +970,46 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         grant_markup(opts, runtime, store, &trusted.tool_models());
     }
     root_agent
+}
+
+/// The assistant scope's lanes: the web lane's token and URL in the spawn env
+/// ([`WEB_TOKEN_ENV`] / [`WEB_URL_ENV`], which `assistant::LaneGrant::from_env`
+/// reads back), and the help lane's ([`HELP_TOKEN_ENV`] / [`HELP_URL_ENV`],
+/// `assistant::help_url_from_env`). Granted only when this process serves the
+/// web lane (`runtime.serves_web`: the window and the desktop's Mobile host,
+/// never a server daemon) and the `assistant` flag is on in the trusted
+/// `settings.json` under `state`. The web lane goes to a profile that wants
+/// it ([`AssistantCli::uses_lane`](super::assistant::AssistantCli::uses_lane));
+/// without it `launch_line` runs a cloud profile on native search alone and
+/// refuses a local one (`Refusal::NoLane`). The help lane goes to every
+/// profile while `help_mcp` is on: the compiled-in user docs, nothing of the
+/// user's. Only the env is set; `launch_line` wires the CLI. Both tokens are
+/// bound to the tab, so the existing revoke-with-the-tab paths end them; they
+/// are the only MCP tokens such a spawn holds.
+fn grant_assistant(opts: &mut PtyOptions, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) {
+    let Some(runtime) = runtime.filter(|r| r.serves_web) else { return };
+    let Some(uses_lane) = opts.assistant.as_ref().map(|launch| launch.cli.uses_lane()) else { return };
+    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&state.join("settings.json")) else { return };
+    if !settings.assistant_enabled() { return; }
+    let tab = opts.id.clone();
+    let identity = |caller| Identity { tab: tab.clone(), caller, project: None, schedule_target: None, push: None, endpoint: None, model: None };
+    let mut grants = Vec::new();
+    if uses_lane {
+        grants.push((Caller::Web, WEB_TOKEN_ENV, WEB_URL_ENV, web_endpoint_url(runtime.port)));
+    }
+    if settings.help_mcp() {
+        grants.push((Caller::Helper, HELP_TOKEN_ENV, HELP_URL_ENV, help_endpoint_url(runtime.port)));
+    }
+    for (caller, token_env, url_env, url) in grants {
+        let Some(token) = mint_token() else { continue };
+        store.register(token.clone(), identity(caller), false);
+        opts.env.insert(token_env.into(), token);
+        opts.env.insert(url_env.into(), url);
+    }
+}
+
+pub fn web_endpoint_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp/web")
 }
 
 /// The root lane of [`grant_lanes`]: [`apply_to_spawn_with`] while the tools
@@ -3762,6 +3864,8 @@ mod tests {
 
     fn opts(cmd: &str, args: &[&str], project_id: Option<&str>) -> PtyOptions {
         PtyOptions {
+            login: None,
+            assistant: None,
             cmd: cmd.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             project_id: project_id.map(str::to_string),
@@ -3785,7 +3889,7 @@ mod tests {
 
     #[test]
     fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
-        let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true };
+        let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true, serves_web: false };
         for cli in WIRED_CLIS {
             let mut spawn = opts(cli, &[], Some("p"));
             apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
@@ -3808,7 +3912,118 @@ mod tests {
     }
 
     fn rt() -> Runtime {
-        Runtime { port: 4321, serves_root: true, serves_markup: true }
+        Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: false }
+    }
+
+    /// One lane rule: a profile gets the web lane exactly when
+    /// `AssistantCli::uses_lane` says so, for every profile there is.
+    #[test]
+    fn the_assistant_grant_follows_the_profiles_own_lane_rule() {
+        use super::super::assistant::{AssistantCli, AssistantLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), json!({"assistant": true}).to_string()).unwrap();
+        let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+        for cli in AssistantCli::ALL {
+            let mut spawn = opts(cli.bin(), &[], Some(crate::storage::ASSISTANT_SCOPE));
+            spawn.assistant = Some(AssistantLaunch { cli, model: None });
+            grant_assistant(&mut spawn, Some(&serving), &TokenStore::default(), dir.path());
+            assert_eq!(spawn.env.contains_key(WEB_TOKEN_ENV), cli.uses_lane(), "{cli:?}");
+        }
+    }
+
+    /// The assistant arm of [`grant_lanes`] (plan "Call sites" row 5): the web
+    /// lane's token and URL and the help lane's, and no other lane, whatever
+    /// the caller sent — and only while this process serves the lane and the
+    /// `assistant` flag is on; the web lane only for a profile that wants it
+    /// (Codex searches natively), the help lane only while `help_mcp` is on.
+    #[test]
+    fn an_assistant_spawn_gets_the_web_and_help_lanes_alone_and_only_when_everything_allows_it() {
+        use super::super::assistant::{AssistantCli, AssistantLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path();
+        let settings = |value: Value| std::fs::write(state.join("settings.json"), value.to_string()).unwrap();
+        // Every other lane's switch is on, to show none of them is granted.
+        let on = json!({"assistant": true, "schedule_mcp": true, "help_mcp": true, "markup_mcp": true, "root_mcp": true, "root_mcp_agents": ["claude"], "root_mcp_mail": true});
+        settings(on.clone());
+        let chat = |cli: AssistantCli| {
+            let mut spawn = opts(cli.bin(), &["--sent-by-the-renderer"], Some(crate::storage::ASSISTANT_SCOPE));
+            spawn.assistant = Some(AssistantLaunch { cli, model: None });
+            spawn.schedule_target_id = Some("target-1".into());
+            spawn.env.insert("KEPT".into(), "1".into());
+            spawn
+        };
+        let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+        let lane_tokens = |spawn: &PtyOptions| {
+            let mut keys: Vec<String> = spawn.env.keys().filter(|k| k.ends_with("_MCP_TOKEN") || k.ends_with("_MCP_URL")).cloned().collect();
+            keys.sort();
+            keys
+        };
+        for cli in [AssistantCli::Claude, AssistantCli::OpenCodeLocal, AssistantCli::ClaudeLocal] {
+            let store = TokenStore::default();
+            let mut spawn = chat(cli);
+            assert!(!grant_lanes(&mut spawn, true, Some(&serving), &store, state), "never a root agent");
+            let mut want = [WEB_TOKEN_ENV, WEB_URL_ENV, HELP_TOKEN_ENV, HELP_URL_ENV].map(str::to_string).to_vec();
+            want.sort();
+            assert_eq!(lane_tokens(&spawn), want, "{cli:?}");
+            assert_eq!(spawn.env[WEB_URL_ENV], "http://127.0.0.1:4321/mcp/web");
+            assert_eq!(spawn.env[HELP_URL_ENV], "http://127.0.0.1:4321/mcp/help");
+            let help = store.authenticate(Some(&format!("Bearer {}", spawn.env[HELP_TOKEN_ENV]))).expect("registered");
+            assert_eq!((help.identity.caller, help.identity.tab.as_str(), help.identity.project.as_deref()), (Caller::Helper, "root:t", None), "{cli:?}");
+            assert_eq!(spawn.args, ["--sent-by-the-renderer"], "the grant never touches argv: launch_line owns it");
+            assert_eq!(spawn.env["KEPT"], "1");
+            let session = store.authenticate(Some(&format!("Bearer {}", spawn.env[WEB_TOKEN_ENV]))).expect("registered");
+            assert_eq!((session.identity.caller, session.identity.tab.as_str(), session.identity.project.as_deref()), (Caller::Web, "root:t", None), "{cli:?}");
+            assert!(session.identity.schedule_target.is_none() && session.identity.push.is_none());
+            assert_eq!(session.access, Access::initial(Caller::Web));
+        }
+        // Codex: native search, no web lane, the help lane and no other.
+        let store = TokenStore::default();
+        let mut codex = chat(AssistantCli::Codex);
+        assert!(!grant_lanes(&mut codex, true, Some(&serving), &store, state));
+        assert_eq!(lane_tokens(&codex), [HELP_TOKEN_ENV, HELP_URL_ENV], "{:?}", codex.env.keys());
+        // `help_mcp` off: the web lane alone, and Codex nothing.
+        let mut help_off = on.clone();
+        help_off["help_mcp"] = json!(false);
+        settings(help_off);
+        let mut spawn = chat(AssistantCli::Claude);
+        grant_lanes(&mut spawn, true, Some(&serving), &store, state);
+        assert_eq!(lane_tokens(&spawn), [WEB_TOKEN_ENV, WEB_URL_ENV]);
+        let mut codex = chat(AssistantCli::Codex);
+        grant_lanes(&mut codex, true, Some(&serving), &store, state);
+        assert!(lane_tokens(&codex).is_empty(), "{:?}", codex.env.keys());
+        settings(on.clone());
+        // A runtime that does not serve the lane (a server daemon's), none at all.
+        for runtime in [Some(Runtime { serves_web: false, ..serving.clone() }), None] {
+            let mut spawn = chat(AssistantCli::Claude);
+            grant_lanes(&mut spawn, true, runtime.as_ref(), &store, state);
+            assert!(lane_tokens(&spawn).is_empty(), "{runtime:?}");
+        }
+        // The flag: absent, off, an unreadable file.
+        for body in [json!({"schedule_mcp": true}), json!({"assistant": false, "schedule_mcp": true})] {
+            settings(body);
+            let mut spawn = chat(AssistantCli::Claude);
+            grant_lanes(&mut spawn, true, Some(&serving), &store, state);
+            assert!(lane_tokens(&spawn).is_empty());
+        }
+        std::fs::write(state.join("settings.json"), "{ nope").unwrap();
+        let mut spawn = chat(AssistantCli::Claude);
+        grant_lanes(&mut spawn, true, Some(&serving), &store, state);
+        assert!(lane_tokens(&spawn).is_empty(), "unreadable settings grant nothing");
+        // The token ends with the tab, and a respawn replaces it.
+        settings(on);
+        let mut first = chat(AssistantCli::Claude);
+        grant_lanes(&mut first, true, Some(&serving), tokens(), state);
+        let token = first.env[WEB_TOKEN_ENV].clone();
+        assert!(authenticate(Some(&format!("Bearer {token}"))).is_some());
+        let mut second = chat(AssistantCli::Claude);
+        grant_lanes(&mut second, true, Some(&serving), tokens(), state);
+        assert!(authenticate(Some(&format!("Bearer {token}"))).is_none(), "a respawn replaces the lane's session");
+        assert!(revoke_tab("root:t"));
+        assert!(authenticate(Some(&format!("Bearer {}", second.env[WEB_TOKEN_ENV]))).is_none(), "revoked with the tab");
+        // Without the assistant block a spawn takes the ordinary arm: no web lane.
+        let mut plain = opts("claude", &[], Some("p"));
+        grant_lanes(&mut plain, true, Some(&serving), &store, state);
+        assert!(!plain.env.contains_key(WEB_TOKEN_ENV));
     }
 
     /// Every agent CLI gets the help pair; Claude and Codex are also named the

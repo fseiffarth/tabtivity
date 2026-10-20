@@ -1,7 +1,7 @@
 # Mobile access — who may reach a scope
 
 Which paired phone may list, open and get pushes for a project, a box or the
-root console. Plan and review: `docs/mobile_device_scoped_access_plan.md`.
+root console. Plan and review: `docs/done/mobile_device_scoped_access_plan.md`.
 Root's own gate: `root_console.md` "On the phone". Pairing itself (device
 keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
 
@@ -131,7 +131,7 @@ row keeps saying *queued*.
 ## Writing into a project (Upload here)
 
 The one route by which a phone puts a file into a visible project folder
-(`uploads.rs`, `docs/phone_upload_plan.md`); everything else a phone sends goes
+(`uploads.rs`, `docs/done/phone_upload_plan.md`); everything else a phone sends goes
 to the hidden, git-ignored drop box (`.tabtivity/inbox/`) or the state dir's
 global inbox. It sits behind its own host switch
 (`tabtivity_mobile_host.project_uploads`, default off, only with
@@ -180,7 +180,7 @@ without one) are not refused — within that threat note.
   the project may undo any logged, unchanged upload of it given the file's
   listing token, until the log line is dropped (7 days, at the next upload's
   rewrite) — also one the desktop pressed **Keep** on (Keep only hides the
-  row in that desktop's storage). Flagged in `docs/phone_upload_handoff.md`,
+  row in that desktop's storage). Flagged in `docs/done/phone_upload_handoff.md`,
   undecided.
 - **Sign-in callback.** `sign_in_callback` checks only that the phone sees
   *some* agent tab, then relays the localhost address to whichever CLI is

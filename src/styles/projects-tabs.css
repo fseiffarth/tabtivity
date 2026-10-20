@@ -57,6 +57,13 @@
   color: var(--text-primary);
 }
 
+.project-pill .pill-main:focus-visible,
+.tab:focus-visible,
+.tab-new-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .project-pill.dragging {
   opacity: 0.45;
   /* No transform transition here: the inline translateX follows the pointer
@@ -117,10 +124,16 @@
 
 /* Alt-drag over a pill: the drop will box the two together (not reorder).
    Suppress the reorder insertion bar and show a breathing "absorb" pulse that
-   reads as the target swelling to pull the dragged pill into a new box. */
+   reads as the target swelling to pull the dragged pill into a new box. The
+   glow is ::after's static blurred shadow; only its opacity and the pill's
+   transform animate (WebKitGTK software-renders animated blurred
+   box-shadows). The pill's `overflow: hidden` would clip a pseudo-element's
+   outer shadow, so it is lifted while the pulse runs. */
 .project-pill.drag-group {
   margin-left: 0;
   border-color: var(--accent);
+  overflow: visible;
+  box-shadow: 0 0 0 1px var(--accent);
   transform-origin: center;
   animation: drag-group-absorb 0.7s ease-in-out infinite;
 }
@@ -129,15 +142,34 @@
   content: none;
 }
 
+.project-pill.drag-group::after {
+  content: "";
+  position: absolute;
+  /* The border box: the pill's 3px top border sits outside the padding box. */
+  inset: -3px 0 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 4px var(--accent), 0 0 18px var(--accent);
+  animation: drag-group-glow 0.7s ease-in-out infinite;
+}
+
 @keyframes drag-group-absorb {
   0%,
   100% {
-    box-shadow: 0 0 0 1px var(--accent), 0 0 5px var(--accent);
     transform: scale(1);
   }
   50% {
-    box-shadow: 0 0 0 4px var(--accent), 0 0 18px var(--accent);
     transform: scale(1.07);
+  }
+}
+
+@keyframes drag-group-glow {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
@@ -150,6 +182,8 @@
      on each side (vertical offset 0) so it reads as a raised chip lifted off
      the flat, shadowless neighbours. */
   color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 600;
   border-top-color: var(--accent);
   box-shadow: 3px 0 4.5px -2px rgba(0, 0, 0, 0.4), -3px 0 4.5px -2px rgba(0, 0, 0, 0.4);
 }
@@ -745,9 +779,12 @@
 }
 
 /* The member list reads as one inset field: the control surface and border of
-   the inputs above it, rows that highlight like menu items. */
+   the inputs above it, rows that highlight like menu items. A fixed height, not
+   a max-height: the filter above narrows it, and a shrinking list moved the
+   centered dialog with every keystroke. */
 .box-editor .box-editor-members {
-  max-height: 40vh;
+  flex: 0 0 auto;
+  height: 40vh;
   overflow-y: auto;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
@@ -1163,11 +1200,15 @@
 .tab-bar {
   display: flex;
   align-items: flex-end;
-  /* Small inset on the top + sides so the tab cards (top), the drag grip / first
+  /* Inset on the top + sides so the tab cards (top), the drag grip / first
      tab (left) and the sticky close/hide/files cluster (right) all clear the
      active subwindow's focus-frame outline (2px, drawn just inside the frame
-     edge) instead of colliding with it — notably the × button and the tab tops. */
-  padding: 4px 5px 0;
+     edge) instead of colliding with it — notably the × button, the tab tops
+     and their 2px status rings. The top inset is exactly that 2px and the bar's
+     height is nothing else: inset + the 30px tab (`.tab`, `.tab-new-btn`,
+     `.tab-drop-placeholder`, all the tallest things in the row) + the 1px
+     border. Every other control is shorter and centred, so none stretches it. */
+  padding: 2px 5px 0;
   gap: 2px;
   /* The bar itself no longer scrolls; only the inner `.tab-strip` does. The bar
      stays a fixed row holding the scroll chevrons, the strip, the + button
@@ -1178,7 +1219,6 @@
      pane's vertical space and float the tabs to mid-window. */
   flex: 0 0 auto;
   min-width: 0;
-  min-height: 32px;
   /* The shared secondary-chrome surface (themes.css): a subwindow's own header,
      so it must read apart from BOTH the window's top bar and the pane under it
      — --bg-subheader is a step up the elevation ladder from --bg-panel with a
@@ -1341,6 +1381,7 @@
      at a glance among many; and it is the only tab with a side 3D shadow, a
      raised chip lifted off the flat, shadowless neighbours. */
   color: var(--text-primary);
+  font-weight: 600;
   border-bottom-color: var(--tab-accent, var(--subwindow-tab-active));
   background-image: linear-gradient(
     to top,
@@ -1527,10 +1568,23 @@
 .tab-status-mark.working.shell {
   color: var(--status-shell-working);
 }
-/* That mark's slot on an agent tab working without a command: held empty so
-   the mark coming and going does not resize the tab. */
-.tab-status-mark.reserved {
-  visibility: hidden;
+/* The marks' fixed cells in a tab strip (`TabStatusMark`'s `slots`): an agent
+   tab keeps two, a shell tab one, laid out empty while the tab is idle. A mark
+   appearing, going or swapping (`?` ↔ ▶, a command on/off) changes no width,
+   so the tabs after it never shift. Each glyph is centred in its cell, and one
+   wider than the cell overflows it rather than growing it. */
+.tab-status-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.tab-status-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  overflow: visible;
 }
 
 /* A root-console tab a one-click install opened (`runInstallInTab`): an accent
@@ -1737,6 +1791,7 @@
    made. Class selectors, so they outrank the `*` rule above at equal
    importance. */
 :root[data-blurred] .tab.landing,
+:root[data-blurred] .tab.landing::before,
 :root[data-blurred] .tab-drop-placeholder {
   animation-play-state: running !important;
 }
@@ -2191,8 +2246,11 @@ button.tab-todo-link {
    A tab dropped into a DIFFERENT tab bar (cross-group move / split) mounts
    fresh in its destination bar and plays this one-shot "settle" so it's clear
    where the dragged tab landed: it drops in from slightly above, overshoots,
-   and settles, ringed by a fading accent glow. The animation overrides the
-   active tab's inset shadow for its duration, then the inline style resumes. */
+   and settles, ringed by a fading accent glow. The glow is ::before's static
+   blurred shadow whose opacity rises and fades with the settle — never an
+   animated blurred box-shadow (WebKitGTK software path). `::before`, because
+   `::after` is the status ring's; an install-pending tab's own breathing
+   `::before` ring wins over the glow. */
 .tab.landing {
   animation: tab-land 0.34s cubic-bezier(0.2, 0.7, 0.3, 1);
   /* Lift above neighbours so the overshoot/glow isn't clipped by adjacent tabs. */
@@ -2200,21 +2258,42 @@ button.tab-todo-link {
   z-index: 12;
 }
 
+.tab.landing:not(.install-pending)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 0;
+  animation: tab-land-glow 0.34s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
 @keyframes tab-land {
   0% {
     transform: translateY(-10px) scale(1.14);
     opacity: 0;
-    box-shadow: 0 0 0 2px var(--accent);
   }
   55% {
     transform: translateY(2px) scale(0.97);
     opacity: 1;
-    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   100% {
     transform: translateY(0) scale(1);
     opacity: 1;
-    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes tab-land-glow {
+  0% {
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 
@@ -2222,6 +2301,9 @@ button.tab-todo-link {
 @media (prefers-reduced-motion: reduce) {
   .tab.landing {
     animation: tab-land-fade 0.2s ease-out;
+  }
+  .tab.landing:not(.install-pending)::before {
+    animation: none;
   }
   @keyframes tab-land-fade {
     0% { opacity: 0; }
@@ -2444,8 +2526,8 @@ button.tab-todo-link {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
-  padding: 6px 10px;
+  min-height: 34px;
+  padding: 7px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--control-bg);
@@ -3014,6 +3096,9 @@ html:not(.show-untested-tags) .untested-tag {
    block only lays out its schedule-specific rows and compact form. */
 .agent-schedule-dialog {
   width: min(880px, calc(100vw - 32px));
+  /* Fixed, not content-sized: switching the form's recurrence (or Edit on a
+     rule) changed its rows, and the centered dialog jumped with them. */
+  height: min(820px, calc(100vh - 32px));
   max-height: min(820px, calc(100vh - 32px));
 }
 

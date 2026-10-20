@@ -104,9 +104,9 @@ dependencies = [
 
 [[package]]
 name = "ammonia"
-version = "4.1.7"
+version = "4.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36322ccf536de7b7afd259098615203e4cc5caca1b78482b58334a720c66e40a"
+checksum = "2f6660fb4ff692ef4937b1b4e74ab3d378653d8588389587d91f96a296907ea0"
 dependencies = [
  "cssparser",
  "html5ever",
@@ -831,7 +831,7 @@ dependencies = [
  "log",
  "quick-xml 0.41.0",
  "serde",
- "zip",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -6071,7 +6071,7 @@ dependencies = [
 
 [[package]]
 name = "tabtivity"
-version = "0.2.11"
+version = "0.2.21"
 dependencies = [
  "aes-gcm",
  "ammonia",
@@ -6088,7 +6088,6 @@ dependencies = [
  "cfb",
  "chacha20poly1305",
  "chrono",
- "chrono-tz",
  "dbus-secret-service",
  "encoding_rs",
  "flate2",
@@ -6097,9 +6096,7 @@ dependencies = [
  "gtk",
  "hkdf",
  "hmac",
- "idna",
  "infer",
- "ipnet",
  "keyring",
  "libc",
  "mail-builder",
@@ -6156,7 +6153,7 @@ dependencies = [
  "xcb",
  "zbus 4.4.0",
  "zeroize",
- "zip",
+ "zip 9.0.4",
 ]
 
 [[package]]
@@ -8516,6 +8513,21 @@ dependencies = [
  "flate2",
  "indexmap 2.14.0",
  "memchr",
+ "typed-path",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.0",
+ "memchr",
+ "nix 0.31.3",
  "typed-path",
  "zopfli",
 ]

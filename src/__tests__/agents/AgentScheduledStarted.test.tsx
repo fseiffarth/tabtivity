@@ -4,7 +4,11 @@
  * has drawn and gone quiet once — not the bare terminal-ready event: a
  * brand-new tab (the phone markup's new-tab Submit) is ready before its CLI
  * runs, and what is typed into a CLI still starting is lost. Once settled it
- * stays started, so a busy agent still takes phone prompts mid-turn.
+ * stays started, so a busy agent still takes phone prompts mid-turn — into
+ * the CLI's own queue, which then decides when the agent takes them, rather
+ * than at the next idle point Tabtivity sees. A hidden pane (the phone's
+ * usual case) gets no output stream, so its quiet readings and its hooks'
+ * turn count too.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
@@ -82,6 +86,8 @@ vi.mock("../../stores/settings", () => ({
 import { TerminalView } from "../../components/terminal/TerminalView";
 import { _clearScheduledAgentInputsForTest, scheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { _clearPhoneHoldsForTest, holdPhonePrompt, onPhoneHoldDue } from "../../lib/agents/phoneHolds";
+import { _clearPtyActivityForTest, lastPtyOutputAt, noteAgentTurn, notePtyOutput } from "../../stores/activity";
+import { useTabsStore } from "../../stores/tabs";
 
 describe("an agent tab's scheduled input · started", () => {
   beforeEach(() => {
@@ -90,6 +96,7 @@ describe("an agent tab's scheduled input · started", () => {
     bus.output.clear();
     _clearScheduledAgentInputsForTest();
     _clearPhoneHoldsForTest();
+    _clearPtyActivityForTest();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -129,5 +136,47 @@ describe("an agent tab's scheduled input · started", () => {
     await act(async () => { bus.output.get(id)?.("✻ Working…"); });
     expect(input().started?.()).toBe(true);
     expect(input().ready()).toBe(false);
+  });
+
+  it("a hidden pane the idle gate found quiet stays started through the turn it began", async () => {
+    const id = "p1:t2";
+    await act(async () => {
+      render(<TerminalView id={id} cmd="claude" cwd="/p" kind="agent" scheduleTargetId="target-2" visible={false} focused={false} />);
+    });
+    const input = () => scheduledAgentInput("target-2")!;
+    await act(async () => { bus.ready.get(id)?.(); });
+    await act(async () => { notePtyOutput(id, "Claude Code ready"); });
+    expect(lastPtyOutputAt(id)).toBeDefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_300); });
+    // The idle gate's read, before it types the first prompt.
+    expect(input().ready()).toBe(true);
+
+    // That prompt's turn redraws without pause: the next phone prompt still
+    // goes into the CLI's queue.
+    await act(async () => { notePtyOutput(id, "✻ Working…"); });
+    expect(input().ready()).toBe(false);
+    expect(input().started?.()).toBe(true);
+  });
+
+  it("a turn its hooks report begun makes a pane never seen quiet started", async () => {
+    const id = "p1:t3";
+    // The activity store keeps hook turns only for tabs it knows.
+    useTabsStore.setState({
+      tabsByScope: { p1: [{ key: "t3", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent" }] },
+      scope: "p1",
+      layoutByScope: {},
+      detachedGroupsByScope: {},
+    });
+    await act(async () => {
+      render(<TerminalView id={id} cmd="claude" cwd="/p" kind="agent" scheduleTargetId="target-3" visible={false} focused={false} />);
+    });
+    const input = () => scheduledAgentInput("target-3")!;
+    await act(async () => { bus.ready.get(id)?.(); });
+    await act(async () => { notePtyOutput(id, "✻ Working…"); });
+    expect(input().started?.()).toBe(false);
+
+    await act(async () => { noteAgentTurn(id, "working"); notePtyOutput(id, "✻ Working…"); });
+    expect(input().ready()).toBe(false);
+    expect(input().started?.()).toBe(true);
   });
 });

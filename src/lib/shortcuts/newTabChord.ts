@@ -72,9 +72,9 @@ export function newTabRequestFor(
  */
 export function requestNewTab(
   request: NewTabRequest,
-  opts?: { besideActive?: boolean },
+  opts?: { besideActive?: boolean; groupId?: string },
 ): boolean {
-  const groupId = targetGroupId();
+  const groupId = opts?.groupId ?? targetGroupId();
   if (!groupId) return false;
   const event = new CustomEvent<NewTabShortcutDetail>(NEW_TAB_SHORTCUT_EVENT, {
     detail: { request, groupId, besideActive: opts?.besideActive },

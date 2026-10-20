@@ -3,7 +3,7 @@ import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type TabRow, type ViewerScope } from "../api";
+import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
@@ -14,6 +14,7 @@ import { useThumb } from "../thumbs";
 import { OptionSheet } from "./OptionSheet";
 import { OutboxViewer, type MarkupNewTab, type MarkupTarget } from "./OutboxViewer";
 import { usePhonePicks, type PickedFile } from "./phonePicks";
+import { useBackLayer } from "../backStack";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
@@ -288,7 +289,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
   markup?: Omit<MarkupTarget, "projectId" | "place" | "folder" | "refresh">;
   /** With no `markup`, Mark up's Submit opens a new agent tab, and the
    * view's Open tab button shows it through this (`MarkupNewTab`). */
-  showTab?: (tab: TabRow) => void;
+  showTab?: MarkupNewTab["show"];
   /** The agent tab a file's card sends its marks to (`MarkupNewTab`). */
   linked?: MarkupNewTab["linked"];
 }) {
@@ -461,6 +462,13 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     if (atRoot) onClose();
     else setTrail((current) => current.length > 1 ? current.slice(0, -1) : current);
   }, [atRoot, onClose]);
+  // Back: the sheet over the list first, then a search, then up like ‹. The
+  // viewer over the library takes Back itself (`OutboxViewer`).
+  useBackLayer(() => {
+    if (sheet) setSheet(null);
+    else if (searching) setQuery("");
+    else up();
+  });
 
   useEffect(() => {
     // The viewer opens over the library and a sheet over its list, so Escape

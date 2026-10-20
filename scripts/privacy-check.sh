@@ -261,12 +261,19 @@ scrub_args=(
   # A noreply address is published on purpose (commit identities, Co-Authored-By
   # trailers). Only the ADDRESS is scrubbed: this used to drop every line that
   # merely contained the word "noreply", together with whatever else was on it.
-  -e 's/[A-Za-z0-9._%+-]+@users\.noreply\.github\.com\b//gI'
+  # A GitHub App's bot account has `[bot]` in its local part
+  # (`49699333+dependabot[bot]@users.noreply.github.com`), so the brackets belong
+  # to the address too.
+  -e 's/[A-Za-z0-9._%+-]+(\[bot\])?@users\.noreply\.github\.com\b//gI'
   -e 's/\bno-?reply@[A-Za-z0-9.-]+\.[A-Za-z]{2,}//gI'
   # `git@<host>` is the SSH login every git host shares — a service account, not
   # a person — and it is what a clone URL and every OpenSSH failure message
   # carries. Only that exact local part: `alice@github.com` still reports.
   -e 's/\bgit@[A-Za-z0-9.-]+\.[A-Za-z]{2,}//g'
+  # GitHub's public support address, which Dependabot signs every commit with
+  # (`Signed-off-by: dependabot[bot] <support@github.com>`). Only that exact
+  # address: any other mailbox at github.com still reports.
+  -e 's/\bsupport@github\.com\b//gI'
   # An image density suffix in a FILE NAME (`128x128@2x.png`) is not an address.
   -e 's/[A-Za-z0-9._-]*@[0-9]+(\.[0-9]+)?x\.(png|jpe?g|webp|gif|svg|ico)\b//gI'
   # A credential keyword followed by a TYPE rather than a value: `password:
@@ -401,6 +408,14 @@ scan_text() {
   return 0
 }
 
+# An author/committer email that is a GitHub noreply address (surface 5).
+noreply_identity() {
+  # `[bot]`: a GitHub App's account (Dependabot's PR commits), noreply all the same.
+  [[ "$1" =~ ^([0-9]+\+)?[A-Za-z0-9._-]+(\[bot\])?@users\.noreply\.github\.com$ ]] \
+    || [ "$1" = "noreply@github.com" ] \
+    || [ "$1" = "eldrun@local" ] # brand-check: allow — the identity of one commit already in history
+}
+
 # Canaries. A scan that silently matches nothing looks exactly like a clean
 # tree, so prove on every run that a real hit is reported through the exact
 # pipeline in use — including after an invalid UTF-8 byte, the input that made
@@ -420,6 +435,16 @@ self_test() {
   hits=""
   scan_text "self-test" "$(printf '%040d' 0):src/a.rs:generic-api-key:12 api_key=$token"
   [ -n "$hits" ] || die_tool "self-test: a fingerprint-led line hid a token"
+  hits=""
+  scan_text "self-test" "Signed-off-by: dependabot[bot] <support@github.com>, by 49699333+dependabot[bot]@users.noreply.github.com"
+  [ -z "$hits" ] || die_tool "self-test: Dependabot's sign-off was reported: $hits"
+  hits=""
+  scan_text "self-test" "Signed-off-by: someone <someone@github.com>"
+  [ -n "$hits" ] || die_tool "self-test: a github.com mailbox other than support was not reported"
+  noreply_identity "49699333+dependabot[bot]@users.noreply.github.com" \
+    || die_tool "self-test: Dependabot's commit identity was refused"
+  ! noreply_identity "dependabot[bot]@example.org" \
+    || die_tool "self-test: a [bot] name off the noreply domain passed"
   hits=""
   scan_text "self-test" "noreply is not a pass for $token"
   [ -n "$hits" ] || die_tool "self-test: the word noreply hid a token on its line"
@@ -507,11 +532,6 @@ while IFS=$'\t' read -r adds dels path; do
 done < <("${DIFF[@]}" --numstat --no-renames --diff-filter=d "${diff_args[@]}" "${PATHSPEC[@]}")
 
 # --- 4 + 5. commits -----------------------------------------------------------
-noreply_identity() {
-  [[ "$1" =~ ^([0-9]+\+)?[A-Za-z0-9._-]+@users\.noreply\.github\.com$ ]] \
-    || [ "$1" = "noreply@github.com" ] \
-    || [ "$1" = "eldrun@local" ] # brand-check: allow — the identity of one commit already in history
-}
 commit_count=0
 if [ "$mode" = range ]; then
   messages=$(git log --format='%B' "${log_range[@]}" --) \

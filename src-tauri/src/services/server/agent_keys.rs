@@ -126,25 +126,27 @@ pub fn ask_at(socket: &Path, request: &Request) -> Result<Reply, String> {
 #[cfg(unix)]
 fn ask_once(socket: &Path, request: &Request) -> Result<Reply, Failure> {
     use std::io::{ErrorKind, Write};
-    // macOS can fail a write to a socket its peer is tearing down with
-    // EPROTOTYPE rather than EPIPE: closed unanswered all the same (ci-cd #391).
-    let unanswered = |e: &std::io::Error| {
-        matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted)
-            || e.raw_os_error() == Some(libc::EPROTOTYPE)
+    // Once connected, any I/O error but a timeout is the keeper hanging up
+    // unanswered. Each OS spells a peer tearing down differently — EPIPE,
+    // ECONNRESET, and on macOS EPROTOTYPE on write (ci-cd #391), EINVAL from
+    // setsockopt (#428) and more (#436) — so no errno list is kept. A timeout
+    // is not retried: four of them would stall a spawn for 4 × DEADLINE.
+    let failure = |e: std::io::Error| {
+        if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) {
+            Failure::Other(e.to_string())
+        } else {
+            Failure::Unanswered(e.to_string())
+        }
     };
     let mut stream = std::os::unix::net::UnixStream::connect(socket).map_err(|e| Failure::Other(format!("{}: {e}", socket.display())))?;
-    stream.set_read_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
-    stream.set_write_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
+    stream.set_read_timeout(Some(DEADLINE)).and_then(|()| stream.set_write_timeout(Some(DEADLINE))).map_err(failure)?;
     let mut line = serde_json::to_vec(request).map_err(|e| Failure::Other(e.to_string()))?;
     line.push(b'\n');
-    if let Err(e) = stream.write_all(&line) {
-        return Err(if unanswered(&e) { Failure::Unanswered(e.to_string()) } else { Failure::Other(e.to_string()) });
-    }
+    stream.write_all(&line).map_err(failure)?;
     match read_answer(stream) {
         Ok(answer) if answer.is_empty() => Err(Failure::Unanswered("closed without an answer".into())),
         Ok(answer) => parse_reply(&answer).map_err(Failure::Other),
-        Err(e) if unanswered(&e) => Err(Failure::Unanswered(e.to_string())),
-        Err(e) => Err(Failure::Other(e.to_string())),
+        Err(e) => Err(failure(e)),
     }
 }
 
@@ -613,8 +615,8 @@ pub(crate) mod tests {
                 drop(stream);
             }
         });
-        assert!(offered_at(&mute).is_err());
-        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), ATTEMPTS as usize);
+        let error = offered_at(&mute).unwrap_err();
+        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), ATTEMPTS as usize, "{error}");
         // No keeper at all: no retries, an error at once.
         let error = offered_at(&dir.path().join("missing.sock")).unwrap_err();
         assert!(error.contains("the key keeper"), "{error}");

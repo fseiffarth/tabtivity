@@ -3,13 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
-  RESUMABLE_AGENTS,
   ROOT_SCOPE,
+  effectiveTabLocation,
+  isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
   type TabEntry,
 } from "../../stores/tabs";
+import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { ASSISTANT_SCOPE, assistantErrorCode, assistantNewChat, assistantOptions } from "../../lib/assistant";
+import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat } from "../../stores/assistantScope";
+import { experimentalEnabled } from "../../lib/experimental";
 import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootOverlay";
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
 import { useSettingsStore } from "../../stores/settings";
@@ -23,7 +30,7 @@ import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
-import { reopenClosedAgentTab, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
+import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
 import type { AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -34,7 +41,7 @@ import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
 import { addDays, monthGrid, toStamp } from "../../lib/calendar/calendarTime";
 import { eventColor } from "../../lib/calendar/calendarCategories";
-import { expandEvents } from "../../lib/calendar/recurrence";
+import { expandEvents, sortOccurrencesByDay } from "../../lib/calendar/recurrence";
 import {
   formatAddress,
   formatMailDate,
@@ -120,6 +127,9 @@ interface CreateRequest {
   /** A local-model agent: the opaque id `launch_options.local` listed, in
    *  place of `agent_id`. */
   local?: string;
+  /** A chat of the assistant scope: the opaque launch id `launch_options`
+   *  listed under `assistant.launches`, alone. */
+  assistant?: string;
   idempotency_key: string;
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
@@ -247,7 +257,7 @@ type DesktopRequest =
 | { type: "catalog"; request_id: string; project_id?: string }
   | { type: "activity"; request_id: string }
   | { type: "git_states"; request_id: string }
-  | { type: "activate"; request_id: string; project_id: string }
+  | { type: "activate"; request_id: string; project_id: string; tmux_session?: string | null }
   | { type: "create"; request_id: string; request: CreateRequest }
   | { type: "launch_options"; request_id: string; project_id: string }
   | { type: "todo"; request_id: string }
@@ -274,7 +284,7 @@ type DesktopRequest =
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
-  | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string }
+  | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
@@ -449,9 +459,29 @@ function mobileRootScope(): MobileScope | undefined {
   return { id: ROOT_SCOPE, name: "Root", cwd, localFile: "" };
 }
 
+/** Whether the chat assistant is the phone's right now: the experimental flag
+ * and the Mobile host's `assistant_access` not switched off (unset is on).
+ * The desktop-side repeat of the sidecar's `discovery::assistant_open`, which
+ * is the perimeter; `Settings::assistant_phone_open` is the same rule on the
+ * typed settings. */
+function assistantPhoneOpen(): boolean {
+  const settings = useSettingsStore.getState().settings;
+  return experimentalEnabled(settings, "assistant") && settings?.[MOBILE_HOST_KEY]?.assistant_access !== false;
+}
+
+/** The chat assistant as a phone scope (`docs/assistant_plan.md`, decision 12).
+ * No project and no folder the phone may use: `cwd` is empty on purpose, so
+ * the project-shaped paths that need one (a shell, an inbox, a worktree)
+ * answer `project_ineligible` for it, and `create` takes its own branch. */
+function mobileAssistantScope(): MobileScope | undefined {
+  if (!assistantPhoneOpen()) return undefined;
+  return { id: ASSISTANT_SCOPE, name: BRAND.assistant, cwd: "", localFile: "" };
+}
+
 function mobileScope(id: string | undefined): MobileScope | undefined {
   if (!id) return undefined;
   if (id === ROOT_SCOPE) return mobileRootScope();
+  if (id === ASSISTANT_SCOPE) return mobileAssistantScope();
   if (id.startsWith(BOX_SCOPE_PREFIX)) {
     const box = useBoxesStore.getState().boxes.find((entry) => boxScopeId(entry.id) === id);
     // A box never opened has no folder yet; the switch resolves one on enable,
@@ -472,7 +502,8 @@ function allMobileScopes(): MobileScope[] {
   const projects = useProjectsStore.getState().projects.flatMap((entry) => mobileScope(entry.id) ?? []);
   const boxes = useBoxesStore.getState().boxes.flatMap((entry) => mobileScope(boxScopeId(entry.id)) ?? []);
   const root = mobileScope(ROOT_SCOPE);
-  return [...(root ? [root] : []), ...projects, ...boxes];
+  const assistant = mobileScope(ASSISTANT_SCOPE);
+  return [...(root ? [root] : []), ...(assistant ? [assistant] : []), ...projects, ...boxes];
 }
 
 /** Load a scope's saved tabs when the desktop has not opened it this session.
@@ -480,6 +511,7 @@ function allMobileScopes(): MobileScope[] {
 async function restoreScope(scope: MobileScope): Promise<void> {
   if (scope.project) await restoreProjectScope(scope.project).catch(() => {});
   else if (scope.id === ROOT_SCOPE) await ensureRootScopeHydrated();
+  else if (scope.id === ASSISTANT_SCOPE) await ensureAssistantScopeHydrated();
 }
 
 /** The phone receives these already-derived activity facts only. The desktop
@@ -530,6 +562,7 @@ function agentTurnScopes(): string[] {
     ...useBoxesStore.getState().boxes.flatMap((entry) => mobileScope(boxScopeId(entry.id)) ?? []),
   ].map((scope) => scope.id);
   if (useSettingsStore.getState().settings?.[MOBILE_HOST_KEY]?.root_access === true) scopes.push(ROOT_SCOPE);
+  if (assistantPhoneOpen()) scopes.push(ASSISTANT_SCOPE);
   return scopes;
 }
 
@@ -819,6 +852,9 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // A chat of the assistant scope is its own thing: the phone names a launch,
+  // never an agent, a folder or a mode.
+  if (scope.id === ASSISTANT_SCOPE || request.assistant) return createAssistantChat(scope, request);
   const cwd = scope.cwd;
   if (!cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   // The new tab must be in the *shown* scope to get a terminal at all, so the
@@ -919,6 +955,75 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   return { status: "created", tmux_session: created.tmuxSession };
 }
 
+/** The chats this window has already made for a phone request, by the request's
+ * opaque key: `assistant_new_chat` takes no idempotency key, and the phone
+ * retries a create until it sees the tab. Bounded; a window restart forgets it
+ * (the sidecar's own create, with no window, is idempotent on the file). */
+const assistantCreated = new Map<string, string>();
+const MAX_ASSISTANT_CREATED = 64;
+
+/** The CLI and model a phone's opaque assistant launch id stands for, among
+ * the launches the desktop's own new-chat menu offers: the sidecar derives the
+ * id from the same `(cli, model)` pairs (`mobile_control::assistant::
+ * launch_handle`), so an id it never listed resolves to nothing. */
+async function resolveAssistantLaunch(handle: string): Promise<{ cli: string; model: string | null } | null> {
+  const options = await assistantOptions().catch(() => null);
+  if (!options) return null;
+  const models = options.localModels.slice(0, 64);
+  const pairs = options.clis.flatMap((cli) => (cli.local ? models : [null]).map((model) => ({ cli: cli.id, model })));
+  for (const pair of await Promise.all(pairs.map(async (candidate) => ({
+    ...candidate,
+    id: await invoke<string>("mobile_opaque_id", {
+      domain: "assistant",
+      value: candidate.model === null ? candidate.cli : `${candidate.cli}:${candidate.model}`,
+    }).catch(() => ""),
+  })))) {
+    if (pair.id === handle) return { cli: pair.cli, model: pair.model };
+  }
+  return null;
+}
+
+/** Start one assistant chat for the phone: `assistant_new_chat` (the desktop
+ * command, so the record is `assistant::new_chat_record`'s and the other
+ * windows are told by `workspace:patch`), adopted into this window's store and
+ * raised. The pane that attaches and spawns the CLI is the assistant layer's
+ * (`CenterPanel` keeps every scope's panes mounted). */
+async function createAssistantChat(scope: MobileScope, request: CreateRequest): Promise<DesktopResponse> {
+  const invalid = (message: string): DesktopResponse => ({ status: "error", code: "invalid_request", message });
+  if (
+    scope.id !== ASSISTANT_SCOPE || request.kind !== "agent" || !request.assistant
+    || request.agent_id || request.mode || request.worktree || request.cloud || request.task
+    || request.sign_in || request.like_tab || request.local
+  ) {
+    return invalid("A chat names its launch and nothing else");
+  }
+  const requestHash = await invoke<string>("mobile_opaque_id", { domain: "request", value: request.idempotency_key });
+  const known = assistantCreated.get(requestHash);
+  if (known) return { status: "created", tmux_session: known };
+  const launch = await resolveAssistantLaunch(request.assistant);
+  if (!launch) return { status: "error", code: "unknown_agent", message: "That launch is unavailable" };
+  // Hydrate before the command: a created tab arriving at an unhydrated scope
+  // is only picked up by the hydrate (`mountAssistantChat` needs it too).
+  await ensureAssistantScopeHydrated();
+  let chat;
+  try {
+    chat = await assistantNewChat(launch.cli, launch.model);
+  } catch (error) {
+    return { status: "error", code: assistantErrorCode(error) || "launch_failed", message: "The chat could not be started" };
+  }
+  // The one door for a chat the backend made: adopts the tab (the
+  // `workspace:patch` or a re-read of the stored set, whichever lands first)
+  // and lets its CLI start, which the assistant scope otherwise does lazily.
+  const created = await mountAssistantChat(chat.tabId).catch(() => null);
+  if (!created?.tmuxSession) {
+    return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
+  }
+  useTabsStore.getState().revealTabInScope(ASSISTANT_SCOPE, created.key);
+  if (assistantCreated.size >= MAX_ASSISTANT_CREATED) assistantCreated.clear();
+  assistantCreated.set(requestHash, created.tmuxSession);
+  return { status: "created", tmux_session: created.tmuxSession };
+}
+
 /** A project scope's startable worktrees under their opaque ids — the same
  * list the desktop "+" asks from (`agentWorktreeChoices`: empty unless a
  * linked worktree exists). Box and root scopes have none. */
@@ -950,6 +1055,9 @@ async function launchOptions(projectId: string): Promise<DesktopResponse> {
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // The assistant's launches are the sidecar's to list (it derives their opaque
+  // ids and answers without asking the window); nothing else is offered here.
+  if (scope.id === ASSISTANT_SCOPE) return { status: "launch_options", worktrees: [], cloud: [], sign_in: [] };
   const worktrees = (await worktreesOf(scope)).map(({ id, worktree }) => ({
     id,
     label: worktree.is_main ? "" : worktreeName(worktree.path),
@@ -1055,6 +1163,12 @@ async function signInOptions(): Promise<MobileSignInOption[]> {
  * console is raised over whatever is open, which is what gives its panes a
  * terminal. */
 async function enterScope(scope: MobileScope): Promise<void> {
+  // Like root, the assistant is never switched to; its chats are restored and
+  // their panes are the assistant layer's.
+  if (scope.id === ASSISTANT_SCOPE) {
+    await ensureAssistantScopeHydrated();
+    return;
+  }
   if (scope.id === ROOT_SCOPE) {
     await ensureRootScopeHydrated();
     useRootOverlayStore.getState().show();
@@ -1062,13 +1176,62 @@ async function enterScope(scope: MobileScope): Promise<void> {
   else await useBoxesStore.getState().openBox(scope.id.slice(BOX_SCOPE_PREFIX.length));
 }
 
-async function activate(projectId: string): Promise<DesktopResponse> {
+async function activate(projectId: string, tmuxSession?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   await enterScope(scope);
+  // The assistant's chats start lazily (a restored one has no process until
+  // asked for), so the phone opening one names it here and the window starts
+  // its CLI; the pane appears and the phone's next catalog read finds the
+  // tmux session live. Every other scope ignores the name.
+  if (scope.id === ASSISTANT_SCOPE && tmuxSession) {
+    const chat = mobileTargetTab(scope.id, tmuxSession);
+    if (!chat) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
+    startAssistantChat(chat.key);
+  } else if (tmuxSession) {
+    const refused = wrapAgentTabForPhone(scope, tmuxSession);
+    if (refused) return { status: "error", code: refused, message: "Tab cannot be opened from the phone" };
+  }
   return { status: "activated" };
+}
+
+/**
+ * The phone opening a tab it lists as not attachable. An agent tab that was
+ * already running when the scope's Mobile switch went on runs outside tmux
+ * (`lib/terminal/mobileTmuxReady`: a live agent is never respawned behind the
+ * user's back), and the phone attaches through tmux, so it could not open
+ * one. The phone's tap is the consent to that respawn: an idle, resumable
+ * agent is relaunched in place on the args a restore would give it, now inside
+ * its minted tmux session, and the phone's next catalog read finds it live.
+ *
+ * Returns why not, or null when the tab is (or is about to be) coming up:
+ * `session_gone` when there is nothing to bring back — the tab is wrapped
+ * already and its session ended, or tmux never wraps it here (root, a remote
+ * host, Windows, persistent sessions off); `tab_not_resumable` when a respawn
+ * would lose its conversation; `agent_busy` while it works or waits on a
+ * question, which a respawn would cut off.
+ */
+function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string | null {
+  const tab = mobileTargetTab(scope.id, tmuxSession);
+  if (!tab) return "tab_not_found";
+  const ready = mobileTmuxReadiness(scope.id, tab.key);
+  // Not drawn yet (a scope `enterScope` just restored): its first render
+  // stamps the switch, which is on, and the spawn is wrapped.
+  if (ready === undefined) return null;
+  if (ready || (tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
+  const project = scope.project;
+  const localRunning = !project?.remote || effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) === "local";
+  const localPersist = !IS_HOST_WINDOWS && useSettingsStore.getState().settings?.persist_local_sessions !== false;
+  if (!localRunning || !localPersist || tab.login) return "session_gone";
+  if (!isResumableAgentTab(tab)) return "tab_not_resumable";
+  if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") return "agent_busy";
+  // One render takes both: the stamp turns the tmux name on and the relaunch
+  // bumps the spawn, so the pane respawns once, wrapped.
+  markMobileTmuxReady(scope.id, tab.key);
+  useTabsStore.getState().relaunchTabInScope(scope.id, tab.key, resumeArgsOf(tab));
+  return null;
 }
 
 function scheduleTargetTab(projectId: string, tmuxSession: string) {
@@ -1170,7 +1333,10 @@ async function reopenMobileTab(projectId: string, closedId?: string): Promise<De
   if (!entry.tmuxSession) {
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
   }
-  if (scope.id === ROOT_SCOPE) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, entry.key);
+  if (scope.id === ROOT_SCOPE || scope.id === ASSISTANT_SCOPE) useTabsStore.getState().revealTabInScope(scope.id, entry.key);
+  // A reopened chat is asked for: without this its pane is never mounted (the
+  // assistant scope spawns lazily) and the CLI would not resume.
+  if (scope.id === ASSISTANT_SCOPE) startAssistantChat(entry.key);
   await persistScopeLayout(scope.id);
   return { status: "created", tmux_session: entry.tmuxSession };
 }
@@ -1721,7 +1887,9 @@ async function resolveAlertRow(feed: AlertsFeed, alertId: string): Promise<Deskt
   };
 }
 
-const MOBILE_CALENDAR_EVENTS = 80;
+/** The most occurrences one month answer carries (six weeks: a daily series
+ * alone is 42 of them). The headless twin is `headless::MOBILE_CALENDAR_EVENTS`. */
+const MOBILE_CALENDAR_EVENTS = 400;
 
 /** The mobile view is materialized by the desktop, so it uses exactly the same
  * recurrence expansion, checked calendars, colors and local wall-clock rules
@@ -1739,12 +1907,13 @@ async function calendarSnapshot(month: string): Promise<MobileCalendar> {
   const grid = monthGrid(Number(month.slice(0, 4)), Number(month.slice(5, 7)), weekStart, 6);
   const windowStart = grid[0][0];
   const windowEnd = addDays(grid[5][6], 1);
-  const occurrences = expandEvents(
+  // Cut day by day, so whatever a cap drops is the window's last days.
+  const occurrences = sortOccurrencesByDay(expandEvents(
     calendar.events,
     windowStart,
     windowEnd,
     visibleCalendarIds(calendar.calendars),
-  );
+  ));
   const shown = occurrences.slice(0, MOBILE_CALENDAR_EVENTS);
   return {
     month,
@@ -2145,7 +2314,7 @@ function markTabSeen(projectId: string, tmuxSession: string): DesktopResponse {
  * not a prompt, and is not recorded. A Claude or Codex prompt recorded here is
  * not recorded again when its transcript is adopted (same words, near in time:
  * `lib/agents/prompt/adopt`). */
-async function recordTabPrompt(projectId: string, tmuxSession: string, message: string): Promise<DesktopResponse> {
+async function recordTabPrompt(projectId: string, tmuxSession: string, message: string, phoneDevice?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
@@ -2153,11 +2322,13 @@ async function recordTabPrompt(projectId: string, tmuxSession: string, message: 
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
   const text = message.trim();
-  if (!text || isSessionCommand(text)) return { status: "seen" };
+  // The chat assistant keeps no prompt history: the chat lives in the CLI's
+  // transcript (`agent_prompts` records nothing for the scope either).
+  if (!text || isSessionCommand(text) || scope.id === ASSISTANT_SCOPE) return { status: "seen" };
   await useAgentPromptsStore.getState().record(scope.id, {
     id: crypto.randomUUID(),
     message: text,
-    sent: { tabLabel: tab.label, sessionId: tab.sessionId, tabId: tab.scheduleTargetId, agent: tab.cmd, result: "delivered" },
+    sent: { tabLabel: tab.label, sessionId: tab.sessionId, tabId: tab.scheduleTargetId, agent: tab.cmd, result: "delivered", phoneDevice },
   }).catch(() => []);
   return { status: "seen" };
 }
@@ -2422,7 +2593,7 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
 
 /** The agents whose transcript `services::agent_transcript` reads; any other
  * family answers `unsupported` there, and so does the short-circuit below. */
-const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode"]);
+const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode", "gemini", "agy"]);
 
 /**
  * The phone's Focus view on an agent tab: the conversation as the agent's own
@@ -2449,7 +2620,7 @@ async function agentTranscriptFor(
   // A local-model tab's `cmd` is its launcher; only an OpenCode driver has a
   // transcript to read (`readerAgent`).
   const agent = readerAgent(tab);
-  if (!tab.sessionId && agent !== "opencode") {
+  if (!tab.sessionId && !["opencode", "gemini", "agy"].includes(agent)) {
     // Two different answers for the phone: a family whose transcript is
     // never read (the backend's `unsupported`, decided by the same list) hands
     // Focus to the terminal; a tab that has no session id *yet* — every tab
@@ -2466,7 +2637,7 @@ async function agentTranscriptFor(
     // than restored with `--continue`, the newest one begun since it launched,
     // so a new tab is a new chat and not the folder's last conversation.
     tabDir: tab.cwd || scope.cwd,
-    since: tab.launchedAt && !tab.args?.includes("--continue") ? tab.launchedAt : null,
+    since: tab.launchedAt && !tab.args?.some((arg) => ["--continue", "--resume", "-c", "-r"].includes(arg)) ? tab.launchedAt : null,
     sessionId: tab.sessionId ?? "",
     subagent: subagent ?? null,
     version: version ?? null,
@@ -2502,7 +2673,7 @@ async function handleRequest(
     };
     case "activity": return { status: "activity", statuses: allAgentStatuses(), prompts: allAgentPrompts() };
     case "git_states": return { status: "git_states", states: gitDotRows(allMobileScopes().flatMap((scope) => scope.project ?? [])) };
-    case "activate": return activate(request.project_id);
+    case "activate": return activate(request.project_id, request.tmux_session ?? undefined);
     case "create": return create(request.request, t);
     case "launch_options": return launchOptions(request.project_id);
     case "todo": return { status: "todo", board: await todoSnapshot() };
@@ -2529,7 +2700,7 @@ async function handleRequest(
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
     case "tab_input": return markTabInput(request.project_id, request.tmux_session);
-    case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message);
+    case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);

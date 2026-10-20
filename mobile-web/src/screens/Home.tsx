@@ -1,13 +1,12 @@
-import { useEffect, useState, type ComponentType } from "react";
-import type { IconProps } from "../../../src/components/common/icons/Icon";
-import { api, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
-import { classifyUnavailable, describeFailure, describeUnavailable, type UnavailableReason } from "../connection";
+import { useEffect, useState } from "react";
+import { api, type ActivityTab, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
+import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
 import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../projectOrder";
 import { useRowDrag } from "../rowDrag";
+import { rememberScopeKind } from "../scopeKind";
 import { placeBeside } from "../tabReorder";
 import { Activity } from "./Activity";
-import { SECTION_ICON } from "../glyphs";
 import { BUNDLE_VERSION } from "../buildInfo";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
@@ -18,7 +17,6 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
-import { GitMark } from "../components/GitMark";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -28,8 +26,11 @@ import { readMarkupOpen } from "../markupOpen";
 import { getPushState, pushSupport, type HostPushState } from "../push";
 import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
-
-type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
+import { NeedsYou } from "../components/NeedsYou";
+import { firstGrapheme } from "../components/TabCard";
+import { AssistantGlyph } from "../../../src/components/header/HeaderGlyphs";
+import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
+import { useBackLayer } from "../backStack";
 
 /** A reorder hint with the drag grip drawn where its `{grip}` stands, so the
  * sentence stays one translatable string. The project screen's hint too. */
@@ -56,112 +57,13 @@ function AgentCounts({ counts, tagged }: { counts: AgentCountsRow; tagged: boole
   })}</>;
 }
 
-const ALERT_ICON: Record<MobileAlertItem["kind"], ComponentType<IconProps>> = {
-  mail: SECTION_ICON.mail,
-  event: SECTION_ICON.calendar,
-  task: SECTION_ICON.todo,
-};
-
-function relativeAlertTime(item: MobileAlertItem, t: Translate): string {
-  if (item.minutes_away === undefined) return t("filesAlerts.noDate");
-  if (item.all_day) {
-    const days = item.days_away ?? 0;
-    if (days === 0) return t("filesAlerts.today");
-    const amount = t("mobile.home.alertDays", { count: Math.abs(days) });
-    return days < 0 ? t("mobile.home.alertOverdue", { amount }) : t("mobile.home.alertIn", { amount });
-  }
-  const minutes = item.minutes_away;
-  if (minutes === 0) return t("filesAlerts.rightNow");
-  const abs = Math.abs(minutes);
-  const amount = abs >= 1440
-    ? t("mobile.home.alertDays", { count: Math.floor(abs / 1440) })
-    : abs >= 60
-      ? t("mobile.home.alertHours", { count: Math.floor(abs / 60) })
-      : t("mobile.home.alertMinutes", { count: abs });
-  return minutes < 0 ? t("mobile.home.alertOverdue", { amount }) : t("mobile.home.alertIn", { amount });
-}
-
-/** What the ✓ does to *this* row, said in the row's own terms — the desktop's
- * three labels verbatim, because it is the same act reaching the same stores.
- * None of the three deletes anything. */
-const DONE_LABEL: Record<MobileAlertItem["kind"], TranslationKey> = {
-  mail: "filesAlerts.doneMail",
-  event: "filesAlerts.doneEvent",
-  task: "filesAlerts.doneTask",
-};
-
-function AlertRows({ alerts, onAlerts, todo, mail }: {
-  alerts: MobileAlerts;
-  onAlerts: (alerts: MobileAlerts) => void;
-  todo: (card?: string) => void;
-  mail: () => void;
-}) {
-  const t = useT();
-  // The row being resolved, so its own ✓ can say it is working and the rest go
-  // quiet: the three resolutions are desktop store writes, and two of them
-  // landing at once is how a phone on bad signal ends up ticking the wrong card.
-  const [finishing, setFinishing] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const finish = async (alertId: string) => {
-    if (finishing) return;
-    setFinishing(alertId);
-    setError("");
-    try {
-      // The desktop answers with the feed as it stands afterwards, so the list
-      // is replaced rather than patched here: what a ✓ removes is the desktop's
-      // to decide, and a card that reappears because it was only 90% done is a
-      // truth the phone should show rather than hide.
-      onAlerts((await resolveAlert(alertId)).alerts);
-    } catch (reason) {
-      // Done on the desktop with a feed too large to show is not a failed ✓.
-      setError(wasApplied(reason) ? describeFailure(reason) : t("mobile.failure.alertResolveFailed"));
-    } finally {
-      setFinishing(null);
-    }
-  };
-  if (!alerts.enabled) return null;
-  return <section className="mobile-alerts" aria-labelledby="mobile-alerts-heading">
-    <h2 id="mobile-alerts-heading">{t("filesAlerts.title")}</h2>
-    {error && <p className="mobile-alerts-error" role="alert">{error}</p>}
-    {alerts.items.length === 0
-      ? <p className="mobile-alerts-empty">{t("mobile.home.alertsEmpty")}</p>
-      : <div className="mobile-alert-list">{alerts.items.map((item, index) => {
-        // A card row opens *its own* card: the alert has already named the one
-        // thing that needs attention, and a board of forty is where finding it
-        // again costs the search the row exists to save. A row the desktop
-        // could not resolve to a card still opens the board.
-        const open = item.kind === "mail"
-          ? mail
-          : item.kind === "task"
-            ? () => todo(item.task_id)
-            : undefined;
-        const key = item.alert_id ?? `${item.kind}-${item.at ?? ""}-${item.title}-${index}`;
-        const AlertIcon = ALERT_ICON[item.kind];
-        const contents = <>
-          <span className={`mobile-alert-dot ${item.severity}`} aria-hidden="true" />
-          <span className="mobile-alert-icon" aria-hidden="true"><AlertIcon /></span>
-          <span className="mobile-alert-copy"><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span>
-          <time>{relativeAlertTime(item, t)}</time>
-        </>;
-        // The ✓ sits **beside** the row rather than inside it, for the desktop
-        // strip's reason: a button nested in a button is invalid markup, and it
-        // would also make finishing the thing part of the tap that opens it.
-        // A row the desktop minted no handle for keeps its opener and loses only
-        // the ✓ — there is nothing honest to send back for it.
-        return <div className="mobile-alert-row-wrap" key={key}>
-          {item.alert_id && <button
-            className="mobile-alert-done"
-            disabled={finishing !== null}
-            onClick={() => void finish(item.alert_id as string)}
-            title={t(DONE_LABEL[item.kind])}
-            aria-label={t(DONE_LABEL[item.kind])}
-          >{finishing === item.alert_id ? "…" : "✓"}</button>}
-          {open
-            ? <button className="mobile-alert-row" onClick={open}>{contents}</button>
-            : <div className="mobile-alert-row">{contents}</div>}
-        </div>;
-      })}</div>}
-  </section>;
+/** A project row's tile: the name's first letter, ⬡ for a box and `>_` for
+ * the root console. One accent tint for all of them — a hue per project
+ * would be a second colour code beside the tab colours. */
+function projectTile(project: ProjectRow): string {
+  if (project.kind === "box") return "⬡";
+  if (project.kind === "root") return ">_";
+  return firstGrapheme(project.label).toUpperCase();
 }
 
 /** The three modes of the Projects section. `agents` is not a filter over the
@@ -198,6 +100,7 @@ export function Home({ open, openTab, todo, mail }: {
   const [pushSheet, setPushSheet] = useState(false);
   /** The header gear's sheet: the phone's own settings, kept off the page. */
   const [deviceSheet, setDeviceSheet] = useState(false);
+  useBackLayer(() => setDeviceSheet(false), deviceSheet);
   /** The Projects heading's ＋: a new project, made by name in the desktop's
    * projects folder (`NewProjectSheet`). */
   const [newProject, setNewProject] = useState(false);
@@ -209,6 +112,10 @@ export function Home({ open, openTab, todo, mail }: {
   }, []);
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<ProjectRow[]>([]);
+  /** The assistant scope's id, for the chat FAB. The active list always holds
+   * it while the Mobile switch for it is on, so that list says whether it is
+   * gone; a search result that misses it says nothing either way. */
+  const [assistantId, setAssistantId] = useState<string | null>(null);
   /** Whether any list has come back yet. Until it has, an empty `rows` is
    * "still loading", not "nothing here" — and a first open with no active
    * project drew nothing at all under the heading, which read as broken. */
@@ -243,7 +150,12 @@ export function Home({ open, openTab, todo, mail }: {
     const timer = window.setTimeout(() => {
       const suffix = view === "search" ? `?view=search&q=${encodeURIComponent(query)}` : "?view=active";
       void api<{ projects: ProjectRow[] }>(`/api/v1/projects${suffix}`, { signal: controller.signal })
-        .then((body) => { setRows(body.projects); setOffline(null); setLoaded(true); })
+        .then((body) => {
+          for (const project of body.projects) rememberScopeKind(project.id, project.kind);
+          const assistant = body.projects.find((project) => project.kind === "assistant");
+          if (assistant || view === "active") setAssistantId(assistant?.id ?? null);
+          setRows(body.projects); setOffline(null); setLoaded(true);
+        })
         .catch((error: unknown) => { if (!controller.signal.aborted) setOffline(classifyUnavailable(error)); });
     }, view === "search" ? 180 : 0);
     return () => {
@@ -273,10 +185,11 @@ export function Home({ open, openTab, todo, mail }: {
     return () => window.clearInterval(timer);
   }, [offline]);
   useEffect(() => {
-    // Alerts sit under the project list and are deliberately not part of the
-    // agents mode, which shows agent tabs and nothing else; polling a feed
-    // that mode does not draw would be a minute-timer for nobody.
-    if (view === "agents") return;
+    // Alerts are rows of Needs you, which only the active view draws: the
+    // agents mode shows agent tabs and nothing else, and a search result is
+    // an answer to a query. Polling a feed no view draws would be a
+    // minute-timer for nobody.
+    if (view !== "active") return;
     let disposed = false;
     const load = () => {
       void api<{ alerts: MobileAlerts }>("/api/v1/alerts")
@@ -307,16 +220,38 @@ export function Home({ open, openTab, todo, mail }: {
     setOrder(next);
     writeOrder("projectOrder", next);
   };
-  const drag = useRowDrag(listed.map((project) => project.id), moveProject, canReorder);
-  return <main className="screen home-screen">
+  /** The list's drag hint, gone for good once dismissed or once a row has
+   *  been dragged. */
+  const [hintGone, setHintGone] = useState(() => readFlag("homeHintReorder"));
+  const dropHint = () => {
+    setHintGone(true);
+    writeFlag("homeHintReorder", true);
+  };
+  const drag = useRowDrag(listed.map((project) => project.id), (key, anchor, place) => { dropHint(); moveProject(key, anchor, place); }, canReorder);
+  /** The finished tabs this phone has opened (`seenDone.ts`): Needs you lists
+   *  a done tab until then. Opening one from anywhere on Home — Needs you or
+   *  the Agents view — marks it. */
+  const [seen, setSeen] = useState<SeenDone>(() => readSeenDone());
+  const openAgentTab = (projectId: string, tab: ActivityTab) => {
+    if (tab.agent_status === "done") setSeen(markDoneSeen(tab.id, tab.done_at));
+    openTab(projectId, tab);
+  };
+  /** What the Agents switch's badge counts: the tabs asking something across
+   *  the projects the list last loaded — no poll of its own. */
+  const asking = rows.reduce((sum, project) => sum + (project.agents?.question ?? 0), 0);
+  const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
+  return <main className={assistantId ? "screen home-screen has-fab" : "screen home-screen"}>
+    {/* A slim bar: the mark and name, the link's lamp — worded only when the
+        link is down, where it is news — and the gear for this phone's own
+        settings. The global views live in the tab bar at the bottom. */}
     <header className="home-header">
       <div className="home-brand" aria-label={BRAND.display}>
         <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" /></span>
-        <span className="home-brand-copy"><strong>{BRAND.display}</strong><small>{BUNDLE_VERSION}{isUntested("mobile.version.commit") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small></span>
+        <strong>{BRAND.display}</strong>
       </div>
-      {/* The global views used to live here as a header rail; they are tabs of
-          their own now, so the bar at the bottom of every screen carries them. */}
-      <span className={offline ? "lamp off" : "lamp"} />
+      {offline
+        ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
+        : <span className="lamp" role="img" aria-label={connection} title={connection} />}
       <button className="home-settings" aria-haspopup="dialog" aria-expanded={deviceSheet} aria-label={t("mobile.home.thisDevice")} title={t("mobile.home.thisDevice")} onClick={() => setDeviceSheet(true)}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
       </button>
@@ -332,13 +267,15 @@ export function Home({ open, openTab, todo, mail }: {
         title={t("mobile.newProject.title")}
       ><span aria-hidden="true">＋</span></button>}
     </div>
-    <nav>{HOME_VIEWS.map(([id, label]) => <button
+    {/* One segmented track. The Agents segment carries how many tabs are
+        asking something; its name stays the view's. */}
+    <nav className="home-switch">{HOME_VIEWS.map(([id, label]) => <button
       key={id}
       className={view === id ? "selected" : ""}
       aria-pressed={view === id}
       onClick={() => choose(id)}
-    >{t(label)}</button>)}</nav>
-    {view === "agents" && <Activity open={openTab} onConnection={setOffline} />}
+    >{t(label)}{id === "agents" && asking > 0 && <span className="home-switch-badge" aria-hidden="true">{asking}</span>}</button>)}</nav>
+    {view === "agents" && <Activity open={openAgentTab} onConnection={setOffline} />}
     {view !== "agents" && <>
       {view === "search" && <input className="search" placeholder={t("mobile.home.searchPlaceholder")} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
       {offline && <p className="error connection-error">
@@ -347,25 +284,32 @@ export function Home({ open, openTab, todo, mail }: {
         <span>{rows.length ? t("mobile.home.showingLast") : t("mobile.home.neverCached")}</span>
         {isUntested("mobile.home.recover") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </p>}
+      {view === "active" && <NeedsYou alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
+      {/* Its own head only under Needs you (CSS): with nothing above it, the
+          page title already says what this list is. */}
+      {view === "active" && listed.length > 0 && <h2 className="home-section-head home-projects-head">{t("mobile.home.projectsTitle")}</h2>}
       {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.home.loading")}</p>}
-      {loaded && rows.length === 0 && <p className="projects-empty">{view === "search"
-        ? query.trim() ? t("mobile.home.noMatch") : t("mobile.home.typeToSearch")
-        : t("mobile.home.noneActive")}</p>}
-      {/* A box row says it is one where a project row says its status: a box
-          has no status of its own (listing it is what its switch means), and
-          a "Paper" box beside a "Paper" project must be tellable apart.
-
-          The row is the project screen's tab card, one line tall: the grip has
-          to sit beside the opener rather than on it (a press anywhere else
-          opens the project, and the two must not be one gesture), which is the
-          same shape — and so the same classes — the tab list already wears. */}
-      <section className="cards">{listed.map((project, index) => <div
+      {loaded && rows.length === 0 && <div className="home-empty">
+        <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? "⌕" : "◇"}</span>
+        {view !== "search" && <strong>{t("mobile.home.emptyActiveTitle")}</strong>}
+        <p>{view === "search"
+          ? query.trim() ? t("mobile.home.noMatch") : t("mobile.home.typeToSearch")
+          : t("mobile.home.noneActive")}</p>
+        {view !== "search" && <button onClick={() => choose("search")}>{t("mobile.home.searchAll")}</button>}
+      </div>}
+      {/* One inset group: a row per project — its tile, name and caption, the
+          agent counts and the open tabs — with the grip in its own column
+          beside the opener (a press anywhere else opens the project, and the
+          two must not be one gesture). A box row says it is one where a
+          project row says its status: a "Paper" box beside a "Paper" project
+          must be tellable apart. */}
+      {listed.length > 0 && <section className="cards home-projects">{listed.map((project, index) => <div
         className={`tab-card one-row home-project-card${drag.rowClass(project.id)}`}
         key={project.id}
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.kind === "assistant" && isUntested("mobile.assistant") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"
@@ -374,11 +318,20 @@ export function Home({ open, openTab, todo, mail }: {
             {...drag.gripProps(project.id)}
           ><span aria-hidden="true">⠿</span></button>}
         </div>
-      </div>)}</section>
-      {alerts && <AlertRows alerts={alerts} onAlerts={setAlerts} todo={todo} mail={mail} />}
+      </div>)}</section>}
+      {canReorder && !hintGone && <p className="home-hint">
+        <span><GripHint text={t("mobile.home.reorderHint")} />{isUntested("mobile.home.hintDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+        <button onClick={dropHint} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
+      </p>}
     </>}
-    <SendToDesktop />
-    <LocalModelsSection />
+    {/* What goes to the desktop rather than coming from it: a file for its
+        inbox and the local models it runs. They stay on the page, not in a
+        sheet — closing one would drop the upload rows still in flight. */}
+    <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
+    <div className="home-desktop">
+      <SendToDesktop />
+      <LocalModelsSection />
+    </div>
     {/* What this phone does, as against what the desktop is doing, behind
         the header's gear. A row's own sheet replaces it while open, and
         closing that one comes back here rather than to the page. */}
@@ -406,8 +359,20 @@ export function Home({ open, openTab, todo, mail }: {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
           </button></li>
         </ul>
+        {/* The build this phone runs, which used to ride under the name in
+            the start page's header. */}
+        <p className="sheet-note device-version">{BRAND.display} {BUNDLE_VERSION}{isUntested("mobile.version.commit") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>
       </section>
     </div>}
+    {/* The assistant one tap from anywhere on Home, in the place the project
+        screen keeps its ＋: its row sits wherever the list put it, often
+        below the fold under Needs you. */}
+    {assistantId && <button
+      className="primary fab fab-round fab-chat"
+      onClick={() => open(assistantId)}
+      aria-label={t("assistant.button")}
+      title={t("assistant.button")}
+    ><AssistantGlyph className="fab-chat-icon" />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}

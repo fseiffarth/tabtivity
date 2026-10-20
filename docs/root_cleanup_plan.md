@@ -186,8 +186,8 @@ The changes:
     `DOCUMENTATION.md`, `docs/README.tex`, the `todo/` hits;
   - comments at `paths.rs:586`, `storage.rs:274`, `dev_build.rs:261`,
     `guard-single-instance.sh` and `package-dev.sh:254,274`.
-  - Delete the stale `docs/start-tabtivity-tauri-hotreload.sh`, a
-    pre-`brand.sh` copy.
+  - Done (2026-10-15, screen Medium M6): delete the stale
+    `docs/start-tabtivity-tauri-hotreload.sh`, a pre-`brand.sh` copy.
   - Fix `docs/Tabtivity.desktop`'s `Exec=`, which points at a root
     `start-tabtivity-tauri.sh` that doesn't exist.
 - **Final report to the user:** one `sed` to run outside Tabtivity. It
@@ -217,7 +217,7 @@ The changes:
 
 ### Step 3 † — PostCSS into `package.json` (−1 row; after `hosted`)
 
-Tailwind is removed (`c106e375`, `docs/vite8_vitest5_migration_plan.md`
+Tailwind is removed (`c106e375`, `docs/done/vite8_vitest5_migration_plan.md`
 S5): `tailwind.config.js` no longer exists and `postcss.config.js` holds only
 autoprefixer.
 

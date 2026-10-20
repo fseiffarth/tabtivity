@@ -205,9 +205,10 @@ terminal.
 
 ## Resume after a restart
 
-Claude, Codex and Mistral tabs reopen their exact conversation. Gemini, Qwen,
-Grok, Cursor, Copilot, OpenCode and Antigravity continue the project's most
-recent conversation. Others start fresh.
+Claude, Codex, Mistral and OpenCode tabs reopen their exact conversation (an
+OpenCode tab that never got a prompt starts fresh). Gemini, Qwen, Grok,
+Cursor, Copilot and Antigravity continue the project's most recent
+conversation. Others start fresh.
 
 ## Permission modes
 
@@ -268,4 +269,5 @@ is not adopted until you sign out first.
 - **Skills library…** (the Models & agents window's **Skills** tile, or the
   `+` menu) installs reusable
   Agent Skills into one project (`.claude/skills/`) or for every project on
-  this machine (`~/.claude/skills/`).
+  this machine (Tabtivity's own agent settings, copied into every agent tab's
+  home when it starts — your own `~/.claude/skills/` is left alone).

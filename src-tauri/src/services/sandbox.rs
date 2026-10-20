@@ -612,8 +612,8 @@ pub fn is_host_bound_local_agent(cmd: &str, marker: bool) -> bool {
 
 /// Whether a spawn's command launches an AI coding agent — the question
 /// [`SandboxScope::Agents`] turns on. Mirrors `commands::agents::AGENTS` (the
-/// registry the + menu lists) and the frontend's `AGENT_CMDS`; the three are the
-/// same set by construction and `agent_registry_matches_classifier` fails if the
+/// registry the + menu lists, and the frontend's generated `agentCliTable.ts`
+/// that classifies a tab); `agent_registry_matches_classifier` fails if the
 /// registry grows an entry this misses.
 ///
 /// **Classified by the command that actually executes**, deliberately, and not by
@@ -1545,6 +1545,11 @@ pub fn sandbox_spec_for(project_id: &str) -> Option<SandboxSpec> {
 /// mount, and a value read from it would let the contained process choose what
 /// the next container mounts.
 pub fn project_dir_for(project_id: &str) -> Option<String> {
+    // A reserved scope (`root`, the chat assistant's) is no project, whatever
+    // a hand-edited registry says.
+    if storage::is_reserved_scope(project_id) {
+        return None;
+    }
     let list_path = storage::projects_path();
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.id == project_id)?;
@@ -2403,6 +2408,8 @@ mod tests {
     #[test]
     fn wrap_is_noop_when_sandbox_disabled() {
         let mut opts = PtyOptions {
+            login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: args(&["--session-id", "x"]),
@@ -2432,6 +2439,8 @@ mod tests {
         // A `box:<id>` tab is local + uncontained by design; the branch returns
         // before any state-dir read, so this is safe to exercise in a test.
         let mut opts = PtyOptions {
+            login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: vec![],
@@ -2678,9 +2687,8 @@ mod tests {
 
     #[test]
     fn agent_registry_matches_classifier() {
-        // `is_agent_cmd` reads `commands::agents::AGENTS`; this is the tripwire for
-        // the frontend's `AGENT_CMDS`, which is a hand-kept copy of the same set.
-        // An agent missing from the classifier runs OUTSIDE the container under
+        // `is_agent_cmd` reads `commands::agents::AGENTS`, as the frontend's
+        // generated `agentCliTable.ts` does; this is the tripwire. An agent missing from the classifier runs OUTSIDE the container under
         // agents-only scope, which is exactly the silent failure worth a test.
         for bin in crate::commands::agents::agent_bins() {
             assert!(

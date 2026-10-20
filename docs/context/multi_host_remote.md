@@ -35,3 +35,13 @@ Referenced from `AGENTS.md`.
     same `(project, host)` in-flight guard. Only one writer may build, upload,
     and apply that worker's fixed bundle path at a time; a racing second action
     reports a harmless skip.
+
+- Before a worker reset, Git's quoted path listings are compared for untracked
+  output collisions, including ignored files and file/directory replacements. A
+  collision refuses the update and preserves the worker tree. The check and reset
+  are separate operations; pause output writers during sync to avoid new collisions
+  after preflight. Manual **Sync code
+  now** sends a full bundle even when the recorded source HEAD has not changed,
+  so tracked drift can be repaired. A removed repository is rebuilt only when no
+  existing worker files collide with incoming code. Worker output pulls
+  reject Windows drive/root prefixes and alternate stream paths on every platform.

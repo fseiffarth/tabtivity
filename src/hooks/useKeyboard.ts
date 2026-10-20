@@ -93,6 +93,8 @@ interface KeyboardOptions {
   /** Open (showing the panels if they were hidden) or close the side panel —
    *  steering's B key, and Escape back out of it. */
   onSidePanel?: (open: boolean) => void;
+  /** Ctrl+B / ⌘B (and Alt+1): show or hide the side panel. */
+  onToggleSidePanel?: () => void;
 }
 
 /** Steering's new tabs land right of the tab it was on, not at the pane's end. */
@@ -118,7 +120,11 @@ const EDITOR_CLOSE_ACTIONS: ReadonlySet<ShortcutAction> = new Set<ShortcutAction
  *  and on Linux and Windows Ctrl+W (and Super+W, which is `metaKey` there) must
  *  keep reaching the terminal. Shared with the popout's handler. */
 export function editorMayTakeChord(action: ShortcutAction, e: KeyboardEvent): boolean {
-  return isMacCommandChord(e) && EDITOR_CLOSE_ACTIONS.has(action);
+  if (!isMacCommandChord(e)) return false;
+  // ⌘B toggles the side panel from a field too, unless the field already took
+  // it (the Markdown prompt's ⌘B bold calls preventDefault first).
+  if (action === "toggleSidePanel") return !e.defaultPrevented;
+  return EDITOR_CLOSE_ACTIONS.has(action);
 }
 
 /** ⌘ without ⌃ on macOS — the only keydown from an editable target that is
@@ -208,7 +214,7 @@ function isSuperKey(key: string): boolean {
  */
 export const SUPER_RELEASE_SETTLE_MS = 150;
 
-export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
+export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: KeyboardOptions) {
   useEffect(() => {
     // Lone-Super press tracking (Linux only; see the binding in `onKeyDown`).
     let superHeld = false;
@@ -1165,6 +1171,20 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
         return;
       }
 
+      // Show / hide the side panel (Ctrl+B, ⌘B; Alt+1 off macOS). `is` cannot
+      // carry the alias, so it is matched over `actionChords` with the same gate.
+      if (
+        onToggleSidePanel &&
+        (!editable ||
+          editorMayTakeChord("toggleSidePanel", e) ||
+          terminalMayTakeChord("toggleSidePanel", e)) &&
+        actionMatches("toggleSidePanel", overrides, e)
+      ) {
+        e.preventDefault();
+        onToggleSidePanel();
+        return;
+      }
+
       // Open the shortcut cheat sheet. This hook only fires the door event
       // (the header-menu pattern); the overlay host owns the dialog.
       if (is("shortcutHelp")) {
@@ -1369,7 +1389,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [onTogglePanels, onSidePanel]);
+  }, [onTogglePanels, onSidePanel, onToggleSidePanel]);
 }
 
 /** Steering's status jumps and the tab state each walks. */

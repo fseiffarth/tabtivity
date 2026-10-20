@@ -355,7 +355,9 @@ pub(crate) fn conflict_message(conflict: &ProjectConflict) -> String {
 pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
     let path = storage::projects_path();
     if path.exists() {
-        storage::read_json(&path).map_err(|e| e.to_string())
+        let mut list: ProjectsList = storage::read_json(&path).map_err(|e| e.to_string())?;
+        drop_reserved_projects(&mut list);
+        Ok(list)
     } else {
         Ok(vec![])
     }
@@ -367,13 +369,43 @@ pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
 pub(crate) fn patch_projects_list<R>(
     patch: impl FnOnce(&mut ProjectsList) -> Result<R, String>,
 ) -> Result<R, String> {
-    let path = storage::projects_path();
-    storage::patch_json(&path, ProjectsList::new(), |list| {
+    patch_projects_list_at(&storage::projects_path(), patch)
+}
+
+/// [`patch_projects_list`] on `path`. A record whose id is a reserved scope's
+/// ([`storage::is_reserved_scope`]) is dropped on the way in, and a patch that
+/// leaves one in is refused whole, so no write path — create, import, clone,
+/// VM, transfer, share — can register a project that borrows `root`'s or the
+/// chat assistant's state.
+fn patch_projects_list_at<R>(
+    path: &std::path::Path,
+    patch: impl FnOnce(&mut ProjectsList) -> Result<R, String>,
+) -> Result<R, String> {
+    storage::patch_json(path, ProjectsList::new(), |list| {
         // The built-in Trash workspace was removed; every registry read or
         // write drops its leftover entry (its folder stays on disk).
         drop_legacy_trash_project(list);
-        patch(list)
+        drop_reserved_projects(list);
+        let result = patch(list)?;
+        match list.iter().find(|p| storage::is_reserved_scope(&p.id)) {
+            Some(p) => Err(reserved_id_message(&p.id)),
+            None => Ok(result),
+        }
     })
+}
+
+/// Why a project id that names a reserved scope is refused.
+fn reserved_id_message(id: &str) -> String {
+    format!("invalid project id '{id}': it names a scope {} keeps for itself", crate::brand::DISPLAY)
+}
+
+/// Drop the registry records that borrow a reserved scope's id (a hand-edited
+/// or imported `projects.json`): they would otherwise hand their folder out as
+/// the scope's, or its state as theirs. Whether anything was dropped.
+fn drop_reserved_projects(list: &mut ProjectsList) -> bool {
+    let before = list.len();
+    list.retain(|p| !storage::is_reserved_scope(&p.id));
+    list.len() != before
 }
 
 /// Patch one registry entry without open-coding another whole-list
@@ -740,6 +772,9 @@ pub struct ArchivedProject {
 pub(crate) fn validate_project_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(format!("invalid project id '{id}'"));
+    }
+    if storage::is_reserved_scope(id) {
+        return Err(reserved_id_message(id));
     }
     Ok(())
 }
@@ -1196,11 +1231,10 @@ pub struct UnsyncedReport {
 }
 
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
+/// Hookless: it inspects a mirror in the background.
 fn git_in(dir: &Path, args: &[&str]) -> String {
     use crate::services::git_bounded::BoundedOutput;
-    crate::paths::command_no_window("git")
-        .args(args)
-        .current_dir(dir)
+    crate::commands::git::hookless_git_command_in(dir, args)
         .bounded_output()
         .ok()
         .filter(|o| o.status.success())
@@ -2266,7 +2300,7 @@ pub fn set_project_remote_label(
 /// user — or with the wrong one — authenticated as the *local* account name with
 /// no way to correct it short of recreating the project. Every login surface needs
 /// it, not just the headless one: it is what `ssh_connect`/`remote_connect` send
-/// **and** what `remote_login_command` types into the interactive login terminal.
+/// **and** what the interactive login PTY (`pty_spawn` with `login: ssh`) runs.
 ///
 /// A blank/whitespace-only string clears it (ssh then falls back to the local
 /// account name / `~/.ssh/config`). Returns the resulting user (`None` = cleared).
@@ -2772,12 +2806,6 @@ pub fn adopt_folder_tab_layout(
     local_file: String,
 ) -> Result<crate::schema::session::TerminalSession, String> {
     crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
-}
-
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn save_project(local_file: String, project: Project) -> Result<(), String> {
-    let path = PathBuf::from(&local_file);
-    storage::write_json(&path, &project).map_err(|e| e.to_string())
 }
 
 /// Save only the tab layout — into `<state_dir>/sessions/<project_id>/`, plus the
@@ -3292,9 +3320,7 @@ fn git_scaffold_commit(dir: &Path) {
 /// (don't force a commit when we can't tell), never a wipe.
 fn git_head_unborn(dir: &Path) -> bool {
     use crate::services::git_bounded::BoundedOutput;
-    crate::paths::command_no_window("git")
-        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
-        .current_dir(dir)
+    crate::commands::git::hardened_git_command_in(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])
         .bounded_output()
         .map(|o| !o.status.success())
         .unwrap_or(false)
@@ -3743,6 +3769,41 @@ pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPrevie
         return Err("Source folder does not exist".to_string());
     }
     Ok(scaffold_preview(&source))
+}
+
+/// True when the scaffold target's `AGENTS.md` still holds no project guidance:
+/// missing, empty, the untouched legacy stub, or an untouched earlier template
+/// (all `is_legacy_agent_stub` answers). Pure, so the rule is unit-testable
+/// without touching the project list.
+fn agents_empty_at(target: &Path) -> bool {
+    match fs::read_to_string(target.join("AGENTS.md")) {
+        Ok(existing) => is_legacy_agent_stub("AGENTS.md", &existing),
+        Err(_) => !target.join("AGENTS.md").exists(),
+    }
+}
+
+/// True when a project's `AGENTS.md` still holds no project guidance (see
+/// `agents_empty_at`) — drives the one-time agent-tab card that asks the user
+/// to describe the project. A project with no materialized local scaffold
+/// target yet (e.g. a remote project whose mirror hasn't been created)
+/// reports `false` rather than a spurious "empty".
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn project_agents_empty(project_id: String) -> Result<bool, String> {
+    let list_path = storage::projects_path();
+    if !list_path.exists() {
+        return Ok(false);
+    }
+    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
+    let Some(entry) = list.into_iter().find(|p| p.id == project_id) else {
+        return Ok(false);
+    };
+    let Some((target, _)) = scaffold_target_for_entry(&entry) else {
+        return Ok(false);
+    };
+    if !target.is_dir() {
+        return Ok(false);
+    }
+    Ok(agents_empty_at(&target))
 }
 
 /// True when a project is missing one or more scaffold pieces (any scaffold
@@ -5385,6 +5446,61 @@ mod tests {
         }
     }
 
+    // ── Reserved scope ids (`storage::is_reserved_scope`) ──────────────────
+
+    /// A project record that names a scope the app keeps for itself — root's,
+    /// the chat assistant's — is not a project: never read, never written, and
+    /// not an id a command may validate.
+    #[test]
+    fn a_project_cannot_take_a_reserved_scope_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let hand_edited = vec![
+            entry("p1", "Real", vec![]),
+            entry("assistant", "Borrowed", vec![("directory", serde_json::json!("/home/u/secret"))]),
+            entry("Assistant", "Borrowed", vec![]),
+            entry("root", "Borrowed", vec![]),
+            entry("assistant ", "Borrowed", vec![]),
+        ];
+        std::fs::write(&path, serde_json::to_vec(&hand_edited).unwrap()).unwrap();
+
+        // Dropped on the way in; the next write lands without them.
+        let mut list = hand_edited.clone();
+        assert!(drop_reserved_projects(&mut list));
+        assert_eq!(list.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p1"]);
+        assert!(!drop_reserved_projects(&mut list));
+        let seen = patch_projects_list_at(&path, |list| Ok(list.iter().map(|p| p.id.clone()).collect::<Vec<_>>())).unwrap();
+        assert_eq!(seen, ["p1"]);
+        let stored: ProjectsList = storage::read_json(&path).unwrap();
+        assert_eq!(stored.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p1"], "rewritten without the borrowed records");
+
+        // A patch that adds one — create, import, clone, VM, share — is refused
+        // whole, and the file is as it was.
+        for id in ["assistant", "ASSISTANT", " assistant", "root", "Root"] {
+            let before = std::fs::read(&path).unwrap();
+            let refused = patch_projects_list_at(&path, |list| {
+                list.push(entry(id, "New", vec![]));
+                Ok(())
+            });
+            assert!(refused.is_err(), "{id:?}");
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{id:?}");
+        }
+        // An ordinary id still goes through.
+        patch_projects_list_at(&path, |list| {
+            list.push(entry("assistant2", "Fine", vec![]));
+            Ok(())
+        })
+        .unwrap();
+
+        for id in ["assistant", "Assistant", "root", "assistant "] {
+            assert!(validate_project_id(id).is_err(), "{id:?}");
+        }
+        assert!(validate_project_id("0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10").is_ok());
+        assert!(validate_project_id("assistant2").is_ok());
+        // And no folder is ever looked up for one, planted or not.
+        assert_eq!(crate::services::sandbox::project_dir_for("assistant"), None);
+    }
+
     /// A project keeps an old-named screenshots or mail folder it already
     /// has, so the default ignore list names both spellings: regenerating a
     /// `.gitignore` must never un-ignore a folder of filed private data.
@@ -6443,6 +6559,29 @@ mod tests {
         let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
 
         assert!(report.is_empty());
+    }
+
+    #[test]
+    fn agents_empty_at_matches_missing_empty_stub_and_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No AGENTS.md at all.
+        assert!(agents_empty_at(tmp.path()));
+
+        // Empty and whitespace-only.
+        std::fs::write(tmp.path().join("AGENTS.md"), "").unwrap();
+        assert!(agents_empty_at(tmp.path()));
+        std::fs::write(tmp.path().join("AGENTS.md"), "  \n").unwrap();
+        assert!(agents_empty_at(tmp.path()));
+
+        // Untouched legacy stub and an untouched earlier template.
+        std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n").unwrap();
+        assert!(agents_empty_at(tmp.path()));
+        std::fs::write(tmp.path().join("AGENTS.md"), AGENTS_HISTORY[0]).unwrap();
+        assert!(agents_empty_at(tmp.path()));
+
+        // Real project guidance is not empty.
+        std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n\nRun `npm test`.\n").unwrap();
+        assert!(!agents_empty_at(tmp.path()));
     }
 
     /// PROJECT.md is the navigation hub: a scaffold file it does not link is

@@ -8,6 +8,8 @@ import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
 import { COLUMN_FOLLOWS_DATE, intakeColumn, localDate, moveAccepted } from "../todoDates";
+import { ConfirmSheet, NameSheet, type Confirm, type NameAsk } from "../components/ConfirmSheet";
+import { useBackLayer } from "../backStack";
 
 type Editing = TodoCard | "new" | null;
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -97,6 +99,10 @@ export function Todo({ card }: { card?: string }) {
   // nothing the head does not still count.
   const [folded, setFolded] = useState<string[]>(() => readOrder("todoCollapsedColumns"));
   const [busy, setBusy] = useState(false);
+  // The board's two questions — a second tap before a delete, a name for a
+  // column — as the phone's own sheets (`ConfirmSheet`), never `window.*`.
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [nameAsk, setNameAsk] = useState<NameAsk | null>(null);
   // The refusal itself, said at render time: a language switch re-words it.
   const [error, setError] = useState<{ reason: unknown } | null>(null);
   const load = useCallback(() => {
@@ -193,10 +199,11 @@ export function Todo({ card }: { card?: string }) {
       cardCount={matching.filter((task) => task.column === column.id).length} busy={busy}
       folded={folded.includes(column.id)} fold={(value) => fold(column.id, value)}
       move={move} toggle={toggle} edit={setEditing} columnAction={columnAction}
-    />)}<button className="todo-add-column" disabled={busy} onClick={() => {
-      const name = window.prompt(t("todoBoard.columnNamePlaceholder"));
-      if (name?.trim()) columnAction({ type: "column_create", name });
-    }}>{t("mobile.todo.addColumn")}</button></section>
+      confirm={setConfirm} askName={setNameAsk}
+    />)}<button className="todo-add-column" disabled={busy} onClick={() => setNameAsk({
+      title: t("todoBoard.addColumn"), label: t("todoBoard.columnNamePlaceholder"), action: t("common.add"),
+      run: (name) => columnAction({ type: "column_create", name }),
+    })}>{t("mobile.todo.addColumn")}</button></section>
     <button className="primary todo-fab" aria-label={t("mobile.todo.addCard")} title={t("mobile.todo.addCard")} disabled={busy || !board?.calendars.length} onClick={() => setEditing("new")}>＋</button>
     {editing && board && <TaskEditor
       board={board} task={editing === "new" ? null : editing} busy={busy}
@@ -208,29 +215,38 @@ export function Todo({ card }: { card?: string }) {
         if (ok) setEditing(null);
       }}
       remove={editing === "new" ? undefined : async () => {
-        if (!window.confirm(t("mobile.todo.deleteNamed", { name: editing.title }))) return;
-        if (await mutate({ type: "delete", task_id: editing.id })) setEditing(null);
+        const task = editing;
+        setConfirm({
+          title: t("mobile.todo.deleteNamed", { name: task.title }), label: t("common.delete"),
+          run: async () => { if (await mutate({ type: "delete", task_id: task.id })) setEditing(null); },
+        });
       }}
     />}
+    {nameAsk && <NameSheet ask={nameAsk} busy={busy} onClose={() => setNameAsk(null)} />}
+    {confirm && <ConfirmSheet confirm={confirm} busy={busy} onClose={() => setConfirm(null)} />}
     <p className="notice todo-mobile-note">{t("mobile.todo.note")}</p>
   </main>;
 }
 
-function TodoColumnView({ column, index, columns, tasks, cardCount, busy, folded, fold, move, toggle, edit, columnAction }: {
+function TodoColumnView({ column, index, columns, tasks, cardCount, busy, folded, fold, move, toggle, edit, columnAction, confirm, askName }: {
   column: TodoColumn; index: number; columns: TodoColumn[]; tasks: TodoCard[]; busy: boolean;
   cardCount: number; folded: boolean; fold: (value: boolean) => void;
   move: (task: TodoCard, column: string, index?: number) => void; toggle: (task: TodoCard) => void;
   edit: (task: TodoCard) => void; columnAction: (body: unknown) => void;
+  confirm: (ask: Confirm) => void; askName: (ask: NameAsk) => void;
 }) {
   const t = useT();
-  const rename = () => {
-    const name = window.prompt(t("todoBoard.columnNamePlaceholder"), column.name);
-    if (name?.trim() && name.trim() !== column.name) columnAction({ type: "column_rename", column_id: column.id, name });
-  };
+  const rename = () => askName({
+    title: t("mobile.todo.renameColumnNamed", { name: column.name }), label: t("todoBoard.columnNamePlaceholder"),
+    initial: column.name, action: t("common.rename"),
+    run: (name) => columnAction({ type: "column_rename", column_id: column.id, name }),
+  });
   const remove = () => {
-    if (columns.length > 1 && window.confirm(t("mobile.todo.deleteColumnConfirm", { name: column.name, count: cardCount }))) {
-      columnAction({ type: "column_delete", column_id: column.id });
-    }
+    if (columns.length > 1) confirm({
+      title: t("mobile.todo.deleteColumnNamed", { name: column.name }),
+      note: t("mobile.todo.deleteColumnConfirm", { name: column.name, count: cardCount }), label: t("common.delete"),
+      run: () => columnAction({ type: "column_delete", column_id: column.id }),
+    });
   };
   const accent = column.color || "#7c6cff";
   // The name is the fold's target rather than the caret beside it: a thumb aims
@@ -288,6 +304,7 @@ function TaskEditor({ board, task, busy, close, save, remove }: {
   board: TodoBoard; task: TodoCard | null; busy: boolean; close: () => void;
   save: (task: TodoTaskInput) => Promise<void>; remove?: () => Promise<void>;
 }) {
+  useBackLayer(close);
   const t = useT();
   const [draft, setDraft] = useState<TodoTaskInput>(() => task ? inputOf(task) : blankTask(board));
   const [tagInput, setTagInput] = useState("");

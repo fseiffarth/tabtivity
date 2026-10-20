@@ -134,8 +134,12 @@ impl Policy {
                 .to_string(),
         }
     }
+    /// Whether the root registry (`/mcp`) is served to `caller`. A **positive**
+    /// list: the lane classes with their own route (schedule, push, help,
+    /// markup, web) are not named here, and neither is the next one added — a
+    /// class defaults to refused until someone lists it.
     pub fn serves(&self, caller: Caller) -> bool {
-        if matches!(caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker) { return false; }
+        if !matches!(caller, Caller::Agent | Caller::LocalModel | Caller::Reader) { return false; }
         self.enabled
             && (!self.local_only || caller == Caller::LocalModel)
             && (caller != Caller::Reader || self.serves_mail(caller))
@@ -156,7 +160,7 @@ impl Policy {
             && match caller {
                 Caller::Reader => true,
                 Caller::LocalModel => self.mail_local_read,
-                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker => false,
+                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web => false,
             }
     }
 }
@@ -207,6 +211,17 @@ impl Access {
         Ok(access)
     }
     pub fn initial(caller: Caller) -> Self {
+        // A web-lane session reaches no calendar, board, project, mail or
+        // account, and writes nothing: its tools carry no root family.
+        if caller == Caller::Web {
+            return Self {
+                calendars: Scope::default(),
+                projects: Scope::default(),
+                accounts: Scope::default(),
+                families: Vec::new(),
+                write: false,
+            };
+        }
         let reader = caller == Caller::Reader;
         Self {
             calendars: if reader {
@@ -296,6 +311,9 @@ pub struct ToolPolicy {
     /// Served to [`Caller::Marker`] (`services::markup_mcp`) — and then to
     /// no other class: the three markup tools set it and nothing else.
     marker: bool,
+    /// Served to [`Caller::Web`] (`services::web_lane`) — and then to no
+    /// other class: `web_fetch` and `web_search` set it and nothing else.
+    web: bool,
 }
 impl ToolPolicy {
     pub fn serves(&self, caller: Caller) -> bool {
@@ -303,6 +321,7 @@ impl ToolPolicy {
             Caller::Scheduler | Caller::Pusher => false,
             Caller::Helper => self.help,
             Caller::Marker => self.marker,
+            Caller::Web => self.web,
             Caller::Reader => self.reader,
             Caller::LocalModel => self.root || self.local,
             Caller::Agent => self.root,
@@ -336,7 +355,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         "todo_update" | "todo_delete" => ("board", true, true, true, true),
         "mail_accounts_list" | "mail_drafts_list" => ("mail", false, false, true, true),
         "mail_folders" | "mail_search" | "mail_read" | "mail_thread" => {
-            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false });
+            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false });
         }
         // The help corpus (`services::help_mcp`): read-only, compiled in, and
         // served to the help identity alone — never to a root or reader tab
@@ -345,14 +364,21 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         | crate::brand::HELP_TOOL_READ
         | crate::brand::HELP_TOOL_TOPICS
         | crate::brand::HELP_TOOL_STATUS => {
-            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false });
+            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false });
         }
         // The markup questions and ticks (`services::markup_mcp`): they only
         // put a card or a tick in front of the user, served to the markup
         // identity alone on `/mcp/markup` — never to a root or reader tab
         // through `/mcp`.
         "markup_ask" | "markup_withdraw" | "markup_done" => {
-            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true });
+            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false });
+        }
+        // The chat assistant's web lane (`services::web_lane`): a guarded page
+        // fetch and a search, served to the web identity alone on `/mcp/web`
+        // — never to a root or reader tab through `/mcp`. Family `web` is on
+        // no `Access` list, so the handler gates on `serves(Caller::Web)`.
+        "web_fetch" | "web_search" => {
+            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true });
         }
         "mail_draft_create" => ("mail", true, false, true, true),
         "mail_draft_update" | "mail_draft_delete" => ("mail", true, true, true, true),
@@ -367,6 +393,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         local: false,
         help: false,
         marker: false,
+        web: false,
     })
 }
 
@@ -463,6 +490,39 @@ mod tests {
                 assert!(!policy.serves(Caller::Scheduler));
                 assert!(!policy.serves(Caller::Pusher));
             }
+        }
+    }
+
+    /// The web lane's class is on no list the root registry reads from: not
+    /// the endpoint, not the mail switches, not one root tool's policy —
+    /// whatever the settings say. Its two tools are served to it and to no
+    /// other class, and the access it starts with grants nothing.
+    #[test]
+    fn the_web_class_is_served_nothing_by_the_root_policy() {
+        let open = Policy { enabled: true, local_only: false, mail: true, mail_local_only: false, mail_local_read: true, review: "off".into() };
+        assert!(open.serves(Caller::Agent) && !open.serves(Caller::Web));
+        assert!(!open.reads_mail(Caller::Web));
+        for name in ["projects_list", "calendar_list", "todo_list", "mail_search", "mail_draft_create", "markup_ask", "markup_done", crate::brand::HELP_TOOL_SEARCH, "git_push", "schedule_prompt"] {
+            if let Some(tool) = tool(name) {
+                assert!(!tool.serves(Caller::Web), "{name}");
+            }
+        }
+        let access = Access::initial(Caller::Web);
+        assert!(access.validate().is_ok() && access.families.is_empty() && !access.write);
+        assert!(!access.calendars.contains("x") && !access.projects.contains("x") && !access.accounts.contains("x"));
+        assert!(!access.allows(Caller::Web, "projects_list") && !access.allows(Caller::Web, "web_fetch"), "Access is the root registry's: the lane gates on the tool row");
+    }
+
+    /// `web_fetch` and `web_search` serve the web identity and nothing else.
+    #[test]
+    fn the_web_tools_serve_only_the_web_class() {
+        for name in ["web_fetch", "web_search"] {
+            let tool = tool(name).unwrap_or_else(|| panic!("{name}"));
+            assert!(!tool.write && !tool.destructive, "{name}");
+            for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Helper, Caller::Marker] {
+                assert!(!tool.serves(caller), "{name} must not serve {caller:?}");
+            }
+            assert!(tool.serves(Caller::Web), "{name}");
         }
     }
 

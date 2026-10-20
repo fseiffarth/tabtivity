@@ -94,8 +94,10 @@ where
         .lock_ok();
     // The process-wide lock serialises this process; the file lock serialises
     // a second Tabtivity process patching the same file (#171's lesson applied
-    // to every read-modify-write here).
-    let _file_lock = FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
+    // to every read-modify-write here). On a file system without advisory
+    // locks (and only there) it falls back to the in-process lock plus the
+    // revision check a patch makes against the value it reads here.
+    let _file_lock = FileLock::exclusive_or_unlocked(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
     // The bytes as read, kept to tell a patch that changed nothing from one
     // that did. A missing file has none, so its first patch always writes.
     let (mut value, on_disk) = if path.exists() {
@@ -307,9 +309,15 @@ pub(crate) mod durability {
 /// `JSON_MUTATION_LOCK` serialises this process; a second Tabtivity process (a
 /// second window, the Mobile sidecar) needs the file system to do it. The
 /// lock file is never removed: deleting one out from under a holder is how
-/// two processes end up both holding "the" lock. Best effort — a filesystem
-/// without advisory locks still gets the caller's revision check, which
-/// closes the window for every practical interleaving.
+/// two processes end up both holding "the" lock.
+///
+/// [`Self::exclusive`] and [`Self::shared`] fail when the lock cannot be
+/// taken, whatever the reason. A file system with no advisory locks at all
+/// ([`lock_unsupported`]) is let through only by the explicit
+/// [`Self::exclusive_or_unlocked`] / [`Self::shared_or_unlocked`], meant for a
+/// caller whose own revision or compare-and-swap check still catches a write
+/// another process slipped in; they answer `Ok(None)` and log once per
+/// directory.
 pub struct FileLock {
     file: fs::File,
 }
@@ -317,21 +325,15 @@ pub struct FileLock {
 impl FileLock {
     /// Take the exclusive lock beside `path`, blocking until it is free.
     pub fn exclusive(path: &Path) -> std::io::Result<Self> {
-        let lock_path = lock_path_for(path);
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)?;
-        let _ = file.lock();
-        Ok(Self { file })
+        Self::take(path, fs::File::lock)
     }
-}
 
-impl FileLock {
+    /// [`Self::exclusive`], except that a file system without advisory locks
+    /// answers `Ok(None)` — for a caller with its own revision check only.
+    pub fn exclusive_or_unlocked(path: &Path) -> std::io::Result<Option<Self>> {
+        or_unlocked(path, Self::exclusive(path))
+    }
+
     /// Take the exclusive lock beside `path` only if nobody holds it, in this
     /// process or another: `Ok(None)` when it is held.
     pub fn try_exclusive(path: &Path) -> std::io::Result<Option<Self>> {
@@ -347,9 +349,69 @@ impl FileLock {
     /// has it. Any number of shared holders coexist; an exclusive one waits
     /// for them all.
     pub fn shared(path: &Path) -> std::io::Result<Self> {
+        Self::take(path, fs::File::lock_shared)
+    }
+
+    /// [`Self::shared`], except that a file system without advisory locks
+    /// answers `Ok(None)` (see [`Self::exclusive_or_unlocked`]).
+    pub fn shared_or_unlocked(path: &Path) -> std::io::Result<Option<Self>> {
+        or_unlocked(path, Self::shared(path))
+    }
+
+    /// Open the lock file and lock it with `lock`; any failure is the caller's.
+    fn take(path: &Path, lock: impl FnOnce(&fs::File) -> std::io::Result<()>) -> std::io::Result<Self> {
         let file = open_lock_file(path)?;
-        file.lock_shared()?;
+        lock(&file)?;
         Ok(Self { file })
+    }
+}
+
+/// Whether a lock call failed because the file system has no advisory locks
+/// at all (an NFS mount without a lock daemon, some FUSE and SMB mounts), as
+/// opposed to failing on a file system that has them.
+pub fn lock_unsupported(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    let Some(code) = e.raw_os_error() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        code == libc::ENOLCK || code == libc::EOPNOTSUPP || code == libc::ENOTSUP || code == libc::ENOSYS
+    }
+    #[cfg(windows)]
+    {
+        // ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED: a redirector or file
+        // system driver that does not implement byte-range locks.
+        const ERROR_INVALID_FUNCTION: i32 = 1;
+        const ERROR_NOT_SUPPORTED: i32 = 50;
+        code == ERROR_INVALID_FUNCTION || code == ERROR_NOT_SUPPORTED
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = code;
+        false
+    }
+}
+
+/// The explicit lockless fallback: `Ok(None)` for [`lock_unsupported`],
+/// logged once per directory; every other failure stays an error.
+fn or_unlocked(path: &Path, taken: std::io::Result<FileLock>) -> std::io::Result<Option<FileLock>> {
+    match taken {
+        Ok(lock) => Ok(Some(lock)),
+        Err(e) if lock_unsupported(&e) => {
+            static WARNED: Mutex<Option<std::collections::HashSet<std::path::PathBuf>>> = Mutex::new(None);
+            let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            if WARNED.lock_ok().get_or_insert_with(Default::default).insert(dir.clone()) {
+                eprintln!(
+                    "storage: no advisory file locks under {} ({e}); relying on each file's revision check there",
+                    dir.display()
+                );
+            }
+            Ok(None)
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -496,6 +558,36 @@ pub fn home_share_dir() -> std::path::PathBuf {
 /// backend's whole knowledge of the root scope is "this id maps to that folder,
 /// and it is in no project list".
 pub const ROOT_SCOPE: &str = "root";
+
+/// The scope id of the chat assistant's tabs (`docs/assistant_plan.md`): a
+/// scope of its own, neither root nor a project. Its session state is
+/// `<state_dir>/sessions/assistant/` and its agent home `agent-homes/assistant`
+/// (`project_key` is the identity on it). Unlike root its backend
+/// `project_id` is `Some("assistant")`, not `None`: every place that reads a
+/// `Some` id as a project has to meet this one first (`is_reserved_scope`).
+pub const ASSISTANT_SCOPE: &str = "assistant";
+
+/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`] or
+/// [`ASSISTANT_SCOPE`] — and so can never be a project or box id. Compared
+/// through [`project_key`] and case-insensitively, because the id names a
+/// directory under the state dir and a case-folding filesystem or the key
+/// reduction would otherwise let `Assistant` or `assistant ` share the
+/// reserved scope's state. The one funnel the project/box registries, the
+/// layout sanitiser and the phone's discovery ask.
+pub fn is_reserved_scope(id: &str) -> bool {
+    let key = project_key(id.trim());
+    [ROOT_SCOPE, ASSISTANT_SCOPE].iter().any(|scope| key.eq_ignore_ascii_case(scope))
+}
+
+/// Whether `id` names the chat assistant's scope, in any spelling the state
+/// dir would fold onto it (`Assistant`, ` assistant`): the same reduction as
+/// [`is_reserved_scope`]. Every place that gives the scope its rules (layout
+/// sanitiser, no export copy, no prompt history, no schedule binding) asks this
+/// and never compares with [`ASSISTANT_SCOPE`], or a case-folding filesystem
+/// would let another spelling reach the scope's folder without them.
+pub fn is_assistant_scope(id: &str) -> bool {
+    project_key(id.trim()).eq_ignore_ascii_case(ASSISTANT_SCOPE)
+}
 
 /// Working directory for terminals that are not attached to a project.
 pub fn root_work_dir() -> std::path::PathBuf {
@@ -660,6 +752,62 @@ pub(crate) fn is_leap_year(y: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── FileLock ───────────────────────────────────────────────────────────
+
+    /// The error a file system with no advisory locks gives, per OS.
+    fn no_locks_here() -> std::io::Error {
+        #[cfg(unix)]
+        {
+            std::io::Error::from_raw_os_error(libc::ENOLCK)
+        }
+        #[cfg(windows)]
+        {
+            std::io::Error::from_raw_os_error(50) // ERROR_NOT_SUPPORTED
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            std::io::Error::from(std::io::ErrorKind::Unsupported)
+        }
+    }
+
+    #[test]
+    fn a_failed_lock_is_an_error_and_only_a_lockless_file_system_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let broken = || std::io::Error::other("the lock call failed");
+
+        // The plain locks propagate every failure, lockless or not.
+        assert!(FileLock::take(&path, |_| Err(broken())).is_err());
+        assert!(FileLock::take(&path, |_| Err(no_locks_here())).is_err());
+
+        // The explicit fallback lets through only "no locks here".
+        assert!(or_unlocked(&path, FileLock::take(&path, |_| Err(broken()))).is_err());
+        assert!(or_unlocked(&path, FileLock::take(&path, |_| Err(no_locks_here()))).unwrap().is_none());
+        let unsupported = std::io::Error::from(std::io::ErrorKind::Unsupported);
+        assert!(or_unlocked(&path, FileLock::take(&path, |_| Err(unsupported))).unwrap().is_none());
+
+        // A file system that has locks still takes them through the fallback.
+        let held = FileLock::exclusive_or_unlocked(&path).unwrap().expect("locked");
+        assert!(FileLock::try_exclusive(&path).unwrap().is_none(), "held");
+        drop(held);
+        assert!(FileLock::shared_or_unlocked(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn lock_unsupported_names_only_the_lockless_errors() {
+        assert!(lock_unsupported(&no_locks_here()));
+        assert!(lock_unsupported(&std::io::Error::from(std::io::ErrorKind::Unsupported)));
+        assert!(!lock_unsupported(&std::io::Error::other("x")));
+        assert!(!lock_unsupported(&std::io::Error::from(std::io::ErrorKind::PermissionDenied)));
+        #[cfg(unix)]
+        {
+            assert!(lock_unsupported(&std::io::Error::from_raw_os_error(libc::EOPNOTSUPP)));
+            assert!(lock_unsupported(&std::io::Error::from_raw_os_error(libc::ENOSYS)));
+            assert!(!lock_unsupported(&std::io::Error::from_raw_os_error(libc::EIO)));
+            assert!(!lock_unsupported(&std::io::Error::from_raw_os_error(libc::EBADF)));
+        }
+    }
 
     // ── rewrite_path_prefix ────────────────────────────────────────────────
 
@@ -928,6 +1076,19 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["plain", "project.json", "settings.json"]);
+    }
+
+    // ── reserved scopes ───────────────────────────────────────────────────
+
+    #[test]
+    fn reserved_scopes_are_root_and_assistant_under_any_spelling() {
+        for id in ["root", "assistant", "Assistant", "ROOT", " assistant ", "assistant\n"] {
+            assert!(is_reserved_scope(id), "{id:?}");
+        }
+        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant"] {
+            assert!(!is_reserved_scope(id), "{id:?}");
+        }
+        assert_eq!(project_key(ASSISTANT_SCOPE), ASSISTANT_SCOPE, "the id names its own directory");
     }
 
     // ── root_work_dir ─────────────────────────────────────────────────────

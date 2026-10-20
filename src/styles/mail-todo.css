@@ -777,15 +777,16 @@ svg.alerts-toggle-icon {
 .machines-home-inner {
   max-width: 1320px;
 }
-/* As many 300px columns as fit: a fleet is a list of peers, not four fixed
+/* As many 280px columns as fit: a fleet is a list of peers, not four fixed
    sections, so it takes the auto-fill a two-up would waste. */
 .machines-home .machines-grid {
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
 }
 .machines-grid > .machines-tile {
-  gap: 10px;
-  min-height: 170px;
-  padding: 16px 18px;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 16px;
   border: 1px solid var(--control-border);
   cursor: var(--cur-default, default);
 }
@@ -833,6 +834,10 @@ svg.alerts-toggle-icon {
   color: var(--text-secondary);
 }
 .machines-tile-busy {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   padding: 0 7px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--success) 16%, transparent);
@@ -845,6 +850,9 @@ svg.alerts-toggle-icon {
 /* The icon actions at the tile's foot, so the tiles of one row line them up
    (the chips' rule in `.models-tile-chips`). */
 .machines-grid > .machines-tile .machines-row-actions {
+  /* The dropdown's 100% basis is a row break; here the flex axis is vertical. */
+  flex-basis: auto;
+  flex-wrap: wrap;
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px solid var(--border-color);
@@ -933,6 +941,157 @@ svg.alerts-toggle-icon {
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+/* ── Tabby's side-panel view (assistant/AssistantView) ──────────────────────
+   One of the side panel's views, so it is stacked for the panel's width: New
+   chat and the chat list on top (capped, scrolling past a few chats), the chat
+   — or the new-chat form — filling what is left. The list's rows wear the
+   subwindow head's × (`.subwindow-hide`), the cards the settings design
+   system's (`.settings-card`, `.settings-btn`), so only the layout is new. */
+.assistant-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-color);
+}
+.assistant-chat-list {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: 32%;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+.assistant-chat-list-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.assistant-new-chat-btn {
+  flex: 1 1 auto;
+}
+.assistant-chat-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.assistant-chat-empty {
+  padding: 10px;
+  margin: 0;
+}
+.assistant-chat-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 2px solid transparent;
+}
+.assistant-chat-row:hover,
+.assistant-chat-row.active {
+  background: var(--control-hover-bg);
+}
+.assistant-chat-row.active {
+  border-left-color: var(--accent);
+}
+.assistant-chat-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 6px 6px 10px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.assistant-chat-label,
+.assistant-chat-sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-chat-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.assistant-chat-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.assistant-chat-delete {
+  flex: 0 0 auto;
+  margin-right: 4px;
+}
+.assistant-chat-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: var(--text-primary);
+}
+.assistant-main-note {
+  padding: 16px;
+}
+.assistant-new-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+}
+.assistant-new-chat-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--accent);
+}
+.assistant-chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.assistant-chat-notes {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+/* The pane fills what the notes leave; TabPane lays itself out in it as in a
+   `.center-pane` (the docked agent column's `.overlay-agent-body`). */
+.assistant-chat-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Not a scroll container (see ViewerOverflowClip.test.ts). */
+  overflow: hidden;
+  overflow: clip;
+}
+.assistant-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-card-plain {
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+}
+.assistant-card-title {
+  font-size: 13px;
+  font-weight: 650;
 }
 /* The docked agent column (layout/OverlayAgentColumn): a root agent tab beside
    the app, on the body's right like the ◫ file column — same edge, same

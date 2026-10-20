@@ -1,6 +1,6 @@
 /**
  * The desktop markup mode's Submit (`usePdfMarkup` + `PdfMarkupBar`,
- * `docs/pdf_markup_rounds_plan.md` §2.6): the marks go to `pdf_markup_submit`,
+ * `docs/done/pdf_markup_rounds_plan.md` §2.6): the marks go to `pdf_markup_submit`,
  * the prompt it answers is queued for an agent tab of the project and held for
  * the CLI's own queue (`holdPhonePrompt`) — and only then do the marks move to
  * the sent side. Without an agent tab there is nothing to send to; a prompt the

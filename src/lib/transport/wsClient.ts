@@ -29,7 +29,9 @@ export interface CommandCapability {
 
 export interface ServerCapabilities {
   protocol: number;
-  hostOs: "linux" | "windows" | "macos";
+  /** Absent when the server named none (or none this client knows); the
+   *  page then uses its own OS (`lib/platform.ts`). */
+  hostOs?: "linux" | "windows" | "macos";
   role: "user" | "admin";
   /** `admin-helper` on a hosted server: CLIs are the administrator's. */
   cliInstalls?: "self" | "admin-helper";
@@ -40,6 +42,26 @@ export interface Hello {
   client: string;
   protocol: number;
   capabilities: ServerCapabilities;
+}
+
+/**
+ * The `hello` frame's capabilities, read rather than trusted. A server that
+ * sends none (an older daemon, a proxy that rewrote the frame) or a malformed
+ * value must not crash the page's boot on `hello.capabilities.hostOs`: what
+ * is missing falls back to the least the client may assume — the `user` role,
+ * no listed commands, no host OS.
+ */
+export function helloCapabilities(raw: unknown, protocol: number): ServerCapabilities {
+  const c = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const hostOs = c.hostOs === "linux" || c.hostOs === "windows" || c.hostOs === "macos" ? c.hostOs : undefined;
+  const cliInstalls = c.cliInstalls === "self" || c.cliInstalls === "admin-helper" ? c.cliInstalls : undefined;
+  return {
+    protocol: typeof c.protocol === "number" ? c.protocol : protocol,
+    ...(hostOs ? { hostOs } : {}),
+    role: c.role === "admin" ? "admin" : "user",
+    ...(cliInstalls ? { cliInstalls } : {}),
+    commands: Array.isArray(c.commands) ? (c.commands as CommandCapability[]) : [],
+  };
 }
 
 export type EventHandler = (name: string, payload: unknown) => void;
@@ -91,7 +113,7 @@ export class WsClient {
   /** Subscription reference counts, re-sent after every hello. */
   private readonly subs = new Map<string, number>();
   private readonly handlers = new Set<EventHandler>();
-  private readyWaiters: Array<(hello: Hello) => void> = [];
+  private readyWaiters: Pending[] = [];
   private closed = false;
   private attempt = 0;
   private readonly options: Required<Pick<WsClientOptions, "url" | "protocol" | "reconnectMinMs" | "reconnectMaxMs">> & WsClientOptions;
@@ -106,16 +128,33 @@ export class WsClient {
     this.open();
   }
 
+  /**
+   * Stop for good. Settles everything waiting on this client here, before the
+   * socket is dropped: the socket's own `onclose` arrives later (a real
+   * WebSocket fires it asynchronously) and then finds a different `socket`
+   * and returns early, so it cannot be the one to reject them.
+   */
   close(): void {
     this.closed = true;
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    this.hello = null;
+    socket?.close();
+    setLinkState("down");
+    const error = new DisconnectedError();
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    const waiters = this.readyWaiters;
+    this.readyWaiters = [];
+    for (const waiter of waiters) waiter.reject(error);
   }
 
-  /** Resolves with the first `hello` (or the last one received). */
+  /** Resolves with the first `hello` (or the last one received); rejects
+   * with `DisconnectedError` once the client is closed. */
   whenReady(): Promise<Hello> {
     if (this.hello) return Promise.resolve(this.hello);
-    return new Promise((resolve) => this.readyWaiters.push(resolve));
+    if (this.closed) return Promise.reject(new DisconnectedError());
+    return new Promise((resolve, reject) => this.readyWaiters.push({ resolve: resolve as (value: unknown) => void, reject }));
   }
 
   get up(): boolean {
@@ -195,7 +234,11 @@ export class WsClient {
     socket.onopen = () => {
       // `up` waits for the hello frame.
     };
-    socket.onmessage = (event) => this.receive(event.data);
+    socket.onmessage = (event) => {
+      // A frame still arriving on a socket `close()` dropped is not this
+      // client's any more (a late hello would mark a closed link "up").
+      if (this.socket === socket) this.receive(event.data);
+    };
     socket.onerror = () => {
       // The close that follows does the work.
     };
@@ -223,7 +266,7 @@ export class WsClient {
 
   private receive(data: unknown): void {
     if (typeof data === "string") {
-      let frame: { t?: string; id?: number; ok?: unknown; err?: unknown; name?: string; payload?: unknown; client?: string; protocol?: number; capabilities?: ServerCapabilities };
+      let frame: { t?: string; id?: number; ok?: unknown; err?: unknown; name?: string; payload?: unknown; client?: string; protocol?: number; capabilities?: unknown };
       try {
         frame = JSON.parse(data);
       } catch {
@@ -231,14 +274,15 @@ export class WsClient {
       }
       switch (frame.t) {
         case "hello": {
-          this.hello = { client: frame.client ?? "", protocol: frame.protocol ?? 0, capabilities: frame.capabilities! };
+          const protocol = frame.protocol ?? 0;
+          this.hello = { client: frame.client ?? "", protocol, capabilities: helloCapabilities(frame.capabilities, protocol) };
           this.clientId = this.hello.client;
           this.attempt = 0;
           for (const name of this.subs.keys()) this.socket?.send(JSON.stringify({ t: "sub", name }));
           setLinkState("up");
           const waiters = this.readyWaiters;
           this.readyWaiters = [];
-          for (const resolve of waiters) resolve(this.hello);
+          for (const waiter of waiters) waiter.resolve(this.hello);
           return;
         }
         case "ret": {

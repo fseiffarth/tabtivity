@@ -1,7 +1,7 @@
 /**
  * The files library's covers (`FilesLibrary`'s `LibraryCover`), drawn on the
  * phone and only there: the desktop has no thumbnail route
- * (`docs/mobile_files_library_plan.md`, decision 3).
+ * (`docs/done/mobile_files_library_plan.md`, decision 3).
  *
  * A picture is fetched by its sealed token, as the viewer fetches it, and
  * scaled with `createImageBitmap`; a PDF's first page comes from the sealed
@@ -127,7 +127,9 @@ export class ThumbCache {
 }
 
 /** At most `limit` tasks at once, the rest waiting in order; a waiting one
- * can leave the line, and then never runs. */
+ * can leave the line, and then never runs, and a running one is told to stop
+ * through its signal — a tile gone (the library left for a viewer) must not
+ * keep pulling a PDF down the link the viewer is loading over. */
 export class ThumbQueue {
   private active = 0;
   private readonly waiting: { start: () => void; drop: () => void }[] = [];
@@ -136,13 +138,14 @@ export class ThumbQueue {
 
   /** `done` settles with the task's answer, or `null` when it left the line
    * before its turn (or threw). */
-  run<T>(task: () => Promise<T>): { done: Promise<T | null>; cancel: () => void } {
+  run<T>(task: (signal: AbortSignal) => Promise<T>): { done: Promise<T | null>; cancel: () => void } {
     let cancel = () => {};
+    const controller = new AbortController();
     const done = new Promise<T | null>((resolve) => {
       const slot = {
         start: () => {
           this.active += 1;
-          void task().then((answer) => resolve(answer), () => resolve(null)).finally(() => {
+          void task(controller.signal).then((answer) => resolve(controller.signal.aborted ? null : answer), () => resolve(null)).finally(() => {
             this.active -= 1;
             this.next();
           });
@@ -154,6 +157,8 @@ export class ThumbQueue {
         if (at >= 0) {
           this.waiting.splice(at, 1);
           slot.drop();
+        } else {
+          controller.abort();
         }
       };
       this.waiting.push(slot);
@@ -287,8 +292,9 @@ let frameTurn: Promise<unknown> = Promise.resolve();
 
 /** The first page of `bytes`, drawn by a freshly loaded hidden sealed frame;
  * `null` when the frame refused it or did not answer in time. */
-function firstPage(bytes: ArrayBuffer): Promise<ImageBitmap | null> {
+function firstPage(bytes: ArrayBuffer, signal: AbortSignal): Promise<ImageBitmap | null> {
   const turn = frameTurn.then(() => new Promise<ImageBitmap | null>((resolve) => {
+    if (signal.aborted) { resolve(null); return; }
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts");
     frame.setAttribute("aria-hidden", "true");
@@ -302,10 +308,13 @@ function firstPage(bytes: ArrayBuffer): Promise<ImageBitmap | null> {
     const finish = (bitmap: ImageBitmap | null) => {
       window.clearTimeout(timer);
       window.removeEventListener("message", onMessage);
+      signal.removeEventListener("abort", stop);
       frame.remove();
       resolve(bitmap);
     };
-    const timer = window.setTimeout(() => finish(null), PDF_TIMEOUT_MS);
+    const stop = () => finish(null);
+    const timer = window.setTimeout(stop, PDF_TIMEOUT_MS);
+    signal.addEventListener("abort", stop);
     const onMessage = (event: MessageEvent) => {
       const message = acceptFrameMessage(event, frame.contentWindow, pages || MAX_FRAME_PAGES);
       if (!message) {
@@ -337,8 +346,8 @@ function firstPage(bytes: ArrayBuffer): Promise<ImageBitmap | null> {
   return turn;
 }
 
-async function pdfCover(blob: Blob): Promise<Blob | null> {
-  const bitmap = await firstPage(await blob.arrayBuffer());
+async function pdfCover(blob: Blob, signal: AbortSignal): Promise<Blob | null> {
+  const bitmap = await firstPage(await blob.arrayBuffer(), signal);
   if (!bitmap) return null;
   try {
     return await encode(bitmap);
@@ -347,27 +356,29 @@ async function pdfCover(blob: Blob): Promise<Blob | null> {
   }
 }
 
-/** Fetch, draw and store one cover; `null` when there is none to show. */
-async function makeCover(projectId: string, entry: ProjectFileEntry, source: "image" | "pdf", key: string): Promise<Blob | null> {
+/** Fetch, draw and store one cover; `null` when there is none to show. A
+ * cover stopped by `signal` is not recorded at all: the next visit tries it. */
+async function makeCover(projectId: string, entry: ProjectFileEntry, source: "image" | "pdf", key: string, signal: AbortSignal): Promise<Blob | null> {
   if (unfetched.has(key)) return null;
   let blob: Blob;
   try {
     const url = viewerFileUrl({ files: projectId }, { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token });
-    const response = await fetch(url, { credentials: "same-origin" });
+    const response = await fetch(url, { credentials: "same-origin", signal });
     if (!response.ok) throw new Error("fetch");
     blob = await response.blob();
   } catch {
-    unfetched.add(key);
+    if (!signal.aborted) unfetched.add(key);
     return null;
   }
   let thumb: Blob | null = null;
   if (blob.size <= (source === "pdf" ? MAX_THUMB_PDF : MAX_THUMB_IMAGE)) {
     try {
-      thumb = source === "pdf" ? await pdfCover(blob) : await pictureCover(blob);
+      thumb = source === "pdf" ? await pdfCover(blob, signal) : await pictureCover(blob);
     } catch {
       thumb = null;
     }
   }
+  if (signal.aborted) return null;
   await cache().store(key, thumb);
   return thumb;
 }
@@ -428,7 +439,7 @@ export function useThumb(cover: RefObject<Element | null>, projectId: string, en
       if (gone || !started || mine !== visit) return;
       if (cached instanceof Blob) { show(cached); return; }
       if (cached !== null) return;
-      const run = queue.run(() => makeCover(projectId, entry, source, key));
+      const run = queue.run((signal) => makeCover(projectId, entry, source, key, signal));
       job = run;
       const made = await run.done;
       if (made) show(made);

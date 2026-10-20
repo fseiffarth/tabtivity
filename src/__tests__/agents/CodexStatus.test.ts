@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexRemaining, codexReset, readCodexStatus } from "../../lib/agents/codexStatus";
+import { codexRemaining, codexReset, readClaudeStatus, readCodexStatus } from "../../lib/agents/codexStatus";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 
 const lines = (rows: string[]) => rows.map((text) => ({ text }));
@@ -49,5 +49,30 @@ describe("Codex's /status card", () => {
     expect(codexRemaining("101% left")).toBeUndefined();
     expect(codexRemaining("10% used")).toBeUndefined();
     expect(codexRemaining(undefined)).toBeUndefined();
+  });
+});
+
+describe("Claude's /status dialog", () => {
+  const page = [
+    "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔", "   Settings  Status   Config   Usage   Stats", "",
+    "   Version:           2.1.303", "   Session name:      /rename to add a name",
+    "   Session ID:        753d5b25-6981-4bba-9cce-d27f19fc265a", "   cwd:               /p",
+    "   Login method:      Claude Max account", "", "   Model:             opus (claude-opus-5-5)",
+    "   MCP servers:       1 connected, 4 disabled · /mcp", "   Setting sources:   User settings, Shared project settings,",
+    "                      Project local settings", "", "   Esc to cancel", "Model: untrusted output",
+  ];
+
+  it("reads the Status page and joins wrapped values", () => {
+    const card = readClaudeStatus(lines(["❯ /status", ...page]));
+    expect(card?.fields.find((field) => field.label === "Model")?.value).toBe("opus (claude-opus-5-5)");
+    expect(card?.fields.find((field) => field.label === "Session ID")?.value).toBe("753d5b25-6981-4bba-9cce-d27f19fc265a");
+    expect(card?.fields.find((field) => field.label === "Setting sources")?.value).toBe("User settings, Shared project settings, Project local settings");
+    expect(card?.raw).not.toContain("untrusted output");
+    expect(card?.raw).not.toContain("Esc to cancel");
+  });
+
+  it("ignores the dialog's other pages and prose without the tab row", () => {
+    expect(readClaudeStatus(lines(["   Settings  Status   Config   Usage   Stats", "   Current session", "   25% used", "   Esc to cancel"]))).toBeNull();
+    expect(readClaudeStatus(lines(["Model: opus", "cwd: /p"]))).toBeNull();
   });
 });

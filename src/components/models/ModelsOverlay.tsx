@@ -42,9 +42,9 @@ import { storageKey } from "../../lib/brand";
  *  - **Agents & CLIs** — Settings' `AgentsPanel`, each installed card carrying
  *    the dropdown's Default · + tab · Root · MCP chips (`AgentChips`), the
  *    cards tiled across the window;
- *  - **Local models** — the dropdown's own sections (`ModelsHubSections`) over
- *    the shared `stores/agents/ollamaActivity`, in its order: models, then the
- *    Machine meters;
+ *  - **Local models** — the hub sections (`ModelsHubSections`) over the shared
+ *    `stores/agents/ollamaActivity`, drawn as cards: status bar, Machine
+ *    meters, then Running / On disk;
  *  - **Ollama** — Settings' `OllamaPanel` (install, storage, pulls, catalog);
  *  - **Skills** — the machine-level skills library the retired SkillsOverlay
  *    hosted (`SkillsLibraryView` with no project).
@@ -73,6 +73,15 @@ const SECTION_INTRO: Record<ModelsOverlaySection, TranslationKey> = {
   models: "modelsOverlay.intro.models",
   ollama: "modelsOverlay.intro.ollama",
   skills: "modelsOverlay.intro.skills",
+};
+
+/** The one-line description beside the section's name in the bar and on its
+ *  tile; the longer `SECTION_INTRO` is their tooltip. */
+const SECTION_SUB: Record<ModelsOverlaySection, TranslationKey> = {
+  agents: "modelsOverlay.sub.agents",
+  models: "modelsOverlay.sub.models",
+  ollama: "modelsOverlay.sub.ollama",
+  skills: "modelsOverlay.sub.skills",
 };
 
 function SectionIcon({ id, size }: { id: ModelsOverlaySection; size: number }) {
@@ -175,6 +184,18 @@ function ModelsOverlay() {
         {/* The root console's bar: mark, where-am-I trail, controls. The bar is
             the move handle; the back button and the controls keep their press. */}
         <div {...barRest} className={`tab-bar root-overlay-bar ${barRest.className}`}>
+          {view !== "home" && (
+            <button
+              ref={backRef}
+              type="button"
+              className="models-overlay-back"
+              title={t("modelsOverlay.backTitle")}
+              onClick={() => show("home")}
+            >
+              <ArrowLeftIcon size={13} />
+              <span>{t("modelsOverlay.back")}</span>
+            </button>
+          )}
           <div className="root-overlay-mark app-overlay-mark models-overlay-mark" title={moveHint}>
             <ModelsGlyph className="models-overlay-glyph" />
             <span className="app-overlay-label models-overlay-label">{t("modelsOverlay.title")}</span>
@@ -183,23 +204,18 @@ function ModelsOverlay() {
           <nav className="models-overlay-trail" aria-label={t("modelsOverlay.trailAria")}>
             {view !== "home" && (
               <>
-                <button
-                  ref={backRef}
-                  type="button"
-                  className="models-overlay-back"
-                  title={t("modelsOverlay.backTitle")}
-                  onClick={() => show("home")}
-                >
-                  <ArrowLeftIcon size={13} />
-                  <span>{t("modelsOverlay.back")}</span>
-                </button>
                 <span className="models-overlay-trail-sep" aria-hidden="true">
-                  /
+                  ›
                 </span>
-                <span className="models-overlay-trail-current" aria-current="page">
+                <span
+                  className="models-overlay-trail-current"
+                  aria-current="page"
+                  title={t(SECTION_INTRO[view])}
+                >
                   <SectionIcon id={view} size={14} />
                   {t(SECTION_LABEL[view])}
                 </span>
+                <span className="models-overlay-trail-sub">{t(SECTION_SUB[view])}</span>
                 {/* The skills library's pill moved here with the library
                     (from the retired SkillsOverlay's mark). */}
                 {view === "skills" && <UntestedTag id="skillsLibrary.overlayTitle" />}
@@ -233,7 +249,6 @@ function ModelsOverlay() {
                 className={`models-overlay-pane models-overlay-pane-${id}`}
                 hidden={id !== view}
               >
-                <p className="settings-help models-overlay-intro">{t(SECTION_INTRO[id])}</p>
                 {/* No `onClose` to the embedded panels: it only feeds their
                     header's ×, which the CSS hides with the title row — the
                     overlay's bar has its own. */}
@@ -255,7 +270,7 @@ function ModelsOverlay() {
 }
 
 /** Chips shown on a tile before the rest fold into "+N more". */
-const TILE_CHIPS = 6;
+const TILE_CHIPS = 4;
 
 interface TileChip {
   key: string;
@@ -440,7 +455,7 @@ function OverviewGrid({
     <div className="models-home">
       <div className="models-home-inner">
         <p className="models-home-lead">{t("modelsOverlay.home.lead")}</p>
-        <div className="models-home-grid" ref={gridRef} onKeyDown={onKeyDown}>
+        <div className="models-home-grid models-home-sections" ref={gridRef} onKeyDown={onKeyDown}>
           {MODELS_OVERLAY_SECTIONS.map((id) => (
             <SectionTile key={id} id={id} summary={summary[id]} onOpen={() => onOpen(id)} />
           ))}
@@ -485,26 +500,32 @@ function SectionTile({
       className={`models-tile models-tile-${id}`}
       aria-label={t(SECTION_LABEL[id])}
       aria-describedby={descId}
+      title={t(SECTION_INTRO[id])}
       onClick={onOpen}
     >
       <span className="models-tile-head">
         <span className="models-tile-icon">
           <SectionIcon id={id} size={22} />
         </span>
-        <span className="models-tile-title">{t(SECTION_LABEL[id])}</span>
-        {summary.badge && <span className="models-tile-badge">{summary.badge}</span>}
-        <span className="models-tile-go" aria-hidden="true">
-          <ArrowRightIcon size={16} />
+        <span className="models-tile-titles">
+          <span className="models-tile-title">{t(SECTION_LABEL[id])}</span>
+          <span className="models-tile-intro">{t(SECTION_SUB[id])}</span>
         </span>
+        {summary.badge && <span className="models-tile-badge">{summary.badge}</span>}
       </span>
       <span id={descId} className="models-tile-desc">
-        <span className="models-tile-intro">{t(SECTION_INTRO[id])}</span>
         <span className="models-tile-stat">
           <span className={`ollama-status-dot ${summary.ok ? "running" : "stopped"}`} aria-hidden="true" />
           {summary.stat}
         </span>
       </span>
-      {chips}
+      <span className="models-tile-foot">
+        {chips}
+        <span className="models-tile-open" aria-hidden="true">
+          {t("modelsOverlay.tile.open")}
+          <ArrowRightIcon size={14} />
+        </span>
+      </span>
     </button>
   );
 }
@@ -542,12 +563,12 @@ function AgentsTab({ active }: { active: boolean }) {
 }
 
 /**
- * The dropdown's Local models section at full size, in the dropdown's order:
- * the "Local Models" band with its Running / On disk sub-bands, then the
- * Machine meters (what is left to run them with). `useModelsHub(active)` gates
- * the 2 s GPU/machine poll and the GPU-status read on this section being the
- * visible one; the list and version are re-read each time it becomes visible,
- * as a hover does — but not the agents, which this section doesn't show.
+ * The Local models section at full size: a status bar, notices, the Machine
+ * meters, then a card per model (`LocalModelsSection` `layout="overlay"` — the
+ * dropdown keeps its menu rows). `useModelsHub(active)` gates the 2 s
+ * GPU/machine poll and the GPU-status read on this section being the visible
+ * one; the list and version are re-read each time it becomes visible, as a
+ * hover does — but not the agents, which this section doesn't show.
  */
 function ModelsTab({ active, onManageModels }: { active: boolean; onManageModels: () => void }) {
   const hub = useModelsHub(active);
@@ -563,8 +584,12 @@ function ModelsTab({ active, onManageModels }: { active: boolean; onManageModels
   }, [active, installed]);
   return (
     <div className="dialog-scroll models-overlay-models">
-      <LocalModelsSection hub={hub} layout="overlay" onManageModels={onManageModels} />
-      <MachineMeters hub={hub} />
+      <LocalModelsSection
+        hub={hub}
+        layout="overlay"
+        onManageModels={onManageModels}
+        machine={<MachineMeters hub={hub} layout="overlay" />}
+      />
       {hub.dialogs}
     </div>
   );

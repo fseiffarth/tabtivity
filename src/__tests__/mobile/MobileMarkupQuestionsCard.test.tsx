@@ -1,5 +1,5 @@
 /**
- * The agent's markup questions on the phone (`docs/markup_questions_mcp_plan.md`
+ * The agent's markup questions on the phone (`docs/done/markup_questions_mcp_plan.md`
  * P3): the card docked above the markup palette, its rows the Focus list's,
  * the answer sent as picks only (the desktop builds the prompt), the pins the
  * sealed frame places at the quoted words, and the Focus chat's banner.

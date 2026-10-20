@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentPlatform, shellQuote } from "./pythonRun";
 import type { TranslationKey } from "../i18n";
+import type { DroppedFile } from "../../components/files/importDrop";
 
 /**
  * Files dropped from the OS file manager onto a terminal tab
@@ -26,6 +27,7 @@ const DROP_ERRORS: Record<string, TranslationKey> = {
   file_too_large: "terminal.drop.tooLarge",
   inbox_full: "terminal.drop.inboxFull",
   not_a_file: "terminal.drop.notAFile",
+  not_found: "terminal.drop.notFound",
 };
 
 export function dropErrorKey(code: string): TranslationKey {
@@ -39,15 +41,21 @@ export function dropText(items: readonly string[], agent: boolean): string {
   return items.map((item) => (agent ? `@${item} ` : `${shellQuote(item, platform)} `)).join("");
 }
 
-/** Hand the dropped paths to the backend; `text` is what to type (empty when
- *  nothing made it), `error` the translation key of why a file did not. */
+/** Hand the dropped files to the backend — an inferred path with the size it
+ *  must have (`parseDroppedFiles`); `text` is what to type (empty when nothing
+ *  made it), `error` the translation key of why a file did not. */
 export async function deliverDrop(
   ptyId: string,
-  paths: readonly string[],
+  files: readonly DroppedFile[],
   agent: boolean,
 ): Promise<{ text: string; error: TranslationKey | null }> {
   try {
-    const dropped = await invoke<PtyDropped>("pty_drop_files", { id: ptyId, paths, agent });
+    const dropped = await invoke<PtyDropped>("pty_drop_files", {
+      id: ptyId,
+      paths: files.map((f) => f.path),
+      agent,
+      sizes: files.map((f) => f.size),
+    });
     return {
       text: dropText(dropped.items, agent),
       error: dropped.error ? dropErrorKey(dropped.error) : null,

@@ -167,3 +167,57 @@ describe("a prompt the phone sent mid-turn", () => {
     expect(delivered()).toBe("");
   });
 });
+
+describe("a phone prompt held for a Claude tab that has just started", () => {
+  /** A fresh Claude pane: no hook turn yet; what the prompt starts is reported
+   *  by its `UserPromptSubmit` hook, not by the typing. */
+  function freshClaude() {
+    _clearScheduledAgentInputsForTest();
+    registerScheduledAgentInput("target-1", {
+      ptyId: PTY,
+      ready: () => true,
+      started: () => true,
+      bracketedPaste: () => false,
+      agent: "claude",
+      recordAuthorizedInput: () => {},
+    });
+  }
+  const enters = () => writeMock.mock.calls.filter(([, bytes]) => decode(bytes) === "\r").length;
+
+  it("presses Enter again while no turn has begun, and stops once one has", async () => {
+    freshClaude();
+    schedules = [sendNow("held-1", "fix the marked lines")];
+    holdPhonePrompt("held-1");
+    await act(async () => { render(<AgentScheduleHost />); });
+    await advance(1_000);
+    expect(delivered()).toContain("fix the marked lines");
+    expect(enters()).toBe(1);
+    // The CLI dropped that Enter: no turn came of it.
+    await advance(2_500);
+    expect(enters()).toBe(2);
+    // The second one took.
+    noteAgentTurn(PTY, "working");
+    await advance(10_000);
+    expect(enters()).toBe(2);
+  });
+
+  it("presses nothing more when the prompt started a turn", async () => {
+    freshClaude();
+    schedules = [sendNow("held-1", "fix the marked lines")];
+    holdPhonePrompt("held-1");
+    await act(async () => { render(<AgentScheduleHost />); });
+    await advance(1_000);
+    noteAgentTurn(PTY, "working");
+    await advance(10_000);
+    expect(enters()).toBe(1);
+  });
+
+  it("gives up after a few tries", async () => {
+    freshClaude();
+    schedules = [sendNow("held-1", "fix the marked lines")];
+    holdPhonePrompt("held-1");
+    await act(async () => { render(<AgentScheduleHost />); });
+    await advance(30_000);
+    expect(enters()).toBe(4);
+  });
+});

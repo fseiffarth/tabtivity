@@ -122,12 +122,14 @@ describe("thumbnails — the cache", () => {
 });
 
 describe("thumbnails — the queue", () => {
-  it("makes at most two at once, in order, and a waiting one can leave the line", async () => {
+  it("makes at most two at once, in order; a waiting one can leave the line, a running one is stopped", async () => {
     const queue = new ThumbQueue(2);
     const started: string[] = [];
     const gates = new Map<string, () => void>();
-    const task = (name: string) => () => new Promise<string>((resolve) => {
+    const signals = new Map<string, AbortSignal>();
+    const task = (name: string) => (signal: AbortSignal) => new Promise<string>((resolve) => {
       started.push(name);
+      signals.set(name, signal);
       gates.set(name, () => resolve(name));
     });
     const a = queue.run(task("a"));
@@ -141,11 +143,13 @@ describe("thumbnails — the queue", () => {
     expect(await a.done).toBe("a");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(started).toEqual(["a", "b", "d"]);
-    // Leaving the line once running changes nothing.
+    // A running one is told to stop, and answers nothing.
+    expect(signals.get("b")?.aborted).toBe(false);
     b.cancel();
+    expect(signals.get("b")?.aborted).toBe(true);
     gates.get("b")?.();
     gates.get("d")?.();
-    expect(await b.done).toBe("b");
+    expect(await b.done).toBeNull();
     expect(await d.done).toBe("d");
     expect(started).not.toContain("c");
   });
