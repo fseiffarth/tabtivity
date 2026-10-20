@@ -1090,6 +1090,9 @@ export interface HiddenGroup {
   // a multi-pane split was hidden whole.
   subtree: LayoutNode;
   label: string; // debug/label tag, mirrors DetachedGroup.label
+  // The name the user gave it in the side panel's Hidden list. Unset, the list
+  // calls it "Hidden <n>" by its position.
+  name?: string;
 }
 
 /**
@@ -1316,6 +1319,8 @@ export type SavedLayoutTree =
       // routes it back into `hiddenGroupsByScope` instead of the live tree.
       // See withHiddenDocked / deserializeTree / loadFromLayout.
       hidden?: boolean;
+      // A hidden subtree's user-given name (HiddenGroup.name).
+      hiddenName?: string;
     }
   | {
       type: "group";
@@ -1332,6 +1337,7 @@ export type SavedLayoutTree =
       // When true, this group was HIDDEN (see the split variant's note). Restore
       // moves it into `hiddenGroupsByScope` rather than docking it live.
       hidden?: boolean;
+      hiddenName?: string;
       // Per-subwindow right file viewer (see GroupNode.filesOpen/filesWidth).
       filesOpen?: boolean;
       filesWidth?: number;
@@ -1685,6 +1691,9 @@ interface TabsStore {
   // payloads from `tabsByScope` (killing the PTYs, mirroring `closeGroup`). Used
   // by the ✕ on a Hidden-list row. No-op if the hidden entry is gone.
   closeHiddenGroup: (hiddenId: string) => void;
+  // Name a hidden group in the side panel's Hidden list; a blank name clears it
+  // back to the positional "Hidden <n>". No-op if the hidden entry is gone.
+  renameHiddenGroup: (hiddenId: string, name: string) => void;
   // #42: dock a SINGLE tab out of a popout back into a scope's layout (the
   // per-tab analog of attachGroup, used when one tab — not the whole group — is
   // dragged onto the main window). Inserts the tab at `targetGroupId`/`edge`
@@ -2687,11 +2696,23 @@ export interface RespawnTarget {
  * split (see `isSavedLayoutNode`) builds nothing, like a group whose tabs are
  * all gone, and the caller falls back to one group holding every tab.
  */
+/** A group or split restored from the saved tree that was tagged `hidden`. */
+interface HiddenTarget {
+  id: string; // the FRESH node id minted during deserialize
+  name?: string;
+}
+
+function hiddenTarget(id: string, saved: SavedLayoutTree): HiddenTarget {
+  // Read from disk, so the name's type is checked, not assumed.
+  const name = typeof saved.hiddenName === "string" ? saved.hiddenName.trim() : "";
+  return name ? { id, name } : { id };
+}
+
 function deserializeTree(
   saved: SavedLayoutTree,
   keyMap: Map<string, string>,
   detachedOut?: RespawnTarget[],
-  hiddenOut?: string[],
+  hiddenOut?: HiddenTarget[],
 ): LayoutNode | null {
   if (!isSavedLayoutNode(saved)) return null;
   if (saved.type === "group") {
@@ -2708,7 +2729,7 @@ function deserializeTree(
       detachedOut.push({ id, bounds: saved.bounds, zoom: saved.zoom });
     }
     if (saved.hidden && hiddenOut) {
-      hiddenOut.push(id);
+      hiddenOut.push(hiddenTarget(id, saved));
     }
     return {
       type: "group",
@@ -2734,7 +2755,7 @@ function deserializeTree(
     }
     // Likewise inherit a hidden tag so the survivor is parked, not docked live.
     if (saved.hidden && hiddenOut) {
-      hiddenOut.push(children[0].id);
+      hiddenOut.push(hiddenTarget(children[0].id, saved));
     }
     return children[0];
   }
@@ -2758,7 +2779,7 @@ function deserializeTree(
   }
   // A hidden split is parked whole by its root id (same one-target logic).
   if (saved.hidden && hiddenOut) {
-    hiddenOut.push(id);
+    hiddenOut.push(hiddenTarget(id, saved));
   }
   return { type: "split", id, dir: saved.dir, children, sizes };
 }
@@ -4232,11 +4253,15 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         // The tree emptied while hidden → install the restored subtree as root.
         layout = fresh;
       } else {
-        const target = allGroups(layout)[0];
+        // Beside the pane the user is working in; the first group only when no
+        // live group has focus.
+        const groups = allGroups(layout);
+        const focus = s.focusedGroupByScope[scope] ?? null;
+        const target = groups.find((g) => g.id === focus) ?? groups[0];
         if (!target) {
           layout = fresh;
         } else {
-          // Inject the whole subtree as a new pane to the right of the first group.
+          // Inject the whole subtree as a new pane to the right of the target.
           layout = insertAdjacent(layout, target.id, fresh, "row", false);
         }
       }
@@ -4273,6 +4298,23 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         hiddenGroupsByScope: {
           ...s.hiddenGroupsByScope,
           [scope]: remaining,
+        },
+      };
+    });
+  },
+
+  renameHiddenGroup: (hiddenId, name) => {
+    set((s) => {
+      const scope = s.scope;
+      const entries = s.hiddenGroupsByScope[scope] ?? [];
+      if (!entries.some((h) => h.id === hiddenId)) return {};
+      const trimmed = name.trim();
+      return {
+        hiddenGroupsByScope: {
+          ...s.hiddenGroupsByScope,
+          [scope]: entries.map((h) =>
+            h.id === hiddenId ? { ...h, name: trimmed || undefined } : h,
+          ),
         },
       };
     });
@@ -5279,9 +5321,9 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // Fresh ids of groups/splits tagged `hidden` in the saved tree. They are
     // built into the tree (so their tabs mint payloads/PTYs) then stripped out
     // into `hiddenGroupsByScope` below, so they restore parked, not docked.
-    const hiddenIds: string[] = [];
+    const hiddenTargets: HiddenTarget[] = [];
     if (groups) {
-      root = deserializeTree(groups, keyMap, respawn, hiddenIds);
+      root = deserializeTree(groups, keyMap, respawn, hiddenTargets);
     }
     if (!root && tabs.length > 0) {
       root = {
@@ -5314,14 +5356,19 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // first (ids are stable across sibling strips), then remove them so the tabs
     // stay in `tabsByScope` (payloads/PTYs mounted, hidden) but leave the layout.
     const hiddenGroups: HiddenGroup[] = [];
-    for (const id of hiddenIds) {
+    for (const { id, name } of hiddenTargets) {
       const g = findGroup(root, id);
       const sp = g ? null : findSplit(root, id);
       if (!g && !sp) continue;
       const subtree: LayoutNode = g
         ? { type: "group", id: g.id, tabKeys: [...g.tabKeys], activeKey: g.activeKey }
         : (sp as SplitNode);
-      hiddenGroups.push({ id, subtree, label: `hidden-${targetScope ?? get().scope}-${id}` });
+      hiddenGroups.push({
+        id,
+        subtree,
+        label: `hidden-${targetScope ?? get().scope}-${id}`,
+        ...(name ? { name } : {}),
+      });
     }
     for (const h of hiddenGroups) {
       root = removeNodeById(root, h.id);
@@ -6494,7 +6541,7 @@ export function pruneSavedTree(
       ...(tree.detached ? { detached: true, bounds: tree.bounds } : {}),
       // Carry the hidden tag through pruning so a hidden group stays parked on
       // restore rather than docking live (mirrors the detached tag).
-      ...(tree.hidden ? { hidden: true } : {}),
+      ...(tree.hidden ? { hidden: true, ...(tree.hiddenName ? { hiddenName: tree.hiddenName } : {}) } : {}),
       // Carry the per-subwindow file viewer through pruning (same rationale).
       ...(tree.filesOpen ? { filesOpen: true } : {}),
       ...(tree.filesWidth != null ? { filesWidth: tree.filesWidth } : {}),
@@ -6511,7 +6558,7 @@ export function pruneSavedTree(
   const tag = tree.detached
     ? { detached: true as const, bounds: tree.bounds }
     : tree.hidden
-      ? { hidden: true as const }
+      ? { hidden: true as const, ...(tree.hiddenName ? { hiddenName: tree.hiddenName } : {}) }
       : {};
   if (kept.length === 1) {
     // Collapsed to a single surviving child: it inherits the popout's detached
@@ -6656,7 +6703,7 @@ export function withHiddenDocked(
   for (const h of hidden ?? []) {
     const t = serializeTree(h.subtree);
     if (!t) continue;
-    docked.push({ ...t, hidden: true });
+    docked.push({ ...t, hidden: true, ...(h.name ? { hiddenName: h.name } : {}) });
   }
   if (docked.length === 0) return inWindow;
   const all = inWindow ? [inWindow, ...docked] : docked;

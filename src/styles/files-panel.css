@@ -920,10 +920,9 @@
    here either. This one glyph is the ONE place the working/finished distinction
    cannot be drawn: it is a single character, so it has no stroke to break into
    dashes and no fill to hollow out, and the two states share a colour by design.
-   It is a row-level ROLLUP — "something in this collapsed group wants you" — and
-   the chips beside it carry which state each tab is actually in, so the glyph
-   deliberately says the coarser thing rather than inventing a fourth encoding
-   nobody would learn. */
+   It is a row-level ROLLUP — "something in this collapsed group wants you" —
+   and deliberately says the coarser thing rather than inventing a fourth
+   encoding nobody would learn; restoring the subwindow shows each tab's own. */
 .hidden-sw-icon.working {
   color: var(--status-working);
 }
@@ -960,60 +959,28 @@
 .hidden-sw-status-dot.interrupted {
   background: var(--status-interrupted);
 }
-.hidden-sw-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
+/* A row's name: one subwindow, however many tabs it holds (the tooltip names
+   them). A click restores it, like the ↶ beside it. */
+.hidden-sw-name {
   flex: 1;
   min-width: 0;
-}
-.hidden-sw-chip {
-  max-width: 100%;
-  padding: 0 6px;
-  height: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--bg-main);
+  padding: 0 2px;
+  border: none;
+  background: transparent;
   color: var(--text-primary);
   font-size: var(--text-sm);
-  line-height: 16px;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: var(--cur-pointer, pointer);
 }
-/* Same ring as `.tab.working`/`.needs-decision`/`.finished` — a hidden tab's PTY
-   is still mounted and running, so its chip keeps reporting status, and it has
-   to say which of the three states it is in the same way a visible tab does. A
-   chip already has a border of its own, so the state recolours that border (and
-   for working, breaks it into dots) rather than adding a second ring inside it.
-   Declared ABOVE `:hover`, which carries the same specificity: a pointer on a
-   chip has to be able to say "this one" over the top of whatever state it is
-   in. */
-.hidden-sw-chip.working {
-  border-style: dotted;
-  border-color: var(--status-working);
-  background: color-mix(in srgb, var(--status-working) 12%, var(--bg-main));
-}
-.hidden-sw-chip.working.shell {
-  border-color: var(--status-shell-working);
-  background: color-mix(in srgb, var(--status-shell-working) 12%, var(--bg-main));
-}
-.hidden-sw-chip.needs-decision {
-  border-color: var(--status-decision);
-  background: color-mix(in srgb, var(--status-decision) 12%, var(--bg-main));
-}
-.hidden-sw-chip.finished {
-  border-color: var(--status-done);
-  background: color-mix(in srgb, var(--status-done) 12%, var(--bg-main));
-}
-.hidden-sw-chip.interrupted {
-  border-color: var(--status-interrupted);
-  background: color-mix(in srgb, var(--status-interrupted) 12%, var(--bg-main));
-}
-.hidden-sw-chip:hover {
-  border-color: var(--accent);
+.hidden-sw-name:hover {
   color: var(--accent);
+}
+/* Rides the tab strip's `.tab-label-edit`, so the two renames look alike. */
+.hidden-sw-name-edit {
+  font-size: var(--text-sm);
 }
 .hidden-sw-btn {
   flex-shrink: 0;

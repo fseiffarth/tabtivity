@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ProjectFilesView } from "../files/ProjectFilesView";
 import { useFileSource } from "../files/ProjectFilesPane";
@@ -13,7 +13,7 @@ import {
   type TabEntry,
 } from "../../stores/tabs";
 import { useShallow } from "zustand/react/shallow";
-import { useActivityStore, type AttentionKind, type BusyKind } from "../../stores/activity";
+import { useActivityStore, type AttentionKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
 import { useT } from "../../lib/i18n";
 import { RailChevronIcon, RailSwitchSideIcon } from "../common/EdgeRailIcons";
@@ -30,7 +30,8 @@ import {
 // Single source of truth for the displayed version: package.json is kept in
 // lockstep with the Tauri manifests on each version bump.
 import { version as APP_VERSION } from "../../../package.json";
-import { UndoIcon } from "../common/icons/Icon";
+import { PencilIcon, UndoIcon } from "../common/icons/Icon";
+import { UntestedTag } from "../common/UntestedTag";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 
 interface Props {
@@ -79,6 +80,11 @@ function hiddenTabStatus(
     if (attn === "interrupted") return "interrupted";
   }
   return null;
+}
+
+// Selects the name once, when the rename input mounts (see TabBar's twin).
+function selectOnMount(el: HTMLInputElement | null) {
+  if (el) el.select();
 }
 
 /** Roll several tab statuses up into one, most urgent first — a decision still
@@ -214,9 +220,9 @@ export function SidePanel({
   const folderKey = activeId ?? (isRootScope ? ROOT_SCOPE : null);
   const sidePanelFolder = folderKey ? sidePanelFolderByProject[folderKey] ?? "" : "";
   // Subwindows the user has hidden in the current scope, surfaced as an
-  // auto-pinned section above the toolbar. Their tabs still live in
-  // `tabsByScope[scope]` (PTYs mounted, hidden), so the chips resolve labels
-  // from there. `unhideGroup`/`closeHiddenGroup` restore or discard them.
+  // auto-pinned section above the toolbar, one named row each ("Hidden <n>"
+  // until renamed). Their tabs still live in `tabsByScope[scope]` (PTYs
+  // mounted, hidden); the row's tooltip names them from there. `unhideGroup`/`closeHiddenGroup` restore or discard them.
   const hiddenGroups = useTabsStore((s) => s.hiddenGroupsByScope[s.scope]);
   const scopeTabs = useTabsStore((s) => s.tabsByScope[s.scope]);
   const scopePtyIds = useMemo(
@@ -242,24 +248,18 @@ export function SidePanel({
   );
   const hiddenActivity = useActivityStore(
     useShallow((s) =>
-      hiddenPtyIds.flatMap((id) => [
-        s.busyByTab[id] ?? false,
-        s.busyKindByTab[id] ?? "",
-        s.attentionByTab[id] ?? "",
-      ]),
+      hiddenPtyIds.flatMap((id) => [s.busyByTab[id] ?? false, s.attentionByTab[id] ?? ""]),
     ),
   );
-  const { busyByTab, busyKindByTab, attentionByTab } = useMemo(() => {
+  const { busyByTab, attentionByTab } = useMemo(() => {
     const busy: Record<string, boolean> = {};
-    const kind: Record<string, BusyKind> = {};
     const attention: Record<string, AttentionKind> = {};
     hiddenPtyIds.forEach((id, i) => {
-      const [b, k, a] = hiddenActivity.slice(i * 3, i * 3 + 3);
+      const [b, a] = hiddenActivity.slice(i * 2, i * 2 + 2);
       if (b) busy[id] = true;
-      if (k) kind[id] = k as BusyKind;
       if (a) attention[id] = a as AttentionKind;
     });
-    return { busyByTab: busy, busyKindByTab: kind, attentionByTab: attention };
+    return { busyByTab: busy, attentionByTab: attention };
   }, [hiddenPtyIds, hiddenActivity]);
   // One status per hidden group's tab, rolled up per group and overall, so the
   // Hidden section still says "something's running in there" without needing
@@ -274,13 +274,27 @@ export function SidePanel({
           attentionByTab,
         ),
       );
-      return { id: h.id, status: rollUpStatus(tabStatuses), tabStatuses };
+      return { id: h.id, status: rollUpStatus(tabStatuses) };
     });
     return { rows, overall: rollUpStatus(rows.map((r) => r.status)) };
   }, [hiddenGroups, scopeTabs, scope, busyByTab, attentionByTab]);
   const unhideGroup = useTabsStore((s) => s.unhideGroup);
   const closeHiddenGroup = useTabsStore((s) => s.closeHiddenGroup);
+  const renameHiddenGroup = useTabsStore((s) => s.renameHiddenGroup);
   const [hiddenCollapsed, setHiddenCollapsed] = useState(false);
+  // The hidden row whose name is an <input>. Escape sets the ref so the blur
+  // that follows the input's removal doesn't commit what was typed.
+  const [renamingHidden, setRenamingHidden] = useState<string | null>(null);
+  const renameCancelled = useRef(false);
+  const startHiddenRename = (id: string) => {
+    renameCancelled.current = false;
+    setRenamingHidden(id);
+  };
+  const commitHiddenRename = (id: string, value: string) => {
+    if (!renameCancelled.current) renameHiddenGroup(id, value);
+    renameCancelled.current = false;
+    setRenamingHidden(null);
+  };
 
   // Which view of the shared viewer the panel is on. Kept in settings rather
   // than in the viewer's own state because both things that reset it are
@@ -369,6 +383,7 @@ export function SidePanel({
         >
           <span className="hidden-sw-caret">{hiddenCollapsed ? "▸" : "▾"}</span>
           {t("sidePanel.hiddenCount", { count: hiddenGroups.length })}
+          <UntestedTag id="sidePanel.hiddenRename" />
           {hiddenStatus.overall && (
             <span
               className={`hidden-sw-status-dot ${hiddenStatus.overall}`}
@@ -387,34 +402,50 @@ export function SidePanel({
         {!hiddenCollapsed && (
           <div className="hidden-sw-list">
             {hiddenGroups.map((h, hi) => {
-              const keys = orderedTabKeys(h.subtree);
-              const { status: rowStatus, tabStatuses } = hiddenStatus.rows[hi];
+              const rowStatus = hiddenStatus.rows[hi].status;
+              const name = h.name ?? t("sidePanel.hiddenName", { n: hi + 1 });
+              const tabs = orderedTabKeys(h.subtree)
+                .map((k) => scopeTabs?.find((t) => t.key === k)?.label ?? k)
+                .join(", ");
               return (
                 <div key={h.id} className="hidden-sw-row">
                   <span className={`hidden-sw-icon${rowStatus ? ` ${rowStatus}` : ""}`}>⊞</span>
-                  <div className="hidden-sw-chips">
-                    {keys.map((k, ki) => {
-                      const label = scopeTabs?.find((t) => t.key === k)?.label ?? k;
-                      const status = tabStatuses[ki];
-                      // A chip has one border, so it says the same thing the
-                      // pill's bars do: the shell colour when a COMMAND is all
-                      // the tab is running (`BusyKind` "shell"), the agent's
-                      // otherwise — a tab doing both is drawn as the agent.
-                      const shell =
-                        status === "working" && busyKindByTab[`${scope}:${k}`] === "shell";
-                      return (
-                        <button
-                          key={k}
-                          type="button"
-                          className={`hidden-sw-chip${status ? ` ${status}` : ""}${shell ? " shell" : ""}`}
-                          title={t("sidePanel.restoreFocusedOn", { label })}
-                          onClick={() => unhideGroup(h.id, { activeKey: k })}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {renamingHidden === h.id ? (
+                    <input
+                      className="tab-label-edit hidden-sw-name-edit"
+                      defaultValue={name}
+                      autoFocus
+                      aria-label={t("sidePanel.renameSubwindow")}
+                      ref={selectOnMount}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === "Enter") {
+                          commitHiddenRename(h.id, (e.target as HTMLInputElement).value);
+                        } else if (e.key === "Escape") {
+                          renameCancelled.current = true;
+                          setRenamingHidden(null);
+                        }
+                      }}
+                      onBlur={(e) => commitHiddenRename(h.id, e.target.value)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="hidden-sw-name"
+                      title={t("sidePanel.restoreHiddenTabs", { tabs })}
+                      onClick={() => unhideGroup(h.id)}
+                    >
+                      {name}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="hidden-sw-btn"
+                    title={t("sidePanel.renameSubwindow")}
+                    onClick={() => startHiddenRename(h.id)}
+                  >
+                    <PencilIcon />
+                  </button>
                   <button
                     type="button"
                     className="hidden-sw-btn"

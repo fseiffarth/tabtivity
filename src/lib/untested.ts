@@ -31,6 +31,7 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
+  "sidePanel.hiddenRename": { area: "shell", what: "Side panel Hidden list · one row per hidden subwindow named \"Hidden <n>\" (tooltip lists its tabs, a click restores it); ✎ renames it inline and the name survives a restart; a restored subwindow opens beside the focused one" },
   "sidePanel.ideToggle": { area: "shell", what: "Side panel as a VS Code-style docked bar: always-on rail, click-to-toggle, Ctrl+B, snap-close sash, Auto-hide mode" },
   "centerPanel.openTab": { area: "shell", what: "Empty workspace · Open a tab opens the empty group's new-tab menu" },
   "desktop.settingsNavigation": { area: "shell", what: "Grouped settings pages, the left-hand search box and per-page scroll restoration" },

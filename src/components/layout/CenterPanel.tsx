@@ -114,6 +114,8 @@ function CenterPanelImpl() {
   // this array's identity) — otherwise bounds drags wouldn't reach project.json
   // until the next tab/layout change or app quit.
   const detachedGroups = useTabsStore((s) => s.detachedGroupsByScope[s.scope]);
+  // A hidden subwindow's rename moves nothing else, so it triggers the save itself.
+  const hiddenGroups = useTabsStore((s) => s.hiddenGroupsByScope[s.scope]);
   // `persistScope`, not `saveLayout`: the latter persists the tab store's CURRENT
   // scope into whatever `localFile` it is handed, and those are two independently
   // tracked values. `activeId` and `localFile` both come from `activeProject` here,
@@ -355,7 +357,7 @@ function CenterPanelImpl() {
       persistScope(target.scope, target.localFile).catch(() => {});
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [scope, activeId, localFile, tabs, layout, detachedGroups, persistScope]);
+  }, [scope, activeId, localFile, tabs, layout, detachedGroups, hiddenGroups, persistScope]);
 
   // #42: re-open popouts that were detached when this scope was last saved. The
   // groups were restored DOCKED (above) so their panes mount and spawn their
