@@ -536,7 +536,7 @@ fn child(rel: &str, name: &str) -> String {
 /// ignored (check-ignore reads the index), and a folder counts only when it is
 /// ignored itself, not when something inside it is. No repo, no git, or any
 /// other failure is no names: a display hint, never a gate.
-fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<String> {
+pub(crate) fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<String> {
     if found.is_empty() {
         return HashSet::new();
     }

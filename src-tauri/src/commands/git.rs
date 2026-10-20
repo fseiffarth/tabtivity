@@ -1426,6 +1426,29 @@ fn git_file_statuses_blocking(
         }
     }
 
+    // git's porcelain only lists files, so an ignored folder that holds no file
+    // at all (an empty `emails/` waiting for its first attachment) gets no line
+    // and would sit in the regular section. Ask `check-ignore` about exactly
+    // those children — one call, no walk. Local only: a remote tree would need
+    // a second SSH round trip per listing.
+    if target.is_none() && !wholly_ignored {
+        let here = Path::new(&project_dir).join(&rel_path);
+        let empty_dirs: Vec<(bool, String)> = std::fs::read_dir(&here)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| name != ".git" && !map.contains_key(name))
+            .filter(|name| holds_no_file(&here.join(name), &mut 256))
+            .map(|name| (true, name))
+            .collect();
+        let rel = rel_path.trim_matches('/');
+        for name in crate::services::mobile_control::files::ignored_names(Path::new(&project_dir), rel, &empty_dirs) {
+            map.insert(name, "ignored".to_string());
+        }
+    }
+
     // When `rel_path` is itself wholly ignored, EVERY entry under it is ignored —
     // but git's porcelain only ever emits *file* lines, so a child that is an
     // empty directory (or a tree of only empty directories, e.g. freshly scaffolded
@@ -1441,6 +1464,25 @@ fn git_file_statuses_blocking(
     }
 
     Ok(map)
+}
+
+/// Whether `dir` holds nothing but (possibly nested) empty folders — the shape
+/// git status can't report. Links and other non-folders count as files, so the
+/// walk never leaves the tree; it gives up (answers "holds a file") once
+/// `budget` names are read.
+fn holds_no_file(dir: &Path, budget: &mut usize) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    for entry in entries {
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        let Ok(entry) = entry else { return false };
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) || !holds_no_file(&entry.path(), budget) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Stages a specific path (file or directory) via `git add`.
@@ -4379,6 +4421,36 @@ filename note.txt
             .expect("git_file_statuses should override the user's untracked-files setting");
 
         assert_eq!(statuses.get("cache").map(String::as_str), Some("ignored"));
+    }
+
+    /// An ignored folder with no file in it (`emails/` before its first
+    /// attachment) gets no porcelain line, yet must still land in the
+    /// gitignored section; an empty folder git doesn't ignore stays unmarked.
+    #[test]
+    fn empty_ignored_folders_are_reported_as_ignored() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping empty_ignored_folders_are_reported_as_ignored");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        init_repo(dir);
+
+        fs::write(dir.join(".gitignore"), "emails/\nruns/\n").expect("write .gitignore");
+        fs::create_dir(dir.join("emails")).expect("mkdir emails");
+        fs::create_dir_all(dir.join("runs").join("a").join("b")).expect("mkdir runs");
+        fs::create_dir(dir.join("blank")).expect("mkdir blank");
+        fs::create_dir_all(dir.join("src").join("emails")).expect("mkdir src/emails");
+
+        let root = dir.to_string_lossy().to_string();
+        let statuses = git_file_statuses_blocking(root.clone(), String::new()).expect("statuses");
+        assert_eq!(statuses.get("emails").map(String::as_str), Some("ignored"));
+        assert_eq!(statuses.get("runs").map(String::as_str), Some("ignored"));
+        assert_eq!(statuses.get("blank"), None);
+        assert_eq!(statuses.get("src"), None);
+
+        let inner = git_file_statuses_blocking(root, "src".to_string()).expect("statuses in src");
+        assert_eq!(inner.get("emails").map(String::as_str), Some("ignored"));
     }
 
     #[test]
