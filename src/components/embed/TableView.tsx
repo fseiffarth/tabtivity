@@ -1105,6 +1105,10 @@ export function TableView({
               {t("tableView.noRowsMatch", { query })}
             </div>
           )}
+          {/* The horizontal scrollbar is an overlay (`customScrollbar`, 8px) drawn
+              over the content's bottom edge; room below the last row keeps it
+              readable when scrolled to the end. */}
+          <div aria-hidden="true" style={{ height: 14 }} />
         </div>
       )}
     </div>
