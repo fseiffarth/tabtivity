@@ -2,27 +2,37 @@ import { useEffect, useRef, useState } from "react";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
-import { codexRemaining, codexReset, readCodexStatus, type CodexStatusCard } from "../../lib/agents/codexStatus";
+import { codexRemaining, codexReset, readClaudeStatus, readCodexStatus, type CodexStatusCard } from "../../lib/agents/codexStatus";
+import { writePtyInput } from "../../lib/terminal/terminalInput";
+import { noteUserInput } from "../../stores/activity";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import type { TabEntry } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
+import type { UntestedId } from "../../lib/untested";
 
 /** Rows read for the `/status` card: a screenful or two above the input box. */
 const STATUS_ROWS = 120;
 const PLAIN = { plain: true } as const;
+const ESCAPE = new TextEncoder().encode("\u001b");
+
+/** The agents whose /status the panel reads, and the tag it wears for each. */
+export const STATUS_AGENTS: Partial<Record<string, UntestedId>> = {
+  codex: "terminal.reader.codexStatus",
+  claude: "terminal.reader.claudeStatus",
+};
 
 const FIELD_KEYS: Record<string, TranslationKey> = {
-  Directory: "terminal.reader.status.directory", Account: "terminal.reader.status.account",
-  Session: "terminal.reader.status.session", Permissions: "terminal.reader.status.permissions",
+  Directory: "terminal.reader.status.directory", cwd: "terminal.reader.status.directory", Account: "terminal.reader.status.account",
+  Session: "terminal.reader.status.session", "Session ID": "terminal.reader.status.session", Permissions: "terminal.reader.status.permissions",
   Approval: "terminal.reader.status.approval", Sandbox: "terminal.reader.status.sandbox",
   "Token usage": "terminal.reader.status.tokens", "Context window": "terminal.reader.status.context",
 };
 
-export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request, model, effort, path, contextLeft, usage, onClose, onRefresh }: {
-  tab: TabEntry; ptyId: string; visible: boolean; canRefresh: boolean; request: number;
+export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefresh, request, model, effort, path, contextLeft, usage, onClose, onRefresh }: {
+  tab: TabEntry; ptyId: string; agentLabel: string; visible: boolean; canRefresh: boolean; request: number;
   model?: string; effort?: string; path?: string; contextLeft?: string; usage?: SessionUsage; onClose: () => void; onRefresh: () => void;
 }) {
   const t = useT();
@@ -32,6 +42,10 @@ export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request,
   const [now, setNow] = useState(() => Date.now());
   const refreshAllowed = useRef(canRefresh);
   refreshAllowed.current = canRefresh;
+  const claude = tab.cmd === "claude";
+  /** Claude draws its card as a dialog over the composer: once read, it is
+   * closed again, once per request, so the session is left as it was. */
+  const dismissed = useRef(true);
   // Opening the view is also an explicit /status request. It uses the existing
   // command path, which refuses to overwrite a busy agent's composer.
   useEffect(() => {
@@ -39,6 +53,7 @@ export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request,
     let disposed = false;
     setRefreshing(true);
     setError(false);
+    dismissed.current = false;
     void submitScheduledAgentCommand(tab.scheduleTargetId, "/status")
       .catch(() => { if (!disposed) setError(true); });
     const wait = setTimeout(() => { if (!disposed) setRefreshing(false); }, 1500);
@@ -52,14 +67,20 @@ export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request,
       const term = terminalFor(ptyId);
       // Words only, off the bottom rows: the card is what the pane shows now,
       // and this runs twice a second while the panel is open.
-      const next = term && readCodexStatus(readableScreen(term.buffer.active, STATUS_ROWS, PLAIN).lines);
+      const lines = term ? readableScreen(term.buffer.active, STATUS_ROWS, PLAIN).lines : [];
+      const next = claude ? readClaudeStatus(lines) : readCodexStatus(lines);
+      if (next && claude && !dismissed.current) {
+        dismissed.current = true;
+        noteUserInput(ptyId);
+        void writePtyInput(ptyId, ESCAPE).catch(() => {});
+      }
       if (next) setSnapshot((previous) => previous?.card.raw === next.raw ? previous : { card: next, readAt: Date.now() });
       setNow(Date.now());
     };
     read();
     const timer = setInterval(read, 500);
     return () => clearInterval(timer);
-  }, [visible, ptyId]);
+  }, [visible, ptyId, claude]);
 
   const card = snapshot?.card;
   const fields = card?.fields ?? [];
@@ -81,13 +102,13 @@ export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request,
       meters.push({ label, remaining, resets: value ? codexReset(value) : fallback?.resets });
     }
   }
-  const details = fields.filter((entry) => entry.label !== "Model" && !(codexRemaining(entry.value) != null && ["Context window", "5h limit", "Weekly limit"].includes(entry.label)));
+  const details = fields.filter((entry) => entry.label !== "Model" && entry.label !== "Session name" && !(codexRemaining(entry.value) != null && ["Context window", "5h limit", "Weekly limit"].includes(entry.label)));
 
-  return <section className="terminal-reader-picker terminal-reader-status" role="dialog" aria-label={t("terminal.reader.status.title")}
+  return <section className="terminal-reader-picker terminal-reader-status" role="dialog" aria-label={t("terminal.reader.status.title", { agent: agentLabel })}
     onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
     <div className="terminal-reader-picker-head">
-      <strong>{t("terminal.reader.status.title")}</strong>
-      <UntestedTag id="terminal.reader.codexStatus" />
+      <strong>{t("terminal.reader.status.title", { agent: agentLabel })}</strong>
+      {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
       <button type="button" className="terminal-reader-fact-model" onClick={onRefresh} disabled={!canRefresh || refreshing || !tab.scheduleTargetId}>{t("terminal.reader.status.refresh")}</button>
       <button type="button" className="terminal-reader-picker-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
     </div>
@@ -116,9 +137,9 @@ export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request,
       {!card && tab.sessionId && <div><dt>{t("terminal.reader.status.session")}</dt><dd>{tab.sessionId}</dd></div>}
       {details.map((entry, index) => <div key={`${entry.label}:${index}`}><dt>{FIELD_KEYS[entry.label] ? t(FIELD_KEYS[entry.label]) : entry.label}</dt><dd>{entry.value}</dd></div>)}
     </dl>
-    <small className="terminal-reader-status-note">{t("terminal.reader.status.reported")}</small>
-    {refreshing && <small role="status">{t("terminal.reader.status.refreshing")}</small>}
-    {error && <small role="alert">{t("terminal.reader.status.failed")}</small>}
+    <small className="terminal-reader-status-note">{t("terminal.reader.status.reported", { agent: agentLabel })}</small>
+    {refreshing && <small role="status">{t("terminal.reader.status.refreshing", { agent: agentLabel })}</small>}
+    {error && <small role="alert">{t("terminal.reader.status.failed", { agent: agentLabel })}</small>}
     {card && <details className="terminal-reader-status-raw"><summary>{t("terminal.reader.status.raw")}</summary><pre>{card.raw}</pre></details>}
   </section>;
 }

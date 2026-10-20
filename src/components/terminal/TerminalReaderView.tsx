@@ -37,6 +37,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { withAssistantPromptTarget } from "../../lib/assistant";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
+import { STATUS_AGENTS } from "./TerminalReaderStatus";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { UntestedTag } from "../common/UntestedTag";
 import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
@@ -586,7 +587,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const current = tabRef.current;
     const text = draft.trim();
     if (!current || !text || sending) return;
-    if (current.cmd === "codex" && text === "/status") {
+    if (STATUS_AGENTS[current.cmd] && text === "/status") {
       onStatus();
       setDraft("");
       undo.current.clear();

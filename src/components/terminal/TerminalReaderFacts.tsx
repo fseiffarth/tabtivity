@@ -17,7 +17,7 @@ import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen"
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
-import { TerminalReaderStatus } from "./TerminalReaderStatus";
+import { STATUS_AGENTS, TerminalReaderStatus } from "./TerminalReaderStatus";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 
@@ -275,8 +275,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   return (
     <div className="terminal-reader-facts-wrap">
-      {statusOpen && tab.cmd === "codex" && <TerminalReaderStatus key={ptyId}
-        tab={tab} ptyId={ptyId} visible={visible} request={statusRequest}
+      {statusOpen && STATUS_AGENTS[tab.cmd] && <TerminalReaderStatus key={ptyId}
+        tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         model={modelLabel} effort={effortLabel} path={shownPath} contextLeft={contextLeft} usage={usage}
         onClose={onStatusClose} onRefresh={onStatusRequest}
@@ -382,10 +382,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         </div>
       )}
       <div className="terminal-reader-facts">
-        {tab.cmd === "codex" && <button type="button" className="terminal-reader-fact-model"
+        {STATUS_AGENTS[tab.cmd] && <button type="button" className="terminal-reader-fact-model"
           onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); onStatusRequest(); }}
-          aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint")}>
-          {t("terminal.reader.status.button")} <UntestedTag id="terminal.reader.codexStatus" />
+          aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
+          {t("terminal.reader.status.button")} {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
         </button>}
         {modelPickable ? (
           <button
