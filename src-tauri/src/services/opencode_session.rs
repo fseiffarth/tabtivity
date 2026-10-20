@@ -253,7 +253,7 @@ fn resolve_in(
     // apart from a tab from before the plugin.
     if registered {
         if let Err(e) = write_launch_in(notes, &uid, launch) {
-            eprintln!("opencode_session: launch note for {uid}: {e}");
+            eprintln!("opencode_session: launch note: {e}");
         }
     }
     opts
