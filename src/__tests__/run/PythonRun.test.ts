@@ -10,6 +10,7 @@ import {
   systemInterpreter,
 } from "../../lib/terminal/pythonRun";
 import { BRAND } from "../../lib/brand";
+import { withoutLegacyRunGlyph } from "../../stores/tabs";
 
 describe("shellQuote", () => {
   it("single-quotes on unix and escapes an embedded quote", () => {
@@ -101,6 +102,14 @@ describe("pyTabLabel", () => {
   it("names the tab after the file, marked by mode", () => {
     expect(pyTabLabel("run", "/proj/pkg/main.py")).toBe("main.py");
     expect(pyTabLabel("debug", "/proj/pkg/main.py")).toBe("main.py (debug)");
+  });
+
+  it("drops the ▶ an older build typed into a saved run tab's label", () => {
+    expect(withoutLegacyRunGlyph("\u25B6\uFE0E run_full.py")).toBe("run_full.py");
+    expect(withoutLegacyRunGlyph("\u25B6\uFE0F run_full.py")).toBe("run_full.py");
+    expect(withoutLegacyRunGlyph("\u25B6 run_full.py")).toBe("run_full.py");
+    expect(withoutLegacyRunGlyph("run_full.py")).toBe("run_full.py");
+    expect(withoutLegacyRunGlyph("Shell")).toBe("Shell");
   });
 });
 

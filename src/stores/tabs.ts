@@ -5921,6 +5921,13 @@ function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((k, i) => k === b[i]);
 }
 
+/** A run tab saved before `pyTabLabel` dropped its typed ▶ still carries
+ *  "▶︎ file.py", which WebKitGTK draws as the colour emoji in the tab and its
+ *  hover card. Restore it as the plain file name. */
+export function withoutLegacyRunGlyph(label: string): string {
+  return label.replace(/^▶[︎️]?\s+/u, "");
+}
+
 /** The live entry a saved tab restores as — THE one place a `SavedTabEntry`
  * becomes a `TabEntry`: `loadFromLayout` maps every saved tab through it,
  * and `adoptSyncOutcome` a tab another client of this backend created
@@ -6009,7 +6016,7 @@ function restoreSavedTab(
     // The shared-set identity survives the re-mint: it is how the next
     // sync tells this tab from a new one.
     id: t.id,
-    label: t.label,
+    label: withoutLegacyRunGlyph(t.label),
     cmd: t.cmd,
     args,
     env,
