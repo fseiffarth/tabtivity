@@ -15,6 +15,9 @@ import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { onSentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
+import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
+import { actionMatches } from "../../lib/shortcuts/shortcuts";
+import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInput";
@@ -493,6 +496,18 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  /** Ctrl+Z / Ctrl+Shift+Z (`editorUndo`/`editorRedo`): the composer's own
+   * history, since React setting the value loses the box's. `draftRef` is
+   * the text a change replaces; `caretAt` where an undo puts the caret. */
+  const undo = useRef(new DraftUndo());
+  const draftRef = useRef(draft);
+  const caretAt = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    draftRef.current = draft;
+    if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
+    caretAt.current = null;
+  }, [draft]);
+  const shortcutOverrides = useShortcutOverrides();
   /** Where the ↑/↓ walk stands in `history`, and the draft it set aside;
    * null while the composer holds the user's own draft. */
   const historyAt = useRef<number | null>(null);
@@ -509,7 +524,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     () => (slashClosed || historyAt.current !== null ? [] : slashSuggestions(draft, cli, usedSlash)),
     [slashClosed, draft, cli, usedSlash],
   );
-  const editDraft = (next: string) => {
+  const editDraft = (next: string, typing = false) => {
+    undo.current.record(draftRef.current, next, typing);
+    draftRef.current = next;
     setDraft(next);
     setSendError("");
     setSlashAt(null);
@@ -536,11 +553,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   useEffect(() => onReaderInsert(ptyId, (text) => {
     const box = composerRef.current;
     const focusedBox = box !== null && document.activeElement === box;
-    setDraft((current) => {
-      const at = focusedBox ? box.selectionEnd : current.length;
-      const before = current.slice(0, at);
-      return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
-    });
+    const current = draftRef.current;
+    const at = focusedBox ? box.selectionEnd : current.length;
+    const before = current.slice(0, at);
+    const next = `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+    undo.current.record(current, next, false);
+    draftRef.current = next;
+    setDraft(next);
     setSendError("");
     box?.focus();
   }), [ptyId]);
@@ -552,6 +571,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (current.cmd === "codex" && text === "/status") {
       onStatus();
       setDraft("");
+      undo.current.clear();
       setSendError("");
       historyAt.current = null;
       return;
@@ -599,6 +619,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       rememberSlashCommand(cli, command);
       setUsedSlash(readSlashCommands(cli));
       setDraft("");
+      undo.current.clear();
       historyAt.current = null;
     } catch {
       setSendError(t("terminal.reader.sendFailed"));
@@ -621,13 +642,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const next = (at ?? history.length) + step;
     if (next < 0) return history.length > 0;
     if (at === null) setAsideDraft.current = draft;
-    if (next >= history.length) {
-      historyAt.current = null;
-      setDraft(setAsideDraft.current);
-    } else {
-      historyAt.current = next;
-      setDraft(history[next]);
-    }
+    const text = next >= history.length ? setAsideDraft.current : history[next];
+    historyAt.current = next >= history.length ? null : next;
+    undo.current.record(draft, text, false);
+    setDraft(text);
     setSendError("");
     return true;
   };
@@ -656,8 +674,24 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     return false;
   };
 
+  /** Undo (or redo) the composer's last change, the caret after it. */
+  const swapDraft = (redo: boolean) => {
+    const next = redo ? undo.current.redo(draft) : undo.current.undo(draft);
+    if (next === null) return;
+    caretAt.current = caretAfterSwap(draft, next);
+    historyAt.current = null;
+    setDraft(next);
+    setSendError("");
+    setSlashAt(null);
+    setSlashClosed(false);
+  };
+
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (slashKey(e)) {
+    const redo = actionMatches("editorRedo", shortcutOverrides, e);
+    if (!e.nativeEvent.isComposing && (redo || actionMatches("editorUndo", shortcutOverrides, e))) {
+      e.preventDefault();
+      swapDraft(redo);
+    } else if (slashKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
@@ -682,10 +716,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         rows={2}
         placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
         aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
-        onChange={(e) => editDraft(e.target.value)}
+        onChange={(e) => editDraft(e.target.value, true)}
         onKeyDown={onComposerKey}
       />
       {historyAt.current !== null && <UntestedTag id="terminal.reader.history" />}
+      {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
       <button type="button" className="terminal-reader-send" disabled={!draft.trim() || sending} onClick={() => void send()}>
         {t("terminal.reader.send")}
