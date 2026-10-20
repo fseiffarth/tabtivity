@@ -12,7 +12,9 @@
  *  - Escape and a press on the backdrop close it, a press inside does not;
  *  - it never takes over the header's status report: unmounting it leaves the
  *    `machines` key the header's own instance published;
- *  - a hand Check made in it is the header's answer too (shared checks).
+ *  - a hand Check made in it is the header's answer too (shared checks);
+ *  - handing a machine to a project opens that project's window ON TOP of it:
+ *    the overlay stays open to come back to.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
@@ -33,6 +35,9 @@ import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusStore } from "../../stores/headerStatus";
 import { useHostBusyStore } from "../../stores/remote/hostBusy";
 import { targetKey } from "../../lib/remote/machineSync";
+import { useProjectsStore } from "../../stores/projects";
+import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
+import type { ProjectEntry } from "../../types";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -192,5 +197,29 @@ describe("Machines overlay", () => {
       .join("\n");
     expect(labels).toMatch(/up, not connected — build\.example\.org/);
     expect(labels).not.toMatch(/not checked/i);
+  });
+
+  it("stays open when a machine is handed to a project", () => {
+    useProjectsStore.setState({
+      projects: [
+        {
+          id: "p1",
+          name: "Proj",
+          status: "current",
+          position: 0,
+          remote: { host: "login.example.org", user: "ada", remote_path: "/work/proj" },
+        } as unknown as ProjectEntry,
+      ],
+      activeId: "p1",
+    });
+    useRemoteMachinesStore.setState({ projectId: null, pendingDrop: null, extendTarget: null });
+    useMachinesOverlayStore.setState({ open: true });
+    render(<MachinesOverlayHost />);
+    const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[0]);
+    fireEvent.click(tile.getByRole("button", { name: "Add this machine to a project" }));
+    fireEvent.click(tile.getByRole("button", { name: /Proj/ }));
+    expect(useRemoteMachinesStore.getState().projectId).toBe("p1");
+    expect(useRemoteMachinesStore.getState().pendingDrop?.id).toBe("m1");
+    expect(useMachinesOverlayStore.getState().open).toBe(true);
   });
 });

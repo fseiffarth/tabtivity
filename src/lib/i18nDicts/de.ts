@@ -4571,6 +4571,8 @@ export const dict: Dict = {
   "remoteMachines.connectEllipsis": "Verbinden…",
   "remoteMachines.sharedFsTag": "Gemeinsames Dateisystem",
   "remoteMachines.dropIntro": "Aus deinen globalen Maschinen. Gib den gemeinsamen Pfad an, unter dem sie den Ordner dieses Projekts sieht — alles andere ist bereits bekannt.",
+  "remoteMachines.dropPendingTitle": "{name} zu diesem Projekt hinzufügen?",
+  "remoteMachines.dropPendingNote": "Noch nicht hinzugefügt — gespeichert wird erst, wenn du auf Maschine hinzufügen drückst.",
   "remoteMachines.pathOnMachine": "Pfad auf dieser Maschine",
   "remoteMachines.absolutePathPlaceholder": "Absoluter Pfad (z. B. /home/me/project)",
   "remoteMachines.adding": "Wird hinzugefügt…",

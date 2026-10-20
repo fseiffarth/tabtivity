@@ -15,7 +15,7 @@ import { forgetConnection, markConnectionOpened, resolveRemoteStartDir } from ".
 import { loginDedupeKey, sshLogin, type LoginTarget } from "../../lib/remote/loginTarget";
 import { formatBytes } from "../../lib/formatBytes";
 import { withHostKeyConfirm } from "../../lib/remote/hostKey";
-import { sameTarget } from "../../lib/remote/machineSync";
+import { sameTarget, type Target } from "../../lib/remote/machineSync";
 import { useConnectDialogStore } from "../../stores/remote/connectDialog";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useRemoteStatusStore, PRIMARY_HOST, type ConnState } from "../../stores/remote/remoteStatus";
@@ -137,14 +137,11 @@ export function RemoteMachinesWindow({
   const [dropPath, setDropPath] = useState(project.remote?.remote_path ?? "");
   const [dropBusy, setDropBusy] = useState(false);
   const [dropError, setDropError] = useState("");
-  // The dropped machine's lamp used to be hardcoded `connected` — it is a global
-  // machine, so it *usually* is, but "usually" is not a status. Before the add it
-  // reads the machine's real state from the global list; during/after the add it
-  // reads this dialog's own attempt, which is the thing the user is watching.
+  // The panel's lamp is this dialog's own add-and-connect attempt and nothing
+  // else. Before the add it has none: borrowing the global machine's green lamp
+  // made the not-yet-added panel read as an added, connected worker card, so a
+  // user closed the hub believing the machine was in the project.
   const dropMachineId = pendingDrop?.id;
-  const globalStatus = useGlobalMachinesStore((s) =>
-    dropMachineId ? s.status[dropMachineId] : undefined,
-  );
   const [dropConn, setDropConn] = useState<ConnState | null>(null);
   // The panel is rendered above the worker list, so a machine picked from the
   // list *inside* the add-form below would otherwise land off screen.
@@ -169,6 +166,10 @@ export function RemoteMachinesWindow({
 
   const addDroppedMachine = async () => {
     if (!pendingDrop) return;
+    if (alreadyAHost(pendingDrop)) {
+      setDropError(t("remoteMachines.globalAlreadyAddedTitle"));
+      return;
+    }
     const path = dropPath.trim();
     if (!path.startsWith("/")) {
       setDropError(t("remoteMachines.enterAbsolutePath"));
@@ -504,7 +505,7 @@ export function RemoteMachinesWindow({
    *  target, never by id (a project host is a copy by value; `lib/remote/machineSync`).
    *  Such a row offers no action: adding the same machine twice would give it two
    *  cards, two lamps and two sync paths for one host. */
-  const alreadyAHost = (m: GlobalMachine) =>
+  const alreadyAHost = (m: Target) =>
     (project.remote ? sameTarget(project.remote, m) : false) ||
     workers.some((w) => sameTarget(w, m));
 
@@ -539,6 +540,10 @@ export function RemoteMachinesWindow({
     const parsed = parseTarget();
     if (!parsed) {
       setAddError(t("remoteMachines.enterHost"));
+      return;
+    }
+    if (alreadyAHost({ user: parsed.user ?? undefined, host: parsed.host, port: parsed.port ?? undefined })) {
+      setAddError(t("remoteMachines.globalAlreadyAddedTitle"));
       return;
     }
     const path = remotePath.trim();
@@ -725,15 +730,19 @@ export function RemoteMachinesWindow({
             worker. */}
         {pendingDrop && (
           <div className="remote-machine-card remote-machine-drop-panel" ref={dropPanelRef}>
+            {/* Says outright that nothing is saved yet: drawn like a worker card,
+                this panel was taken for an added machine and closed unconfirmed. */}
+            <div className="remote-machine-add-title">
+              {t("remoteMachines.dropPendingTitle", {
+                name: pendingDrop.label || pendingDrop.host,
+              })}
+              <UntestedTag id="remoteMachinesWindow.5" />
+            </div>
             <div className="remote-machine-head">
-              {/* Was hardcoded `connected`. A dropped machine is *usually* live —
-                  that is why it is droppable — but "usually" is not a status, and
-                  once this panel's own connect is in flight (or has failed) the
-                  attempt the user is watching is the only honest thing to show. */}
-              <ConnLamp
-                status={dropConn ?? globalStatus ?? "off"}
-                label={pendingDrop.label || pendingDrop.host}
-              />
+              {/* Only this panel's own attempt, once there is one (see `dropConn`). */}
+              {dropConn && (
+                <ConnLamp status={dropConn} label={pendingDrop.label || pendingDrop.host} />
+              )}
               <span className="remote-machine-name">
                 {pendingDrop.label || pendingDrop.host}
               </span>
@@ -744,8 +753,19 @@ export function RemoteMachinesWindow({
                 {pendingDrop.port ? `:${pendingDrop.port}` : ""}
               </span>
             </div>
+            {alreadyAHost(pendingDrop) ? (
+              <>
+                <p className="settings-help">{t("remoteMachines.globalAlreadyAddedTitle")}</p>
+                <div className="project-dialog-actions">
+                  <button type="button" onClick={() => setPendingDrop(null)}>
+                    {t("common.close")}
+                  </button>
+                </div>
+              </>
+            ) : (
+            <>
             <p className="settings-help">
-              {t("remoteMachines.dropIntro")}
+              {t("remoteMachines.dropPendingNote")} {t("remoteMachines.dropIntro")}
             </p>
             <label>
               <span className="remote-machine-add-label">{t("remoteMachines.pathOnMachine")}</span>
@@ -769,6 +789,8 @@ export function RemoteMachinesWindow({
                 {dropBusy ? t("remoteMachines.adding") : t("remoteMachines.addMachineBtn")}
               </button>
             </div>
+            </>
+            )}
           </div>
         )}
 

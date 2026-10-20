@@ -4558,6 +4558,8 @@ export const dict: Dict = {
   "remoteMachines.connectEllipsis": "Connetti…",
   "remoteMachines.sharedFsTag": "Filesystem condiviso",
   "remoteMachines.dropIntro": "Dalle tue macchine globali. Indica il percorso condiviso in cui vede la cartella di questo progetto — tutto il resto è già noto.",
+  "remoteMachines.dropPendingTitle": "Aggiungere {name} a questo progetto?",
+  "remoteMachines.dropPendingNote": "Non ancora aggiunta — nulla viene salvato finché non premi Aggiungi macchina.",
   "remoteMachines.pathOnMachine": "Percorso su questa macchina",
   "remoteMachines.absolutePathPlaceholder": "Percorso assoluto (es. /home/me/project)",
   "remoteMachines.adding": "Aggiunta in corso…",

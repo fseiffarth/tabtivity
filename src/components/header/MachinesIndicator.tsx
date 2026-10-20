@@ -20,6 +20,7 @@ import { openConnectionInRoot } from "../../lib/remote/remoteConnect";
 import { loginDedupeKey, sshLogin } from "../../lib/remote/loginTarget";
 import { isHpcHost, mayAutoTouch, setHpcPatch, targetOfSpec } from "../../lib/remote/hpc/hpcHost";
 import { isCarefulHost } from "../../lib/remote/carefulHost";
+import { sameTarget } from "../../lib/remote/machineSync";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -321,6 +322,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     if (p.remote) openRemoteMachines(p.id, machine);
     else requestExtend(p.id, machine);
   };
+  /** Already this project's primary or one of its workers — by SSH target, the
+   *  same rule as the Remote machines window's own list (a project host is a
+   *  copy by value, never linked by id). */
+  const alreadyInProject = (p: ProjectEntry, m: { host: string; user?: string; port?: number }) =>
+    (p.remote ? sameTarget(p.remote, m) : false) ||
+    (p.compute_hosts ?? []).some((h) => sameTarget(h, m));
 
   // The shared menu store makes the status controls mutually exclusive.
   // The overlay is open for as long as it is mounted (its host renders nothing
@@ -329,11 +336,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const open = isOverlay || menuOpen;
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
   const closeMenu = useHeaderHoverMenuStore((s) => s.close);
-  /** Put this surface away — before a hand-off to a window of its own (the
-   *  usage report, a project's machine picker), as the dropdown always has. */
+  /** Before a hand-off to a window of its own (the usage report, a project's
+   *  machine picker, the extend dialog): the hover dropdown is put away, the
+   *  overlay is not. It is a window the user opened, and each of those dialogs
+   *  lands on top of it (portaled, or mounted after it at the shell), so closing
+   *  it left the user nowhere to come back to once the dialog was done. */
   const dismiss = () => {
-    if (isOverlay) useMachinesOverlayStore.getState().close();
-    else closeMenu(MENU_ID);
+    if (!isOverlay) closeMenu(MENU_ID);
   };
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
@@ -2240,26 +2249,41 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     {projects.length === 0 && (
                       <div className="vpn-indicator-empty">{t("machines.noActiveProject")}</div>
                     )}
-                    {projects.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="vpn-indicator-connect machines-attach-project"
-                        title={t(
-                          p.remote ? "machines.attachRemoteTitle" : "machines.attachLocalTitle",
-                        )}
-                        onClick={() => {
-                          setAttachId(null);
-                          dismiss();
-                          attachToProject(p, m);
-                        }}
-                      >
-                        {p.name}
-                        <span className="machines-attach-kind">
-                          {t(p.remote ? "machines.attachKindCompute" : "machines.attachKindExtend")}
-                        </span>
-                      </button>
-                    ))}
+                    {projects.map((p) => {
+                      const taken = alreadyInProject(p, m);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className="vpn-indicator-connect machines-attach-project"
+                          disabled={taken}
+                          title={t(
+                            taken
+                              ? "remoteMachines.globalAlreadyAddedTitle"
+                              : p.remote
+                                ? "machines.attachRemoteTitle"
+                                : "machines.attachLocalTitle",
+                          )}
+                          onClick={() => {
+                            setAttachId(null);
+                            dismiss();
+                            attachToProject(p, m);
+                          }}
+                        >
+                          {p.name}
+                          <span className="machines-attach-kind">
+                            {taken ? (
+                              <>
+                                {t("remoteMachines.globalAlreadyAdded")}
+                                <UntestedTag id="machinesIndicator.17" />
+                              </>
+                            ) : (
+                              t(p.remote ? "machines.attachKindCompute" : "machines.attachKindExtend")
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
                     <button type="button" className="vpn-indicator-remove" onClick={() => setAttachId(null)}>
                       {t("common.cancel")}
                     </button>

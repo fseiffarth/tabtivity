@@ -4741,6 +4741,8 @@ export const enSource = {
   "remoteMachines.connectEllipsis": "Connect…",
   "remoteMachines.sharedFsTag": "Shared filesystem",
   "remoteMachines.dropIntro": "From your global machines. Give the shared path it sees this project's folder at — everything else is already known.",
+  "remoteMachines.dropPendingTitle": "Add {name} to this project?",
+  "remoteMachines.dropPendingNote": "Not added yet — nothing is saved until you press Add machine.",
   "remoteMachines.pathOnMachine": "Path on this machine",
   "remoteMachines.absolutePathPlaceholder": "Absolute path (e.g. /home/me/project)",
   "remoteMachines.adding": "Adding…",
