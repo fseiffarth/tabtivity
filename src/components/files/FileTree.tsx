@@ -4771,6 +4771,10 @@ export function FileTree({
             const syncExcluded = syncTracked
               ? !!syncStatus?.[entryRel]?.excluded
               : false;
+            // Own OR inherited: a row inside an excluded tree is downloaded the
+            // same way. The pull leaves the exclusion in place (auto-sync and
+            // Sync all keep skipping it), so it is offered as a one-off copy.
+            const downloadExcluded = syncTracked && isPathExcluded(syncStatus, entryRel);
             return (
               <>
                 {onOpenFolderTab && entry.is_dir && (
@@ -4824,9 +4828,20 @@ export function FileTree({
                 )}
                 {remoteListing && (
                   <>
-                    <button onClick={() => syncEntryToLocal(entry)}>
-                      {t(entry.is_dir ? "fileTree.syncFolderToLocal" : "fileTree.syncToLocal")}
-                    </button>
+                    {downloadExcluded ? (
+                      <button
+                        className="untested"
+                        onClick={() => syncEntryToLocal(entry)}
+                        title={t("fileTree.downloadExcludedTitle")}
+                      >
+                        {t(entry.is_dir ? "fileTree.downloadExcludedFolder" : "fileTree.downloadExcludedFile")}
+                        <UntestedTag id="fileTree.downloadExcludedFolder" />
+                      </button>
+                    ) : (
+                      <button onClick={() => syncEntryToLocal(entry)}>
+                        {t(entry.is_dir ? "fileTree.syncFolderToLocal" : "fileTree.syncToLocal")}
+                      </button>
+                    )}
                     {syncSel && (
                       <button onClick={() => stopSyncingEntry(entry)}>
                         {t("fileTree.stopSyncing")}
@@ -4837,6 +4852,18 @@ export function FileTree({
                 )}
                 {treatLocal && (
                   <>
+                    {/* The local copy of an excluded folder holds only what was
+                        downloaded (or git-tracked) — fetch the host's bytes here. */}
+                    {downloadExcluded && entry.is_dir && (
+                      <button
+                        className="untested"
+                        onClick={() => syncEntryToLocal(entry)}
+                        title={t("fileTree.downloadExcludedTitle")}
+                      >
+                        {t("fileTree.downloadExcludedFolder")}
+                        <UntestedTag id="fileTree.downloadExcludedFolder" />
+                      </button>
+                    )}
                     <button onClick={() => pushEntryToHost(entry)}>
                       {t(entry.is_dir ? "fileTree.pushFolderToHost" : "fileTree.pushToHost")}
                     </button>

@@ -613,24 +613,27 @@ pub fn is_auto(manifest: &Manifest, rel: &str) -> bool {
 /// to the project root. An explicit `auto_sync` marker nearer than the exclusion
 /// re-includes the path, so a user can keep one folder inside an excluded tree.
 ///
-/// `under` is the path the caller was *asked* to transfer, and its own marker is
-/// deliberately ignored: right-clicking an excluded folder and syncing it is an
-/// explicit override of the very answer stored there, whereas a whole-project
-/// pull is not. Pass `""` for a project-root pull to honour every exclusion.
+/// `under` is the path the caller was *asked* to transfer, and the markers on it
+/// and above it are deliberately ignored: right-clicking a folder in (or of) an
+/// excluded tree and downloading it — say, the one data folder an agent needs —
+/// is an explicit override of the answer stored there, whereas a whole-project
+/// pull is not. Exclusions nested *below* `under` still hold. Pass `""` for a
+/// project-root pull to honour every exclusion.
 pub fn is_excluded(manifest: &Manifest, rel: &str, under: &str) -> bool {
     let mut cur = rel;
     loop {
-        if cur != under {
-            if let Some(e) = manifest.get(cur) {
-                // A directory marker rules its subtree; a file's own entry rules
-                // only itself (`cur == rel` on the first pass).
-                if e.is_dir || cur == rel {
-                    if e.excluded {
-                        return true;
-                    }
-                    if e.auto_sync {
-                        return false;
-                    }
+        if cur == under {
+            return false;
+        }
+        if let Some(e) = manifest.get(cur) {
+            // A directory marker rules its subtree; a file's own entry rules
+            // only itself (`cur == rel` on the first pass).
+            if e.is_dir || cur == rel {
+                if e.excluded {
+                    return true;
+                }
+                if e.auto_sync {
+                    return false;
                 }
             }
         }
@@ -1727,6 +1730,21 @@ mod tests {
         // path's own marker is waived.
         m.insert("data/raw".into(), excluded_dir());
         assert!(is_excluded(&m, "data/raw/big.bin", "data"));
+    }
+
+    #[test]
+    fn explicitly_transferring_a_folder_inside_an_excluded_tree_overrides_its_ancestors() {
+        let mut m = Manifest::new();
+        m.insert("data".into(), excluded_dir());
+        m.insert("data/raw/cache".into(), excluded_dir());
+        // Downloading `data/raw` for an agent: the inherited exclusion is waived…
+        assert!(!is_excluded(&m, "data/raw/big.bin", "data/raw"));
+        assert!(!is_excluded(&m, "data/raw/big.bin", "data/raw/big.bin"));
+        // …one nested below it is not, and a sibling outside it stays excluded.
+        assert!(is_excluded(&m, "data/raw/cache/x.bin", "data/raw"));
+        assert!(is_excluded(&m, "data/other/x.bin", "data/raw"));
+        // A prefix that is not a path segment is not "inside".
+        assert!(is_excluded(&m, "data/rawer/x.bin", "data/raw"));
     }
 
     #[test]

@@ -1492,7 +1492,8 @@ pub async fn sync_push(
     let files = remote_sync::walk_mirror_files(&project_id, &rel_path)?;
     let walked = files.len();
     // Excluded folders are excluded in BOTH directions: a mirror-side copy of an
-    // excluded tree (an earlier pull, a local build) must not be pushed up either.
+    // excluded tree (an earlier pull, a local build) must not be pushed up either —
+    // unless the push names that folder (or one inside it), as a pull may.
     let files: Vec<String> = {
         let mut guard = manifest.lock().await;
         let m = ensure_loaded(&mut guard, &project_id);
@@ -1762,8 +1763,9 @@ async fn pull_subtree(
         };
     // Drop everything the user excluded from byte-sync (the giant-folder prompt,
     // `services::big_folders`). A whole-project pull is exactly the click that
-    // answer exists to make safe; an explicit pull *of* the excluded folder still
-    // goes through, which is why its own marker is ignored (`is_excluded`'s `under`).
+    // answer exists to make safe; an explicit pull *of* the excluded folder, or of
+    // one inside it (a one-off download, e.g. for an agent), still goes through,
+    // which is why the markers on and above `rel` are ignored (`is_excluded`'s `under`).
     let (files, skipped_excluded) = {
         let mut guard = manifest.lock().await;
         let m = ensure_loaded(&mut guard, project_id);

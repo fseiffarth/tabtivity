@@ -107,12 +107,17 @@ Right-click a file or folder in the **Remote** tree:
 | *Auto-sync this file/folder* | `sync_set_auto(true)` | background engine keeps it in step; folder markers cover the subtree; also lifts the path's own exclusion |
 | the same item again | `sync_set_auto(false)` | writes an `auto_off` carve-out (an ancestor's auto no longer applies) |
 | *Exclude from sync* / *Include in sync* | `sync_set_excluded` | the strong marker: skipped by auto-sync **and** by whole-project transfers |
+| *Download folder (stays excluded)* (Remote tree, and Local tree for an excluded folder) | `sync_pull` | one-off pull of an excluded folder — or one inside an excluded tree, e.g. the data an agent needs; the exclusion stays, so auto-sync and *Sync all* keep skipping it |
 | *Auto-sync all* (view header) | `sync_set_auto("")` | the project-wide root marker |
 | *Large folders…* (view header) | `sync_big_folders` | census of both sides; ticked folders become `excluded` |
 
 Nearest marker wins, walking from the path's own entry up through ancestor
 **folder** markers to the root `""`. So a project-wide auto-sync with `data/`
 excluded and `data/configs/` auto-synced does exactly what it says.
+A transfer you start on a path waives the exclusion markers **on and above**
+that path (`remote_sync::is_excluded`'s `under`), never the ones below it: pulling
+`data/raw` out of an excluded `data/` works, and `data/raw/cache/` excluded on
+its own still stays on the host.
 
 Auto-syncing a folder that would pull more than 200 files or 100 MB asks first
 (`sync_auto_preview`); byte-sync ignores `.gitignore`, so this is the click that
