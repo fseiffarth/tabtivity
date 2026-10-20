@@ -87,6 +87,13 @@ describe("where paths are looked up", () => {
     expect(pathLinkContext(null, null, "/home/me")).toMatchObject({ bases: ["/home/me"], projectDir: "" });
     expect(pathLinkContext(null, null, "").bases).toEqual([]);
   });
+
+  it("in the local mirror for a remote project's tab that runs here", () => {
+    expect(pathLinkContext("p", "", "/state/p/mirror", undefined, true)).toMatchObject({ bases: ["/state/p/mirror"], projectDir: "" });
+    expect(pathLinkContext("p", "", "", undefined, true).bases).toEqual([]);
+    // An unknown project (a popout) stays closed: its tab may run on the host.
+    expect(pathLinkContext("p", null, "/x", undefined, true).bases).toEqual([]);
+  });
 });
 
 describe("resolving paths", () => {

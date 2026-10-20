@@ -404,7 +404,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // Path links (`lib/terminal/pathLinks`), read by the link provider through
   // a ref: it lives in the spawn effect, which must not respawn on a settings
   // or project change.
-  const pathLinkContext = usePathLinkContext(projectId, cwd);
+  const pathLinkContext = usePathLinkContext(projectId, cwd, localOnly);
   const pathLinkContextRef = useRef(pathLinkContext);
   pathLinkContextRef.current = pathLinkContext;
   const tRef = useRef(t);
@@ -2373,6 +2373,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         scope={splitId.scope}
         tabKey={splitId.key}
         cwd={cwd}
+        localOnly={localOnly}
         visible={visible}
         focused={focused}
       />

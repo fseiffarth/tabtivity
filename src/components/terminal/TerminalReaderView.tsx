@@ -791,13 +791,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * Claude tab (`ReaderComposer`); anywhere else prompts go to the session, and
  * sending one goes back to it.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, focused }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
   scope: string;
   tabKey: string;
   cwd: string | undefined;
+  /** The pane runs on this machine (`TerminalView`'s `localOnly`). */
+  localOnly?: boolean;
   visible: boolean;
   focused: boolean;
 }) {
@@ -995,7 +997,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   // remote project runs in its local mirror), not the stored `tab.cwd`, which
   // for such a project names its state folder.
   const tabDir = cwd || tab?.cwd || "";
-  const pathContext = usePathLinkContext(projectId, tabDir);
+  const pathContext = usePathLinkContext(projectId, tabDir, localOnly);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
   const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());

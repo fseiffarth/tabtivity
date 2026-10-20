@@ -95,13 +95,18 @@ export interface PathLinkContext {
 /** The tab's own folder, then its project's. `projectDir` is the project's
  *  folder, "" for a remote project and null when the project is not known (a
  *  popout holds no projects): a project tab without a local folder gets no
- *  links — a remote-run tab prints the remote host's paths. */
+ *  links — a remote-run tab prints the remote host's paths. The exception is
+ *  a remote project's tab that runs here (`runsLocal`, an agent's default):
+ *  it works in the project's local mirror, its `cwd`, and links what is there
+ *  (files only — a folder link opens the project's Files tab). */
 export function pathLinkContext(
   projectId: string | null | undefined,
   projectDir: string | null,
   cwd: string | undefined,
   disabled?: ReadonlySet<InternalViewer>,
+  runsLocal = false,
 ): PathLinkContext {
+  if (projectId && projectDir === "" && runsLocal && cwd) return { bases: [cwd], projectDir: "", disabled };
   if (projectId && !projectDir) return { bases: [], projectDir: "", disabled };
   const bases = [cwd, projectDir].filter((b, i, all): b is string => !!b && all.indexOf(b) === i);
   return { bases, projectDir: projectDir ?? "", disabled };
