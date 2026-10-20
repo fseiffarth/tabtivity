@@ -4083,6 +4083,7 @@ export const dict: Dict = {
   "boxChip.rootRow": "Proyecto raíz",
   "boxChip.rootLabel": "Raíz",
   "boxChip.pickerTitle": "Todos los proyectos: pasa el cursor para el proyecto raíz y las cajas de proyectos",
+  "boxChip.logoTitle": "Proyecto raíz: haz clic para abrir su consola sobre este proyecto; arrastra para mover la ventana",
   "boxScopePill.title": "{name} · {members}: haz clic para abrir esta caja; arrastra un proyecto aquí para añadirlo",
   "boxChip.moreBoxes": "+{count}",
   "boxChip.moreBoxesTitle": "{count} cajas más en la lista",

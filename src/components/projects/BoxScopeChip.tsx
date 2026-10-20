@@ -126,7 +126,7 @@ export function BoxScopeChip({
 
   // The logo is the window's move handle. The move starts only once the press
   // has travelled LOGO_DRAG_SLOP px, so a press that stays put is still the
-  // click that means "All projects". Once the OS move loop owns the pointer
+  // click that opens the root console. Once the OS move loop owns the pointer
   // the webview may never see the release, so the listeners go at hand-off;
   // `logoDragged` swallows the click that may still follow a move.
   const logoDragged = useRef(false);
@@ -289,7 +289,7 @@ export function BoxScopeChip({
 
   const chipTitle = () => {
     if (naming === "root") return t("header.rootProject");
-    return t("boxChip.pickerTitle");
+    return t("boxChip.logoTitle");
   };
 
   const chipLabel = () => {
@@ -312,9 +312,9 @@ export function BoxScopeChip({
           naming ? " filtering" : ""
         }`}
       >
-        {/* The mark: drag it to move the window, click it for "All projects"
-            (the menu's own row — drop the box slice). It does not open the
-            list; only the caret beside it does. */}
+        {/* The mark: drag it to move the window, click it for the root
+            console (the menu's root row; "All projects" is a row there too).
+            It does not open the list; only the caret beside it does. */}
         <button
           type="button"
           className="box-chip-main"
@@ -327,7 +327,8 @@ export function BoxScopeChip({
               logoDragged.current = false;
               return;
             }
-            pick(null);
+            dismiss();
+            onSelectRoot();
           }}
         >
           {naming === "root" ? (

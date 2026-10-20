@@ -4097,6 +4097,7 @@ export const dict: Dict = {
   "boxChip.rootRow": "Root-Projekt",
   "boxChip.rootLabel": "Root",
   "boxChip.pickerTitle": "Alle Projekte — für das Root-Projekt und die Projektboxen darüberfahren",
+  "boxChip.logoTitle": "Root-Projekt — klicken öffnet seine Konsole über diesem Projekt; ziehen verschiebt das Fenster",
   "boxScopePill.title": "{name} · {members} — klicken öffnet die Box; ein Projekt hierher ziehen fügt es hinzu",
   "boxChip.moreBoxes": "+{count}",
   "boxChip.moreBoxesTitle": "{count} weitere Boxen in der Liste",

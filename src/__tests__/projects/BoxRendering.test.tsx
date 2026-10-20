@@ -27,6 +27,7 @@ import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { useTabsStore } from "../../stores/tabs";
 import { useActivityStore } from "../../stores/activity";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { MAX_BOX_PILLS } from "../../components/projects/BoxScopeChip";
 import { boxColor } from "../../lib/theme/boxColor";
 
@@ -270,7 +271,8 @@ describe("box chip rendering (slice model)", () => {
     expect(pillNames(container).sort()).toEqual(["p1", "p2"]);
   });
 
-  it("clicking the chip itself is “All projects”", async () => {
+  it("clicking the logo opens the root console and keeps the box slice", async () => {
+    useRootOverlayStore.setState({ open: false });
     useBoxesStore.setState({
       boxes: [box("boxA", ["p1"])],
       openBox: vi.fn(openBoxScope),
@@ -291,12 +293,14 @@ describe("box chip rendering (slice model)", () => {
     await act(async () => {
       fireEvent.click(container.querySelector(".box-chip-main") as HTMLElement);
     });
-    expect(pillNames(container).sort()).toEqual(["p1", "p2"]);
+    expect(useRootOverlayStore.getState().open).toBe(true);
+    expect(pillNames(container)).toEqual(["p1"]);
     expect(document.querySelector(".box-chip-menu")).toBeNull();
   });
 
   it("the logo moves the window once the press travels, and only the caret opens the list", async () => {
     startWindowDrag.mockClear();
+    useRootOverlayStore.setState({ open: false });
     useBoxesStore.setState({
       boxes: [box("boxA", ["p1"])],
       openBox: vi.fn(openBoxScope),
@@ -316,7 +320,7 @@ describe("box chip rendering (slice model)", () => {
     });
     expect(document.querySelector(".box-chip-menu")).toBeNull();
 
-    // Narrow down to boxA first, so a stray "All projects" click would show.
+    // Narrow down to boxA first; no click here is "All projects" any more.
     const menu = await openChipMenu(container);
     await act(async () => {
       fireEvent.click(menuRow(menu, "boxA"));
@@ -337,16 +341,17 @@ describe("box chip rendering (slice model)", () => {
       fireEvent.click(logo);
     });
     expect(startWindowDrag).toHaveBeenCalledTimes(1);
-    expect(pillNames(container)).toEqual(["p1"]);
+    expect(useRootOverlayStore.getState().open).toBe(false);
 
-    // A later plain click is "All projects" again.
+    // A later plain click opens the root console.
     await act(async () => {
       fireEvent.mouseDown(logo, { button: 0, clientX: 10, clientY: 10 });
       fireEvent.mouseUp(window);
       fireEvent.click(logo);
     });
     expect(startWindowDrag).toHaveBeenCalledTimes(1);
-    expect(pillNames(container).sort()).toEqual(["p1", "p2"]);
+    expect(useRootOverlayStore.getState().open).toBe(true);
+    expect(pillNames(container)).toEqual(["p1"]);
   });
 
   it("“All projects” hands the scope back to the project the strip was on", async () => {
