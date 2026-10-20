@@ -49,6 +49,7 @@ import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
+import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { onReaderInsert } from "../../lib/terminal/terminalDrop";
@@ -457,7 +458,9 @@ function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
  * survives steering; an unsent draft is kept per tab (`readerDrafts`), so
  * it survives the Reader unmounting too — another tab shown, the switch
  * flipped. Sends through the prompt box's path (`sendSteeringPrompt`); ↑/↓
- * walk `history`; Esc is `onEscape`.
+ * walk `history`; Esc is `onEscape`. ↑ in the empty box while Claude shows
+ * prompts sent from here as queued takes them back out of its queue to be
+ * edited (`queuePull`), and `onPulled` drops their bubbles.
  *
  * With a Claude subagent open, `subagent`, the words go to it instead — through
  * Claude Code's own agent list (`subagentInput`), the one way it takes them —
@@ -471,7 +474,7 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, focused, visible, steering, questionOpen, onEscape, onStatus }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, onEscape, onStatus, onPulled }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -482,6 +485,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   /** The open subagent to write to: its description and type. */
   subagent?: { task: string; role?: string };
   history: readonly string[];
+  /** Prompts sent to the session while Claude works, still drawn as sending. */
+  queued: readonly PendingPrompt[];
   focused: boolean;
   visible: boolean;
   steering: boolean;
@@ -489,12 +494,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   questionOpen: boolean;
   onEscape: () => void;
   onStatus: () => void;
+  /** These of `queued` left Claude's queue for the composer. */
+  onPulled: (ids: number[]) => void;
 }) {
   const t = useT();
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
   useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  const pulling = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   /** Ctrl+Z / Ctrl+Shift+Z (`editorUndo`/`editorRedo`): the composer's own
    * history, since React setting the value loses the box's. `draftRef` is
@@ -564,6 +572,16 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     box?.focus();
   }), [ptyId]);
 
+  /** The pane's screen and keyboard, for the walks that read Claude's own. */
+  const paneRows = () => {
+    const term = terminalFor(ptyId);
+    return term ? bufferRows(term.buffer.active) : [];
+  };
+  const paneKey = (key: string) => {
+    noteUserInput(ptyId);
+    return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
+  };
+
   const send = async () => {
     const current = tabRef.current;
     const text = draft.trim();
@@ -595,15 +613,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         const target = current.scheduleTargetId;
         if (!target) throw new Error("not an agent tab");
         const result = await sendToSubagent({
-          rows: () => {
-            const term = terminalFor(ptyId);
-            return term ? bufferRows(term.buffer.active) : [];
-          },
+          rows: paneRows,
           // Its Esc hands the list's keyboard back: no turn is stopped.
-          key: (key) => {
-            noteUserInput(ptyId);
-            return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
-          },
+          key: paneKey,
           command: (command) => typePaneKeys(ptyId, agentInputWrites(command)).then(() => true, () => false),
           type: () => submitScheduledAgentMessage(target, text, { whileBusy: true }).then(() => true, () => false),
         }, subagent);
@@ -647,6 +659,32 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     undo.current.record(draft, text, false);
     setDraft(text);
     setSendError("");
+    return true;
+  };
+
+  /** ↑ in the empty box while Claude says messages wait in its queue: they
+   * come back into the composer, out of the queue — so they are never sent
+   * as they were — and their bubbles go. */
+  const pullQueued = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
+    if (draft || historyAt.current !== null || queued.length === 0 || subagent || sending) return false;
+    if (pulling.current) return true;
+    if (!queuedHintShown(paneRows())) return false;
+    pulling.current = true;
+    const taken = [...queued];
+    void pullQueuedPrompts({ rows: paneRows, key: paneKey }, taken.map((item) => item.text)).then((result) => {
+      if (!result.ok) {
+        setSendError(t("terminal.reader.pullFailed"));
+        return;
+      }
+      if (result.pulled > 0) onPulled(taken.slice(taken.length - result.pulled).map((item) => item.id));
+      const current = draftRef.current;
+      const next = current ? `${current}\n${result.text}` : result.text;
+      editDraft(next);
+      caretAt.current = next.length;
+      if (!result.cleared) setSendError(t("terminal.reader.pullLeftover"));
+      composerRef.current?.focus();
+    }).finally(() => { pulling.current = false; });
     return true;
   };
 
@@ -694,6 +732,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     } else if (slashKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
+      e.preventDefault();
+    } else if (e.key === "ArrowUp" && pullQueued(e)) {
       e.preventDefault();
     } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && walkHistory(e, e.key === "ArrowUp" ? -1 : 1)) {
       e.preventDefault();
@@ -1128,6 +1168,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   });
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
+  /** What ↑ in the composer can take back out of Claude's queue: the prompts
+   * still sending while its turn runs. */
+  const queuedPrompts = useMemo(
+    () => (live.working && isClaudeCommand(tab?.cmd) ? pending : []),
+    [live.working, tab?.cmd, pending],
+  );
+  const dropPending = useCallback((ids: number[]) => {
+    setPending((items) => items.filter((item) => !ids.includes(item.id)));
+  }, []);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
 
@@ -1423,11 +1472,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
-                  queue at once. */}
+                  queue at once; ↑ in the empty composer takes it back. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
                 <small className="terminal-reader-pending-hint">
                   {t("terminal.reader.sendNowHint")}
                   <UntestedTag id="terminal.reader.sendNowHint" />
+                  <UntestedTag id="terminal.reader.queuePull" />
                 </small>
               )}
               <small className="terminal-reader-time">{t("terminal.reader.sending")}</small>
@@ -1533,12 +1583,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         cli={agentFamily(agentLabel)}
         subagent={openStep && isClaudeCommand(tab?.cmd) ? openStep : undefined}
         history={history}
+        queued={queuedPrompts}
         focused={focused}
         visible={visible}
         steering={steering}
         questionOpen={!!shownLive.question}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
+        onPulled={dropPending}
       />
     </div>
     {changesOpen && tab && (

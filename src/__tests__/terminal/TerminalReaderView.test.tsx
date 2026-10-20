@@ -16,8 +16,15 @@ vi.mock("../../lib/agents/scheduledAgentInput", async (importOriginal) => ({
   submitScheduledAgentCommand: (...args: unknown[]) => submitCommand(...args),
 }));
 const written: string[] = [];
+/** Lets a fake pane answer what is typed into it. */
+const onWritten = new Set<(text: string) => void>();
 vi.mock("../../lib/terminal/terminalInput", () => ({
-  writePtyInput: (_id: string, bytes: Uint8Array) => { written.push(new TextDecoder().decode(bytes)); return Promise.resolve(); },
+  writePtyInput: (_id: string, bytes: Uint8Array) => {
+    const text = new TextDecoder().decode(bytes);
+    written.push(text);
+    for (const hear of onWritten) hear(text);
+    return Promise.resolve();
+  },
 }));
 
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
@@ -145,6 +152,50 @@ describe("the agent pane's Reader", () => {
       clearInterval(repaint);
       unregisterTerminal("p:agent-1", term);
       vi.useRealTimers();
+    }
+  });
+
+  it("takes a queued prompt back out of Claude's queue on ↑ and drops its bubble", async () => {
+    const rule = "─".repeat(40);
+    const queue: string[] = [];
+    let box = "";
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", rule, "❯ ", rule, "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    const draw = () => {
+      const lines = box ? box.split("\n") : [queue.length ? "Press up to edit queued messages" : ""];
+      rows.splice(4, rows.length - 6, ...lines.map((line, index) => `${index ? "  " : "❯ "}${line}`));
+    };
+    // Claude 2.1.303 as probed: ↑ moves the queue into the box, Ctrl+U
+    // deletes back to the line's start, or the break before it.
+    const hear = (text: string) => {
+      if (text === "\u001b[A" && !box) box = queue.splice(0).join("\n");
+      else if (text === "\u0015") {
+        const start = box.lastIndexOf("\n") + 1;
+        box = start === box.length && start > 0 ? box.slice(0, -1) : box.slice(0, start);
+      } else return;
+      draw();
+    };
+    onWritten.add(hear);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      act(() => {
+        noteSentPrompt("st-1", "also rename it");
+        queue.push("also rename it");
+        draw();
+      });
+      expect(host.querySelector(".terminal-reader-turn.pending")?.textContent).toContain("also rename it");
+      const composer = screen.getByRole("textbox") as HTMLTextAreaElement;
+      await act(async () => { fireEvent.keyDown(composer, { key: "ArrowUp" }); });
+      await waitFor(() => expect(composer.value).toBe("also rename it"));
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull();
+      expect(queue).toEqual([]);
+      expect(box).toBe("");
+    } finally {
+      onWritten.delete(hear);
+      unregisterTerminal("p:agent-1", term);
     }
   });
 
