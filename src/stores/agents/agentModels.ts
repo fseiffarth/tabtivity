@@ -304,6 +304,18 @@ function refreshTab(ptyId: string, turnStarted = false): void {
   void store.refreshScreen(parts.scope, tab, true);
 }
 
+/** A prompt was submitted to an agent tab — typed, or sent by the composer.
+ *  One going into a tab that is already working starts no turn of its own:
+ *  the CLI queues it, or runs a `/goal` inside the running turn, so no busy
+ *  edge comes to re-read the record, and the GOAL mark (and the prompt chart's
+ *  row) would wait for the turn's end — which a goal puts off for as long as it
+ *  runs. Re-read once the agent has had time to write it. A quiet tab is left
+ *  to its busy edge. */
+export function noteAgentSubmit(ptyId: string): void {
+  if (!useActivityStore.getState().busyByTab[ptyId]) return;
+  setTimeout(() => refreshTab(ptyId), TURN_START_RECHECK_MS);
+}
+
 // A finished turn is the one moment the tag can have changed (a `/model` mid-
 // session shows up in the next answer), and a turn *starting* is the moment
 // a prompt was submitted — by whichever route — so both edges re-read for

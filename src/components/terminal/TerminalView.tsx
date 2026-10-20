@@ -12,6 +12,7 @@ import { useExperimental } from "../../lib/experimental";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
+import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { ROOT_SCOPE, bumpUsage, markAgentActive } from "../../stores/usage";
@@ -847,6 +848,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // "Agent tabs you used today" — once per tab per day, however much you
         // then ask it.
         markAgentActive(scope, id, sub(METRIC.AGENT_ACTIVE, agentLeaf));
+        noteAgentSubmit(id);
       } else if (kind === "shell") {
         bumpUsage(scope, METRIC.SHELL_COMMAND);
       }

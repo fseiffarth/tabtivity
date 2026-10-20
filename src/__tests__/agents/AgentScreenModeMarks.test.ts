@@ -3,8 +3,16 @@
  * with the parser the phone's Mode chip uses, so the tab is marked exactly
  * while the CLI says so — and an unreadable screen says nothing either way.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
+
 import { screenModeMarks, textScreenModeMarks } from "../../lib/agents/agentModel";
+import { clearAgentModelFloorForTest, noteAgentSubmit, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { useActivityStore } from "../../stores/activity";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import type { ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
@@ -56,5 +64,43 @@ describe("an agent tab's plan / goal marks", () => {
     expect(screenModeMarks(screen(["> ", "? for shortcuts · 85% context left"]), "Claude"))
       .toEqual({ plan: false, goal: false });
     expect(screenModeMarks(screen(["● Plan mode is on, /goal active"]), "Claude")).toBeNull();
+  });
+});
+
+describe("the GOAL mark of a /goal set mid-turn", () => {
+  const PTY = "p:agent-1";
+  const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "s-1" };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(invoke).mockReset();
+    useActivityStore.setState({ busyByTab: {} });
+    useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {}, screenByTab: {}, modeByTab: {}, goalByTab: {} });
+    clearAgentModelFloorForTest();
+  });
+
+  it("is read from the record a while after the submit, with no turn edge to bring it", async () => {
+    vi.useFakeTimers();
+    let goal: boolean | null = null;
+    vi.mocked(invoke).mockImplementation(async (command: string) => (command === "agent_tab_goal" ? goal : null));
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
+    // The first prompt starts the turn; no goal yet.
+    useActivityStore.setState({ busyByTab: { [PTY]: true } });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(tabModeMarks(useAgentModelsStore.getState(), PTY)).toBeUndefined();
+    // `/goal …` typed while it works: Claude runs it inside the running turn,
+    // so the tab stays busy and no edge follows.
+    goal = true;
+    noteAgentSubmit(PTY);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(tabModeMarks(useAgentModelsStore.getState(), PTY)).toEqual({ plan: false, goal: true });
+  });
+
+  it("leaves a quiet tab to its busy edge", async () => {
+    vi.useFakeTimers();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
+    noteAgentSubmit(PTY);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("agent_tab_goal", expect.anything());
   });
 });
