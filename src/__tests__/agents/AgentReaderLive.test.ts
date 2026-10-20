@@ -125,6 +125,23 @@ describe("the desktop Reader's live screen", () => {
     ]);
   });
 
+  it("cuts the diff panel off a question whose screen has rows without its divider", () => {
+    // Rows printed before the pane opened sit above it (the phone's replayed
+    // history), and a row caught mid-repaint lacks the bar: either one left
+    // the whole panel glued into the question.
+    const rows = [
+      "● Earlier output that ran the whole width of the pane before the diff panel opened, long ago.",
+      ...DIFF_PANEL_QUESTION.slice(0, 7),
+      `${"│ syncing, so `ollama launch cline` can't push its Ollama setting into".padEnd(73)}New file not yet staged.`,
+      ...DIFF_PANEL_QUESTION.slice(8),
+    ];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 130);
+    expect(live.ask).toEqual([
+      "How should local-model agent homes (<scope>.local) take part in login syncing, so `ollama launch cline` can't push its Ollama setting into your normal Cline tabs?",
+    ]);
+    expect(live.question?.options[0]).toMatchObject({ label: "Receive-only, all CLIs (Recommended)" });
+  });
+
   it("reads a permission prompt as its question, its context and its options", () => {
     const live = readReaderLive(plainBuffer(PERMISSION), "Claude");
     expect(live.question?.options.map((option) => option.label)).toEqual([

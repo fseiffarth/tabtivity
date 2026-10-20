@@ -378,6 +378,27 @@ describe(`${BRAND.display} Mobile side panel`, () => {
     expect(lines).toEqual(["● Wrote the plan.", "", "How should homes sync, so", "nothing leaks?", "完成 Shipped", "❯", "  ⏵⏵ auto mode on"]);
   });
 
+  it("cuts the diff panel below history printed before it opened, and a row missing its divider", () => {
+    const pane = (left: string, right = "") => `${left.padEnd(30)}│${right}`;
+    const rows = [
+      "$ a command printed the whole width before the panel opened",
+      pane("● Wrote the plan.", "1 file changed"),
+      pane("", "docs/plan.md (untracked)"),
+      pane("│ How should homes sync, so", "─".repeat(20)),
+      `${"│ nothing leaks?".padEnd(31)}New file not yet staged.`,
+      pane("🖐️ Shipped", "Run `git add` to see line counts."),
+      `${"─".repeat(30)}│`,
+      pane("❯ "),
+      `${"─".repeat(30)}│`,
+      pane("  ⏵⏵ auto mode on", "+1 file edited before this session"),
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines).toEqual([
+      "$ a command printed the whole width before the panel opened",
+      "● Wrote the plan.", "", "How should homes sync, so", "nothing leaks?", "🖐️ Shipped", "❯", "  ⏵⏵ auto mode on",
+    ]);
+  });
+
   it("leaves a table's columns whole: they never run through every row", () => {
     const rows = [
       "┌──────────────────────────┬──────────┐",
