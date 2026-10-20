@@ -1,12 +1,12 @@
 /**
- * Tabby's side-panel view (S4b, `docs/assistant_plan.md`; the rail icon that
- * opens it is in `shell/SidePanelEdgeRail.test.tsx`): polling only while
- * shown, the chat list newest first, a chat's CLI started when it is first shown (lazy spawn),
- * deleting a chat, the new-chat flow with the CLI/model picker, the sign-in and
- * search setup cards.
+ * Tabby's side-panel view (the rail icon that opens it is in
+ * `shell/SidePanelEdgeRail.test.tsx`): polling only while shown, one chat —
+ * the newest, started when shown (lazy spawn) or made on the default CLI when
+ * there is none — the head's CLI/model dropdown and Relaunch replacing it, the
+ * sign-in and search setup cards.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 type Call = [string, Record<string, unknown> | undefined];
 const calls: Call[] = [];
@@ -26,7 +26,11 @@ vi.mock("@tauri-apps/api/core", () => ({
         version: 9,
         tabLayout: [
           ...(snapshot.tabLayout as unknown[]),
-          chat(made.tabId, made.uid, { createdVersion: 9, label: "Fresh" }),
+          chat(made.tabId, made.uid, {
+            createdVersion: 9,
+            label: "Fresh",
+            assistant: args?.model ? { cli: String(args.cli), model: String(args.model) } : { cli: String(args?.cli) },
+          } as Partial<SavedTabEntry>),
         ],
       };
       return Promise.resolve({ ...made, scope: "assistant", version: 9 });
@@ -137,14 +141,14 @@ function resetStores() {
   useProjectsStore.setState({ projects: [], activeId: "p1", rootDir: "/r" });
   useOverlayAgentStore.setState({ shownKeys: new Set(), assistantShownKeys: new Set(), assistantStartedKeys: new Set() });
   useRootOverlayStore.setState({ open: false, installTabs: {} });
-  useAssistantViewStore.setState({ selectedKey: null, composing: false });
+  useAssistantViewStore.setState({ selectedKey: null });
   setFlag(true);
 }
 
 const optionCalls = () => calls.filter(([c]) => c === "assistant_options").length;
 const own = (key: string) => document.querySelector(`[data-testid="pane-own-${key}"]`);
 const attached = () => Array.from(document.querySelectorAll('[data-testid^="pane-attach-"]'));
-const rowLabels = () => Array.from(document.querySelectorAll(".assistant-chat-label")).map((n) => n.textContent);
+const newChatCalls = () => calls.filter(([c]) => c === "assistant_new_chat").map(([, a]) => a);
 
 /** Show the view (the side panel mounts it only while it is on show),
  *  on `chatKey` when given. */
@@ -177,19 +181,20 @@ describe("the view", () => {
     expect(optionCalls()).toBe(1);
   });
 
-  it("lists the chats newest first and shows the newest one", async () => {
+  it("shows the newest chat alone, with its CLI in the head", async () => {
     await show();
-    expect(rowLabels()).toEqual(["Newer chat", "Old chat"]);
     const newest = assistantTabs().find((t) => t.id === "b")!;
-    expect(document.querySelector(".assistant-chat-row.active")?.textContent).toContain("Newer chat");
-    // The attach-only view of the shown chat, Reader always on.
+    // The attach-only view of the shown chat, Reader always on; no chat list.
     const views = attached();
     expect(views).toHaveLength(1);
     expect(views[0].getAttribute("data-testid")).toBe(`pane-attach-${newest.key}`);
     expect(views[0].getAttribute("data-reader-always")).toBe("true");
-    // Showing Tabby is not a project switch.
+    expect(document.querySelector(".assistant-chat-row")).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Codex"));
+    // Showing Tabby is not a project switch, and a saved chat starts no new one.
     expect(useProjectsStore.getState().activeId).toBe("p1");
     expect(useTabsStore.getState().scope).toBe("p1");
+    expect(newChatCalls()).toEqual([]);
   });
 
   it("opens on the chat a jump names", async () => {
@@ -199,14 +204,12 @@ describe("the view", () => {
     });
     const old = assistantTabs().find((t) => t.id === "a")!;
     await show(old.key);
-    expect(document.querySelector(".assistant-chat-row.active")?.textContent).toContain("Old chat");
     expect(attached()[0].getAttribute("data-testid")).toBe(`pane-attach-${old.key}`);
   });
-
 });
 
 describe("lazy spawn", () => {
-  it("starts a restored chat's CLI only when it is first shown", async () => {
+  it("starts only the shown chat's CLI", async () => {
     render(<CenterPanel />);
     await act(async () => {});
     // Tabby has not been shown: nothing hydrated, nothing spawned.
@@ -214,67 +217,32 @@ describe("lazy spawn", () => {
 
     await show();
     const [oldChat, newest] = [assistantTabs().find((t) => t.id === "a")!, assistantTabs().find((t) => t.id === "b")!];
-    // Two chats were restored; only the one shown owns a pane (= a PTY).
     expect(assistantTabs()).toHaveLength(2);
     expect(own(newest.key)).not.toBeNull();
     expect(own(oldChat.key)).toBeNull();
-
-    // Picking the other one starts it; the first keeps running.
-    fireEvent.click(screen.getByText("Old chat"));
-    await act(async () => {});
-    expect(own(oldChat.key)).not.toBeNull();
-    expect(own(newest.key)).not.toBeNull();
   });
 });
 
-describe("deleting a chat", () => {
-  it("removes the tab from the scope and falls back to the next chat", async () => {
-    await show();
-    const newest = assistantTabs().find((t) => t.id === "b")!;
-    const row = document.querySelector(".assistant-chat-row.active") as HTMLElement;
-    fireEvent.click(within(row).getByRole("button", { name: "Delete this chat" }));
-    await act(async () => {});
-    expect(assistantTabs().map((t) => t.id)).toEqual(["a"]);
-    expect(assistantTabs().some((t) => t.key === newest.key)).toBe(false);
-    expect(rowLabels()).toEqual(["Old chat"]);
-    expect(document.querySelector(".assistant-chat-row.active")?.textContent).toContain("Old chat");
+describe("with no chat", () => {
+  beforeEach(() => {
+    snapshot = { version: 4, tabLayout: [] };
   });
-});
 
-describe("a new chat", () => {
-  async function openForm() {
+  it("starts one on the default CLI at once and shows it", async () => {
     await show();
-    fireEvent.click(screen.getByRole("button", { name: /\+ New chat/ }));
-    await act(async () => {});
-  }
-
-  it("starts with the default CLI, mounts the chat the backend made and shows it", async () => {
-    await openForm();
-    expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Claude");
-    fireEvent.click(screen.getByRole("button", { name: "Start chat" }));
     await waitFor(() => expect(assistantTabs().some((t) => t.id === "fresh")).toBe(true));
-    expect(calls.filter(([c]) => c === "assistant_new_chat")).toEqual([["assistant_new_chat", { cli: "claude", model: null }]]);
+    expect(newChatCalls()).toEqual([{ cli: "claude", model: null }]);
     const fresh = assistantTabs().find((t) => t.id === "fresh")!;
     await waitFor(() => expect(attached()[0]?.getAttribute("data-testid")).toBe(`pane-attach-${fresh.key}`));
-    expect(document.querySelector(".assistant-chat-row.active")?.textContent).toContain("Fresh");
-    // The scope was hydrated before the chat was made (the restored ones are kept).
-    expect(assistantTabs()).toHaveLength(3);
   });
 
-  it("asks for a model with a local CLI, preselecting the user's default, and offers the search setup", async () => {
+  it("takes the user's default local CLI and model, and the chat offers the search setup", async () => {
     useSettingsStore.setState({
       settings: { assistant: true, experimental_explicit: true, assistant_settings: { default_cli: "opencode_local", default_model: "llama3.2" } } as Settings,
     });
-    await openForm();
-    expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("OpenCode");
-    expect(screen.getByRole("button", { name: "Local model" }).textContent).toContain("llama3.2");
-    // No search backend: the card says so and offers the form.
-    expect(screen.getByText("Set up web search for local models")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Local model" }));
-    fireEvent.click(screen.getByRole("option", { name: "qwen3:8b" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start chat" }));
-    await waitFor(() => expect(calls.some(([c]) => c === "assistant_new_chat")).toBe(true));
-    expect(calls.find(([c]) => c === "assistant_new_chat")![1]).toEqual({ cli: "opencode_local", model: "qwen3:8b" });
+    await show();
+    await waitFor(() => expect(newChatCalls()).toEqual([{ cli: "opencode_local", model: "llama3.2" }]));
+    await waitFor(() => expect(screen.getByText("Set up web search for local models")).toBeTruthy());
   });
 
   it("shows no search card once a backend is configured", async () => {
@@ -282,26 +250,29 @@ describe("a new chat", () => {
     useSettingsStore.setState({
       settings: { assistant: true, experimental_explicit: true, assistant_settings: { default_cli: "opencode_local" } } as Settings,
     });
-    await openForm();
+    await show();
+    await waitFor(() => expect(attached()).toHaveLength(1));
     expect(screen.queryByText("Set up web search for local models")).toBeNull();
   });
 
-  it("says why it can't start: a CLI that is not signed in gets the one-click sign-in", async () => {
-    await openForm();
-    fireEvent.click(screen.getByRole("button", { name: "CLI" }));
-    fireEvent.click(screen.getByRole("option", { name: "Codex" }));
-    expect(screen.getByText("Sign in to Codex", { selector: ".assistant-card-title" })).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Start chat" }) as HTMLButtonElement).disabled).toBe(true);
+  it("waits on a signed-out default CLI behind its one-click sign-in, then starts", async () => {
+    options = baseOptions({ defaultCli: "codex" });
+    await show();
+    await waitFor(() => expect(screen.getByText("Sign in to Codex", { selector: ".assistant-card-title" })).toBeTruthy());
+    expect(newChatCalls()).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Sign in to Codex" }));
     expect(runInstallInTab).toHaveBeenCalledTimes(1);
     const [label, command, shell] = runInstallInTab.mock.calls[0];
     expect(label).toContain("Codex");
     expect(command).toBe("codex login --device-auth");
     expect(shell).toBe("default");
-    // Check again re-reads the options.
-    const before = optionCalls();
+    // Signed in: Check again re-reads the options and the chat starts.
+    const signedIn = baseOptions({ defaultCli: "codex" });
+    (signedIn.clis[1] as Record<string, unknown>).signedIn = true;
+    (signedIn.clis[1] as Record<string, unknown>).ready = true;
+    options = signedIn;
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
-    await waitFor(() => expect(optionCalls()).toBe(before + 1));
+    await waitFor(() => expect(newChatCalls()).toEqual([{ cli: "codex", model: null }]));
   });
 
   it("blocks a local CLI while Ollama is down", async () => {
@@ -309,19 +280,81 @@ describe("a new chat", () => {
     useSettingsStore.setState({
       settings: { assistant: true, experimental_explicit: true, assistant_settings: { default_cli: "opencode_local" } } as Settings,
     });
-    await openForm();
-    expect(screen.getByText("Ollama isn't running")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Start chat" }) as HTMLButtonElement).disabled).toBe(true);
+    await show();
+    await waitFor(() => expect(screen.getByText("Ollama isn't running")).toBeTruthy());
+    expect(newChatCalls()).toEqual([]);
   });
 
-  it("reports a refusal from the backend and starts nothing", async () => {
+  it("reports a refusal, starts nothing, and Start tries again", async () => {
     newChatRefusal = "not_offered: that CLI isn't offered";
-    await openForm();
-    fireEvent.click(screen.getByRole("button", { name: "Start chat" }));
+    await show();
     expect((await screen.findByRole("alert")).textContent).toContain("not_offered");
-    expect(assistantTabs()).toHaveLength(2);
+    expect(assistantTabs()).toHaveLength(0);
+    expect(newChatCalls()).toHaveLength(1);
+    newChatRefusal = null;
+    fireEvent.click(screen.getByRole("button", { name: "Start chat" }));
+    await waitFor(() => expect(assistantTabs().some((t) => t.id === "fresh")).toBe(true));
   });
 });
+
+describe("replacing the chat", () => {
+  it("picking another CLI starts a chat on it and removes the others", async () => {
+    await show();
+    await waitFor(() => expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Codex"));
+    fireEvent.click(screen.getByRole("button", { name: "CLI" }));
+    fireEvent.click(screen.getByRole("option", { name: "Claude" }));
+    await waitFor(() => expect(assistantTabs().map((t) => t.id)).toEqual(["fresh"]));
+    expect(newChatCalls()).toEqual([{ cli: "claude", model: null }]);
+    const fresh = assistantTabs()[0];
+    await waitFor(() => expect(attached()[0]?.getAttribute("data-testid")).toBe(`pane-attach-${fresh.key}`));
+  });
+
+  it("picking a local CLI asks for its model in the head", async () => {
+    await show();
+    await waitFor(() => expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Codex"));
+    fireEvent.click(screen.getByRole("button", { name: "CLI" }));
+    fireEvent.click(screen.getByRole("option", { name: "OpenCode (local model)" }));
+    await waitFor(() => expect(newChatCalls()).toEqual([{ cli: "opencode_local", model: "qwen3:8b" }]));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Local model" }).textContent).toContain("qwen3:8b"));
+    fireEvent.click(screen.getByRole("button", { name: "Local model" }));
+    newChat = { tabId: "fresh2", uid: UID_A };
+    fireEvent.click(screen.getByRole("option", { name: "llama3.2" }));
+    await waitFor(() => expect(newChatCalls()).toEqual([
+      { cli: "opencode_local", model: "qwen3:8b" },
+      { cli: "opencode_local", model: "llama3.2" },
+    ]));
+  });
+
+  it("a signed-out pick shows its sign-in card and keeps the chat", async () => {
+    await show(await assistantTabsKey("a"));
+    fireEvent.click(screen.getByRole("button", { name: "CLI" }));
+    fireEvent.click(screen.getByRole("option", { name: "Codex" }));
+    expect(screen.getByText("Sign in to Codex", { selector: ".assistant-card-title" })).toBeTruthy();
+    expect(newChatCalls()).toEqual([]);
+    expect(assistantTabs()).toHaveLength(2);
+    // Back to the chat's own CLI: the chat again, nothing started.
+    fireEvent.click(screen.getByRole("button", { name: "CLI" }));
+    fireEvent.click(screen.getByRole("option", { name: "Claude" }));
+    expect(attached()).toHaveLength(1);
+    expect(newChatCalls()).toEqual([]);
+  });
+
+  it("Relaunch starts a fresh session of the same CLI", async () => {
+    await show(await assistantTabsKey("a"));
+    fireEvent.click(screen.getByRole("button", { name: "Relaunch" }));
+    await waitFor(() => expect(assistantTabs().map((t) => t.id)).toEqual(["fresh"]));
+    expect(newChatCalls()).toEqual([{ cli: "claude", model: null }]);
+  });
+});
+
+/** The key chat `id` restored under (hydrating the scope first). */
+async function assistantTabsKey(id: string): Promise<string> {
+  await act(async () => {
+    const { ensureAssistantScopeHydrated } = await import("../../stores/assistantScope");
+    await ensureAssistantScopeHydrated();
+  });
+  return assistantTabs().find((t) => t.id === id)!.key;
+}
 
 describe("a restored chat whose CLI is signed out", () => {
   it("shows the sign-in card above the chat", async () => {

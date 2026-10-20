@@ -105,7 +105,7 @@ beforeEach(async () => {
     fullscreenGroupId: null,
   });
   useOverlayAgentStore.setState({ assistantShownKeys: new Set(), assistantStartedKeys: new Set(), assistantEndedKeys: new Set() });
-  useAssistantViewStore.setState({ selectedKey: null, composing: false });
+  useAssistantViewStore.setState({ selectedKey: null });
   useSettingsStore.setState({ settings: { assistant: true } as unknown as Settings });
   await act(async () => {
     await ensureAssistantScopeHydrated();

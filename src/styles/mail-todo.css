@@ -943,10 +943,9 @@ svg.alerts-toggle-icon {
   white-space: nowrap;
 }
 /* ── Tabby's side-panel view (assistant/AssistantView) ──────────────────────
-   One of the side panel's views, so it is stacked for the panel's width: New
-   chat and the chat list on top (capped, scrolling past a few chats), the chat
-   — or the new-chat form — filling what is left. The list's rows wear the
-   subwindow head's × (`.subwindow-hide`), the cards the settings design
+   One of the side panel's views, so it is stacked for the panel's width: a
+   head row with the chat's CLI (and local model) dropdown and Relaunch on top,
+   the one chat filling what is left. The cards wear the settings design
    system's (`.settings-card`, `.settings-btn`), so only the layout is new. */
 .assistant-view {
   flex: 1 1 auto;
@@ -955,80 +954,22 @@ svg.alerts-toggle-icon {
   flex-direction: column;
   border-top: 1px solid var(--border-color);
 }
-.assistant-chat-list {
+.assistant-head {
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
-  min-width: 0;
-  max-height: 32%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-panel);
 }
-.assistant-chat-list-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.assistant-new-chat-btn {
-  flex: 1 1 auto;
-}
-.assistant-chat-rows {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-.assistant-chat-empty {
-  padding: 10px;
-  margin: 0;
-}
-.assistant-chat-row {
-  display: flex;
-  align-items: center;
-  border-bottom: 1px solid var(--border-subtle);
-  border-left: 2px solid transparent;
-}
-.assistant-chat-row:hover,
-.assistant-chat-row.active {
-  background: var(--control-hover-bg);
-}
-.assistant-chat-row.active {
-  border-left-color: var(--accent);
-}
-.assistant-chat-select {
-  flex: 1 1 auto;
+.assistant-head-pick {
+  flex: 1 1 0;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 6px 6px 6px 10px;
-  border: none;
-  background: none;
-  color: var(--text-primary);
-  text-align: left;
-  cursor: var(--cur-pointer, pointer);
 }
-.assistant-chat-label,
-.assistant-chat-sub {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.assistant-chat-label {
-  font-size: 13px;
-  font-weight: 600;
-}
-.assistant-chat-sub {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.assistant-chat-delete {
+.assistant-relaunch {
   flex: 0 0 auto;
-  margin-right: 4px;
 }
 .assistant-chat-main {
   flex: 1 1 auto;
@@ -1043,18 +984,13 @@ svg.alerts-toggle-icon {
 .assistant-main-note {
   padding: 16px;
 }
-.assistant-new-chat {
+.assistant-start {
   display: flex;
   flex-direction: column;
   gap: 12px;
   width: 100%;
   box-sizing: border-box;
   padding: 12px;
-}
-.assistant-new-chat-title {
-  font-size: 16px;
-  font-weight: 650;
-  color: var(--accent);
 }
 .assistant-chat {
   flex: 1 1 auto;

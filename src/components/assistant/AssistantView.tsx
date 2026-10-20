@@ -1,17 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { ASSISTANT_SCOPE } from "../../lib/assistant";
+import { isAiOffRefusal } from "../../lib/aiSwitch";
+import { ASSISTANT_SCOPE, assistantNewChat } from "../../lib/assistant";
 import { useT } from "../../lib/i18n";
 import { useAssistantViewStore } from "../../stores/assistantView";
-import { ensureAssistantScopeHydrated, forgetAssistantChat, startAssistantChat } from "../../stores/assistantScope";
+import {
+  assistantTabs,
+  ensureAssistantScopeHydrated,
+  forgetAssistantChat,
+  mountAssistantChat,
+  startAssistantChat,
+} from "../../stores/assistantScope";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { AttachedAgentPane } from "../layout/AttachedAgentPane";
 import { CliBlockCard, SearchSetupCard } from "./AssistantCards";
-import { AssistantNewChat } from "./AssistantNewChat";
-import { cliBlock, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
+import { cliBlock, defaultCliOf, defaultModelOf, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
+
+/** A CLI and, for a local one, the model it drives. */
+interface Launch {
+  cli: string;
+  model: string | null;
+}
 
 /**
  * **Tabby's side-panel view**: the panel's edge-rail icon (and its switcher's
@@ -20,20 +34,23 @@ import { cliBlock, useAssistantOptions, type AssistantOptionsHandle } from "./us
  * the experimental switch on), so every effect below — the options poll
  * included — is visible-only.
  *
- * On top, New chat and the chats (the assistant scope's tabs, newest first)
- * with a delete per chat. Below, the chat shown — an attach-only view of its
- * tab (`AttachedAgentPane` with `readerAlways`: the Reader is always on here,
- * and the agent's own terminal one toggle away). The PTY belongs to the tab's
- * pane in `CenterPanel`; closing the panel or switching views ends nothing,
- * deleting a chat does.
+ * **One chat.** On top, the CLI it runs (and the local model) as a dropdown and
+ * Relaunch; below, the chat — an attach-only view of its tab
+ * (`AttachedAgentPane` with `readerAlways`: the Reader is always on here, and
+ * the agent's own terminal one toggle away). The PTY belongs to the tab's pane
+ * in `CenterPanel`; closing the panel or switching views ends nothing.
  *
- * **Lazy spawn.** Hydrating the scope restores chats as records only. A chat's
- * CLI starts when the chat is first shown here (`startAssistantChat`), so
- * opening the view with many saved chats starts one CLI, not all of them.
+ * Opening the view shows the last chat, started again if its CLI is not
+ * running (`startAssistantChat` resumes it); with none it starts one on the
+ * default CLI at once. Picking another CLI, or Relaunch, starts a fresh chat
+ * and removes the one it replaces (every other chat of the scope with it, so
+ * the scope holds the one chat shown here and on the phone).
  */
 export function AssistantView() {
   const t = useT();
   const handle = useAssistantOptions(true);
+  const { options } = handle;
+  const stored = useSettingsStore((s) => s.settings?.assistant_settings);
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -45,106 +62,176 @@ export function AssistantView() {
     };
   }, []);
 
-  const stored = useTabsStore((s) => s.tabsByScope[ASSISTANT_SCOPE]);
-  // Newest first; the scope holds them oldest first.
-  const chats = useMemo(() => [...(stored ?? [])].reverse(), [stored]);
+  const chats = useTabsStore((s) => s.tabsByScope[ASSISTANT_SCOPE]);
   const selectedKey = useAssistantViewStore((s) => s.selectedKey);
-  const composing = useAssistantViewStore((s) => s.composing);
-  const selected = chats.find((c) => c.key === selectedKey) ?? (composing ? undefined : chats[0]);
-  const showForm = hydrated && (composing || chats.length === 0);
+  // The chat a jump named, else the newest (the scope holds them oldest first).
+  const chat = chats?.find((c) => c.key === selectedKey) ?? chats?.[chats.length - 1];
+
+  // A launch asked for and not made yet: the default on a first open, or the
+  // dropdown's pick. It waits here while its CLI is blocked (the card says
+  // why) and goes once the poll sees the block cleared.
+  const [want, setWant] = useState<Launch | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const defaultLaunch = (): Launch | null => {
+    if (!options) return null;
+    const cli = defaultCliOf(options, stored?.default_cli);
+    if (!cli) return null;
+    return { cli: cli.id, model: cli.local ? defaultModelOf(options, stored?.default_model) : null };
+  };
+
+  // Nothing to show: ask for a chat on the default CLI, once per open.
+  const autoAsked = useRef(false);
+  useEffect(() => {
+    if (!hydrated || !options || chat || autoAsked.current) return;
+    autoAsked.current = true;
+    setWant(defaultLaunch());
+    // `defaultLaunch` reads the same `options`/`stored` this render does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, options, chat]);
 
   // Showing a chat is what starts its CLI.
-  const selectedChatKey = !showForm ? selected?.key : undefined;
+  const chatKey = chat?.key;
   useEffect(() => {
-    if (selectedChatKey) startAssistantChat(selectedChatKey);
-  }, [selectedChatKey]);
+    if (chatKey) startAssistantChat(chatKey);
+  }, [chatKey]);
 
-  const deleteChat = (chat: TabEntry) => {
-    useAssistantViewStore.getState().forget(chat.key);
-    forgetAssistantChat(chat.key);
-    // Like closing any tab: the pane unmounts and its PTY is reaped. The persist
-    // host saves the shorter list.
-    useTabsStore.getState().removeTabInScope(ASSISTANT_SCOPE, chat.key);
+  const wantCli = want ? options?.clis.find((c) => c.id === want.cli) : undefined;
+  const wantBlock = wantCli && options ? cliBlock(wantCli, options) : null;
+
+  /** Start a chat on `launch`, show it, and remove every other chat. */
+  const launch = async (next: Launch) => {
+    setBusy(true);
+    setError(null);
+    try {
+      // The scope first: a created tab arriving at an unhydrated scope is only
+      // picked up by the hydrate (the restored chats would then be missed).
+      await ensureAssistantScopeHydrated();
+      const made = await assistantNewChat(next.cli, next.model);
+      const tab = await mountAssistantChat(made.tabId);
+      if (!tab) {
+        setError(t("assistant.newChat.vanished"));
+        return;
+      }
+      useAssistantViewStore.getState().select(tab.key);
+      for (const old of assistantTabs().filter((c) => c.key !== tab.key)) deleteChat(old);
+    } catch (err) {
+      setError(isAiOffRefusal(err)
+        ? t("sidePanel.aiOffHint")
+        : t("assistant.newChat.failed", { reason: String(err).replace(/^Error: /, "") }));
+    } finally {
+      setBusy(false);
+    }
   };
+
+  useEffect(() => {
+    if (!want || busy || !wantCli || wantBlock !== null || (wantCli.local && !want.model)) return;
+    setWant(null);
+    void launch(want);
+    // `launch` is a fresh closure each render; `want` is what triggers it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [want, busy, wantCli, wantBlock]);
+
+  const current: Launch | null = want
+    ?? (chat?.assistant ? { cli: chat.assistant.cli, model: chat.assistant.model ?? null } : null)
+    ?? defaultLaunch();
+  const currentCli = current ? options?.clis.find((c) => c.id === current.cli) : undefined;
+
+  const pick = (next: Launch) => {
+    setError(null);
+    const same = chat?.assistant && chat.assistant.cli === next.cli && (chat.assistant.model ?? null) === next.model;
+    setWant(same ? null : next);
+  };
+  const pickCli = (id: string) => {
+    const cli = options?.clis.find((c) => c.id === id);
+    if (!cli || !options) return;
+    const model = cli.local ? (current?.model && options.localModels.includes(current.model) ? current.model : defaultModelOf(options, stored?.default_model)) : null;
+    pick({ cli: id, model });
+  };
+  const relaunch = () => {
+    if (!chat?.assistant || busy) return;
+    setWant(null);
+    void launch({ cli: chat.assistant.cli, model: chat.assistant.model ?? null });
+  };
+
+  let body: ReactNode = null;
+  if (!hydrated || (!options && !handle.error)) {
+    body = <p className="settings-help assistant-main-note">{t("assistant.loading")}</p>;
+  } else if (!options) {
+    body = <p className="settings-help assistant-main-note">{t("assistant.optionsFailed", { reason: handle.error ?? "" })}</p>;
+  } else if (want && wantCli && wantBlock) {
+    body = (
+      <div className="assistant-start">
+        <p className="settings-help">{t("assistant.newChat.intro")}</p>
+        <CliBlockCard block={wantBlock} cli={wantCli} onRecheck={() => void handle.refresh()} />
+      </div>
+    );
+  } else if (busy || want) {
+    body = <p className="settings-help assistant-main-note">{t("assistant.newChat.starting")}</p>;
+  } else if (error || !chat) {
+    body = (
+      <div className="assistant-start">
+        <p className="settings-help">{t("assistant.newChat.intro")}</p>
+        {error && <p className="project-dialog-error" role="alert">{error}</p>}
+        <div className="settings-link-row">
+          <button type="button" className="settings-btn primary" onClick={() => current && pick(current)} disabled={!current}>
+            {t("assistant.newChat.start")}
+          </button>
+        </div>
+      </div>
+    );
+  } else {
+    body = <ChatView chat={chat} handle={handle} />;
+  }
 
   return (
     <div className="assistant-view" aria-label={t("assistant.title")}>
-      <aside className="assistant-chat-list" aria-label={t("assistant.chats")}>
-        <div className="assistant-chat-list-head">
-          <button
-            type="button"
-            className="settings-btn sm primary assistant-new-chat-btn"
-            onClick={() => useAssistantViewStore.getState().compose()}
-          >
-            + {t("assistant.newChat")}
-          </button>
-          <UntestedTag id="assistant.view" />
-        </div>
-        <div className="assistant-chat-rows" role="list">
-          {chats.length === 0 && <p className="settings-help assistant-chat-empty">{t("assistant.noChats")}</p>}
-          {chats.map((chat) => (
-            <ChatRow
-              key={chat.key}
-              chat={chat}
-              active={!showForm && selected?.key === chat.key}
-              cliLabel={handle.options?.clis.find((c) => c.id === chat.assistant?.cli)?.label ?? chat.assistant?.cli ?? ""}
-              onSelect={() => useAssistantViewStore.getState().select(chat.key)}
-              onDelete={() => deleteChat(chat)}
-            />
-          ))}
-        </div>
-      </aside>
-      <section className="assistant-chat-main">
-        {!hydrated ? (
-          <p className="settings-help assistant-main-note">{t("assistant.loading")}</p>
-        ) : showForm ? (
-          <AssistantNewChat
-            handle={handle}
-            onStarted={(key) => {
-              startAssistantChat(key);
-              useAssistantViewStore.getState().select(key);
-            }}
+      <div className="assistant-head">
+        <Dropdown
+          className="assistant-head-pick"
+          value={current?.cli ?? ""}
+          ariaLabel={t("assistant.newChat.cli")}
+          title={t("assistant.newChat.cli")}
+          options={options?.clis.map((c) => ({ value: c.id, label: c.label })) ?? []}
+          placeholder={t("assistant.loading")}
+          disabled={!options || busy}
+          onChange={pickCli}
+        />
+        {currentCli?.local && options && (
+          <Dropdown
+            className="assistant-head-pick"
+            value={current?.model ?? ""}
+            ariaLabel={t("assistant.newChat.model")}
+            title={t("assistant.newChat.model")}
+            options={options.localModels.map((m) => ({ value: m, label: m }))}
+            placeholder={t("assistant.newChat.noModel")}
+            disabled={options.localModels.length === 0 || busy}
+            onChange={(m) => current && pick({ cli: current.cli, model: m })}
           />
-        ) : selected ? (
-          <ChatView chat={selected} handle={handle} />
-        ) : null}
-      </section>
+        )}
+        <button
+          type="button"
+          className="settings-btn sm assistant-relaunch"
+          title={t("assistant.relaunchHint")}
+          disabled={!chat || busy || !!want}
+          onClick={relaunch}
+        >
+          {t("assistant.relaunch")}
+        </button>
+        <UntestedTag id="assistant.view" />
+      </div>
+      <section className="assistant-chat-main">{body}</section>
     </div>
   );
 }
 
-function ChatRow({
-  chat,
-  active,
-  cliLabel,
-  onSelect,
-  onDelete,
-}: {
-  chat: TabEntry;
-  active: boolean;
-  cliLabel: string;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const t = useT();
-  const sub = [cliLabel, chat.assistant?.model].filter(Boolean).join(" · ");
-  return (
-    <div role="listitem" className={`assistant-chat-row${active ? " active" : ""}`}>
-      <button type="button" className="assistant-chat-select" aria-current={active || undefined} onClick={onSelect}>
-        <span className="assistant-chat-label">{chat.label || t("assistant.chatFallback")}</span>
-        {sub && <span className="assistant-chat-sub">{sub}</span>}
-      </button>
-      <button
-        type="button"
-        className="subwindow-hide assistant-chat-delete"
-        title={t("assistant.deleteChat")}
-        aria-label={t("assistant.deleteChat")}
-        onClick={onDelete}
-      >
-        ×
-      </button>
-    </div>
-  );
+/** Like closing any tab: the pane unmounts and its PTY is reaped. The persist
+ *  host saves the shorter list. */
+function deleteChat(chat: TabEntry) {
+  useAssistantViewStore.getState().forget(chat.key);
+  forgetAssistantChat(chat.key);
+  useTabsStore.getState().removeTabInScope(ASSISTANT_SCOPE, chat.key);
 }
 
 /** One chat: the cards its CLI may need above, the attach-only view below. */

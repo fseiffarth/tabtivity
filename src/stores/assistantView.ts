@@ -16,21 +16,16 @@ import type { FilesPanelView } from "../types";
  */
 interface AssistantViewState {
   /** The shown chat's tab key; `null` until one is picked (the view then falls
-   *  back to the newest chat, or to the new-chat form when there is none). */
+   *  back to the newest chat, or starts one when there is none). */
   selectedKey: string | null;
-  /** The new-chat form is up in place of a chat. */
-  composing: boolean;
   select: (chatKey: string) => void;
-  compose: () => void;
   /** A chat was deleted: stop pointing at it. */
   forget: (chatKey: string) => void;
 }
 
 export const useAssistantViewStore = create<AssistantViewState>((set) => ({
   selectedKey: null,
-  composing: false,
-  select: (chatKey) => set({ selectedKey: chatKey, composing: false }),
-  compose: () => set({ composing: true }),
+  select: (chatKey) => set({ selectedKey: chatKey }),
   forget: (chatKey) => set((s) => (s.selectedKey === chatKey ? { selectedKey: null } : s)),
 }));
 

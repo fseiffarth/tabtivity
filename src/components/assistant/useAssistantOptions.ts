@@ -65,3 +65,18 @@ export function cliBlock(cli: AssistantCliOption, options: AssistantOptions): Cl
   }
   return cli.signedIn === false ? "signIn" : null;
 }
+
+/** The CLI a new chat preselects: the user's default if it is offered, else
+ *  the backend's, else the first one that can start a chat right now. */
+export function defaultCliOf(options: AssistantOptions, preferred: string | undefined): AssistantCliOption | undefined {
+  const byId = (id: string | null | undefined) => options.clis.find((c) => c.id === id);
+  return byId(preferred) ?? byId(options.defaultCli) ?? options.clis.find((c) => cliBlock(c, options) === null) ?? options.clis[0];
+}
+
+/** The local model a new chat preselects, from the installed ones only. */
+export function defaultModelOf(options: AssistantOptions, preferred: string | undefined): string {
+  const models = options.localModels;
+  if (preferred && models.includes(preferred)) return preferred;
+  if (options.defaultModel && models.includes(options.defaultModel)) return options.defaultModel;
+  return models[0] ?? "";
+}
