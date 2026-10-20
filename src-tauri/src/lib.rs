@@ -2325,6 +2325,7 @@ pub fn run() {
             commands::git::git_reword_head,
             commands::git_peer::git_peer_status,
             commands::git_peer::git_peer_set_enabled,
+            commands::git_peer::git_peer_set_local_authoritative,
             commands::git_peer::git_peer_sync_now,
             commands::git_peer::git_peer_checkout,
             commands::git_peer::git_peer_resolve,

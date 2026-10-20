@@ -303,6 +303,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["git_peer_resolve", "core"],
   ["git_peer_restore_backup", "core"],
   ["git_peer_set_enabled", "core"],
+  ["git_peer_set_local_authoritative", "core"],
   ["git_peer_status", "core"],
   ["git_peer_sync_now", "core"],
   ["project_has_origin", "core"],

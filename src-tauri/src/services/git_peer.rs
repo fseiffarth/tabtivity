@@ -164,6 +164,13 @@ pub struct PairingConflict {
 pub struct GitPeerState {
     /// Opt-in toggle; when false the watcher/poll tasks never run.
     pub enabled: bool,
+    /// Opt-in "Local is authoritative": commits travel mirror → host only. A host
+    /// commit is never pulled back — a branch the host moved on its own is backed up
+    /// to `refs/tabtivity/backup/*` and reset to the mirror's tip (refused while the
+    /// host has uncommitted tracked edits), and a host branch switch is undone by
+    /// checking the mirror's branch out there.
+    #[serde(default)]
+    pub local_authoritative: bool,
     pub status: SyncStatus,
     /// Human-readable reason when `status == Desynchronized`.
     pub detail: Option<String>,
@@ -194,6 +201,7 @@ impl Default for GitPeerState {
     fn default() -> Self {
         GitPeerState {
             enabled: false,
+            local_authoritative: false,
             status: SyncStatus::Synchronized,
             detail: None,
             local_head: None,
@@ -405,10 +413,12 @@ fn is_empty_bundle_error(stderr: &str) -> bool {
 
 /// The two refspecs that import a bundle's refs into the receiver's isolated
 /// `refs/tabtivity/incoming/*` namespace — never touching real `refs/heads`/`refs/tags`.
+/// Forced (`+`): the namespace is lockstep's own scratch space, and a leftover ref
+/// from an interrupted pass must not fail the fetch as a non-fast-forward.
 pub fn incoming_fetch_refspecs() -> [String; 2] {
     [
-        format!("refs/heads/*:{}/heads/*", crate::brand::GIT_REF_INCOMING),
-        format!("refs/tags/*:{}/tags/*", crate::brand::GIT_REF_INCOMING),
+        format!("+refs/heads/*:{}/heads/*", crate::brand::GIT_REF_INCOMING),
+        format!("+refs/tags/*:{}/tags/*", crate::brand::GIT_REF_INCOMING),
     ]
 }
 
@@ -617,6 +627,24 @@ pub fn blocked_detail(branch: &str, stderr: &str) -> String {
         .find(|l| !l.is_empty())
         .unwrap_or("the peer has uncommitted changes");
     format!("'{branch}' can't fast-forward: {first}")
+}
+
+/// Run `git <args>` on `peer` and turn a non-zero exit into an error naming `what`
+/// and git's first stderr line. For the writes lockstep must not assume landed — a
+/// silently failed fetch or reset used to read as success and be recomputed into a
+/// misleading "Diverged".
+fn run_checked(peer: &Peer, args: &[&str], what: &str) -> Result<Output, String> {
+    let out = peer.run(args).map_err(|e| format!("{what} failed: {e}"))?;
+    if out.status.success() {
+        return Ok(out);
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let first = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("git exited without a message");
+    Err(format!("{what} failed: {first}"))
 }
 
 // ── Batched probe (#28p D5) ─────────────────────────────────────────────────
@@ -1526,7 +1554,15 @@ async fn transfer_and_apply(
         // 3. Import objects into the dest's isolated incoming namespace.
         let specs = incoming_fetch_refspecs();
         let fetch: Vec<&str> = vec!["fetch", &dst_bundle, &specs[0], &specs[1]];
-        let _ = dst_peer.run(&fetch); // fetch failure → apply below simply finds nothing
+        // A failed fetch must stop the pass. Without the source's objects every
+        // ancestry check below fails, `decide` reads that as Diverged, and a forced
+        // reset onto an unknown sha fails — all of which used to be reported as a
+        // divergence (or a resolve that "worked") rather than as the fetch error.
+        if let Err(e) = run_checked(&dst_peer, &fetch, "bundle fetch") {
+            cleanup_incoming(&dst_peer);
+            cleanup_bundles(pool, project_id, spec).await;
+            return Err(e);
+        }
     } else {
         let stderr = String::from_utf8_lossy(&out.stderr);
         if !is_empty_bundle_error(&stderr) {
@@ -1613,15 +1649,19 @@ async fn transfer_and_apply(
                 // Under a resolution the authority wins even where the dest is ahead:
                 // discard the dest's extra commits (backed up) and reset to source.
                 if force {
-                    force_reset_branch(
+                    match force_reset_branch(
                         &dst_peer,
                         &src_ref.name,
                         &src_ref.sha,
                         dst_sha.unwrap(),
                         is_head,
                         ts,
-                    );
-                    result.applied += 1;
+                    ) {
+                        Ok(()) => result.applied += 1,
+                        Err(e) => result.blocked = result.blocked.or(Some(e)),
+                    }
+                } else {
+                    result.dest_ahead.push(src_ref.name.clone());
                 }
             }
             RefAction::CreateOnDest => {
@@ -1730,15 +1770,17 @@ async fn transfer_and_apply(
             }
             RefAction::Diverged => {
                 if force {
-                    force_reset_branch(
+                    match force_reset_branch(
                         &dst_peer,
                         &src_ref.name,
                         &src_ref.sha,
                         dst_sha.unwrap(),
                         is_head,
                         ts,
-                    );
-                    result.applied += 1;
+                    ) {
+                        Ok(()) => result.applied += 1,
+                        Err(e) => result.blocked = result.blocked.or(Some(e)),
+                    }
                 } else {
                     result.diverged.push(src_ref.name.clone());
                 }
@@ -1756,7 +1798,14 @@ async fn transfer_and_apply(
         let peer_ref = peer_ref_name(&src_ref.name);
         match peer_ref_op(action, force) {
             PeerRefOp::Set => {
-                let _ = dst_peer.run(&["update-ref", &peer_ref, &src_ref.sha]);
+                // Resolve-in-terminal depends on this ref; say so when it can't be set.
+                if let Err(e) = run_checked(
+                    &dst_peer,
+                    &["update-ref", &peer_ref, &src_ref.sha],
+                    &format!("parking the peer's '{}' at {peer_ref}", src_ref.name),
+                ) {
+                    result.blocked = result.blocked.or(Some(e));
+                }
             }
             PeerRefOp::Delete => {
                 let _ = dst_peer.run(&["update-ref", "-d", &peer_ref]);
@@ -1837,6 +1886,9 @@ async fn transfer_and_apply(
 struct TransferResult {
     applied: usize,
     diverged: Vec<String>,
+    /// Branches where the dest is ahead and a non-forced pass left it alone (the
+    /// other leg's fast-forward) — what a local-authoritative pass must reset.
+    dest_ahead: Vec<String>,
     /// What git said when it refused a needed fast-forward, already composed into a
     /// user-facing sentence (#28p D2 — this used to be a bare `bool` that always
     /// rendered as "a peer has uncommitted changes", which was usually a lie).
@@ -2135,8 +2187,8 @@ fn audit_local_head_move(project_id: &str, from_sha: &str, op: &str) {
 /// resolution, after saving the overwritten tip to a timestamped `refs/tabtivity/backup/*`
 /// safety ref so nothing is lost. When the branch is the dest's checked-out HEAD, a
 /// `reset --hard` moves the ref *and* the working tree; otherwise the ref is force-set
-/// with `update-ref`'s old-value guard. Best-effort (each step ignores its own error;
-/// a stale backup is harmless).
+/// with `update-ref`'s old-value guard. No move without its backup: a failed backup
+/// stops before the reset, and a failed reset is an error, never a counted apply.
 fn force_reset_branch(
     dst_peer: &Peer,
     branch: &str,
@@ -2144,19 +2196,27 @@ fn force_reset_branch(
     dst_sha: &str,
     is_head: bool,
     ts: u64,
-) {
+) -> Result<(), String> {
     let backup = backup_ref_name(branch, ts);
-    let _ = dst_peer.run(&["update-ref", &backup, dst_sha]);
+    run_checked(
+        dst_peer,
+        &["update-ref", &backup, dst_sha],
+        &format!("backing up '{branch}'"),
+    )?;
     if is_head {
-        let _ = dst_peer.run(&["reset", "--hard", src_sha]);
+        run_checked(
+            dst_peer,
+            &["reset", "--hard", src_sha],
+            &format!("resetting '{branch}'"),
+        )?;
     } else {
-        let _ = dst_peer.run(&[
-            "update-ref",
-            &format!("refs/heads/{branch}"),
-            src_sha,
-            dst_sha,
-        ]);
+        run_checked(
+            dst_peer,
+            &["update-ref", &format!("refs/heads/{branch}"), src_sha, dst_sha],
+            &format!("moving '{branch}'"),
+        )?;
     }
+    Ok(())
 }
 
 /// Copy the bundle file between the two machines over the pooled SFTP session.
@@ -2623,7 +2683,34 @@ async fn reconcile_with(
     let mut pairing_blocked: Option<String> = None;
     let mut pairing_conflict: Option<PairingConflict> = None;
 
-    if matches!(plan, PairPlan::Sync) {
+    if matches!(plan, PairPlan::Sync) && prior.local_authoritative {
+        // One leg only: the mirror is the source of truth and nothing comes back.
+        // A plain pass first (creates and fast-forwards); only when the host moved a
+        // branch on its own does a forced one follow, through the same refusals as
+        // Use local.
+        match transfer_and_apply(
+            pool, manifest, project_id, spec, true, &local, &remote, false,
+        )
+        .await
+        {
+            Ok(r) => {
+                blocked = r.blocked;
+                if blocked.is_none() && (!r.diverged.is_empty() || !r.dest_ahead.is_empty()) {
+                    let remote2 = probe(&Peer::Remote(spec.clone()));
+                    if let Err(e) =
+                        force_apply(pool, manifest, project_id, spec, true, &local, &remote2)
+                            .await
+                    {
+                        blocked = Some(format!(
+                            "The host has commits of its own and could not be reset to the \
+                             local copy: {e}"
+                        ));
+                    }
+                }
+            }
+            Err(e) => blocked = Some(format!("Sync to the host failed: {e}")),
+        }
+    } else if matches!(plan, PairPlan::Sync) {
         // Local → remote, then remote → local (each catches the side that is ahead).
         // A leg that *errors* (bundle unreadable, SFTP transfer died) must not be
         // discarded: dropping it leaves `diverged`/`blocked` empty, which computes to
@@ -2759,10 +2846,14 @@ async fn reconcile_with(
         // to lock-step yet.
         (SyncStatus::Synchronized, None)
     } else if !diverged.is_empty() {
-        (
-            SyncStatus::Desynchronized,
-            Some(format!("Diverged: {}", diverged.join(", "))),
-        )
+        // A leg that failed outright is said too: hidden behind "Diverged", a broken
+        // transfer looked like a divergence that Use local should end — and didn't.
+        let mut msg = format!("Diverged: {}", diverged.join(", "));
+        if let Some(b) = &blocked {
+            msg.push_str(" — ");
+            msg.push_str(b);
+        }
+        (SyncStatus::Desynchronized, Some(msg))
     } else if let Some(msg) = blocked {
         (SyncStatus::Desynchronized, Some(msg))
     } else if let Some(msg) = (!opts.mid_checkout)
@@ -2785,6 +2876,7 @@ async fn reconcile_with(
         project_id,
         GitPeerState {
             enabled: prior.enabled,
+            local_authoritative: prior.local_authoritative,
             status,
             detail,
             local_subject: final_local.head_subject,
@@ -3146,19 +3238,53 @@ async fn resolve_inner(
 
     let old_local_sha = head_sha(&local).unwrap_or_default();
     let winner_local = winner_is_local(authority);
-    // Force in the winner→loser direction: winner local ⇒ push to the remote loser.
-    let to_remote = winner_local;
     let (source, dest) = if winner_local {
         (&local, &remote)
     } else {
         (&remote, &local)
     };
+    let applied = force_apply(pool, manifest, project_id, spec, winner_local, source, dest).await;
 
-    // #28p D9: a force-reset of dest's checked-out branch runs `reset --hard`, which
-    // silently clobbers a colliding untracked file. Refuse and name it rather than
-    // guess — the same "blocked, user clears it, retries" UX a blocked fast-forward
-    // already gets (D1/D2) — instead of trusting the backup-ref safety net to cover
-    // something it structurally cannot (an untracked file was never a git object).
+    // A losing local branch was `reset --hard`, rewriting mirror tracked files — refresh
+    // the file-sync bases so the resumed auto-sync reads them green (no-op when the
+    // remote was the loser, since the mirror tree is unchanged). Runs even after a
+    // partial failure: whatever did move must not read as a false local edit.
+    restamp_after_checkout(pool, manifest, project_id, spec, &old_local_sha).await;
+
+    // A resolution is where backup refs are born, so it is also where they are pruned
+    // (#28p D6) — keeping the cost off the hot reconcile path, which creates none.
+    prune_backups(project_id, spec);
+
+    // A resolve that did not apply says why. It used to recompute the same "Diverged"
+    // it was asked to end and return it as success, which read as a button that did
+    // nothing.
+    applied?;
+
+    // Recompute status; the forced side is now in sync, so this should read Synchronized.
+    Ok(reconcile(pool, manifest, project_id, spec).await)
+}
+
+/// The forced winner → loser apply behind Use local / Use remote and a
+/// local-authoritative pass: refuse what no backup ref can cover, then transfer with
+/// `force` so every diverged or loser-ahead branch is backed up and reset to the
+/// winner's tip. `Err` names the first thing that stopped it.
+async fn force_apply(
+    pool: &RemotePoolState,
+    manifest: &remote_sync::SyncManifestState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    winner_local: bool,
+    source: &PeerSnapshot,
+    dest: &PeerSnapshot,
+) -> Result<(), String> {
+    // Force in the winner→loser direction: winner local ⇒ push to the remote loser.
+    let to_remote = winner_local;
+
+    // A force-reset of dest's checked-out branch runs `reset --hard`. Two things it
+    // destroys are outside what the backup ref saves, because neither was ever a
+    // commit: uncommitted edits to tracked files, and (#28p D9) untracked files the
+    // incoming tree would overwrite. Refuse and name them — the same "blocked, user
+    // clears it, retries" UX a blocked fast-forward already gets (D1/D2).
     if let Some(HeadRef::Branch {
         name,
         sha: dest_sha,
@@ -3177,43 +3303,70 @@ async fn resolve_inner(
                         Peer::Local(mirror_dir(project_id)),
                     )
                 };
+                let where_ = if to_remote { "host" } else { "mirror" };
+                if dest.dirty_tracked {
+                    let dirty = dirty_tracked_paths(&dest_peer);
+                    return Err(format!(
+                        "Refusing: the {where_} has uncommitted changes to {} tracked file(s) \
+                         on '{name}'{}. Resetting would discard them, and no backup can hold \
+                         them. Commit or stash them there, then retry.",
+                        dirty.len(),
+                        name_list(&dirty, 5, ": "),
+                    ));
+                }
                 let collisions = reset_collisions(&source_peer, &dest_peer, &target.sha);
                 if !collisions.is_empty() {
-                    let where_ = if to_remote { "host" } else { "mirror" };
-                    let shown: Vec<&str> = collisions.iter().take(5).map(String::as_str).collect();
-                    let more = collisions.len() - shown.len();
-                    let extra = if more > 0 {
-                        format!(" (+{more} more)")
-                    } else {
-                        String::new()
-                    };
                     return Err(format!(
                         "Refusing: {} untracked file(s) on the {where_} differ from '{name}' \
-                         and are not in git: {}{extra}. Move or remove them, then retry.",
+                         and are not in git{}. Move or remove them, then retry.",
                         collisions.len(),
-                        shown.join(", "),
+                        name_list(&collisions, 5, ": "),
                     ));
                 }
             }
         }
     }
 
-    transfer_and_apply(
+    let result = transfer_and_apply(
         pool, manifest, project_id, spec, to_remote, source, dest, true,
     )
     .await?;
+    match result.blocked {
+        Some(msg) => Err(msg),
+        None => Ok(()),
+    }
+}
 
-    // A losing local branch was `reset --hard`, rewriting mirror tracked files — refresh
-    // the file-sync bases so the resumed auto-sync reads them green (no-op when the
-    // remote was the loser, since the mirror tree is unchanged).
-    restamp_after_checkout(pool, manifest, project_id, spec, &old_local_sha).await;
+/// `<sep>a, b, c (+N more)` for the first `cap` of `paths`; empty for none. Pure.
+pub fn name_list(paths: &[String], cap: usize, sep: &str) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = paths.iter().take(cap).map(String::as_str).collect();
+    let more = paths.len() - shown.len();
+    let extra = if more > 0 {
+        format!(" (+{more} more)")
+    } else {
+        String::new()
+    };
+    format!("{sep}{}{extra}", shown.join(", "))
+}
 
-    // A resolution is where backup refs are born, so it is also where they are pruned
-    // (#28p D6) — keeping the cost off the hot reconcile path, which creates none.
-    prune_backups(project_id, spec);
-
-    // Recompute status; the forced side is now in sync, so this should read Synchronized.
-    Ok(reconcile(pool, manifest, project_id, spec).await)
+/// The tracked files with staged or unstaged changes on `peer`, from
+/// `status --porcelain --untracked-files=no`. Empty when git can't answer — the
+/// caller's `dirty_tracked` bit already decided to refuse; this only names them.
+fn dirty_tracked_paths(peer: &Peer) -> Vec<String> {
+    peer.run(&["status", "--porcelain", "--untracked-files=no"])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| l.len() > 3)
+                .map(|l| unquote_git_path(l[3..].trim()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ── Backup refs: list / restore / prune (#28p D6) ────────────────────────────
@@ -3320,14 +3473,21 @@ pub async fn restore_backup(
         }
     }
 
-    match sha_of(&snap, RefKind::Head, &branch) {
+    let moved = match sha_of(&snap, RefKind::Head, &branch) {
         // force_reset_branch backs the current tip up before moving it, so the state we
         // are restoring *away from* stays reachable too.
         Some(cur) => force_reset_branch(&peer, &branch, &sha, cur, is_head, now_secs()),
         // The branch is gone entirely (a resolve deleted it) — recreate it.
-        None => {
-            let _ = peer.run(&["update-ref", &format!("refs/heads/{branch}"), &sha]);
-        }
+        None => run_checked(
+            &peer,
+            &["update-ref", &format!("refs/heads/{branch}"), &sha],
+            &format!("recreating '{branch}'"),
+        )
+        .map(|_| ()),
+    };
+    if let Err(e) = moved {
+        crate::services::sync_auto::resume(auto, project_id).await;
+        return Err(format!("Restore did not apply: {e}"));
     }
 
     // #28q: restoring a backup onto the mirror's checked-out branch is a `reset --hard`
@@ -3370,6 +3530,7 @@ fn desync_state(project_id: &str, spec: &RemoteSpec, detail: &str) -> GitPeerSta
         project_id,
         GitPeerState {
             enabled: prior.enabled,
+            local_authoritative: prior.local_authoritative,
             status: SyncStatus::Desynchronized,
             detail: Some(detail.to_string()),
             local_subject: local.head_subject,
@@ -3739,6 +3900,22 @@ pub async fn detect_and_sync(
     // not a checkout to replay on the peer.
     let local_moved = head_target_moved(&prior.local_head, &local.head);
     let remote_moved = head_target_moved(&prior.remote_head, &remote.head);
+
+    // Local is authoritative: whatever either side switched to, the host follows the
+    // mirror's checkout — never the other way round. Keyed on the two targets
+    // differing, not on a move, so it also settles an "Out of step" left from before
+    // the switch was turned on.
+    if prior.local_authoritative {
+        let host_target = target_of(&remote.head);
+        if let Some(t) = target_of(&local.head).filter(|t| Some(t) != host_target.as_ref()) {
+            if let Ok(s) =
+                checkout_lockstep(pool, manifest, auto, project_id, spec, &t, "local", true).await
+            {
+                return s;
+            }
+        }
+        return reconcile_with(pool, manifest, project_id, spec, opts).await;
+    }
 
     if local_moved && remote_moved {
         // Both sides changed what they have checked out since the last look (a long
@@ -4165,6 +4342,7 @@ mod tests {
             let dst = s.split(':').nth(1).unwrap();
             dst.starts_with(concat!("refs/", crate::app_slug!(), "/incoming/")) && !dst.contains("refs/remotes")
         }));
+        assert!(specs.iter().all(|s| s.starts_with('+')), "{specs:?}");
     }
 
     #[test]
@@ -5354,6 +5532,100 @@ mod tests {
             .to_string()
     }
 
+    fn git_in(dir: &Path, args: &[&str]) -> std::process::Output {
+        crate::paths::command_no_window("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git")
+    }
+
+    fn rev(dir: &Path, r: &str) -> String {
+        String::from_utf8_lossy(&git_in(dir, &["rev-parse", r]).stdout)
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn force_reset_branch_moves_head_and_keeps_a_backup() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping force_reset_branch_moves_head_and_keeps_a_backup");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let first = init_repo_with_file(dir, "a.txt", b"one\n");
+        std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+        git_in(dir, &["commit", "-qam", "two"]);
+        let second = rev(dir, "HEAD");
+        let branch = String::from_utf8_lossy(&git_in(dir, &["branch", "--show-current"]).stdout)
+            .trim()
+            .to_string();
+        let peer = Peer::Local(dir.to_path_buf());
+
+        force_reset_branch(&peer, &branch, &first, &second, true, 1_700_000_000).expect("reset");
+        assert_eq!(rev(dir, "HEAD"), first);
+        assert_eq!(rev(dir, &backup_ref_name(&branch, 1_700_000_000)), second);
+    }
+
+    #[test]
+    fn force_reset_branch_reports_a_reset_that_did_not_happen() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping force_reset_branch_reports_a_reset_that_did_not_happen");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let head = init_repo_with_file(dir, "a.txt", b"one\n");
+        let branch = String::from_utf8_lossy(&git_in(dir, &["branch", "--show-current"]).stdout)
+            .trim()
+            .to_string();
+        let peer = Peer::Local(dir.to_path_buf());
+        // The winner's commit never reached this side — the shape of a failed bundle
+        // fetch. This used to be ignored and counted as applied.
+        let missing = "0123456789abcdef0123456789abcdef01234567";
+
+        let err = force_reset_branch(&peer, &branch, missing, &head, true, 1_700_000_001)
+            .expect_err("a reset onto an unknown commit must fail");
+        assert!(err.contains("resetting"), "{err}");
+        assert_eq!(rev(dir, "HEAD"), head, "HEAD must not have moved");
+
+        let err = force_reset_branch(&peer, &branch, missing, &head, false, 1_700_000_002)
+            .expect_err("a ref move onto an unknown commit must fail");
+        assert!(err.contains("moving"), "{err}");
+        assert_eq!(rev(dir, &format!("refs/heads/{branch}")), head);
+    }
+
+    #[test]
+    fn dirty_tracked_paths_names_tracked_edits_only() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping dirty_tracked_paths_names_tracked_edits_only");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        init_repo_with_file(dir, "a.txt", b"one\n");
+        std::fs::write(dir.join("a.txt"), b"edited\n").unwrap();
+        std::fs::write(dir.join("new.txt"), b"untracked\n").unwrap();
+        assert_eq!(dirty_tracked_paths(&Peer::Local(dir.to_path_buf())), vec!["a.txt"]);
+    }
+
+    #[test]
+    fn name_list_caps_and_counts_the_rest() {
+        assert_eq!(name_list(&[], 3, ": "), "");
+        let paths: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(name_list(&paths, 2, ": "), ": a, b (+2 more)");
+        assert_eq!(name_list(&paths[..1], 2, ": "), ": a");
+    }
+
+    #[test]
+    fn local_authoritative_defaults_off_for_older_state_files() {
+        let old = r#"{"enabled":true,"status":"synchronized","detail":null,"localHead":null,"remoteHead":null,"lastSyncTs":null}"#;
+        let s: GitPeerState = serde_json::from_str(old).expect("older state parses");
+        assert!(s.enabled);
+        assert!(!s.local_authoritative);
+    }
+
     #[test]
     fn reset_collisions_flags_only_the_differing_source_tracked_path() {
         if !git_available() {
@@ -5451,6 +5723,7 @@ mod tests {
     fn state_roundtrips_camelcase() {
         let s = GitPeerState {
             enabled: true,
+            local_authoritative: false,
             status: SyncStatus::Desynchronized,
             detail: Some("Diverged: main".into()),
             local_head: Some(HeadRef::Branch {

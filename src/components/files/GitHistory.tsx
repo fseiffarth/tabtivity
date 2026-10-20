@@ -99,6 +99,8 @@ interface BackupRef {
 /** Mirrors `services::git_peer::GitPeerState` (camelCase). */
 interface GitPeerState {
   enabled: boolean;
+  /** "Local wins": commits go mirror → host only (`GitPeerState::local_authoritative`). */
+  localAuthoritative?: boolean;
   status: LockstepStatus;
   detail: string | null;
   localHead: HeadRef | null;
@@ -694,6 +696,36 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
     }
   }, [projectId, lockstep?.enabled]);
 
+  // "Local wins": turning it on can reset host branches (backed up), so it asks first;
+  // turning it off only goes back to two-way sync and needs no confirmation.
+  const toggleLocalAuthoritative = useCallback(async () => {
+    if (!projectId) return;
+    const next = !(lockstep?.localAuthoritative ?? false);
+    if (next) {
+      const ok = await confirmAction({
+        title: t("gitHistory.localAuthConfirmTitle"),
+        body: t("gitHistory.localAuthConfirmBody"),
+        confirmLabel: t("gitHistory.localAuthConfirm"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setLockstepBusy(true);
+    setError(null);
+    try {
+      const s = await invoke<GitPeerState>("git_peer_set_local_authoritative", {
+        projectId,
+        enabled: next,
+      });
+      setLockstep(s);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLockstepBusy(false);
+    }
+  }, [projectId, lockstep?.localAuthoritative, confirmAction, t, load]);
+
   const lockstepSyncNow = useCallback(async () => {
     if (!projectId) return;
     setLockstepBusy(true);
@@ -1166,6 +1198,19 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
           </button>
           {lockstep?.enabled && (
             <>
+              <button
+                className={`toolbar-btn${lockstep.localAuthoritative ? " active" : ""}`}
+                onClick={toggleLocalAuthoritative}
+                disabled={lockstepBusy}
+                aria-pressed={!!lockstep.localAuthoritative}
+                title={t(
+                  lockstep.localAuthoritative
+                    ? "gitHistory.localAuthOnTitle"
+                    : "gitHistory.localAuthOffTitle",
+                )}
+              >
+                {t("gitHistory.localAuthLabel")} <UntestedTag id="gitHistory.localAuthoritative" />
+              </button>
               <span
                 title={lockstep.detail ?? undefined}
                 style={{

@@ -193,6 +193,7 @@ export const UNTESTED = {
   "gitHistory.worktreeSelection": { area: "files", what: "Git · Select a worktree; branches, history and actions follow its checkout" },
   "gitHistory.loadMoreCommits": { area: "files", what: "GitHistory · Load older commits" },
   "gitHistory.search": { area: "files", what: "GitHistory · Commit search box", tested: "2026-09-28" },
+  "gitHistory.localAuthoritative": { area: "files", what: "Git sync · Local wins switch (commits go to the host only; host commits backed up and reset)" },
   "gitPull.1": { area: "files", what: "Git · Pull preview (fetch, fast-forward, merge)" },
   "gitMerge.1": { area: "files", what: "Git · Merge-in-progress bar (commit / abort)" },
   "gitMergeView.1": { area: "embed", what: "Git merge view · Incoming diff and conflict resolve" },

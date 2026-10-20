@@ -300,8 +300,15 @@ When both sides committed on the same branch:
   to the winner's commit after the overwritten tip is saved to
   `refs/tabtivity/backup/<ts>/<branch>`. A checked-out loser branch is
   `reset --hard` (the mirror side logs what that deleted). The reset is refused
-  if an **untracked** file on the loser differs from the incoming tree — those
-  were never git objects and no backup could cover them.
+  if the loser has **uncommitted changes to tracked files**, or if an
+  **untracked** file on the loser differs from the incoming tree — neither was
+  ever a git object, so no backup could cover them. A backup, reset or fetch
+  that fails is reported with git's message; it is never counted as applied.
+- **Local wins** (opt-in per project, beside the Git sync toggle): commits travel
+  mirror → host only. Each pass fast-forwards the host; a branch the host moved
+  on its own is handled like *Use local* (backed up, reset, same refusals), and
+  a branch switch on the host is undone by checking the mirror's branch out
+  there. Host commits never come back to the mirror.
 - **Resolve in terminal**: opens a shell in the mirror; the host's tip is at
   `refs/tabtivity/peer/<branch>`, so `git merge refs/tabtivity/peer/main` or a rebase
   works as usual, and the next pass fast-forwards the host.
@@ -364,6 +371,8 @@ into the mirror.
 | ⬆ "new local" on a file the host already has | never synced on either side, so no base | push it once (accept the conflict prompt) or pull it once |
 | lockstep red: *untracked file(s) on the peer differ* | a file byte-synced or created before its commit, with different content | commit, move or delete it on that side, *Retry* |
 | lockstep red: *Diverged* | both sides committed | Use local / Use remote / merge in terminal |
+| lockstep red: *Diverged: … — Sync … failed: bundle fetch failed* | the transfer itself broke, so ancestry couldn't be checked | fix what git names; Use local cannot help until the fetch works |
+| *Refusing: the host has uncommitted changes to N tracked file(s)* | Use local / Local wins would `reset --hard` over them | commit or stash them on the host, then Retry |
 | lockstep red: *Out of step* | the two sides sit on different branches and no side is authoritative | pick a branch in the Git panel; that checkout replays on the peer |
 | lockstep red: *Pairing would overwrite N file(s)* | the empty side already holds differing files | inspect, then *Overwrite* if they are disposable |
 | lockstep *disconnected* | the pool is cold | reconnect; nothing was claimed or written |

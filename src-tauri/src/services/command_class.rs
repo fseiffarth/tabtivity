@@ -502,6 +502,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("git_peer_resolve", Core),
     ("git_peer_restore_backup", Core),
     ("git_peer_set_enabled", Core),
+    ("git_peer_set_local_authoritative", Core),
     ("git_peer_status", Core),
     ("git_peer_sync_now", Core),
     // commands/git_publish.rs

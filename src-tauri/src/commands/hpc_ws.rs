@@ -970,6 +970,7 @@ pub async fn hpc_ws_move_root(
         let prev = crate::services::git_peer::load_state(&project_id);
         let reset = crate::services::git_peer::GitPeerState {
             enabled: prev.enabled,
+            local_authoritative: prev.local_authoritative,
             ..Default::default()
         };
         if let Err(e) = crate::services::git_peer::save_state(&project_id, &reset) {
