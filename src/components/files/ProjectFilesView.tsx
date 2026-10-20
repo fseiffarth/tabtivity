@@ -85,7 +85,7 @@ import { useExperimental } from "../../lib/experimental";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
-import { ArrowDownIcon, ArrowUpIcon, AssistantIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, AssistantIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TerminalIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -1842,8 +1842,9 @@ export function ProjectFilesView({
             aria-pressed={view === "sessions"}
             onClick={() => setView(view === "sessions" ? "files" : "sessions")}
             title={t("projectFilesView.persistentSessionsTitle", { count: sessionRows.length })}
+            aria-label={t("projectFilesView.persistentSessionsTitle", { count: sessionRows.length })}
           >
-            ☰ {sessionRows.length > 0 && <span className="side-panel-orange-count">{sessionRows.length}</span>}
+            <TerminalIcon /> {sessionRows.length > 0 && <span className="side-panel-orange-count">{sessionRows.length}</span>}
           </button>
         )}
         {/* SLURM jobs (HPC): shown only when the host actually has SLURM, so the
