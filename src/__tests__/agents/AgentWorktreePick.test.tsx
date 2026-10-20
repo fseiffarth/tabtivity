@@ -1,7 +1,7 @@
 /**
  * Agents in git worktrees (#23, Phase 4's agent-per-branch half):
- *  - the "+" menu asks which worktree an agent starts in — only when the
- *    project has a linked worktree, and the answer lands as the tab's cwd;
+ *  - the "+" menu starts an agent in the worktree the git view has selected,
+ *    without asking, and that worktree lands as the tab's cwd;
  *  - a restored agent tab KEEPS a worktree cwd under its project root (Claude
  *    keys its history by cwd, so resetting it broke `--resume`), while a stale
  *    cwd under some other root still resets to the project root.
@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 import { TabBar } from "../../components/tabs/TabBar";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
+import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import {
   agentWorktreeChoices,
   isProjectWorktreeCwd,
@@ -172,7 +173,7 @@ describe("restore keeps a worktree agent where it was", () => {
   });
 });
 
-describe("'+ agent' asks which worktree", () => {
+describe("'+ agent' starts in the git view's worktree", () => {
   let worktrees: GitWorktree[] = [];
 
   beforeEach(() => {
@@ -189,6 +190,7 @@ describe("'+ agent' asks which worktree", () => {
       return Promise.resolve(null);
     });
     useProjectsStore.setState({ projects: [proj("p1", "/p/p1")], activeId: "p1", loaded: true });
+    useGitWorktreeSelectionStore.setState({ byRoot: {} });
     useTabsStore.setState({
       scope: "p1",
       tabsByScope: {},
@@ -230,20 +232,14 @@ describe("'+ agent' asks which worktree", () => {
     return useTabsStore.getState().tabsByScope["p1"].filter((t) => t.kind === "agent");
   }
 
-  it("lists the mirror side's worktrees and lands the agent in the chosen one", async () => {
+  it("lands the agent in the worktree selected in the git view, without asking", async () => {
+    useGitWorktreeSelectionStore.getState().setSelected("/p/p1", FEATURE.path);
     await pickClaude();
     expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", {
       projectDir: "/p/p1",
       site: "mirror",
     });
-    // The question is up, the tab is not yet there.
-    expect(await screen.findByText("Where should Claude start?")).toBeTruthy();
-    expect(agentTabs()).toHaveLength(0);
-    const options = screen.getAllByRole("option");
-    expect(options.map((o) => o.textContent)).toEqual(["Main worktreemain", "featurefeature"]);
-    await act(async () => {
-      fireEvent.click(options[1]);
-    });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
     const created = agentTabs();
     expect(created).toHaveLength(1);
     expect(created[0].cwd).toBe(`/p/p1/${NAMES.worktreesDir}/feature`);
@@ -251,40 +247,37 @@ describe("'+ agent' asks which worktree", () => {
     expect(created[0].sessionId).toBeTruthy();
     // The session is named after the branch too.
     expect(created[0].initialInput).toBe("/rename p1 (feature)");
-    expect(screen.queryByText("Where should Claude start?")).toBeNull();
   });
 
-  it("picking the main worktree is the plain root tab", async () => {
+  it("starts at the root when the git view has nothing selected", async () => {
     await pickClaude();
-    const options = await screen.findAllByRole("option");
-    await act(async () => {
-      fireEvent.click(options[0]);
-    });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
     const created = agentTabs();
     expect(created).toHaveLength(1);
     expect(created[0].cwd).toBe("/p/p1");
     expect(created[0].label).toBe("Claude");
   });
 
-  it("dismissing the question creates no tab", async () => {
+  it("starts at the root when the selected worktree is gone", async () => {
+    useGitWorktreeSelectionStore
+      .getState()
+      .setSelected("/p/p1", `/p/p1/${NAMES.worktreesDir}/removed`);
     await pickClaude();
-    await screen.findByText("Where should Claude start?");
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    });
-    expect(agentTabs()).toHaveLength(0);
-  });
-
-  it("never asks when the project has only its main worktree", async () => {
-    worktrees = [MAIN];
-    await pickClaude();
-    expect(screen.queryByText("Where should Claude start?")).toBeNull();
     const created = agentTabs();
     expect(created).toHaveLength(1);
     expect(created[0].cwd).toBe("/p/p1");
   });
 
-  it("never asks when the listing fails (not a repo)", async () => {
+  it("starts at the root when the project has only its main worktree", async () => {
+    worktrees = [MAIN];
+    useGitWorktreeSelectionStore.getState().setSelected("/p/p1", MAIN.path);
+    await pickClaude();
+    const created = agentTabs();
+    expect(created).toHaveLength(1);
+    expect(created[0].cwd).toBe("/p/p1");
+  });
+
+  it("starts at the root when the listing fails (not a repo)", async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "list_agents") {
         return Promise.resolve([{ id: "claude", bin: "claude", installed: true }]);

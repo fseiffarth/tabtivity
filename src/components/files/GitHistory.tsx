@@ -9,6 +9,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
 import { useTabsStore } from "../../stores/tabs";
+import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
 import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
@@ -494,6 +495,16 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
   useEffect(() => {
     onWorktreeChanged?.(worktreeSelection);
   }, [onWorktreeChanged, worktreeSelection]);
+
+  // The "+" menu starts agents in the worktree selected here. Only a local
+  // checkout counts: a host-side path means nothing to a local agent, whose
+  // cwd on a remote project is pinned to the mirror root anyway.
+  const setSelectedWorktree = useGitWorktreeSelectionStore((s) => s.setSelected);
+  useEffect(() => {
+    if (!projectDir) return;
+    const local = !remote || worktreeSelection?.site === "mirror";
+    setSelectedWorktree(projectDir, local ? worktreeSelection?.path || null : null);
+  }, [projectDir, remote, setSelectedWorktree, worktreeSelection]);
 
   const selectWorktree = (wt: Worktree) => {
     if (!selectionSupported || loading || fetching || actionsBusy || !connected || wt.is_prunable || wt.is_bare) return;

@@ -596,9 +596,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const projectName = useProjectsStore(
     (s) => s.projects.find((p) => p.id === s.activeId)?.name ?? "",
   );
-  // "+ agent" on a project with linked worktrees asks which one first (#23).
+  // "+ agent" starts in the worktree the git view has selected (#23).
   // Local projects only: a local agent on a remote project has its cwd pinned
-  // to the mirror root at spawn, so a pick there could not be honored.
+  // to the mirror root at spawn, so a worktree there could not be honored.
   const worktreePicker = useAgentWorktreePicker({
     projectCwd,
     projectName,

@@ -6,9 +6,11 @@
  *
  * **Starting there.** Every "+" menu entry landed at the project root, so the
  * only way to put an agent in a worktree was to `cd` inside it — which Claude
- * then keyed its session history to, silently. `useAgentWorktreePicker` asks
- * *before* the spawn, and only when there is something to choose: a project
- * with no linked worktrees never sees the dialog.
+ * then keyed its session history to, silently. `useAgentWorktreePicker`
+ * starts the agent in the worktree the project's git view has selected
+ * (`stores/gitWorktreeSelection`) — it used to ask in a dialog on every click;
+ * the git view is where that choice is already made. Nothing selected, or a
+ * project with no linked worktrees, starts at the project root.
  *
  * **Coming back there.** `loadFromLayout` reset every agent tab's cwd to the
  * project root, on purpose — a stale saved cwd after a project move/rename put
@@ -43,6 +45,7 @@ import {
   type GitWorktree,
 } from "../../lib/agents/agentWorktrees";
 import { cleanCloudTask, type CloudLaunch } from "../../lib/agents/cloudSessions";
+import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 
 /**
  * The tab payload for an agent started in a linked worktree `wt`: cwd there,
@@ -67,13 +70,14 @@ export function worktreeAgentSpec(
 }
 
 /**
- * The "+" menus' worktree question, shared by `TabBar` and the popout's
+ * The "+" menus' worktree choice, shared by `TabBar` and the popout's
  * `NewTabMenu` so the two cannot drift. `specFor` resolves a static agent
- * item to its full tab payload: the plain project-root spec when the project
- * has no linked worktrees (no dialog, no extra round trip visible), the
- * chosen worktree's spec otherwise, or `null` when the user dismissed the
- * question. `asking` is true while the dialog is up — a host menu that closes
- * on outside clicks must hold still for it.
+ * item to its full tab payload: the worktree selected in the git view when it
+ * is still a linked worktree of this project, the plain project-root spec
+ * otherwise. (The popout is its own window with its own store, so it starts
+ * at the root unless its own git view picked a worktree.) `asking` is true
+ * while the cloud-task dialog is up — a host menu that closes on outside
+ * clicks must hold still for it.
  */
 export function useAgentWorktreePicker({
   projectCwd,
@@ -85,7 +89,7 @@ export function useAgentWorktreePicker({
   enabled: boolean;
 }) {
   const t = useT();
-  const { chooseOption, promptText, dialogs } = useDialogs();
+  const { promptText, dialogs } = useDialogs();
   const [asking, setAsking] = useState(false);
 
   const specFor = useCallback(
@@ -102,35 +106,14 @@ export function useAgentWorktreePicker({
       } catch {
         // Not a repo, or git unavailable — the root is the only answer.
       }
-      if (choices.length === 0) return rootSpec();
-      setAsking(true);
-      let picked: string | null;
-      try {
-        picked = await chooseOption({
-          title: t("newTabMenu.worktreePickTitle", { agent: item.label }),
-          body: t("newTabMenu.worktreePickBody"),
-          options: choices.map((w) => ({
-            id: w.path,
-            label: w.is_main
-              ? t("newTabMenu.worktreeMain")
-              : worktreeName(w.path),
-            detail: w.branch || t("newTabMenu.worktreeDetached"),
-            hint: w.path,
-            // Default to where the project itself is — the answer a click on
-            // the old menu gave, and the safe one to Enter through.
-            current: w.is_main,
-          })),
-          untested: "agentWorktrees.1",
-        });
-      } finally {
-        setAsking(false);
-      }
-      if (picked === null) return null;
-      const wt = choices.find((w) => w.path === picked);
+      // No question: the git view's selection is the answer, re-checked
+      // against the live listing so a removed worktree falls back to the root.
+      const picked = useGitWorktreeSelectionStore.getState().byRoot[projectCwd];
+      const wt = picked ? choices.find((w) => w.path === picked) : undefined;
       if (!wt || wt.is_main) return rootSpec();
       return worktreeAgentSpec(item, wt, projectName, t);
     },
-    [chooseOption, enabled, projectCwd, projectName, t],
+    [enabled, projectCwd, projectName, t],
   );
 
   /** A cloud launch (the "+" menu's "Cloud session" fly-out): asks for the

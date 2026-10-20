@@ -772,7 +772,6 @@ export const UNTESTED = {
   "skillsLibrary.overlayTitle": { area: "skills", what: "ModelsOverlay · Skills tab (the machine-level Skills Library)" },
 
   // --- tabs — Tabs and the new-tab menus ----------------------------
-  "agentWorktrees.1": { area: "tabs", what: "agentWorktrees · Which worktree to open a tab on", tested: "2026-09-28" },
   "tabBar.1": { area: "tabs", what: "TabBar · Duplicate tab" },
   "tabBar.2": { area: "tabs", what: "TabBar · Schedule prompt…" },
   "tabBar.reopenClosed": { area: "tabs", what: "TabBar · tab right-click Reopen closed agent tab, and the + menu's Recently closed group: a closed resumable agent tab comes back in its old place on its resume args (Claude --resume, Codex/Vibe by hook id, others continue-last); a remote tab reattaches its still-running session" },
