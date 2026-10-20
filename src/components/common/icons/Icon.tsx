@@ -699,13 +699,15 @@ export function PlayMark() {
   );
 }
 
-/** Tabby, the chat assistant: a rounded speech bubble with a spark, rounder
- *  than the Agents rail bubble so the two read apart. */
+/** Tabby, the chat assistant: a cat's head. Not a speech bubble — the panel's
+ *  Remarks button ({@link CommentIcon}) and the Agents rail icon are bubbles,
+ *  and a third one sat beside them looking the same. */
 export function AssistantIcon(props: IconProps) {
   return (
     <Frame {...props}>
-      <path d="M6 4.5h12a2.5 2.5 0 012.5 2.5v7.5a2.5 2.5 0 01-2.5 2.5h-6l-4.5 3.5v-3.5H6a2.5 2.5 0 01-2.5-2.5V7A2.5 2.5 0 016 4.5z" />
-      <path d="M12 7.5v5.5M9.25 10.25h5.5" />
+      <path d="M5 4.5l4 3h6l4-3V13a7 6.5 0 01-14 0z" />
+      <path d="M9.5 11.5v1.5M14.5 11.5v1.5" />
+      <path d="M11 15.5l1 .8 1-.8" />
     </Frame>
   );
 }
