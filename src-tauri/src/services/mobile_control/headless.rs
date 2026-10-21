@@ -821,6 +821,22 @@ pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 /// through the same filter here (`terminal_service::strip_persisted_env`):
 /// no loader or control variable from a stored layout reaches the spawn.
 pub(super) fn launch_options(state_dir: &Path, project_id: &str, tab: &TabEntry) -> Result<PtyOptions, NotAttachable> {
+    options_for(state_dir, project_id, tab, false)
+}
+
+/// [`launch_options`] for the restart of a bound agent whose session is gone
+/// (the scheduler's): the same, except that a container project's tab is
+/// launched as recorded. `launch_prep` re-derives its `sandbox` flag from the
+/// project record and `docker exec`s it into the project's container, which is
+/// where the window runs it too, so a restart there is right; refusing it (as a
+/// phone's create is refused, there being nothing to attach to) would lose a
+/// scheduled prompt the base delivered. A tab on a remote host or in a VM stays
+/// refused: with no window there is no pool to reach it, and the spawn failed.
+pub(super) fn restart_options(state_dir: &Path, project_id: &str, tab: &TabEntry) -> Result<PtyOptions, NotAttachable> {
+    options_for(state_dir, project_id, tab, true)
+}
+
+fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool) -> Result<PtyOptions, NotAttachable> {
     // The chat assistant's scope trusts nothing of the record but the validated
     // launch block and the chat's uid: the CLI line, its env and its folder are
     // rebuilt by `launch_prep`'s assistant gate from `PtyOptions.assistant` and
@@ -858,6 +874,8 @@ pub(super) fn launch_options(state_dir: &Path, project_id: &str, tab: &TabEntry)
     let location = tab.extra.get("location").and_then(serde_json::Value::as_str);
     let (local_only, cwd) = match super::discovery::launch_place(state_dir, project_id, kind.unwrap_or("shell"), location) {
         super::discovery::LaunchPlace::AsRecorded => (false, tab.cwd.clone()),
+        super::discovery::LaunchPlace::InContainer if restart => (false, tab.cwd.clone()),
+        super::discovery::LaunchPlace::InContainer => return Err(NotAttachable),
         super::discovery::LaunchPlace::LocalMirror(mirror) => (true, mirror.to_string_lossy().into_owned()),
         super::discovery::LaunchPlace::NotAttachable => return Err(NotAttachable),
     };
@@ -2297,6 +2315,21 @@ mod tests {
         for (kind, location) in [("agent", None), ("agent", Some("local")), ("shell", None), ("local_agent", None)] {
             assert!(placed(state.path(), "vm1", kind, location, &cwd).is_err(), "{kind} {location:?}");
         }
+        // A restart (the scheduler's) differs only for a container: launched as
+        // recorded, `launch_prep` puts it in the container as it always did. A
+        // remote host's and a VM's tabs stay refused.
+        for (scope, kind, location) in [("box1", "agent", None), ("box2", "agent", Some("local")), ("box1", "shell", None)] {
+            let record = stored(kind, location, &cwd);
+            let opts = restart_options(state.path(), scope, &record).unwrap();
+            assert!(!opts.local_only && !opts.sandbox, "{scope} {kind}");
+            assert_eq!(opts.cwd, record.cwd, "{scope} {kind}");
+            assert_eq!(opts.project_id.as_deref(), Some(scope));
+        }
+        assert!(restart_options(state.path(), "vm1", &stored("agent", None, &cwd)).is_err());
+        assert!(restart_options(state.path(), "vm1", &stored("local_agent", None, &cwd)).is_err());
+        let directory = state.path().join("remote-projects").join("remote1");
+        assert!(restart_options(state.path(), "remote1", &stored("agent", Some("host:w1"), &directory)).is_err());
+        assert!(restart_options(state.path(), "remote1", &stored("agent", None, &directory)).unwrap().local_only);
         // Local, box, root, an id nobody knows and no projects.json at all.
         let none = state_dir();
         for (dir, scope) in [(state.path(), "local1"), (state.path(), "box:b1"), (state.path(), "root"), (state.path(), "nobody"), (none.path(), "local1")] {

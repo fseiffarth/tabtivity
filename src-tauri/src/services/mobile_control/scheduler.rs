@@ -624,9 +624,10 @@ pub async fn tick(ctx: &Context, now: DateTime<Local>) -> Vec<Event> {
                 // spawn) and deliver on a later tick, once it is up and idle.
                 if target.kind() == "agent" && ctx.may_relaunch(&target.tmux) {
                     // Where the window would run it: a remote project's local agent
-                    // in the mirror; one that belongs on a host, in a container or
-                    // in a VM is not started here (no phone could attach to it).
-                    let error = match headless::launch_options(&ctx.state_dir, &target.project_id, &target.tab) {
+                    // in the mirror, a container project's agent in its container
+                    // (as before); one that belongs on a remote host or in a VM is
+                    // not started here (with no window there is no pool to reach it).
+                    let error = match headless::restart_options(&ctx.state_dir, &target.project_id, &target.tab) {
                         Ok(options) => (ctx.launch)(options).await.err(),
                         Err(refused) => Some(refused.to_string()),
                     };
@@ -932,9 +933,10 @@ mod tests {
 
     /// The restart of a dead bound agent runs where the window would run it,
     /// whatever the scope's Mobile switch says: a remote project's agent in the
-    /// mirror (`local_only`), a container project's agent not at all (it runs
-    /// in the container, which no phone attaches to) — reported on the event,
-    /// nothing spawned.
+    /// mirror (`local_only`), a container project's agent as it always was (the
+    /// spawn puts it in the container), an agent saved as running on a remote
+    /// host not at all — reported on the event, nothing spawned (the base failed
+    /// the same way: no window's pool to reach the host).
     #[tokio::test]
     async fn a_dead_agent_is_restarted_where_the_window_would_run_it() {
         let now = Local::now();
@@ -959,12 +961,30 @@ mod tests {
             assert_eq!(Path::new(&launches[0].cwd), crate::services::remote_sync::default_mirror_dir_in(fixture.state_dir(), PROJECT));
         }
 
-        let fixture = Fixture::new(vec![rule_once(&key)]);
-        write(&fixture, json!({ "sandbox": { "enabled": true, "scope": "all" } }));
-        let (ctx, launched) = context(&fixture, &recorder);
-        let events = tick(&ctx, now).await;
-        assert!(matches!(events.as_slice(), [Event::Relaunched { error: Some(error), .. }] if error.starts_with("not_attachable")), "{events:?}");
-        assert!(launched.lock().unwrap().is_empty());
+        // A container project's agent is restarted exactly as before this
+        // change: launched as recorded, where `launch_prep` re-derives its
+        // `sandbox` flag from the project record and `docker exec`s it into the
+        // container (`pty_spawn` -> `prepare` -> `wrap_pty_options_docker`; the
+        // headless spawn then wraps that client in a local tmux session). Not
+        // `local_only`, not moved to the mirror, not refused.
+        for scope in ["all", "agents"] {
+            let fixture = Fixture::new(vec![rule_once(&key)]);
+            write(&fixture, json!({ "sandbox": { "enabled": true, "scope": scope } }));
+            let recorded_cwd = {
+                let session: crate::schema::session::TerminalSession = storage::read_json(&headless::session_file(fixture.state_dir(), PROJECT)).unwrap();
+                // project-tree-read: ok — the state-dir session file a test fixture wrote.
+                session.tab_layout[0].cwd.clone()
+            };
+            let (ctx, launched) = context(&fixture, &recorder);
+            let events = tick(&ctx, now).await;
+            assert!(matches!(events.as_slice(), [Event::Relaunched { error: None, .. }]), "{scope}: {events:?}");
+            let launches = launched.lock().unwrap();
+            assert_eq!(launches.len(), 1, "{scope}");
+            assert!(!launches[0].local_only && !launches[0].sandbox, "{scope}: the spawn decides sandbox from the record");
+            assert_eq!(launches[0].cwd, recorded_cwd, "{scope}");
+            assert_eq!(launches[0].project_id.as_deref(), Some(PROJECT));
+            assert!(launches[0].agent, "{scope}");
+        }
 
         // The same agent saved as running on a host: not started either.
         let fixture = Fixture::new(vec![rule_once(&key)]);

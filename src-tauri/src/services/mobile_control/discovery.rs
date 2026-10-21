@@ -951,8 +951,15 @@ pub(super) enum LaunchPlace {
     /// A remote project's tab that runs on this machine: `local_only`, in the
     /// project's mirror (the path), as the window runs an agent of it.
     LocalMirror(PathBuf),
-    /// A tab that runs on a remote host, in a container or in a VM: no local
-    /// tmux session, so the phone cannot attach to it and does not start it.
+    /// A container project's tab that runs in the container (`docker exec`,
+    /// the sandbox flag re-derived at spawn): no local tmux session carries it
+    /// for the phone to attach to, so the phone does not start one. A restart of
+    /// a bound agent (the scheduler's) still launches it as recorded, which
+    /// `launch_prep` puts in the container, as it always did.
+    InContainer,
+    /// A tab that runs on a remote host or in a VM: no local tmux session, so
+    /// the phone cannot attach to it and does not start it. (`launch_prep` has
+    /// no window's pool here, so a spawn would only fail.)
     NotAttachable,
 }
 
@@ -976,8 +983,11 @@ pub(super) fn launch_place(state_dir: &Path, raw_id: &str, kind: &str, location:
     let host = project_host(project);
     // A VM project never runs a tab on the host (`launch_prep` refuses a local
     // spawn there), not even the `local_agent` the catalog lists.
-    if host == ProjectHost::Vm || !runs_on_this_machine(host, container_shells(project), kind, location) {
+    if host == ProjectHost::Vm {
         return LaunchPlace::NotAttachable;
+    }
+    if !runs_on_this_machine(host, container_shells(project), kind, location) {
+        return if host == ProjectHost::Container { LaunchPlace::InContainer } else { LaunchPlace::NotAttachable };
     }
     match (host, mobile_root(state_dir, project)) {
         (ProjectHost::Remote, Some(mirror)) => LaunchPlace::LocalMirror(mirror),
