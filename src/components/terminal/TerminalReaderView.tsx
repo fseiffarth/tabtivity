@@ -479,7 +479,7 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, onEscape, onStatus, onPulled }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, chipSlot, onEscape, onStatus, onPulled }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -497,6 +497,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   steering: boolean;
   /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
   questionOpen: boolean;
+  /** The facts row's end, where the chip row goes; over the text box without it. */
+  chipSlot: HTMLElement | null;
   onEscape: () => void;
   onStatus: () => void;
   /** These of `queued` left Claude's queue for the composer. */
@@ -782,17 +784,18 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   };
 
   if (steering) return null;
+  const chips = <ReaderComposerChips
+    prefixes={prefixCommands}
+    active={draftPrefix(draft, prefixCommands)}
+    disabled={sending}
+    onPrefix={togglePrefix}
+    onClear={clearChat}
+    onCommit={commit}
+  />;
   return <>
     <div className="terminal-reader-composer">
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
-      <ReaderComposerChips
-        prefixes={prefixCommands}
-        active={draftPrefix(draft, prefixCommands)}
-        disabled={sending}
-        onPrefix={togglePrefix}
-        onClear={clearChat}
-        onCommit={commit}
-      />
+      {chipSlot ? createPortal(chips, chipSlot) : chips}
       <textarea
         ref={composerRef}
         value={draft}
@@ -895,6 +898,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [heldSignature, setHeldSignature] = useState("");
   const [picking, setPicking] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  /** The facts row's end, where the composer's chips go while it shows. */
+  const [chipSlot, setChipSlot] = useState<HTMLDivElement | null>(null);
   const [statusRequest, setStatusRequest] = useState(0);
   const requestStatus = () => { setStatusOpen(true); setStatusRequest((request) => request + 1); };
   const closeStatus = () => setStatusOpen(false);
@@ -1690,6 +1695,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           statusRequest={statusRequest}
           onStatusRequest={requestStatus}
           onStatusClose={closeStatus}
+          chipSlot={setChipSlot}
         />
       )}
       {browsed ? (
@@ -1713,6 +1719,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         visible={visible}
         steering={steering}
         questionOpen={!!shownLive.question}
+        chipSlot={chipSlot}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
         onPulled={dropPending}

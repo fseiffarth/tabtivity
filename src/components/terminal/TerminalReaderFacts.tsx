@@ -44,7 +44,7 @@ const MODE_CYCLE_LIMIT = 6;
  * CLI's usage panel (`agent_usage`, which spends no quota), or — Codex, which
  * has none — from the figures its rollout stores.
  */
-export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose }: {
+export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose, chipSlot }: {
   tab: TabEntry;
   ptyId: string;
   agentLabel: string;
@@ -70,6 +70,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   statusRequest: number;
   onStatusRequest: () => void;
   onStatusClose: () => void;
+  /** Takes the row's end, where the composer portals its chip row. */
+  chipSlot?: (slot: HTMLDivElement | null) => void;
 }) {
   const t = useT();
   const status = live.status;
@@ -441,6 +443,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         {limitFact(shown.session, "mobile.facts.session")}
         {limitFact(shown.week, "mobile.facts.week")}
       </div>
+      <div className="terminal-reader-facts-chips" ref={chipSlot} />
     </div>
   );
 }

@@ -3003,8 +3003,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel);
 }
-/* The phone composer's Plan / Goal / Clear / Commit chips, a row over the
-   text box; the Commit menu opens upward from it. */
+/* The phone composer's Plan / Goal / Clear / Commit chips, at the facts row's
+   end (`.terminal-reader-facts-chips`), or a row over the text box where
+   there is none; the Commit menu opens upward from it. */
 .terminal-reader-composer { flex-wrap: wrap; }
 .terminal-reader-chips {
   position: relative;
@@ -3196,10 +3197,14 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-facts-wrap {
   position: relative;
   flex: none;
+  display: flex;
+  align-items: center;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-subtle);
 }
 .terminal-reader-facts {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -3242,6 +3247,17 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   opacity: 0.6;
   cursor: var(--cur-default, default);
 }
+/* The composer's chip row, portaled to the facts row's end: kept out of its
+   scroll so the chips stay in view and the Commit menu, anchored to the wrap,
+   is not clipped. */
+.terminal-reader-facts-chips {
+  flex: none;
+  display: flex;
+  padding: 6px 14px 2px 0;
+}
+.terminal-reader-facts-chips:empty { display: none; }
+.terminal-reader-facts-chips .terminal-reader-chips { position: static; flex: none; }
+.terminal-reader-facts-chips .terminal-reader-commit-menu { left: auto; right: 14px; }
 /* The composer's own top rule is the facts row's now. */
 .terminal-reader-facts-wrap + .terminal-reader-composer { border-top: none; }
 .terminal-reader-picker {
