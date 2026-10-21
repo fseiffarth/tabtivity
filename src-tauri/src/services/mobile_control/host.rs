@@ -9060,7 +9060,9 @@ mod tests {
     }
 
     /// A project type with no tab the phone can attach to answers
-    /// `not_attachable` (409) and starts nothing, with the window open.
+    /// `not_attachable` (409) and starts nothing, with the window open. (The
+    /// fake window listens on a unix socket, as the other desktop-control tests.)
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_create_the_phone_cannot_attach_to_is_refused_on_the_window_path() {
         let (host, spawned) = typed_host();
