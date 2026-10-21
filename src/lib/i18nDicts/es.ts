@@ -7313,8 +7313,10 @@ export const dict: Dict = {
   "mail.messageGone": "Ese mensaje ya no está en el índice local.",
   // Mail — seleccionar varias filas y eliminar.
   "mail.selectedCount": "{count} mensajes seleccionados",
+  "mail.dropToMove": "Suelta aquí los mensajes seleccionados para moverlos dentro de esta cuenta",
+  "mail.dragCount": "{count} mensajes",
   "mail.clearSelection": "Quitar la selección",
-  "mail.selectHint": "Clic para abrir en una pestaña, {modifier}+clic para añadir, Mayús+clic para un rango",
+  "mail.selectHint": "Clic para seleccionar, doble clic para abrir, {modifier}+clic para añadir, Mayús+clic para un rango",
   "mail.tabInbox": "Bandeja de entrada",
   "mail.tabUnsent": "No enviado",
   "mail.closeUnsentTitle": "¿Cerrar este correo sin enviar?",

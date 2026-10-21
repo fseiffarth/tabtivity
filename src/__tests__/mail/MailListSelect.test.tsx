@@ -16,8 +16,8 @@
  *    since "delete" means Trash for some rows and the server's own expunge for
  *    others and only one of the two can be taken back.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -56,10 +56,11 @@ interface Calls {
   opened: string[];
   checks: Array<{ id: string; mode: MailCheckMode }>;
   deleted: string[][];
+  drags: Array<string[] | null>;
 }
 
 function renderList(over: { headers?: MailHeader[]; checkedIds?: string[]; purged?: number; query?: string; searchRemote?: boolean; searchPartial?: boolean } = {}) {
-  const calls: Calls = { opened: [], checks: [], deleted: [] };
+  const calls: Calls = { opened: [], checks: [], deleted: [], drags: [] };
   render(
     <MailList
       headers={over.headers ?? HEADERS}
@@ -69,6 +70,7 @@ function renderList(over: { headers?: MailHeader[]; checkedIds?: string[]; purge
       onOpen={(id) => calls.opened.push(id)}
       onCheck={(h, mode) => calls.checks.push({ id: h.id, mode })}
       onClearChecks={() => {}}
+      onDragRows={(rows) => calls.drags.push(rows?.map((h) => h.id) ?? null)}
       onDelete={(rows) => calls.deleted.push(rows.map((h) => h.id))}
       deletePlan={(rows) => ({
         purged: over.purged ?? 0,
@@ -149,11 +151,54 @@ describe("search coverage note", () => {
 });
 
 describe("clicking a row", () => {
-  it("opens the message and makes it the whole selection", async () => {
+  it("selects the message without opening or marking it read", async () => {
     const calls = renderList();
     await userEvent.click(row("m2"));
-    expect(calls.opened).toEqual(["m2"]);
+    expect(calls.opened).toEqual([]);
     expect(calls.checks).toEqual([{ id: "m2", mode: "only" }]);
+  });
+
+  it("opens once on double-click", async () => {
+    const calls = renderList();
+    await userEvent.dblClick(row("m2"));
+    expect(calls.opened).toEqual(["m2"]);
+  });
+
+  it("does not open on a modified double-click", () => {
+    const calls = renderList();
+    for (const modifier of ["ctrlKey", "metaKey", "shiftKey"]) {
+      fireEvent.doubleClick(row("m2"), { [modifier]: true });
+    }
+    expect(calls.opened).toEqual([]);
+  });
+
+  it("Enter opens while Space only selects", () => {
+    const calls = renderList();
+    fireEvent.keyDown(row("m2"), { key: " " });
+    expect(calls.opened).toEqual([]);
+    expect(calls.checks).toEqual([{ id: "m2", mode: "only" }]);
+    fireEvent.keyDown(row("m2"), { key: "Enter" });
+    expect(calls.opened).toEqual(["m2"]);
+  });
+
+  it("Delete applies to the selected set", () => {
+    const calls = renderList({ checkedIds: ["m1", "m3"] });
+    fireEvent.keyDown(row("m3"), { key: "Delete" });
+    expect(calls.deleted).toEqual([["m1", "m3"]]);
+  });
+
+  it("Delete uses the selection even when focus remains on a deselected row", () => {
+    const calls = renderList({ checkedIds: ["m1", "m3"] });
+    fireEvent.keyDown(row("m2"), { key: "Delete" });
+    expect(calls.deleted).toEqual([["m1", "m3"]]);
+  });
+
+  it("embedded buttons never open the message on Enter or double-click", () => {
+    const calls = renderList();
+    const flag = row("m1").querySelector("button")!;
+    fireEvent.keyDown(flag, { key: "Enter" });
+    fireEvent.doubleClick(flag);
+    expect(calls.opened).toEqual([]);
   });
 
   // `fireEvent` rather than `userEvent` for the modified clicks: the modifier
@@ -285,5 +330,59 @@ describe("the row's ✕", () => {
   it("says Trash when there is one", () => {
     renderList();
     expect(deleteBtn("m1").title).toBe(t("mail.moveToTrash"));
+  });
+});
+
+describe("dragging rows", () => {
+  // Pointer-driven (no HTML5 DnD on WebKitGTK), so the gesture is plain
+  // pointer events on the row and the window.
+  const pointer = (type: string, x: number, el: EventTarget = window) => {
+    const ev = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(ev, { clientX: x, clientY: 10, button: 0, pointerId: 1 });
+    act(() => {
+      el.dispatchEvent(ev);
+    });
+  };
+  const savedEFP = document.elementFromPoint;
+  beforeEach(() => {
+    document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
+  });
+  afterEach(() => {
+    document.elementFromPoint = savedEFP;
+  });
+
+  it("carries the whole selection without opening it or changing the selection", () => {
+    const calls = renderList({ checkedIds: ["m1", "m3"] });
+    pointer("pointerdown", 10, row("m3"));
+    pointer("pointermove", 60);
+    expect(calls.drags).toEqual([["m1", "m3"]]);
+    pointer("pointerup", 60);
+    fireEvent.click(row("m3"));
+    expect(calls.checks).toEqual([]);
+    expect(calls.opened).toEqual([]);
+    expect(calls.drags).toEqual([["m1", "m3"], null]);
+    // A later ordinary click still replaces the selection.
+    pointer("pointerdown", 10, row("m2"));
+    pointer("pointerup", 10);
+    fireEvent.click(row("m2"));
+    expect(calls.checks).toEqual([{ id: "m2", mode: "only" }]);
+  });
+
+  it("dragging outside the selection carries only the dragged row", () => {
+    const calls = renderList({ checkedIds: ["m1", "m3"] });
+    pointer("pointerdown", 10, row("m2"));
+    pointer("pointermove", 60);
+    pointer("pointerup", 60);
+    expect(calls.drags).toEqual([["m2"], null]);
+    expect(calls.checks).toEqual([{ id: "m2", mode: "only" }]);
+    expect(calls.opened).toEqual([]);
+  });
+
+  it("cannot start a row drag from an embedded button", () => {
+    const calls = renderList();
+    pointer("pointerdown", 10, row("m1").querySelector("button")!);
+    pointer("pointermove", 60);
+    pointer("pointerup", 60);
+    expect(calls.drags).toEqual([]);
   });
 });

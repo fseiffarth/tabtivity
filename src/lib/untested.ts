@@ -413,6 +413,8 @@ export const UNTESTED = {
   "mail.agentAttachmentChip": { area: "mail", what: "MailComposeDialog · a file an agent attached by project and path (source chip, Preview, Send bound to the shown set)" },
   "mail.agentSuggestedRecipient": { area: "mail", what: "MailComposeDialog · Agent suggests: X — Add" },
   "mailList.1": { area: "mail", what: "MailList · From" },
+  "mailList.openOnDoubleClick": { area: "mail", what: "Mail list · click selects, double-click or Enter opens; Ctrl/Shift select without marking read" },
+  "mailList.dragMove": { area: "mail", what: "Mail folders · drag one or multiple selected messages to another folder in the same account" },
   "mailList.2": { area: "mail", what: "MailList · {count} messages selected" },
   "mailList.3": { area: "mail", what: "MailList · Move to Important" },
   "mailList.4": { area: "mail", what: "MailList · Move to Urgent" },

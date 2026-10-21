@@ -2412,7 +2412,8 @@ async fn sync_inner(
                 let prev_max_uid = store3.folder_max_uid(&folder2.id)?;
                 let is_arrival = |uid: u32| matches!(prev_max_uid, Some(m) if uid > m);
                 for h in headers {
-                    let (row, in_reply_to) = header_row(&folder2, h);
+                    let (mut row, in_reply_to) = header_row(&folder2, h);
+                    store3.retain_header_id(&mut row)?;
                     let inserted = store3.upsert_header(&row)?;
                     store3.set_reply_key(&row.id, in_reply_to.as_deref())?;
                     if inserted {
@@ -2692,7 +2693,8 @@ pub async fn mail_search(
                     let mut inserted_unseen = 0u32;
                     for h in headers {
                         let unseen = !h.seen;
-                        let (row, in_reply_to) = header_row(&folder, h);
+                        let (mut row, in_reply_to) = header_row(&folder, h);
+                        store.retain_header_id(&mut row)?;
                         if store.upsert_header(&row)? {
                             inserted += 1;
                             if unseen {
@@ -3720,13 +3722,13 @@ pub async fn mail_move(
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
     };
-    InProcessEngine
+    let uid_pairs = InProcessEngine
         .move_messages(&account, &pw, &source_path, &uids, &dest_path)
         .await
         .map_err(String::from)?;
 
     app_core::rt::try_blocking("mail", move || {
-        store.move_messages(&message_ids, &dest_folder_id)?;
+        store.move_messages(&message_ids, &dest_folder_id, &uid_pairs)?;
         // Both folders' counters, because the rail's unread badge is read from
         // them: without this a mail moved out of the inbox — which is what a
         // delete-to-Trash is — kept being counted there until the next sync.

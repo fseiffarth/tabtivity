@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAIL_PAGE_SIZE, useMailStore } from "../../stores/mail";
 import { useSettingsStore } from "../../stores/settings";
 import { onMailSync, mailAiAllowed, planMailDelete } from "../../lib/mail";
@@ -6,7 +6,7 @@ import { useT } from "../../lib/i18n";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
-import type { MailDraft, MailHeader, MailPriority, MailSort } from "../../types/mail";
+import type { MailDraft, MailFolder, MailHeader, MailPriority, MailSort } from "../../types/mail";
 import { MailList, type MailCheckMode } from "./MailList";
 import { MailAgentDraftList } from "./MailAgentDraftList";
 import { MailAccountDialog } from "./MailAccountDialog";
@@ -89,6 +89,32 @@ export function MailPane({ visible }: MailPaneProps) {
   // not the store's folder/priority selection: those drive paging, search and
   // sync reads a draft list has none of.
   const [draftsOpen, setDraftsOpen] = useState(false);
+  const draggedRows = useRef<MailHeader[] | null>(null);
+  const [dropFolderId, setDropFolderId] = useState<string | null>(null);
+  const dragRows = useCallback((rows: MailHeader[] | null) => {
+    draggedRows.current = rows;
+    setDropFolderId(null);
+  }, []);
+  // A move stays within one account (the backend's limit), and a folder every
+  // dragged row is already in has nothing to receive.
+  const canDrop = useCallback((folderId: string) => {
+    const rows = draggedRows.current;
+    const folder = Object.values(useMailStore.getState().foldersByAccount)
+      .flat()
+      .find((f: MailFolder) => f.id === folderId);
+    return !!folder && !!rows?.length &&
+      rows.every((h) => h.account_id === folder.account_id) &&
+      rows.some((h) => h.folder_id !== folder.id);
+  }, []);
+  const dragOverFolder = useCallback(
+    (folderId: string | null) => setDropFolderId(folderId && canDrop(folderId) ? folderId : null),
+    [canDrop],
+  );
+  const dropRows = useCallback((folderId: string) => {
+    const rows = draggedRows.current;
+    if (!rows || !canDrop(folderId)) return;
+    void useMailStore.getState().moveMessages(rows.map((h) => h.id), folderId);
+  }, [canDrop]);
   // The local store's encryption. Read once when the pane first becomes visible
   // rather than on mount: the read *opens the store* (that is what resolves the
   // unlock), and a pane that is mounted-but-hidden must not be the thing that
@@ -658,7 +684,10 @@ export function MailPane({ visible }: MailPaneProps) {
             copy of the name here was one more place it could be read from and
             one more place it could disagree. */}
         <div className="mail-rail">
-          <div className="mail-rail-title">{t("mail.folders")}</div>
+          <div className="mail-rail-title">
+            {t("mail.folders")}
+            <UntestedTag id="mailList.dragMove" />
+          </div>
           {folders.length === 0 && <div className="mail-rail-hint">{t("mail.noFolders")}</div>}
           {folders.map((f) => (
             <button
@@ -666,7 +695,10 @@ export function MailPane({ visible }: MailPaneProps) {
               type="button"
               className={`mail-rail-folder${
                 f.id === selectedFolderId && !draftsOpen ? " selected" : ""
-              }`}
+              }${dropFolderId === f.id ? " drop-target" : ""}`}
+              title={t("mail.dropToMove")}
+              // Found by the list's pointer drag (`MailList`'s hit-test).
+              data-mail-drop-folder={f.id}
               onClick={() => {
                 setDraftsOpen(false);
                 void useMailStore.getState().openFolder(f.id);
@@ -732,6 +764,9 @@ export function MailPane({ visible }: MailPaneProps) {
               onOpen={openMessage}
               onCheck={checkRow}
               onClearChecks={clearChecks}
+              onDragRows={dragRows}
+              onDragOverFolder={dragOverFolder}
+              onDropRows={dropRows}
               onDelete={deleteRows}
               deletePlan={deletePlan}
               onToggleFlag={toggleFlag}

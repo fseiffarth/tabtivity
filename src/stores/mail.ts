@@ -385,7 +385,7 @@ interface MailStore {
 
   /**
    * Open a message of the loaded page in its own mail-window tab — the Inbox
-   * has no preview pane, so this is what a click on a row does. Also the row
+   * has no preview pane, so this is what a double-click on a row does. Also the row
    * the list marks as last opened. A message not in the page opens nothing.
    */
   openMessage: (messageId: string) => void;
@@ -409,6 +409,8 @@ interface MailStore {
    * reason to leave the other's mail undeleted.
    */
   deleteMessages: (messageIds: string[]) => Promise<void>;
+  /** Move the visible selection within one account, grouped by source folder. */
+  moveMessages: (messageIds: string[], destFolderId: string) => Promise<void>;
   /** Re-fetch the open body with remote references resolved (explicit click). */
   setFlag: (messageId: string, flag: MailFlag, value: boolean) => Promise<void>;
   /** Mark every unread message in a folder read, locally and on the server.
@@ -1118,6 +1120,43 @@ export const useMailStore = create<MailStore>((set, get) => ({
     await get().loadPage(get().headerOffset);
     // Deleting the whole of the last page leaves the pager past the end, which
     // reads as an empty folder. Step back one page instead.
+    if (get().headers.length === 0 && get().headerOffset > 0) {
+      await get().loadPage(Math.max(0, get().headerOffset - MAIL_PAGE_SIZE));
+    }
+  },
+
+  moveMessages: async (messageIds, destFolderId) => {
+    const wanted = new Set(messageIds);
+    const rows = get().headers.filter((h) => wanted.has(h.id));
+    const dest = Object.values(get().foldersByAccount).flat().find((f) => f.id === destFolderId);
+    // Reject stale drags and mixed-account selections as a whole. The backend
+    // only supports moves within an account; never silently move half a set.
+    if (!dest || rows.length === 0 || rows.length !== wanted.size ||
+        rows.some((h) => h.account_id !== dest.account_id)) return;
+    const groups = new Map<string, string[]>();
+    for (const h of rows) {
+      if (h.folder_id === dest.id) continue;
+      const ids = groups.get(h.folder_id) ?? [];
+      ids.push(h.id);
+      groups.set(h.folder_id, ids);
+    }
+    if (groups.size === 0) return;
+    for (const ids of groups.values()) {
+      try {
+        await mailMove(ids, dest.id);
+        const moved = new Set(ids);
+        set((s) => ({
+          headers: s.headers.map((h) => moved.has(h.id) ? { ...h, folder_id: dest.id } : h),
+          mailTabs: s.mailTabs.map((tab) => tab.kind === "message" && moved.has(tab.header.id)
+            ? { ...tab, header: { ...tab.header, folder_id: dest.id } } : tab),
+        }));
+      } catch (err) {
+        set({ error: reason(err) });
+      }
+    }
+    await get().loadFolders(dest.account_id, false);
+    await get().refreshPriorityCounts();
+    await get().loadPage(get().headerOffset);
     if (get().headers.length === 0 && get().headerOffset > 0) {
       await get().loadPage(Math.max(0, get().headerOffset - MAIL_PAGE_SIZE));
     }

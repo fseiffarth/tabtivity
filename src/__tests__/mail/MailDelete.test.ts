@@ -80,6 +80,7 @@ beforeEach(() => {
     selectedFolderId: "a1|INBOX",
     selectedPriority: null,
     selectedMessageId: null,
+    mailTabs: [],
     checkedIds: [],
     anchorId: null,
     foldersByAccount: { a1: [INBOX, TRASH, JUNK] },
@@ -300,5 +301,64 @@ describe("paging the unread filter", () => {
     await useMailStore.getState().stepPage(100);
     const offsets = invoked.filter((i) => i.cmd === "mail_headers").map((i) => i.args.offset);
     expect(offsets).toEqual([100, 100]);
+  });
+});
+
+describe("moving messages to a folder", () => {
+  beforeEach(() => {
+    useMailStore.setState({ headers: [
+      header({ id: "m1" }), header({ id: "m2" }),
+      header({ id: "m3", folder_id: JUNK.id }),
+      header({ id: "m4", folder_id: TRASH.id }),
+    ] });
+    answers.mail_headers = page([]);
+    answers.mail_folders = [INBOX, TRASH, JUNK];
+  });
+
+  it("moves a whole selection in one command per source folder, skipping mail already there", async () => {
+    await useMailStore.getState().moveMessages(["m1", "m2", "m3", "m4"], TRASH.id);
+    expect(invoked.filter((i) => i.cmd === "mail_move").map((i) => i.args)).toEqual([
+      { messageIds: ["m1", "m2"], destFolderId: TRASH.id },
+      { messageIds: ["m3"], destFolderId: TRASH.id },
+    ]);
+    expect(cmds()).not.toContain("mail_purge");
+    expect(cmds()).not.toContain("mail_flag");
+    expect(cmds()).toContain("mail_folders");
+    expect(cmds()).toContain("mail_headers");
+  });
+
+  it("rejects a cross-account selection as a whole", async () => {
+    useMailStore.setState({ headers: [header({ id: "m1" }), header({ id: "m2", account_id: "b1" })] });
+    await useMailStore.getState().moveMessages(["m1", "m2"], TRASH.id);
+    expect(cmds()).toEqual([]);
+  });
+
+  it("ignores stale ids, unknown destinations and same-folder drops", async () => {
+    await useMailStore.getState().moveMessages(["m1", "gone"], TRASH.id);
+    await useMailStore.getState().moveMessages(["m1"], "unknown");
+    await useMailStore.getState().moveMessages(["m1"], INBOX.id);
+    expect(cmds()).toEqual([]);
+  });
+
+  it("keeps open tabs and updates their folder after a successful move", async () => {
+    useMailStore.getState().openMessageTab(header({ id: "m1" }));
+    await useMailStore.getState().moveMessages(["m1"], TRASH.id);
+    const tab = useMailStore.getState().mailTabs[0];
+    expect(tab?.kind === "message" && tab.header.folder_id).toBe(TRASH.id);
+  });
+
+  it("reports a failed move without changing the open tab's folder", async () => {
+    useMailStore.getState().openMessageTab(header({ id: "m1" }));
+    answers.mail_move = Promise.reject("move refused");
+    await useMailStore.getState().moveMessages(["m1"], TRASH.id);
+    expect(useMailStore.getState().error).toBe("move refused");
+    const tab = useMailStore.getState().mailTabs[0];
+    expect(tab?.kind === "message" && tab.header.folder_id).toBe(INBOX.id);
+  });
+
+  it("backs up if the moved messages emptied the last page", async () => {
+    useMailStore.setState({ headerOffset: 100 });
+    await useMailStore.getState().moveMessages(["m1"], TRASH.id);
+    expect(invoked.filter((i) => i.cmd === "mail_headers").map((i) => i.args.offset)).toEqual([100, 0]);
   });
 });

@@ -2701,6 +2701,11 @@ handle — it swallows the pointer before the card ever sees it. */
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   font-weight: 600;
 }
+.mail-rail-folder.drop-target {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
 .mail-rail-folder-name {
   flex: 1;
   overflow: hidden;
@@ -2861,6 +2866,10 @@ handle — it swallows the pointer before the card ever sees it. */
 /* Faint banding, so the eye can hold a row across the gap between the sender
    and the date. Declared before hover/selected/checked so every state wash
    still wins over it at equal specificity. */
+.mail-msg-row {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .mail-row:nth-child(even) {
   background: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
 }

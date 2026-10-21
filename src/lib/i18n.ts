@@ -7664,8 +7664,10 @@ export const enSource = {
   "mail.messageGone": "That message is no longer in the local index.",
   // Mail — selecting several rows, and deleting.
   "mail.selectedCount": "{count} messages selected",
+  "mail.dropToMove": "Drop selected messages here to move them within this account",
+  "mail.dragCount": "{count} messages",
   "mail.clearSelection": "Clear the selection",
-  "mail.selectHint": "Click to open in a tab, {modifier}-click to pick more, Shift-click for a range",
+  "mail.selectHint": "Click to select, double-click to open, {modifier}-click to pick more, Shift-click for a range",
   "mail.tabInbox": "Inbox",
   "mail.tabUnsent": "Not sent",
   "mail.closeUnsentTitle": "Close this unsent mail?",
