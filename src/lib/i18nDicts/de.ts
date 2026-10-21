@@ -625,6 +625,7 @@ export const dict: Dict = {
   "mobile.failure.launchFailed": "Der Desktop konnte diesen Tab nicht öffnen.",
   "mobile.failure.unknownAgent": "Der Desktop kennt diesen Agenten nicht.",
   "mobile.failure.unsupportedSignIn": "Der Desktop kann diesen Agenten nicht vom Handy aus anmelden.",
+  "mobile.failure.notAttachable": "Das Handy kann das hier nicht starten. Öffne das Projekt am Desktop, um es hinzuzufügen.",
   "mobile.failure.unsupportedMode": "Der Agentenmodus ist für diesen Agenten nicht verfügbar.",
   "mobile.failure.persistFailed": "Der Desktop konnte das nicht speichern.",
   "mobile.failure.calendarUnavailable": "Der Kalender des Desktops konnte nicht gelesen werden.",

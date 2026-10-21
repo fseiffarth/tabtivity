@@ -689,6 +689,7 @@ export const enSource = {
   "mobile.failure.launchFailed": "The desktop could not open that tab.",
   "mobile.failure.unknownAgent": "The desktop does not know that agent.",
   "mobile.failure.unsupportedSignIn": "The desktop cannot sign that agent in from the phone.",
+  "mobile.failure.notAttachable": "The phone cannot start that here. Open the project on the desktop to add it.",
   "mobile.failure.unsupportedMode": "Agent mode is unavailable for that agent.",
   "mobile.failure.persistFailed": "The desktop could not save that.",
   "mobile.failure.calendarUnavailable": "The desktop's calendar could not be read.",

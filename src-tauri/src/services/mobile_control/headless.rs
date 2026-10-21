@@ -2126,6 +2126,7 @@ mod tests {
                 label: "Tabby".into(),
                 status: "active".into(),
                 kind: ScopeKind::Assistant,
+                host: super::super::discovery::ProjectHost::Local,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,

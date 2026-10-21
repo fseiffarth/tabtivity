@@ -932,7 +932,7 @@ async fn projects(
     };
     // Each row's git dot, from the desktop's own pills. Only asked when a
     // project is listed; a closed or older desktop leaves every row without one.
-    let git = if listed.iter().any(|p| p.public.kind == ScopeKind::Project) {
+    let git = if listed.iter().any(|p| is_git_project(p)) {
         let desktop_socket = state.config.control_dir.join("desktop-control.sock");
         let request_id = new_request_id();
         match admin::desktop_call(&desktop_socket, &DesktopRequest::GitStates { request_id }).await {
@@ -943,7 +943,7 @@ async fn projects(
             // No window: probe the dots here (headless owner plan, H1b).
             response if desktop_down(&response) => {
                 let mut dots = HashMap::new();
-                for p in listed.iter().filter(|p| p.public.kind == ScopeKind::Project) {
+                for p in listed.iter().filter(|p| is_git_project(p)) {
                     if let Some(dot) = headless_git_dot(&state, &p.raw_id, &p.root).await {
                         dots.insert(p.raw_id.clone(), dot);
                     }
@@ -959,7 +959,7 @@ async fn projects(
         .into_iter()
         .map(|p| {
             let mut public = p.public.clone();
-            if public.kind == ScopeKind::Project {
+            if is_git_project(p) {
                 public.git = git.get(&p.raw_id).copied();
             }
             let mut agents = AgentCounts::default();
@@ -1195,7 +1195,7 @@ async fn project(
                 .collect();
             let readings = headless_readings(&state, project);
             let schedules = headless::schedule_summaries(state_dir, &project.raw_id, &project.tabs, chrono::Local::now());
-            let git = if project.public.kind == ScopeKind::Project {
+            let git = if is_git_project(project) {
                 headless_git_dot(&state, &project.raw_id, &project.root).await.map(str::to_string)
             } else {
                 None
@@ -1206,7 +1206,7 @@ async fn project(
         _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None),
     };
     let mut public = project.public.clone();
-    if public.kind == ScopeKind::Project {
+    if is_git_project(project) {
         public.git = git.as_deref().and_then(git_dot);
     }
     // The assistant scope starts chats from its own launches, never a plain
@@ -1271,7 +1271,7 @@ async fn project(
             tab.prompts = prompts.remove(&resolved.tmux_name).unwrap_or_default();
         }
     }
-    if project.public.kind == ScopeKind::Project {
+    if is_git_project(project) {
         for (tab, (worktree, subagents)) in tabs.iter_mut().zip(project_tab_worktrees(&state, project).await) {
             tab.worktree = worktree;
             tab.subagent_worktrees = subagents;
@@ -1282,8 +1282,14 @@ async fn project(
         Json(
             json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed,
                 // Whether this project's 📁 answers (`files.rs`): the host-wide
-                // switch, and a project rather than a box or the root console.
-                "files": project.public.kind == ScopeKind::Project && files::files_open(&state.config.state_dir),
+                // switch, and a project with a folder rather than a box, the
+                // root console or a project the phone has no folder of.
+                "files": is_git_project(project) && files::files_open(&state.config.state_dir),
+                // Whether the scope has a folder at all, and what the phone may
+                // create in it (`all`, `agents` or `none`): the phone words the
+                // reason and offers only what these allow, never a project type.
+                "folder": project.has_folder(),
+                "create": project.create,
                 // Whether the phone may offer a new shell (`shells_open`).
                 "shells": shells_open(&state.config.state_dir),
                 // `tmux` where tabs attach through tmux; `unsupported` on a
@@ -1412,6 +1418,9 @@ async fn create_tab(
     // worktree. (`launch_shape_ok` already kept the other fields out.)
     if (project.public.kind == ScopeKind::Assistant) != request.assistant.is_some() {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if let Err(error) = creatable(project, &request.kind) {
+        return error;
     }
     request.project_id = project.raw_id.clone();
     let request_id = new_request_id();
@@ -1564,7 +1573,7 @@ async fn answer_created(
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             match code.as_str() {
                 "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-                "nothing_to_reopen" => StatusCode::CONFLICT,
+                "nothing_to_reopen" | "not_attachable" => StatusCode::CONFLICT,
                 _ => StatusCode::BAD_REQUEST,
             },
             &code,
@@ -1618,6 +1627,10 @@ async fn reopen_tab(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    // A reopen starts an agent tab like a create does.
+    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+        return error;
+    }
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
@@ -1767,7 +1780,7 @@ async fn project_git(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
-    if project.public.kind != ScopeKind::Project {
+    if !is_git_project(project) {
         return api_error(StatusCode::NOT_FOUND, "not_a_project");
     }
     let raw_id = project.raw_id.clone();
@@ -3558,6 +3571,9 @@ async fn sign_in_tab(
     if project.public.kind == ScopeKind::Assistant {
         return api_error(StatusCode::BAD_REQUEST, "unsupported_sign_in");
     }
+    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+        return error;
+    }
     let request = CreateTabRequest {
         project_id: project.raw_id.clone(),
         kind: CreateTabKind::Agent,
@@ -3838,17 +3854,50 @@ fn agent_tab(
     Ok((project.raw_id.clone(), tab.clone()))
 }
 
-/// The chat assistant's scope has a work folder and no project folder: nothing
-/// is read from it, written into it or probed with git on a phone's behalf —
-/// no files, outbox, inbox, upload, markup, desktop-image or uncommitted-changes
-/// route (the `== ScopeKind::Project` gates cover files, git, worktrees and
-/// activation; these are the folder-based routes that gate on nothing but the
-/// scope's existence). A chat's own files live in the CLI's transcript.
+/// A scope with no folder the phone may use has nothing read from it, written
+/// into it or probed with git on a phone's behalf — no files, outbox, inbox,
+/// upload, markup, desktop-image or uncommitted-changes route. That is the
+/// chat assistant's scope (a work folder and no project folder; a chat's own
+/// files live in the CLI's transcript), a remote project whose mirror is not
+/// there yet and a VM project with none: their `root` names nothing that
+/// exists (`ResolvedProject::folder`). Every folder-shaped route asks this one
+/// test, never the scope's kind (a box and the root console have a folder).
 fn has_folder(project: &super::discovery::ResolvedProject) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if project.public.kind == ScopeKind::Assistant {
+    if !project.has_folder() {
         return Err(api_error(StatusCode::NOT_FOUND, "not_a_project"));
     }
     Ok(())
+}
+
+/// A real project folder: the scopes git is asked about (the dot, worktrees,
+/// the Git sheet) and the 📁 drawer lists. A box and the root console have a
+/// folder and are not projects; a project the phone has no folder of is not
+/// either.
+fn is_git_project(project: &super::discovery::ResolvedProject) -> bool {
+    project.public.kind == ScopeKind::Project && project.has_folder()
+}
+
+/// The create gate, made once for every route that starts a tab before it
+/// branches to the window or to the owner: the scope's verdict
+/// (`ResolvedProject::create`) against the kind of tab asked for. The tabs of a
+/// remote host, a container or a VM have no local tmux session the phone can
+/// attach to, so a new one there would run where nobody can reach it
+/// (`docs/mobile_every_project_type_plan.md`, phase 1).
+fn creatable(
+    project: &super::discovery::ResolvedProject,
+    kind: &CreateTabKind,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    use super::discovery::CreateVerdict;
+    let allowed = match project.create {
+        CreateVerdict::All => true,
+        CreateVerdict::Agents => matches!(kind, CreateTabKind::Agent),
+        CreateVerdict::None => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(api_error(StatusCode::CONFLICT, "not_attachable"))
+    }
 }
 
 /// The chat assistant's scope takes no schedules and no collected prompts
@@ -4133,7 +4182,7 @@ async fn phone_transcript(
         .then(|| catalog(state, phone).ok())
         .flatten()
         .and_then(|catalog| catalog.tab(tab_id).map(|(project, _)| project.clone()))
-        .filter(|project| project.public.kind == ScopeKind::Project);
+        .filter(is_git_project);
     if let Some(project) = project {
         let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
         if let Some(spots) = worktree_spots_for(state, &project, &all).await {
@@ -5181,7 +5230,7 @@ struct ListedOutboxFile {
 /// and the host key — or `None` unless the drawer is open (`files_open`) and
 /// the scope is a real project: the same gates as `markup_banner_files`.
 fn row_seal(state: &HostState, project: &super::discovery::ResolvedProject) -> Option<(String, Vec<u8>)> {
-    if project.public.kind != ScopeKind::Project || !files::files_open(&state.config.state_dir) {
+    if !is_git_project(project) || !files::files_open(&state.config.state_dir) {
         return None;
     }
     let key = state.auth.lock_ok().host_key().to_vec();
@@ -5961,7 +6010,7 @@ async fn markup_banner_files(state: &HostState, phone: &Phone, tab_id: &str, raw
     }
     let Ok(catalog) = catalog(state, phone) else { return none() };
     let Some((project, _)) = catalog.tab(tab_id) else { return none() };
-    if project.public.kind != ScopeKind::Project || project.raw_id != raw_id {
+    if !is_git_project(project) || project.raw_id != raw_id {
         return none();
     }
     let root = project.root.clone();
@@ -6123,7 +6172,7 @@ fn files_scope(
     let Some(project) = catalog.project(project_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
     };
-    if project.public.kind != ScopeKind::Project {
+    if !is_git_project(project) {
         return Err(api_error(StatusCode::NOT_FOUND, "files_unavailable"));
     }
     Ok((project.root.clone(), project.raw_id.clone()))
@@ -8774,8 +8823,9 @@ mod tests {
     /// outbox, inbox, uploads, markup, worktrees or schedules answers a tab or
     /// scope of the assistant with a refusal, whatever the host-wide switches
     /// say (they are all on here), and the chat's own routes still work. This
-    /// lists the `== ScopeKind::Project` gates and the folder-based routes
-    /// that gate on the scope alone (`has_folder`).
+    /// lists the `is_git_project` gates and the folder-based routes that gate
+    /// on the scope alone (`has_folder`); a project with no folder is the twin
+    /// (`a_folder_less_project_is_no_project_to_any_folder_route`).
     #[tokio::test]
     async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         let host = assistant_host(Arc::new(|_| Box::pin(async { Ok(()) })));
@@ -8832,6 +8882,264 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/transcript"), &cookie)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    /// A host with one opted-in project of each type, no window and no session
+    /// files: a local one, a container one, a remote one with its mirror, a
+    /// remote one that was never opened on the desktop (no mirror) and a VM one
+    /// with none either. The spawn seam records what it is asked to start.
+    fn typed_host() -> (Fixture, Arc<Mutex<Vec<PtyOptions>>>) {
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let mut host = Fixture::bare();
+        let state_dir = host.state.config.state_dir.clone();
+        std::fs::write(
+            state_dir.join("settings.json"),
+            json!({
+                crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true, "project_files": true, "project_uploads": true },
+            })
+            .to_string(),
+        )
+        .expect("write settings");
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(&state_dir, "t-remote");
+        for dir in [host.root.join("t-local"), host.root.join("t-container"), mirror] {
+            std::fs::create_dir_all(dir).expect("project folder");
+        }
+        let record = |id: &str, name: &str, extra: Value| {
+            let mut record = json!({
+                "id": id, "name": name, "status": "active",
+                "directory": host.root.join(id).to_string_lossy(),
+                crate::brand::MOBILE_ACCESS_KEY: true,
+            });
+            for (key, value) in extra.as_object().expect("object") {
+                record[key] = value.clone();
+            }
+            record
+        };
+        let projects = vec![
+            record("t-local", "Local", json!({})),
+            record("t-container", "Container", json!({ "sandbox": { "enabled": true } })),
+            record("t-remote", "Remote", json!({ "remote": { "host": "h" } })),
+            record("t-remote-bare", "Remote bare", json!({ "remote": { "host": "h" } })),
+            record("t-vm", "Vm", json!({ "remote": { "host": "h" }, "vm": { "enabled": true } })),
+        ];
+        std::fs::write(state_dir.join("projects.json"), serde_json::to_vec(&projects).expect("projects")).expect("write projects");
+        host.state.spawner = HeadlessSpawner {
+            launch: Arc::new(move |opts: PtyOptions| {
+                sink.lock().unwrap().push(opts);
+                Box::pin(async { Ok(()) })
+            }),
+            installed: Arc::new(|_| true),
+            ..HeadlessSpawner::default()
+        };
+        (host, recorded)
+    }
+
+    /// The opaque scope id of the project listed under `label`.
+    async fn scope_id(host: &Fixture, cookie: &str, label: &str) -> String {
+        let (_, _, body) = host.send(get_as("/api/v1/projects", cookie)).await;
+        json(&body)["projects"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["label"] == label))
+            .and_then(|row| row["id"].as_str())
+            .unwrap_or_else(|| panic!("{label} is listed: {body}"))
+            .to_string()
+    }
+
+    /// The row carries the project's host as a type word; the detail says
+    /// whether the scope has a folder and what the phone may create in it, and
+    /// offers the 📁 drawer only where a folder is. Nothing names a path, an id
+    /// or the host the project is on.
+    #[tokio::test]
+    async fn every_project_type_says_its_host_folder_and_create_verdict() {
+        let (host, _) = typed_host();
+        let cookie = host.pair_device(&signing_key(81)).await.0;
+        let (_, _, listed) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let rows = json(&listed)["projects"].clone();
+        let mut seen = Vec::new();
+        for (label, kind, folder, create, files) in [
+            ("Local", "local", true, "all", true),
+            ("Container", "container", true, "none", true),
+            ("Remote", "remote", true, "agents", true),
+            ("Remote bare", "remote", false, "none", false),
+            ("Vm", "vm", false, "none", false),
+        ] {
+            let row = rows.as_array().unwrap().iter().find(|row| row["label"] == label).unwrap_or_else(|| panic!("{label}: {listed}"));
+            assert_eq!(row["host"], kind, "{label}");
+            let id = row["id"].as_str().expect("id");
+            let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{id}"), &cookie)).await;
+            assert_eq!(status, StatusCode::OK, "{label}: {body}");
+            let detail = json(&body);
+            assert_eq!(detail["project"]["host"], kind, "{label}");
+            assert_eq!(detail["folder"], folder, "{label}");
+            assert_eq!(detail["create"], create, "{label}");
+            assert_eq!(detail["files"], files, "{label}");
+            assert_eq!(detail["tabs"], json!([]), "{label}");
+            seen.push(body);
+        }
+        seen.push(listed);
+        for body in seen {
+            assert!(!body.contains("t-local") && !body.contains("t-remote") && !body.contains("t-vm") && !body.contains("t-container"), "raw id leaked: {body}");
+            assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+            assert!(!body.contains("\"h\""), "remote host leaked: {body}");
+        }
+    }
+
+    /// The twin of the assistant's route test for a project the phone has no
+    /// folder of (a remote project never opened on the desktop, a VM project
+    /// without a mirror): its `root` names nothing that exists, so every
+    /// folder-shaped route refuses it, whatever the host-wide switches say.
+    #[tokio::test]
+    async fn a_folder_less_project_is_no_project_to_any_folder_route() {
+        let (host, _) = typed_host();
+        let cookie = host.pair_device(&signing_key(82)).await.0;
+        for label in ["Remote bare", "Vm"] {
+            let p = scope_id(&host, &cookie, label).await;
+            let p = p.as_str();
+            let any = json!({});
+            let routes: Vec<(&str, String, Value, &[&str])> = vec![
+                ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
+                ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
+                ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+                ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
+                ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
+                ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable"]),
+                ("GET", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
+                ("DELETE", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
+                ("GET", format!("/api/v1/projects/{p}/outbox/a.txt"), Value::Null, &["not_a_project"]),
+                ("DELETE", format!("/api/v1/projects/{p}/outbox/a.txt"), Value::Null, &["not_a_project"]),
+                ("POST", format!("/api/v1/projects/{p}/inbox?name=a.txt"), any.clone(), &["not_a_project"]),
+            ];
+            for (method, uri, body, codes) in routes {
+                let request = request_as(method, &uri, &cookie, (!body.is_null()).then_some(body));
+                let (status, _, answer) = host.send(request).await;
+                let code = json(&answer).get("error").and_then(Value::as_str).unwrap_or("").to_string();
+                assert!(!status.is_success() && codes.contains(&code.as_str()), "{label}: {method} {uri} -> {status} {answer} (wanted one of {codes:?})");
+            }
+        }
+        // The tab-shaped routes cannot be reached by id (a folder-less scope
+        // lists no tab), so the one test they all make is pinned directly: a
+        // project with no folder fails it, a box and the root console, which
+        // have a folder and are no git project, pass the one and fail the other.
+        let mut scope = super::super::discovery::fixture_scope("t", "tmux", None);
+        assert!(has_folder(&scope).is_ok() && is_git_project(&scope));
+        scope.folder = false;
+        assert!(has_folder(&scope).is_err() && !is_git_project(&scope));
+        for kind in [ScopeKind::Box, ScopeKind::Root] {
+            scope.folder = true;
+            scope.public.kind = kind;
+            assert!(has_folder(&scope).is_ok() && !is_git_project(&scope), "{kind:?}");
+        }
+    }
+
+    /// Every create, reopen and sign-in the phone sends is answered by the
+    /// scope's verdict before it is handed to the window or the owner.
+    const CREATES: [(&str, &str, bool); 10] = [
+        // (project label, tab kind, accepted)
+        ("Local", "agent", true),
+        ("Local", "shell", true),
+        ("Container", "agent", false),
+        ("Container", "shell", false),
+        ("Remote", "agent", true),
+        ("Remote", "shell", false),
+        ("Remote bare", "agent", false),
+        ("Remote bare", "shell", false),
+        ("Vm", "agent", false),
+        ("Vm", "shell", false),
+    ];
+
+    async fn send_create(host: &Fixture, cookie: &str, label: &str, kind: &str, n: usize) -> (StatusCode, String) {
+        let id = scope_id(host, cookie, label).await;
+        let mut body = json!({ "project_id": id, "kind": kind, "idempotency_key": format!("every-type-{n:02}-0123456789abcdef") });
+        if kind == "agent" {
+            body["agent_id"] = json!("claude");
+        }
+        let (status, _, answer) = host.send(create_request(&id, cookie, body)).await;
+        (status, answer)
+    }
+
+    /// A project type with no tab the phone can attach to answers
+    /// `not_attachable` (409) and starts nothing, with the window open.
+    #[tokio::test]
+    async fn a_create_the_phone_cannot_attach_to_is_refused_on_the_window_path() {
+        let (host, spawned) = typed_host();
+        let cookie = host.pair_device(&signing_key(83)).await.0;
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+        let log = seen.clone();
+        let desktop = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                // A reachability probe connects and sends nothing.
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                let asked_to_create = matches!(request, DesktopRequest::Create { .. } | DesktopRequest::ReopenTab { .. });
+                if asked_to_create {
+                    log.lock().unwrap().push(request);
+                    let refusal = DesktopResponse::Error { code: "unknown_agent".into(), message: "not offered".into() };
+                    admin::write_frame(&mut stream, &refusal).await.expect("answer");
+                } else {
+                    admin::write_frame(&mut stream, &DesktopResponse::Seen).await.expect("answer");
+                }
+            }
+        });
+        let mut reached = 0;
+        for (n, (label, kind, accepted)) in CREATES.into_iter().enumerate() {
+            let (status, body) = send_create(&host, &cookie, label, kind, n).await;
+            if accepted {
+                // Handed to the window, which refuses this made-up agent.
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{label} {kind}: {body}");
+                assert_eq!(json(&body)["error"], "unknown_agent", "{label} {kind}");
+                reached += 1;
+            } else {
+                assert_eq!(status, StatusCode::CONFLICT, "{label} {kind}: {body}");
+                assert_eq!(json(&body)["error"], "not_attachable", "{label} {kind}");
+            }
+            assert_eq!(seen.lock().unwrap().len(), reached, "{label} {kind}: only an accepted create reaches the window");
+        }
+        // A reopen starts an agent: the container, the folder-less and the VM
+        // project are refused before the window is asked.
+        for (label, accepted) in [("Local", true), ("Remote", true), ("Container", false), ("Remote bare", false), ("Vm", false)] {
+            let id = scope_id(&host, &cookie, label).await;
+            let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/projects/{id}/tabs/reopen"), &cookie, None)).await;
+            if accepted {
+                reached += 1;
+                assert_eq!(json(&body)["error"], "unknown_agent", "{label}: {body}");
+            } else {
+                assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{label}: {body}");
+            }
+            assert_eq!(seen.lock().unwrap().len(), reached, "{label}");
+        }
+        desktop.abort();
+        assert!(spawned.lock().unwrap().is_empty());
+    }
+
+    /// The same answer with no window, where the owner would have minted a
+    /// session record and spawned the process: nothing is written or started.
+    #[tokio::test]
+    async fn a_create_the_phone_cannot_attach_to_is_refused_on_the_headless_path() {
+        let (host, spawned) = typed_host();
+        let cookie = host.pair_device(&signing_key(84)).await.0;
+        for (n, (label, kind, accepted)) in CREATES.into_iter().enumerate() {
+            if accepted {
+                continue;
+            }
+            let (status, body) = send_create(&host, &cookie, label, kind, n).await;
+            assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{label} {kind}: {body}");
+        }
+        for label in ["Container", "Remote bare", "Vm"] {
+            let id = scope_id(&host, &cookie, label).await;
+            let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/projects/{id}/tabs/reopen"), &cookie, None)).await;
+            assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{label}: {body}");
+        }
+        assert!(spawned.lock().unwrap().is_empty(), "nothing was started");
+        assert!(!host.state.config.state_dir.join("sessions").exists(), "no session record was minted");
+        // A remote shell is refused even though its project has a folder.
+        let (status, body) = send_create(&host, &cookie, "Remote", "shell", 99).await;
+        assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{body}");
+        assert!(spawned.lock().unwrap().is_empty());
     }
 
     /// What a raw HTTP POST of a `ping` to `127.0.0.1:port` answers: the status.

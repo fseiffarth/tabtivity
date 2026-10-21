@@ -187,6 +187,9 @@ pub struct PublicProject {
     pub label: String,
     pub status: String,
     pub kind: ScopeKind,
+    /// Where the project's tabs run: a type word the phone words one line
+    /// from (`local`, `remote`, `container`, `vm`), never a host name or path.
+    pub host: ProjectHost,
     pub live_sessions: usize,
     pub last_activity: Option<u64>,
     /// Root only: how many staged root-agent proposals wait for a decision.
@@ -1360,6 +1363,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             label: "P".into(),
             status: "active".into(),
             kind: ScopeKind::Project,
+            host: ProjectHost::Local,
             live_sessions: 1,
             last_activity: None,
             pending_reviews: None,
@@ -1582,6 +1586,7 @@ fn resolve_scope(
         label: source.label.chars().take(120).collect(),
         status: source.status,
         kind: source.kind,
+        host: source.host,
         live_sessions: tabs.iter().filter(|t| t.public.available).count(),
         last_activity,
         pending_reviews: (source.kind == ScopeKind::Root)

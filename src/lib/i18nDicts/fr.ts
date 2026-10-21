@@ -625,6 +625,7 @@ export const dict: Dict = {
   "mobile.failure.launchFailed": "L’ordinateur n’a pas pu ouvrir cet onglet.",
   "mobile.failure.unknownAgent": "L’ordinateur ne connaît pas cet agent.",
   "mobile.failure.unsupportedSignIn": "L’ordinateur ne peut pas connecter cet agent depuis le téléphone.",
+  "mobile.failure.notAttachable": "Le téléphone ne peut pas démarrer cela ici. Ouvrez le projet sur l’ordinateur pour l’ajouter.",
   "mobile.failure.unsupportedMode": "Le mode agent n’est pas disponible pour cet agent.",
   "mobile.failure.persistFailed": "L’ordinateur n’a pas pu enregistrer cela.",
   "mobile.failure.calendarUnavailable": "Le calendrier de l’ordinateur n’a pas pu être lu.",
