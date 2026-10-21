@@ -535,3 +535,144 @@ failing test that did not recur in two reruns (not identified). No Rust change.
 
 - Live check owed: box 31ci on a real remote/container/VM project and a phone.
 - The flaky second failure above.
+
+## R1. Finder review (2026-10-21)
+
+Commits: `418f327b` (fix, container restart) and the commit after it (shared
+project-host table, docs); this section's own commit last. Reviewed
+`6490fd90..d314af66` file by file against AGENTS.md and the plan.
+
+### Findings
+
+1. **CONFIRMED, fixed in `418f327b`: A3 broke the scheduler's restart of a
+   container project's agent** (`discovery.rs` `launch_place`, `headless.rs`
+   `launch_options`, `scheduler.rs` tick). See "Evidence" below: on the base it
+   was launched correctly, into the container. A3's table returned
+   `NotAttachable` for it, so a scheduled prompt for a container agent with no
+   window was no longer delivered (the claim "launched in the wrong place" was
+   wrong for containers). Fix: `LaunchPlace::InContainer` (a container tab that
+   runs in the container) and `headless::restart_options`, used by the
+   scheduler only: it launches such a tab as recorded (as on the base). A
+   phone's create, reopen, undo relaunch and chat start still use
+   `launch_options` and refuse it. Tests: `scheduler::a_dead_agent_is_restarted_
+   where_the_window_would_run_it` (container scope `all` and `agents`: launched,
+   not `local_only`, cwd as recorded, no error) and the new `restart_options`
+   block in `headless::container_and_vm_tabs_are_refused_and_other_scopes_
+   are_unchanged` (container launched; VM and `host:w1` agent refused; a remote
+   project's local agent `local_only`).
+2. **CONFIRMED (test gap, fixed in the second commit): the "shared fixture"
+   covered only the remote/VM tab rule.** The container table, the host
+   precedence (vm > remote > container, a sandbox record on a remote or VM
+   project) and the create verdict were hand-written on each side. New
+   `src/__tests__/mobile/projectHostReach.fixture.json` (81 rows: 9 project
+   shapes x agent/shell/local_agent x 3 locations -> host word, reach, create)
+   is read by `discovery::the_project_host_table_matches_the_windows` and by
+   `MobileTabReach.test.ts`. Both agree on every row today; no code drifted.
+3. **Doubtful, flagged (R1 — Flagged for user, 1-3 below).**
+
+### Evidence for item 2 (did the base start these agents correctly?)
+
+Headless launch on the base: `launch_options` (`local_only: false`,
+`sandbox: false`, `remote_host_id: None`, `project_id: Some(..)`) ->
+`HeadlessSpawner.launch` = `launch_prep::prepare(opts, None, None)` then
+`tmux_local::spawn_detached_with` (`host.rs:145-149`).
+
+- **Container project (agent, or a shell while scope `all`): worked.**
+  `prepare` -> `sandbox::enforce_spawn_authority` re-derives `sandbox` from
+  `projects.json` (`resolve_spawn_authority`: toggle on, local project, not
+  host-bound -> `sandbox: true, local_only: false`; scope `agents` leaves a
+  shell on the host) -> cwd check passes (cwd = the project directory) ->
+  `opts.sandbox && !opts.local_only` -> `sandbox::wrap_pty_options_docker`
+  (needs no pool; creates the container on demand) -> `cmd` is now the engine,
+  so `prepare` skips its own tmux wrap (`launch_prep.rs` ~1283,
+  `is_engine_cmd`) -> `spawn_detached_with`/`detached_argv` sees an unwrapped
+  command and wraps the `docker exec` client in a detached local tmux session
+  (`tmux_local.rs:842-870`: "An unwrapped launch is wrapped here"). So the agent
+  ran in the container, under a local tmux session the scheduler could deliver
+  to. A3's refusal is a regression.
+- **Remote project, any agent: failed on the base** (no spawn). `local_only:
+  false` and `remote_target_for_host(project, PRIMARY)` is `Some` -> `prepare`
+  reaches `let Some(pool) = pool else { return Err("terminal: tab .. needs a
+  window's remote pool ..") }` (`launch_prep.rs:1119`) and returns before
+  `ssh_exec::wrap_pty_options`. So the base never started a `host:<id>`/remote
+  agent headless; A3's refusal is the same outcome with a clearer error. It also
+  means the base failed for a remote project's LOCAL agent (location unset or
+  `local`), which A3 now starts `local_only` in the mirror, as the window does
+  (an improvement, not a regression).
+- **VM project: failed on the base** the same way (VM down: the
+  `TABTIVITY_VM_DOWN` sentinel; VM up: the missing pool). A3's refusal matches.
+
+### Checked and found sound
+
+- Every `launch_options` caller: `create_chat`, `create_tab`, `reopen_tab`,
+  `start_chat`, `apply_undo_plan`, `scheduler::tick` (grep-confirmed; no other
+  `spawner.launch` / `(ctx.launch)` use). The phone's create/reopen/sign-in are
+  refused by `creatable` before the window/headless split and again inside
+  `launch_options`; the bridge repeats the verdict. Remoteness is read from the
+  record (`remote`, `vm`, `sandbox`), never from a path; the cwd alias decides
+  how a tab's cwd is READ, not where it runs.
+- Folder-less scopes (`host.rs`): every route taking `project.root` is behind
+  `has_folder` / `is_git_project` (grep over all 20-odd sites, including the
+  headless git dot, worktrees, files/search/raw/upload, outbox, inbox, markup,
+  desktop-image, uncommitted). A folder-less scope lists no tab, so the
+  tab-shaped routes cannot reach it. `host` is a type word; `folder`/`create`
+  are a bool and a word; the body-leak test covers ids, paths and the host name.
+- `activate` from the phone is `activateProject` (status flip + background
+  restore of the saved layout), the same as startup's
+  `restoreActiveProjectScopes`: remote panes stay held until the user's own pool
+  is up, a VM tab shows the boot action; no phone route connects, boots or pulls.
+- cwd alias: `ResolvedTab.cwd` is the canonical mirror, which is where the agent
+  ran (`launch_prep` sets the cwd to `mirror_dir`); transcript, OpenCode and
+  uncommitted lookups read it. `since` does not depend on the cwd.
+- Round trip: `mirror` is lenient, `location` is a loose `Value`, `create_tab`
+  only adds `location` to a remote agent's record (unknown keys preserved).
+  New tests build paths with `Path::join`, no absolute literal.
+- Rust vs TS locality: identical on all 81 fixture rows (item 2 above).
+
+### R1 — Flagged for user
+
+1. **`attachDesktopImage` (`MobileBridgeHost.tsx`, the `mobile_attach_desktop_image`
+   call) passes `scope.cwd` unchecked**; for a VM project without a mirror
+   `phoneProjectFolder` is `""`, and `inbox::store(Path::new(""), ..)` would write
+   relative to the app's process cwd. Not reachable today: the sidecar resolves
+   the tab first and a folder-less scope lists no tab. A one-line
+   `if (!scope.cwd)` guard (`project_ineligible`) would make the bridge's repeated
+   perimeter hold on its own; left to you because nothing reaches it.
+2. **VM detection differs between the catalog and the spawn authority.** The
+   catalog and the window use `vm.enabled` (top-level `vm` key); `launch_prep`
+   refuses local spawns by `remote.vm == true` (`vm::is_vm_spec`). They are set
+   together at VM creation, so no real record disagrees; a hand-edited one with
+   only `remote.vm` would be listed by the catalog as a plain remote project (its
+   local spawns are still refused by `launch_prep`).
+3. **A remote project saved without a `directory` key** (legacy shape: folder
+   derived from `local_file`) gets no cwd alias, so its window-made agent tabs
+   (cwd = that folder) are not listed. Remote projects are not Python-era and
+   carry a `directory`; `ProjectRecord` also never reads the `local_file`
+   fallback for a local project (unchanged from the base).
+4. **A1/A2 headless git dot for a remote project with a mirror** (already noted
+   under A2) remains a deliberate difference from the window.
+5. `launch_place` treats an unparseable `projects.json` as `NotAttachable` for
+   EVERY scope, including a box or root restart that never looked at the file on
+   the base. The catalog fails on the same file, and `launch_prep` fails closed on
+   it too, so the practical difference is nil; noted because it is stricter than
+   the base.
+6. The container/`agents` shell is listed on the phone but a phone create there
+   is refused (plan, phase 1); the bridge `phoneCreateVerdict` says `agents` for
+   every remote project while the sidecar says `none` for a mirror-less one (B1
+   already flagged).
+
+### Gates
+
+Run with `scripts/gates.sh --base 6490fd90` (the range; plain `gates.sh` sees an
+empty diff once everything is committed). brand, whitespace, lint, clippy
+(tabtivity + app-serverd all targets), daemon-lib clippy, daemon clippy and
+`npm run build` PASS at zero warnings. `vitest --changed` (672 files, 6459
+tests): 6458 pass, the one failure is the known `CursorPacks.test.ts` (develop's
+8338634a); the gate stopped there, so the cargo tests were run by hand:
+`cargo test -p tabtivity -p app-serverd` (tabtivity lib 4345 passed, 4 ignored;
+479 in `mobile_control`, the same count as before: two tests extended, one
+added in `discovery`), daemon build `--no-default-features --lib --test
+server_secrets` (4244 + 1) all pass. New: `the_project_host_table_matches_the_
+windows` (Rust, 81 rows) and 81 cases in `MobileTabReach.test.ts` (102 total).
+`ci-local.sh` and the Windows/macOS cross-checks were not run (no `cfg(...)`
+code; the new tests use `Path::join` only).
