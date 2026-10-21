@@ -406,9 +406,9 @@ calls it.
 warnings), clippy x3, `npm run build`, vitest `--changed`, `cargo test -p
 tabtivity -p app-serverd`, daemon-build test all PASS. Full `npm test`: 895 of
 896 files, 9015 of 9016 tests pass; the one failure is the known
-`CursorPacks.test.ts` (develop's 8338634a). New: `MobileTabReach.test.ts` (27
+`CursorPacks.test.ts` (develop's 8338634a). New: `MobileTabReach.test.ts` (21
 tests), `MobileEveryProjectType.test.tsx` (9 tests); `ContainerScope.test.ts`
-still 7. `ci-local.sh` not run (no Rust change).
+still 8. `ci-local.sh` not run (no Rust change).
 
 ### Flagged for user
 
