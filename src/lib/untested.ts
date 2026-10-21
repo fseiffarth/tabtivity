@@ -181,6 +181,7 @@ export const UNTESTED = {
   "texWorkspace.newFileTitle": { area: "embed", what: "FileViewerPane · Add a file to this document" },
   "yamlGrid.1": { area: "embed", what: "YamlGrid · Card view of an empty YAML document" },
   "yamlGrid.2": { area: "embed", what: "YamlGrid · Card view's breadcrumb bar" },
+  "tableView.selection": { area: "embed", what: "Table viewer · select cells, rows (row number) and columns (header name): click, Shift+click, drag, arrows, Ctrl+A, Ctrl+C copies as TSV, Esc clears; header ⇅ sorts" },
 
   // --- files — Project files, tree and git --------------------------
   "fileBrowser.1": { area: "files", what: "FileBrowser · New Presentation" },
