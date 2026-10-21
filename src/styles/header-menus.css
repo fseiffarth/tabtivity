@@ -224,6 +224,34 @@
   color: var(--text-primary);
 }
 
+/* Shared replacement for native title hints, above menus and dialogs. */
+.app-tooltip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  width: max-content;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.app-tooltip > .untested-tag {
+  margin-left: 7px;
+  pointer-events: none;
+}
+
 /* ── Ollama settings panel ───────────────────────────────────────────── */
 .ollama-status-dot {
   width: 8px;

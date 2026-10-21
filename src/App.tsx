@@ -3,6 +3,7 @@ import { AppShell } from "./components/layout/AppShell";
 import { parseDetachedParam } from "./stores/detached";
 import { parsePresentParam } from "./lib/viewers/deck/present";
 import { isPdfPresentLabel } from "./components/embed/pdf/present";
+import { TooltipHost } from "./components/common/TooltipHost";
 
 // Code-split (§5.1 startup size): a static import would pull the deck renderer
 // — and through `deckBase`, all of pdfjs-dist — into the startup chunk of
@@ -28,6 +29,10 @@ const DetachedApp = lazy(() =>
 );
 
 export function App() {
+  return <><AppContent /><TooltipHost /></>;
+}
+
+function AppContent() {
   // #42: when launched with `?detached=<scope>:<group>` (a popped-out subwindow),
   // render the lightweight DetachedApp instead of the full shell. DetachedApp is
   // inert to project switches (no projects store / runtime-switch listener), so

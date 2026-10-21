@@ -292,6 +292,7 @@ stores stay at the top. No `index.ts` barrels.
 | `common/Dropdown.tsx`, `common/OrbitSpinner.tsx` | Shared primitives. |
 | `common/Typewriter.tsx` | A line that types itself out with a caret (first-run greeting, welcome-back); click/key completes, reduced motion shows it whole, screen readers get the full text. |
 | `common/MenuShortcut.tsx` | The muted chord at a menu row's end ("Close   Ctrl+W"); resolves rebinds like `useChordHint`. Only on rows whose chord does the same thing. |
+| `common/TooltipHost.tsx` | One themed `title` tooltip per window, mounted by `App`: delegated pointer/keyboard hints for portaled controls too; suppresses only the active native title, tracks changes/removal, restores on leave, and clamps the card to the viewport. |
 | `common/icons/{Icon,FileIcon}.tsx` | The shared line-icon set (24-grid, 1.4 stroke, `currentColor`, `em`-sized) that replaces colour emoji in the chrome; `FileIcon` renders `fileIconKind()` for every file list. New icons go here, not as emoji — and not as typed symbols with the Unicode Emoji property (↗ ⬆ ⚠ ⚙ ✉ ☑ ▶ …), which a font fallback can hand to the colour-emoji font. |
 | `common/ConnLamp.tsx` | Red/orange/green SSH/OpenVPN status lamp (dialog + header). |
 | `common/TimeFieldCore.tsx` | **The** clock-entry field, desktop and phone: hour/minute segments with their own keystroke buffer (never the caret); `required` never reports `""`. Native `<input type="time">` is ruled out (engine-locale 12/24h face). |
