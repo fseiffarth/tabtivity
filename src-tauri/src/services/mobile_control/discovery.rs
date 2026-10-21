@@ -916,16 +916,73 @@ fn tab_is_local(kind: &str, location: Option<&str>, vm_project: bool) -> bool {
 /// the host — not an agent, and not a shell while the spec's scope is `all`
 /// (the window's `sandbox` flag in `PaneSlot`).
 fn tab_on_this_machine(source: &ScopeSource, tab: &SavedTab) -> bool {
-    match source.host {
+    runs_on_this_machine(source.host, source.shells_in_container, &tab.kind, tab.location.as_ref().and_then(Value::as_str))
+}
+
+/// [`tab_on_this_machine`] on its inputs, so a launch (`launch_place`) applies
+/// the same table as the catalog does.
+fn runs_on_this_machine(host: ProjectHost, shells_in_container: bool, kind: &str, location: Option<&str>) -> bool {
+    match host {
         ProjectHost::Local => true,
-        ProjectHost::Remote | ProjectHost::Vm => {
-            tab_is_local(&tab.kind, tab.location.as_ref().and_then(Value::as_str), source.host == ProjectHost::Vm)
-        }
-        ProjectHost::Container => match tab.kind.as_str() {
+        ProjectHost::Remote | ProjectHost::Vm => tab_is_local(kind, location, host == ProjectHost::Vm),
+        ProjectHost::Container => match kind {
             "agent" => false,
-            "shell" => !source.shells_in_container,
+            "shell" => !shells_in_container,
             _ => true,
         },
+    }
+}
+
+/// Whether a container project's shells run in the container: its spec's scope
+/// is anything but `agents`.
+fn container_shells(project: &ProjectRecord) -> bool {
+    project.sandbox.as_ref().and_then(|s| s.get("scope")).and_then(Value::as_str) != Some("agents")
+}
+
+/// Where a phone's launch of a stored tab record runs, decided from the
+/// project's record the way the window decides it (the same table as the
+/// catalog's [`tab_on_this_machine`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LaunchPlace {
+    /// As the record says: a local project, a box, the root or the assistant,
+    /// a container project's tab that runs on the host, or a scope with no
+    /// project record (the spawn's own gate refuses an unknown project).
+    AsRecorded,
+    /// A remote project's tab that runs on this machine: `local_only`, in the
+    /// project's mirror (the path), as the window runs an agent of it.
+    LocalMirror(PathBuf),
+    /// A tab that runs on a remote host, in a container or in a VM: no local
+    /// tmux session, so the phone cannot attach to it and does not start it.
+    NotAttachable,
+}
+
+/// [`LaunchPlace`] of a tab of `kind` and `location` (the record's loose
+/// strings) in the scope `raw_id`, read from `<state_dir>/projects.json`. An
+/// unreadable file is `NotAttachable` (nothing is guessed); a missing one, or
+/// an id with no project record, is `AsRecorded`. Remoteness comes from the
+/// record, never from a path.
+pub(super) fn launch_place(state_dir: &Path, raw_id: &str, kind: &str, location: Option<&str>) -> LaunchPlace {
+    let projects: Vec<ProjectRecord> = match fs::read(state_dir.join("projects.json")) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(projects) => projects,
+            Err(_) => return LaunchPlace::NotAttachable,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LaunchPlace::AsRecorded,
+        Err(_) => return LaunchPlace::NotAttachable,
+    };
+    let Some(project) = projects.iter().find(|p| p.id == raw_id) else {
+        return LaunchPlace::AsRecorded;
+    };
+    let host = project_host(project);
+    // A VM project never runs a tab on the host (`launch_prep` refuses a local
+    // spawn there), not even the `local_agent` the catalog lists.
+    if host == ProjectHost::Vm || !runs_on_this_machine(host, container_shells(project), kind, location) {
+        return LaunchPlace::NotAttachable;
+    }
+    match (host, mobile_root(state_dir, project)) {
+        (ProjectHost::Remote, Some(mirror)) => LaunchPlace::LocalMirror(mirror),
+        (ProjectHost::Remote, None) => LaunchPlace::NotAttachable,
+        _ => LaunchPlace::AsRecorded,
     }
 }
 
@@ -1189,8 +1246,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             devices: project.app_mobile_devices.clone(),
             host,
             cwd_alias: (host == ProjectHost::Remote).then(|| project.directory.as_deref().map(PathBuf::from)).flatten(),
-            shells_in_container: host == ProjectHost::Container
-                && project.sandbox.as_ref().and_then(|s| s.get("scope")).and_then(Value::as_str) != Some("agents"),
+            shells_in_container: host == ProjectHost::Container && container_shells(project),
         });
     }
     for b in &boxes {

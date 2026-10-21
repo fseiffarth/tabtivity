@@ -221,3 +221,106 @@ tests use `Path::join` only).
 - The unrelated `CursorPacks` failure above (a bare `cursor: pointer;` in
   the stylesheet) is on this branch's base; not touched.
 - The headless git dot for a remote project with a mirror (see Gotchas).
+
+## A3. Launch locality (plan step 3)
+
+Commit: see `git log` (the commit whose message starts `fix(mobile): phone
+launches run where the desktop would`).
+
+### What was built
+
+`services/mobile_control/discovery.rs`: the locality table is now one fn,
+`runs_on_this_machine(host, shells_in_container, kind, location)`, which
+`tab_on_this_machine` (catalog) and the new `launch_place(state_dir, raw_id,
+kind, location) -> LaunchPlace` (launch) both call, so there is still one copy.
+`LaunchPlace` is `AsRecorded` / `LocalMirror(path)` / `NotAttachable`. It reads
+`<state_dir>/projects.json` (the catalog's lenient `ProjectRecord`): missing
+file or unknown id (box, root, assistant) is `AsRecorded`; an unreadable file is
+`NotAttachable` (nothing guessed); a VM project is always `NotAttachable`
+(`launch_prep` refuses a local spawn there); a remote project's local tab is
+`LocalMirror(mobile_root)`.
+
+`headless.rs`: `launch_options(state_dir, project_id, tab) -> Result<PtyOptions,
+NotAttachable>` (`NotAttachable` is a unit struct with a Display starting
+`not_attachable`). `LocalMirror` sets `local_only: true` and `cwd` = the mirror
+(so a desktop-made tab saved with `cwd = directory` is started in the mirror
+too; `launch_prep` would swap it anyway). The kind is the record's `extra.kind`
+(missing = shell), the location its `extra.location`. The assistant branch is
+untouched (`Ok`). `CreateRefusal::NotAttachable` (code `not_attachable`).
+New `launch_minted` replaces the three copies of "launch, else take the minted
+record back out" (`create_chat`, `create_tab`, `reopen_tab`) and maps the
+refusal. `start_chat` maps it. `apply_undo_plan`'s relaunch now builds the
+options BEFORE `runner.kill`, so a refused relaunch leaves the running session
+alone. `reopen_tab` asks the same question about the closed record before
+`reopen_tab_in` moves it, so a host-side closed tab stays closed (for the
+window) instead of being deleted by a failed launch. `create_tab` stamps
+`location: "local"` on an agent of a `ProjectHost::Remote` scope (from
+`project.public.host`).
+
+`scheduler.rs`: the relaunch calls `launch_options(&ctx.state_dir, ..)`; a
+refusal becomes `Event::Relaunched { error: Some("not_attachable: ..") }` and
+nothing is spawned. This applies to every scope regardless of the Mobile switch
+(a remote or container agent with a schedule was launched wrongly before).
+
+`host.rs`: `headless_create_error` maps `NotAttachable` to 409.
+`docs/filemap_backend.md`: the `discovery.rs` row.
+
+Callers of `launch_options`: `create_chat`, `create_tab`, `reopen_tab`,
+`start_chat`, `apply_undo_plan`, `scheduler::tick` (grep-confirmed; the route
+`host.rs::launch_options` is a different fn). The first four go through
+`launch_minted` or a direct map.
+
+Tests: `a_remote_projects_local_tab_launches_local_only_in_the_mirror`,
+`container_and_vm_tabs_are_refused_and_other_scopes_are_unchanged`,
+`a_phone_made_agent_of_a_remote_project_launches_in_the_mirror`,
+`a_create_in_a_container_project_is_refused_and_leaves_no_tab`,
+`a_reopen_follows_the_same_locality_and_leaves_a_refused_record_closed`,
+`an_undo_relaunch_of_a_host_side_tab_kills_nothing` (headless.rs) and
+`a_dead_agent_is_restarted_where_the_window_would_run_it` (scheduler.rs). The
+older in-file `launch_options` tests gained the `state_dir` argument.
+
+### Choices where the plan was silent
+
+- VM: every tab is refused, including a `local_agent` the catalog lists (A1's
+  table says local, `vm_spawn_refusal` says no local spawn). Refusing early is
+  clearer than a `launch_failed`. A1's catalog still lists that tab.
+- A stored remote-project shell with `location: "local"` launches local (the
+  window would). Only the phone's create gate (`creatable`) keeps the phone
+  from making one.
+- Unreadable `projects.json` refuses; a missing one does not.
+
+### Gotchas for B1 / B2 / B3
+
+- **The bridge's `create` must follow this contract** (desktop twin of
+  `launch_place`): remote project + agent: run it local (`local_only`/location
+  `local`), cwd = the mirror, and save the record with `location: "local"`
+  (explicit); remote shell, container (agent, or shell while scope `all`), VM:
+  answer `not_attachable` (409 via `answer_created`, already mapped). Host and
+  `create` verdict come from the same table as `creatable` in `host.rs`
+  (local `all`; remote with a mirror `agents`; else `none`). Remoteness from
+  the project record, never a path.
+- A phone-made remote agent's saved `cwd` is the mirror (not `directory`), by
+  `tab_record(.., &project.root)`; the catalog reads both.
+- `location` is the record's loose string key `location`, same spelling as the
+  window's `SavedTab`.
+
+### Gates
+
+`scripts/gates.sh` (diff-selected): brand, whitespace, clippy (tabtivity +
+app-serverd all targets), daemon-lib clippy, daemon clippy, `cargo test -p
+tabtivity -p app-serverd`, daemon-build test (`--no-default-features --lib
+--test server_secrets`) all PASS at zero warnings. No frontend change, so
+lint/build/vitest were skipped by the selector (the known `CursorPacks`
+failure is untouched). Counts: tabtivity lib 4344 passed (was 4337), 479 in
+`mobile_control` (was 472, +7 new tests). `project_tree_intent` needed
+`// project-tree-read: ok` on test lines reading `.tab_layout`. `ci-local.sh`
+and the Windows/macOS cross-checks were not run (new tests build paths with
+`Path::join`; no `cfg(...)` code).
+
+### Flagged for user
+
+- A closed host-side agent tab on a remote project now cannot be reopened from
+  the phone (`not_attachable`, record kept); it is reopened from the desktop.
+- Scheduler: a due prompt for a host/container/VM agent with no window is not
+  delivered by the sidecar any more (it was launched in the wrong place before);
+  the `Relaunched` event carries the error, once per backoff window.

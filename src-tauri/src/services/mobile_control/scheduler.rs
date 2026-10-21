@@ -623,7 +623,13 @@ pub async fn tick(ctx: &Context, now: DateTime<Local>) -> Vec<Event> {
                 // The session is gone: start the tab again (H1b's detached
                 // spawn) and deliver on a later tick, once it is up and idle.
                 if target.kind() == "agent" && ctx.may_relaunch(&target.tmux) {
-                    let error = (ctx.launch)(headless::launch_options(&target.project_id, &target.tab)).await.err();
+                    // Where the window would run it: a remote project's local agent
+                    // in the mirror; one that belongs on a host, in a container or
+                    // in a VM is not started here (no phone could attach to it).
+                    let error = match headless::launch_options(&ctx.state_dir, &target.project_id, &target.tab) {
+                        Ok(options) => (ctx.launch)(options).await.err(),
+                        Err(refused) => Some(refused.to_string()),
+                    };
                     if let Some(error) = &error {
                         eprintln!("{}: scheduler: could not restart '{}': {error}", crate::brand::MOBILE_HOST_BIN, target.tmux);
                     }
@@ -922,6 +928,55 @@ mod tests {
         });
         let runner: Arc<dyn Runner> = recorder.clone();
         (Context::new(fixture.state_dir().to_path_buf(), runner, launch), launched)
+    }
+
+    /// The restart of a dead bound agent runs where the window would run it,
+    /// whatever the scope's Mobile switch says: a remote project's agent in the
+    /// mirror (`local_only`), a container project's agent not at all (it runs
+    /// in the container, which no phone attaches to) — reported on the event,
+    /// nothing spawned.
+    #[tokio::test]
+    async fn a_dead_agent_is_restarted_where_the_window_would_run_it() {
+        let now = Local::now();
+        let key = occurrence_key(&(now - ChronoDuration::minutes(5)));
+        let dir_of = |fixture: &Fixture| fixture.state_dir().join("project-dir");
+        let write = |fixture: &Fixture, record: serde_json::Value| {
+            let mut row = json!({ "id": PROJECT, "name": "P", "status": "active", "directory": dir_of(fixture) });
+            row.as_object_mut().unwrap().extend(record.as_object().unwrap().clone());
+            std::fs::write(fixture.state_dir().join("projects.json"), json!([row]).to_string()).unwrap();
+        };
+
+        let fixture = Fixture::new(vec![rule_once(&key)]);
+        write(&fixture, json!({ "remote": { "host": "example.invalid" } }));
+        let recorder = Arc::new(Recorder::default());
+        let (ctx, launched) = context(&fixture, &recorder);
+        let events = tick(&ctx, now).await;
+        assert!(matches!(events.as_slice(), [Event::Relaunched { error: None, .. }]), "{events:?}");
+        {
+            let launches = launched.lock().unwrap();
+            assert_eq!(launches.len(), 1);
+            assert!(launches[0].local_only);
+            assert_eq!(Path::new(&launches[0].cwd), crate::services::remote_sync::default_mirror_dir_in(fixture.state_dir(), PROJECT));
+        }
+
+        let fixture = Fixture::new(vec![rule_once(&key)]);
+        write(&fixture, json!({ "sandbox": { "enabled": true, "scope": "all" } }));
+        let (ctx, launched) = context(&fixture, &recorder);
+        let events = tick(&ctx, now).await;
+        assert!(matches!(events.as_slice(), [Event::Relaunched { error: Some(error), .. }] if error.starts_with("not_attachable")), "{events:?}");
+        assert!(launched.lock().unwrap().is_empty());
+
+        // The same agent saved as running on a host: not started either.
+        let fixture = Fixture::new(vec![rule_once(&key)]);
+        write(&fixture, json!({ "remote": { "host": "example.invalid" } }));
+        let path = headless::session_file(fixture.state_dir(), PROJECT);
+        let mut session: serde_json::Value = storage::read_json(&path).unwrap();
+        session["tabLayout"][0]["location"] = json!("host:w1");
+        storage::write_json_atomic(&path, &session).unwrap();
+        let (ctx, launched) = context(&fixture, &recorder);
+        let events = tick(&ctx, now).await;
+        assert!(matches!(events.as_slice(), [Event::Relaunched { error: Some(_), .. }]), "{events:?}");
+        assert!(launched.lock().unwrap().is_empty());
     }
 
     /// H2 exit, headless half: with no window, a due prompt restarts a dead

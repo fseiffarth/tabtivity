@@ -1515,6 +1515,7 @@ fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<
             headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
             headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) => StatusCode::BAD_REQUEST,
+            headless::CreateRefusal::NotAttachable => StatusCode::CONFLICT,
         },
         refusal.code(),
     )

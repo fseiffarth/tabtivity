@@ -652,6 +652,9 @@ pub enum CreateRefusal {
     /// a local model, a mode, a sign-in like a tab, or the root console.
     DesktopUnavailable,
     UnknownAgent,
+    /// The tab would run where no local tmux session carries it (a remote
+    /// host, a container, a VM): the phone cannot attach to it.
+    NotAttachable,
     /// The assistant service or the scope's gate refused the chat: a fixed
     /// category (`assistant::Refusal::code`, or `assistant_off`), never text a
     /// client sent.
@@ -666,6 +669,7 @@ impl CreateRefusal {
         match self {
             Self::DesktopUnavailable => "desktop_unavailable",
             Self::UnknownAgent => "unknown_agent",
+            Self::NotAttachable => "not_attachable",
             Self::Assistant(code) => code,
             Self::LaunchFailed(_) => "launch_failed",
             Self::Persist(_) => "persist_failed",
@@ -685,6 +689,25 @@ pub struct HeadlessCreated {
 /// A scope's session file under `state_dir`, as `terminal_service` keys it.
 pub fn session_file(state_dir: &Path, raw_id: &str) -> std::path::PathBuf {
     state_dir.join("sessions").join(storage::project_key(raw_id)).join("terminals.json")
+}
+
+/// Start the tab the owner just minted, detached. A refused or failed launch
+/// takes the record back out of the session file, so a tab that never ran is
+/// not left for a window to restore.
+async fn launch_minted(state_dir: &Path, path: &Path, raw_id: &str, tab: &TabEntry, launch: &HeadlessLaunch) -> Result<(), CreateRefusal> {
+    let launched = match launch_options(state_dir, raw_id, tab) {
+        Ok(options) => launch(options).await.map_err(CreateRefusal::LaunchFailed),
+        Err(NotAttachable) => Err(CreateRefusal::NotAttachable),
+    };
+    if launched.is_err() {
+        let id = crate::services::workspace::tab_id(tab).map(str::to_string);
+        let _ = crate::services::workspace::edit_in(path, raw_id, |session| {
+            // project-tree-read: ok — the state-dir session file the owner just wrote, keyed by scope id.
+            session.tab_layout.retain(|tab| crate::services::workspace::tab_id(tab) != id.as_deref());
+            Ok(())
+        });
+    }
+    launched
 }
 
 /// The assistant arm of [`create_tab`]: resolve the opaque launch, build the
@@ -722,15 +745,7 @@ async fn create_chat(
     if created.existed {
         return Ok(HeadlessCreated { tmux_session, existed: true });
     }
-    if let Err(reason) = launch(launch_options(&project.raw_id, &created.tab)).await {
-        let id = crate::services::workspace::tab_id(&created.tab).map(str::to_string);
-        let _ = crate::services::workspace::edit_in(&path, &project.raw_id, |session| {
-            // project-tree-read: ok — the state-dir session file the owner just wrote, keyed by scope id.
-            session.tab_layout.retain(|tab| crate::services::workspace::tab_id(tab) != id.as_deref());
-            Ok(())
-        });
-        return Err(CreateRefusal::LaunchFailed(reason));
-    }
+    launch_minted(state_dir, &path, &project.raw_id, &created.tab, launch).await?;
     Ok(HeadlessCreated { tmux_session, existed: false })
 }
 
@@ -794,17 +809,25 @@ pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 /// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
 /// project's or a box's).
 ///
+/// It runs where the window would run the tab, read from the project's record
+/// under `state_dir` and the tab's `kind`/`location` (`discovery::launch_place`,
+/// the catalog's own table): a remote project's local tab is `local_only` in
+/// the mirror (an agent defaults local), while a tab that belongs on the host,
+/// in a container or in a VM is `Err(NotAttachable)` — no local tmux session
+/// carries it, and spawning it here would put it somewhere the window never
+/// would. Every other scope is unchanged.
+///
 /// The record is read raw, past the load sanitizer, so its `env` goes
 /// through the same filter here (`terminal_service::strip_persisted_env`):
 /// no loader or control variable from a stored layout reaches the spawn.
-pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
+pub(super) fn launch_options(state_dir: &Path, project_id: &str, tab: &TabEntry) -> Result<PtyOptions, NotAttachable> {
     // The chat assistant's scope trusts nothing of the record but the validated
     // launch block and the chat's uid: the CLI line, its env and its folder are
     // rebuilt by `launch_prep`'s assistant gate from `PtyOptions.assistant` and
     // `TAB_UID`. This seam serves a create, a reopen, an undo-clear relaunch and
     // the scheduler's relaunch alike, so none of them can feed it `args`/`env`.
     if super::discovery::is_assistant_scope_id(project_id) {
-        return assistant_launch_options(tab);
+        return Ok(assistant_launch_options(tab));
     }
     let mut filtered = tab.clone();
     crate::services::terminal_service::strip_persisted_env(
@@ -831,17 +854,24 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         .unwrap_or_default();
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
     let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
-    PtyOptions {
+    // A record with no kind is read as a shell, the kind that defaults remote.
+    let location = tab.extra.get("location").and_then(serde_json::Value::as_str);
+    let (local_only, cwd) = match super::discovery::launch_place(state_dir, project_id, kind.unwrap_or("shell"), location) {
+        super::discovery::LaunchPlace::AsRecorded => (false, tab.cwd.clone()),
+        super::discovery::LaunchPlace::LocalMirror(mirror) => (true, mirror.to_string_lossy().into_owned()),
+        super::discovery::LaunchPlace::NotAttachable => return Err(NotAttachable),
+    };
+    Ok(PtyOptions {
         login: None,
         assistant: None,
         id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),
         env,
-        cwd: tab.cwd.clone(),
+        cwd,
         cols: HEADLESS_COLS,
         rows: HEADLESS_ROWS,
-        local_only: false,
+        local_only,
         sandbox: false,
         agent: kind == Some("agent"),
         project_id: Some(project_id.to_string()),
@@ -852,6 +882,17 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         host_bound_uid: None,
         local_model: kind == Some("local_agent"),
         host_session: false,
+    })
+}
+
+/// [`launch_options`] found the tab belongs where the phone cannot attach to
+/// it (`discovery::LaunchPlace::NotAttachable`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct NotAttachable;
+
+impl std::fmt::Display for NotAttachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not_attachable: the tab runs on a remote host, in a container or in a VM")
     }
 }
 
@@ -936,7 +977,13 @@ pub async fn create_tab(
         ),
     };
     let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
-    let record = tab_record(&request.kind, agent, &project.root, &request_hash);
+    let mut record = tab_record(&request.kind, agent, &project.root, &request_hash);
+    // A remote project's agent runs in the mirror (`project.root`), as the
+    // window runs it; said on the record so a later change of the default
+    // cannot move it (`discovery::tab_is_local`).
+    if project.public.host == super::discovery::ProjectHost::Remote && agent.is_some() {
+        record.extra.insert("location".into(), json!("local"));
+    }
     let path = session_file(state_dir, &project.raw_id);
     let created = crate::services::workspace::create_tab_in(&path, &project.raw_id, record, Some(&request_hash))
         .map_err(CreateRefusal::Persist)?;
@@ -946,15 +993,7 @@ pub async fn create_tab(
     if created.existed {
         return Ok(HeadlessCreated { tmux_session, existed: true });
     }
-    if let Err(reason) = launch(launch_options(&project.raw_id, &created.tab)).await {
-        let id = crate::services::workspace::tab_id(&created.tab).map(str::to_string);
-        let _ = crate::services::workspace::edit_in(&path, &project.raw_id, |session| {
-            // project-tree-read: ok — the state-dir session file the owner just wrote, keyed by scope id.
-            session.tab_layout.retain(|tab| crate::services::workspace::tab_id(tab) != id.as_deref());
-            Ok(())
-        });
-        return Err(CreateRefusal::LaunchFailed(reason));
-    }
+    launch_minted(state_dir, &path, &project.raw_id, &created.tab, launch).await?;
     Ok(HeadlessCreated { tmux_session, existed: false })
 }
 
@@ -1003,6 +1042,20 @@ pub async fn reopen_tab(
         return Err(CreateRefusal::DesktopUnavailable);
     }
     let path = session_file(state_dir, &project.raw_id);
+    // Where the closed record would run, asked before the record moves: a tab
+    // that belongs on a host, in a container or in a VM stays closed for the
+    // window to reopen, rather than being taken out for good by a failed launch.
+    // project-tree-read: ok — the state-dir session file, keyed by scope id.
+    if let Ok(session) = storage::read_json::<crate::schema::session::TerminalSession>(&path) {
+        let closed = crate::services::workspace::closed_tabs(&session);
+        let wanted = match closed_id {
+            Some(id) => closed.iter().find(|c| c.id == id),
+            None => closed.first(),
+        };
+        if wanted.is_some_and(|c| launch_options(state_dir, &project.raw_id, &c.tab).is_err()) {
+            return Err(CreateRefusal::NotAttachable);
+        }
+    }
     let Some(mut tab) = crate::services::workspace::reopen_tab_in(&path, &project.raw_id, closed_id).map_err(CreateRefusal::Persist)?
     else {
         return Ok(None);
@@ -1013,15 +1066,7 @@ pub async fn reopen_tab(
     let tmux_session = crate::services::workspace::tmux_of(&tab)
         .ok_or_else(|| CreateRefusal::Persist("the owner minted no tmux name".to_string()))?
         .to_string();
-    if let Err(reason) = launch(launch_options(&project.raw_id, &tab)).await {
-        let id = crate::services::workspace::tab_id(&tab).map(str::to_string);
-        let _ = crate::services::workspace::edit_in(&path, &project.raw_id, |session| {
-            // project-tree-read: ok — the state-dir session file the owner just wrote, keyed by scope id.
-            session.tab_layout.retain(|tab| crate::services::workspace::tab_id(tab) != id.as_deref());
-            Ok(())
-        });
-        return Err(CreateRefusal::LaunchFailed(reason));
-    }
+    launch_minted(state_dir, &path, &project.raw_id, &tab, launch).await?;
     Ok(Some(HeadlessCreated { tmux_session, existed: false }))
 }
 
@@ -1055,7 +1100,8 @@ pub async fn start_chat(
     if crate::services::assistant::record_launch(record).is_none() {
         return Err(CreateRefusal::Assistant(crate::services::assistant::Refusal::Config.code()));
     }
-    launch(launch_options(&project.raw_id, record)).await.map_err(CreateRefusal::LaunchFailed)
+    let options = launch_options(state_dir, &project.raw_id, record).map_err(|NotAttachable| CreateRefusal::NotAttachable)?;
+    launch(options).await.map_err(CreateRefusal::LaunchFailed)
 }
 
 /// `Activate` with no window: the registry entry's `status` becomes
@@ -1198,13 +1244,16 @@ pub async fn apply_undo_plan(
             else {
                 return Ok(UndoOutcome::TabNotReady);
             };
-            let ended = tokio::task::spawn_blocking(move || runner.kill(&tmux)).await.map_err(|e| e.to_string())?;
-            ended?;
             let mut record = record;
             if let Some(uid) = record.session_id.as_deref().filter(|id| !id.is_empty()) {
                 record.extra.insert("args".into(), json!(resume_args(&record.cmd, uid)));
             }
-            launch(launch_options(&project.raw_id, &record)).await?;
+            // Before the old session is ended: a tab the phone may not launch
+            // keeps running.
+            let options = launch_options(state_dir, &project.raw_id, &record).map_err(|e| e.to_string())?;
+            let ended = tokio::task::spawn_blocking(move || runner.kill(&tmux)).await.map_err(|e| e.to_string())?;
+            ended?;
+            launch(options).await?;
             Ok(UndoOutcome::Undone)
         }
     }
@@ -2013,10 +2062,11 @@ mod tests {
     /// home, as the window's spawn does; any other tab the scope's own.
     #[test]
     fn a_local_model_record_launches_into_the_local_model_home() {
+        let state = state_dir();
         let mut record = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
-        assert!(!launch_options("p1", &record).local_model);
+        assert!(!launch_options(state.path(), "p1", &record).unwrap().local_model);
         record.extra.insert("kind".into(), serde_json::json!("local_agent"));
-        let opts = launch_options("p1", &record);
+        let opts = launch_options(state.path(), "p1", &record).unwrap();
         assert!(opts.local_model);
         assert!(!opts.agent, "the fence knows a local-model driver by its command");
     }
@@ -2026,6 +2076,7 @@ mod tests {
     /// (gap 17), while the tab's own `TAB_UID` and `VIBE_HOME` do.
     #[test]
     fn a_stored_records_env_is_filtered_before_launch() {
+        let state = state_dir();
         let mut record = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
         let mut env = serde_json::Map::new();
         for (k, v) in [
@@ -2040,7 +2091,7 @@ mod tests {
             env.insert(k.into(), serde_json::json!(v));
         }
         record.extra.insert("env".into(), serde_json::Value::Object(env));
-        let opts = launch_options("p1", &record);
+        let opts = launch_options(state.path(), "p1", &record).unwrap();
         let mut keys: Vec<&str> = opts.env.keys().map(String::as_str).collect();
         keys.sort();
         let mut want = [crate::app_env!("TAB_UID"), "VIBE_HOME"];
@@ -2079,7 +2130,7 @@ mod tests {
         let tmux = format!("{}assistant--agent-1", crate::brand::TMUX_PREFIX);
         // Every spelling of the scope id is the scope.
         for scope in ["assistant", "Assistant", " assistant"] {
-            let opts = launch_options(scope, &record);
+            let opts = launch_options(state.path(), scope, &record).unwrap();
             assert_eq!(opts.assistant.as_ref(), Some(&launch), "{scope}");
             assert_eq!(opts.project_id.as_deref(), Some("assistant"), "{scope}");
             assert_eq!(opts.cmd, "opencode");
@@ -2093,7 +2144,7 @@ mod tests {
         let launched = |edit: &dyn Fn(&mut TabEntry)| {
             let mut bad = chat_record(state.path(), &launch);
             edit(&mut bad);
-            launch_options("assistant", &bad)
+            launch_options(state.path(), "assistant", &bad).unwrap()
         };
         assert!(launched(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "claude", "args": ["-x"] })); }).assistant.is_none());
         assert!(launched(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "opencode_local", "model": "--evil" })); }).assistant.is_none());
@@ -2103,8 +2154,8 @@ mod tests {
         let opts = launched(&|t| { t.extra.remove("assistant"); t.extra.insert("args".into(), serde_json::json!(["--x"])); });
         assert!(opts.assistant.is_none() && opts.args.is_empty() && opts.env.is_empty());
         // Any other scope still reads its record as before.
-        assert!(launch_options("p1", &record).assistant.is_none());
-        assert_eq!(launch_options("p1", &record).args, vec!["--dangerously-skip-permissions", "--session-id", "other"]);
+        assert!(launch_options(state.path(), "p1", &record).unwrap().assistant.is_none());
+        assert_eq!(launch_options(state.path(), "p1", &record).unwrap().args, vec!["--dangerously-skip-permissions", "--session-id", "other"]);
     }
 
     /// A closed chat comes back through the same seam: the owner puts resume
@@ -2155,6 +2206,300 @@ mod tests {
         assert_eq!(seen[0].assistant.as_ref(), Some(&launch));
         assert!(seen[0].args.is_empty(), "{:?}", seen[0].args);
         assert_eq!(seen[0].env.get(crate::app_env!("TAB_UID")).map(String::as_str), Some(CHAT));
+    }
+
+    // ── Where a phone's launch runs (plan step 3) ───────────────────────
+
+    use super::super::discovery::{CreateVerdict, ProjectHost};
+
+    /// A `projects.json` with one project of each host type: `local1`, `remote1`
+    /// (default mirror), `remote2` (a chosen mirror), `box1` (a container whose
+    /// spec scope is `all`), `box2` (scope `agents`), `vm1`.
+    fn write_projects(state: &Path) -> std::path::PathBuf {
+        let chosen = state.join("chosen-mirror");
+        let rows = json!([
+            { "id": "local1", "name": "L", "status": "active", "directory": state.join("local1") },
+            { "id": "remote1", "name": "R", "status": "active", "directory": state.join("remote-projects").join("remote1"),
+              "remote": { "host": "example.invalid" } },
+            { "id": "remote2", "name": "R2", "status": "active", "directory": state.join("remote-projects").join("remote2"),
+              "remote": { "host": "example.invalid" }, "mirror": chosen },
+            { "id": "box1", "name": "C", "status": "active", "directory": state.join("box1"),
+              "sandbox": { "enabled": true, "scope": "all" } },
+            { "id": "box2", "name": "C2", "status": "active", "directory": state.join("box2"),
+              "sandbox": { "enabled": true, "scope": "agents" } },
+            { "id": "vm1", "name": "V", "status": "active", "directory": state.join("vm1"),
+              "remote": { "host": "example.invalid" }, "vm": { "enabled": true } },
+        ]);
+        std::fs::write(state.join("projects.json"), rows.to_string()).unwrap();
+        chosen
+    }
+
+    /// A stored tab as the window saves it: `kind`, an optional `location`.
+    fn stored(kind: &str, location: Option<&str>, cwd: &Path) -> TabEntry {
+        let mut record = tab_record(&CreateTabKind::Shell, None, cwd, "h");
+        record.cmd = if kind == "shell" { String::new() } else { "claude".to_string() };
+        record.extra.insert("kind".into(), json!(kind));
+        if let Some(location) = location {
+            record.extra.insert("location".into(), json!(location));
+        }
+        record.extra.insert("tmuxSession".into(), json!(format!("{}p--t", crate::brand::TMUX_PREFIX)));
+        record
+    }
+
+    fn placed(state: &Path, scope: &str, kind: &str, location: Option<&str>, cwd: &Path) -> Result<PtyOptions, NotAttachable> {
+        launch_options(state, scope, &stored(kind, location, cwd))
+    }
+
+    /// A phone launch runs where the window would run the tab. A remote
+    /// project's agent defaults local: `local_only`, cwd the mirror (the
+    /// default one, or the record's chosen `mirror`) even for a tab the window
+    /// saved with the state-dir `directory`; a stored `remote` / `host:<id>`
+    /// agent and a shell with no location are not started; a shell the user put
+    /// on this machine is.
+    #[test]
+    fn a_remote_projects_local_tab_launches_local_only_in_the_mirror() {
+        let state = state_dir();
+        let chosen = write_projects(state.path());
+        let directory = state.path().join("remote-projects").join("remote1");
+        let default_mirror = crate::services::remote_sync::default_mirror_dir_in(state.path(), "remote1");
+        for location in [None, Some("local")] {
+            let opts = placed(state.path(), "remote1", "agent", location, &directory).unwrap();
+            assert!(opts.local_only, "{location:?}");
+            assert_eq!(Path::new(&opts.cwd), default_mirror, "{location:?}");
+            assert_eq!(opts.project_id.as_deref(), Some("remote1"));
+            assert!(opts.agent);
+        }
+        let opts = placed(state.path(), "remote2", "agent", None, &directory).unwrap();
+        assert!(opts.local_only);
+        assert_eq!(Path::new(&opts.cwd), chosen);
+        // A local-model agent is local whatever the record says.
+        assert!(placed(state.path(), "remote1", "local_agent", Some("remote"), &directory).unwrap().local_only);
+        assert!(placed(state.path(), "remote1", "shell", Some("local"), &directory).unwrap().local_only);
+        for (kind, location) in [("agent", Some("remote")), ("agent", Some("host:w1")), ("agent", Some("bogus")), ("shell", None), ("shell", Some("remote"))] {
+            assert_eq!(placed(state.path(), "remote1", kind, location, &directory).unwrap_err(), NotAttachable, "{kind} {location:?}");
+        }
+    }
+
+    /// A container project's agent runs in the container, and so does its shell
+    /// while the spec's scope is `all`; with scope `agents` the shell is on the
+    /// host and launches as it does today. A VM project's tabs never run on the
+    /// host. A local project, a box and an unknown scope are untouched.
+    #[test]
+    fn container_and_vm_tabs_are_refused_and_other_scopes_are_unchanged() {
+        let state = state_dir();
+        write_projects(state.path());
+        let cwd = state.path().join("box1");
+        assert!(placed(state.path(), "box1", "agent", None, &cwd).is_err());
+        assert!(placed(state.path(), "box2", "agent", Some("local"), &cwd).is_err());
+        assert!(placed(state.path(), "box1", "shell", None, &cwd).is_err());
+        let host_shell = placed(state.path(), "box2", "shell", None, &cwd).unwrap();
+        assert!(!host_shell.local_only && host_shell.cwd == cwd.to_string_lossy());
+        for (kind, location) in [("agent", None), ("agent", Some("local")), ("shell", None), ("local_agent", None)] {
+            assert!(placed(state.path(), "vm1", kind, location, &cwd).is_err(), "{kind} {location:?}");
+        }
+        // Local, box, root, an id nobody knows and no projects.json at all.
+        let none = state_dir();
+        for (dir, scope) in [(state.path(), "local1"), (state.path(), "box:b1"), (state.path(), "root"), (state.path(), "nobody"), (none.path(), "local1")] {
+            let record = stored("agent", Some("remote"), &cwd);
+            let opts = launch_options(dir, scope, &record).unwrap();
+            assert!(!opts.local_only && !opts.sandbox, "{scope}");
+            assert_eq!(opts.cwd, record.cwd, "{scope}");
+            assert_eq!(opts.project_id.as_deref(), Some(scope));
+        }
+        // A projects.json that cannot be read is not guessed at.
+        std::fs::write(state.path().join("projects.json"), "{").unwrap();
+        assert!(placed(state.path(), "local1", "agent", None, &cwd).is_err());
+    }
+
+    fn scope_of(host: ProjectHost, raw_id: &str, root: &Path, create: CreateVerdict) -> ResolvedProject {
+        ResolvedProject {
+            public: super::super::discovery::PublicProject {
+                id: "pub".into(),
+                label: "P".into(),
+                status: "active".into(),
+                kind: ScopeKind::Project,
+                host,
+                live_sessions: 0,
+                last_activity: None,
+                pending_reviews: None,
+                git: None,
+                agents: None,
+            },
+            raw_id: raw_id.into(),
+            root: root.to_path_buf(),
+            roots: vec![root.to_path_buf()],
+            tabs: Vec::new(),
+            devices: None,
+            host,
+            folder: true,
+            create,
+        }
+    }
+
+    fn recording_launcher() -> (HeadlessLaunch, Arc<std::sync::Mutex<Vec<PtyOptions>>>) {
+        let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
+        let sink = seen.clone();
+        let launcher: HeadlessLaunch = Arc::new(move |opts| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        });
+        (launcher, seen)
+    }
+
+    fn claude_choice() -> AgentChoice {
+        AgentChoice { public: AgentCatalogEntry { id: "claude".into(), label: "Claude".into(), modes: Vec::new(), default: false }, bin: "claude" }
+    }
+
+    fn agent_request(scope: &str) -> CreateTabRequest {
+        serde_json::from_value(json!({ "project_id": scope, "kind": "agent", "agent_id": "claude", "idempotency_key": "0123456789abcdef" }))
+            .expect("create request")
+    }
+
+    /// A phone-made agent of a remote project is saved with `location: "local"`
+    /// and its cwd the mirror, and launched `local_only` there — not sent to the
+    /// host, as `local_only: false` did.
+    #[tokio::test]
+    async fn a_phone_made_agent_of_a_remote_project_launches_in_the_mirror() {
+        let state = state_dir();
+        write_projects(state.path());
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(state.path(), "remote1");
+        let project = scope_of(ProjectHost::Remote, "remote1", &mirror, CreateVerdict::Agents);
+        let (launcher, seen) = recording_launcher();
+        let created = create_tab(state.path(), b"k", &project, &agent_request("remote1"), &[claude_choice()], &[], &launcher).await.expect("create");
+        assert!(!created.existed);
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 1);
+            assert!(seen[0].local_only && seen[0].agent);
+            assert_eq!(Path::new(&seen[0].cwd), mirror);
+            assert_eq!(seen[0].project_id.as_deref(), Some("remote1"));
+        }
+        let session: crate::schema::session::TerminalSession = storage::read_json(&session_file(state.path(), "remote1")).unwrap();
+        // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+        assert_eq!(session.tab_layout.len(), 1);
+        // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+        assert_eq!(session.tab_layout[0].extra.get("location"), Some(&json!("local")));
+        // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+        assert_eq!(Path::new(&session.tab_layout[0].cwd), mirror);
+        // A local project's agent is stamped with nothing and launches as before.
+        let root = state.path().join("local1");
+        let local = scope_of(ProjectHost::Local, "local1", &root, CreateVerdict::All);
+        let request = agent_request("local1");
+        create_tab(state.path(), b"k", &local, &request, &[claude_choice()], &[], &launcher).await.expect("create");
+        let seen = seen.lock().unwrap();
+        assert!(!seen[1].local_only);
+        assert_eq!(Path::new(&seen[1].cwd), root);
+        let session: crate::schema::session::TerminalSession = storage::read_json(&session_file(state.path(), "local1")).unwrap();
+        // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+        assert!(!session.tab_layout[0].extra.contains_key("location"));
+    }
+
+    /// A create the launch seam refuses is taken back out of the session file.
+    #[tokio::test]
+    async fn a_create_in_a_container_project_is_refused_and_leaves_no_tab() {
+        let state = state_dir();
+        write_projects(state.path());
+        let project = scope_of(ProjectHost::Container, "box1", &state.path().join("box1"), CreateVerdict::None);
+        let (launcher, seen) = recording_launcher();
+        let refused = create_tab(state.path(), b"k", &project, &agent_request("box1"), &[claude_choice()], &[], &launcher).await.unwrap_err();
+        assert_eq!(refused, CreateRefusal::NotAttachable);
+        assert_eq!(refused.code(), "not_attachable");
+        assert!(seen.lock().unwrap().is_empty(), "nothing was spawned");
+        let session: crate::schema::session::TerminalSession = storage::read_json(&session_file(state.path(), "box1")).unwrap();
+        // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+        assert!(session.tab_layout.is_empty());
+    }
+
+    /// A reopen is checked before the closed record moves: a host-side agent
+    /// stays closed (for the window to reopen), a local one comes back in the
+    /// mirror.
+    #[tokio::test]
+    async fn a_reopen_follows_the_same_locality_and_leaves_a_refused_record_closed() {
+        let state = state_dir();
+        write_projects(state.path());
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(state.path(), "remote1");
+        let project = scope_of(ProjectHost::Remote, "remote1", &mirror, CreateVerdict::Agents);
+        let path = session_file(state.path(), "remote1");
+        let directory = state.path().join("remote-projects").join("remote1");
+        let close = |location: &str, tmux: &str| {
+            let mut record = stored("agent", Some(location), &directory);
+            record.extra.insert("tmuxSession".into(), json!(tmux));
+            let created = crate::services::workspace::create_tab_in(&path, "remote1", record, Some(tmux)).expect("create");
+            let tmux = crate::services::workspace::tmux_of(&created.tab).expect("tmux").to_string();
+            crate::services::workspace::close_tab_in(&path, "remote1", &tmux, 1).expect("close");
+        };
+        close("local", "t-local");
+        close("host:w1", "t-host");
+        let (launcher, seen) = recording_launcher();
+        // Newest first: the host-side one is refused and stays closed.
+        assert_eq!(reopen_tab(state.path(), &project, None, &launcher).await.unwrap_err(), CreateRefusal::NotAttachable);
+        assert!(seen.lock().unwrap().is_empty());
+        let session: crate::schema::session::TerminalSession = storage::read_json(&path).unwrap();
+        // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+        assert!(session.tab_layout.is_empty());
+        assert_eq!(crate::services::workspace::closed_tabs(&session).len(), 2);
+        let local_id = crate::services::workspace::closed_tabs(&session).into_iter().find(|c| c.tab.extra.get("location") == Some(&json!("local"))).unwrap().id;
+        reopen_tab(state.path(), &project, Some(&local_id), &launcher).await.expect("reopen").expect("a closed tab");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].local_only);
+        assert_eq!(Path::new(&seen[0].cwd), mirror);
+    }
+
+    struct CountingRunner(std::sync::atomic::AtomicUsize);
+
+    impl super::super::scheduler::Runner for CountingRunner {
+        fn probe(&self, _tmux: &str) -> Option<super::super::scheduler::SessionProbe> {
+            None
+        }
+        fn deliver(&self, _tmux: &str, _submissions: &[super::super::scheduler::Submission]) -> Result<(), String> {
+            Ok(())
+        }
+        fn kill(&self, _tmux: &str) -> Result<(), String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// An undo-clear relaunch of a tab the phone may not launch ends nothing:
+    /// the running session is not killed first.
+    #[tokio::test]
+    async fn an_undo_relaunch_of_a_host_side_tab_kills_nothing() {
+        let state = state_dir();
+        write_projects(state.path());
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(state.path(), "remote1");
+        let project = scope_of(ProjectHost::Remote, "remote1", &mirror, CreateVerdict::Agents);
+        let path = session_file(state.path(), "remote1");
+        let mut record = stored("agent", Some("host:w1"), &mirror);
+        record.session_id = Some("11111111-2222-4333-8444-555555555555".into());
+        let created = crate::services::workspace::create_tab_in(&path, "remote1", record, Some("h")).expect("create");
+        let tmux = crate::services::workspace::tmux_of(&created.tab).unwrap().to_string();
+        let mut resolved = tab("claude", record_session(&created.tab));
+        resolved.tmux_name = tmux;
+        let runner = Arc::new(CountingRunner(std::sync::atomic::AtomicUsize::new(0)));
+        let (launcher, seen) = recording_launcher();
+        let plan = Some(agent_session::UndoClearPlan::Relaunch);
+        let refused = apply_undo_plan(state.path(), &project, &resolved, plan, runner.clone(), &launcher).await.unwrap_err();
+        assert!(refused.starts_with("not_attachable"), "{refused}");
+        assert_eq!(runner.0.load(std::sync::atomic::Ordering::SeqCst), 0, "the running session is left alone");
+        assert!(seen.lock().unwrap().is_empty());
+        // The same tab on this machine is killed and started again, in the mirror.
+        crate::services::workspace::edit_in(&path, "remote1", |session| {
+            // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
+            session.tab_layout[0].extra.insert("location".into(), json!("local"));
+            Ok(())
+        })
+        .unwrap();
+        let plan = Some(agent_session::UndoClearPlan::Relaunch);
+        assert_eq!(apply_undo_plan(state.path(), &project, &resolved, plan, runner.clone(), &launcher).await.unwrap(), UndoOutcome::Undone);
+        assert_eq!(runner.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].local_only);
+        assert_eq!(Path::new(&seen[0].cwd), mirror);
+    }
+
+    fn record_session(tab: &TabEntry) -> Option<&str> {
+        tab.session_id.as_deref()
     }
 
     #[test]
