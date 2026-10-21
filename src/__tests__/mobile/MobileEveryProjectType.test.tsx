@@ -226,6 +226,22 @@ describe("Mobile bridge — remote, container and VM projects", () => {
     expect(made).not.toHaveBeenCalled();
   });
 
+  it("copies a desktop image only into a folder the scope has", async () => {
+    const attach = (projectId: string) =>
+      ask({ type: "attach_desktop_image", request_id: `img-${projectId}`, project_id: projectId, image_id: "clipboard" });
+    const attached = () => vi.mocked(invoke).mock.calls.filter(([c]) => c === "mobile_attach_desktop_image");
+    // A VM project has no folder on this machine unless a mirror is set: nothing is written.
+    expect(await attach("vm")).toMatchObject({ status: "error", code: "project_ineligible" });
+    expect(attached()).toHaveLength(0);
+    // The same project with a mirror, and a remote project's mirror, are written into.
+    useProjectsStore.setState({ projects: [rem, ctr, ctrAgents, { ...vm, mirror: "/mirrors/vm" }, off] } as never);
+    await attach("vm");
+    expect(attached()[0]?.[1]).toMatchObject({ projectDir: "/mirrors/vm" });
+    // (`ask` clears the mock calls each time.)
+    await attach("rem");
+    expect(attached()[0]?.[1]).toMatchObject({ projectDir: "/mirrors/rem" });
+  });
+
   it("reopens a closed local agent of a remote project, and leaves a host-side one closed", async () => {
     const closed = (id: string, over: Partial<TabEntry>) => ({
       id, tab: tabOf(id, "agent", { sessionId: `sid-${id}`, ...over }), closedAt: 1, sessionEnded: true,

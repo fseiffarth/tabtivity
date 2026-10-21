@@ -2342,6 +2342,12 @@ mod tests {
         // A projects.json that cannot be read is not guessed at.
         std::fs::write(state.path().join("projects.json"), "{").unwrap();
         assert!(placed(state.path(), "local1", "agent", None, &cwd).is_err());
+        // ... but the root console and a box are no project record: a file the
+        // catalog cannot read does not stop their restart, as before.
+        for scope in ["root", "box:b1"] {
+            let opts = restart_options(state.path(), scope, &stored("agent", None, &cwd)).unwrap();
+            assert!(!opts.local_only && opts.cwd == cwd.to_string_lossy(), "{scope}");
+        }
     }
 
     fn scope_of(host: ProjectHost, raw_id: &str, root: &Path, create: CreateVerdict) -> ResolvedProject {

@@ -2583,6 +2583,10 @@ async function attachDesktopImage(projectId: string, imageId: string): Promise<D
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // A scope with no folder on this machine (a VM project without a mirror, the
+  // assistant) has no inbox: an empty path would be written relative to the
+  // app's own working directory.
+  if (!scope.cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   try {
     const attachment = await invoke<InboxAttachment>("mobile_attach_desktop_image", {
       projectDir: scope.cwd,

@@ -24,6 +24,10 @@ struct ProjectRecord {
     status: String,
     #[serde(default)]
     directory: Option<String>,
+    /// The legacy shape's only folder hint: a record with no `directory` is
+    /// the folder holding its `project.json` (`ProjectEntry::directory`).
+    #[serde(default, deserialize_with = "lenient_string")]
+    local_file: Option<String>,
     #[serde(default)]
     remote: Option<Value>,
     #[serde(default)]
@@ -45,6 +49,25 @@ struct ProjectRecord {
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
     #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices")]
     app_mobile_devices: Option<Vec<String>>,
+}
+
+impl ProjectRecord {
+    /// The project's own folder, by the rule of `ProjectEntry::directory` and
+    /// the window's `resolveProjectDirectory`: the trimmed `directory`, else
+    /// the folder of a `project.json` named by `local_file` (a record from
+    /// before `directory` was persisted, which startup backfills but a
+    /// sidecar that read the file first, or a daemon, has not seen). Never an
+    /// empty path or a filesystem root.
+    fn directory(&self) -> Option<PathBuf> {
+        if let Some(dir) = self.directory.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            return Some(PathBuf::from(dir));
+        }
+        let file = Path::new(self.local_file.as_deref()?);
+        if !file.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case("project.json")) {
+            return None;
+        }
+        file.parent().filter(|dir| dir.file_name().is_some()).map(Path::to_path_buf)
+    }
 }
 
 /// `deserialize_with` for an optional string that must never fail the record:
@@ -887,7 +910,7 @@ fn mobile_root(state_dir: &Path, project: &ProjectRecord) -> Option<PathBuf> {
     match project_host(project) {
         ProjectHost::Vm => mirror,
         ProjectHost::Remote => Some(mirror.unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &project.id))),
-        ProjectHost::Local | ProjectHost::Container => project.directory.as_deref().map(PathBuf::from),
+        ProjectHost::Local | ProjectHost::Container => project.directory(),
     }
 }
 
@@ -969,6 +992,12 @@ pub(super) enum LaunchPlace {
 /// an id with no project record, is `AsRecorded`. Remoteness comes from the
 /// record, never from a path.
 pub(super) fn launch_place(state_dir: &Path, raw_id: &str, kind: &str, location: Option<&str>) -> LaunchPlace {
+    // The root console and a box are no project record: their launch never
+    // looked at `projects.json`, and a file the catalog cannot read must not
+    // stop them restarting a tab.
+    if is_root_scope_id(raw_id) || raw_id.trim().starts_with("box:") {
+        return LaunchPlace::AsRecorded;
+    }
     let projects: Vec<ProjectRecord> = match fs::read(state_dir.join("projects.json")) {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(projects) => projects,
@@ -1255,7 +1284,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             roots,
             devices: project.app_mobile_devices.clone(),
             host,
-            cwd_alias: (host == ProjectHost::Remote).then(|| project.directory.as_deref().map(PathBuf::from)).flatten(),
+            cwd_alias: (host == ProjectHost::Remote).then(|| project.directory()).flatten(),
             shells_in_container: host == ProjectHost::Container && container_shells(project),
         });
     }
@@ -2860,6 +2889,61 @@ mod tests {
                 ("In the mirror", mirror.join("src")),
             ],
         );
+    }
+
+    /// A record from before `directory` was persisted names its folder only
+    /// through `local_file` (`<dir>/project.json`), as the window's
+    /// `resolveProjectDirectory` reads it: a remote project's window-made agent
+    /// (saved with that folder as its `cwd`) is still read in the mirror, and a
+    /// local one's root is that folder. A `local_file` that is not a
+    /// `project.json` gives nothing.
+    #[test]
+    fn a_legacy_record_without_a_directory_key_still_names_its_folder() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        allow_shells(state);
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(state, "p-remote");
+        let remote_dir = state.join("dirs").join("p-remote");
+        let local_dir = state.join("dirs").join("p-local");
+        for d in [&mirror, &remote_dir, &local_dir] {
+            fs::create_dir_all(d).expect("dir");
+        }
+        let legacy = |id: &str, folder: &Path, extra: serde_json::Value| {
+            let mut row = serde_json::json!({
+                "id": id, "name": id, "status": "active",
+                "local_file": folder.join("project.json").to_string_lossy(),
+                crate::brand::MOBILE_ACCESS_KEY: true,
+            });
+            row.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            row
+        };
+        let projects = [
+            legacy("p-remote", &remote_dir, serde_json::json!({ "remote": { "host": "h.invalid" } })),
+            legacy("p-local", &local_dir, serde_json::json!({})),
+        ];
+        fs::write(state.join("projects.json"), serde_json::to_vec(&projects).expect("projects")).expect("write projects");
+        write_session(
+            state,
+            "p-remote",
+            vec![tab_json("Window made", "agent", &remote_dir, &format!("{}-p-remote--agent-123456789", crate::app_slug!()), serde_json::json!({}))],
+        );
+        let listed = load_all(state, &HashMap::new());
+        let by_id = |id: &str| listed.iter().find(|p| p.raw_id == id).unwrap_or_else(|| panic!("{id} not listed"));
+        let canon = |p: &Path| p.canonicalize().expect("canonical");
+        let remote = by_id("p-remote");
+        let cwds: Vec<PathBuf> = remote.tabs.iter().map(|t| PathBuf::from(&t.cwd)).collect();
+        assert_eq!(cwds.len(), 1);
+        assert_eq!(cwds[0], remote.root);
+        assert_eq!(remote.root, canon(&mirror));
+        assert_eq!(by_id("p-local").root, canon(&local_dir));
+        // Only a `project.json` names a folder; a bare file name has no parent to give.
+        let record = |local_file: &str| -> ProjectRecord {
+            serde_json::from_value(serde_json::json!({ "id": "p", "name": "P", "status": "active", "local_file": local_file })).unwrap()
+        };
+        assert_eq!(record("/a/b/project.json").directory(), Some(PathBuf::from("/a/b")));
+        for odd in ["/a/b/notes.json", "project.json", "/project.json", ""] {
+            assert_eq!(record(odd).directory(), None, "{odd}");
+        }
     }
 
     /// On a remote or VM project the catalog lists only the tabs the window
