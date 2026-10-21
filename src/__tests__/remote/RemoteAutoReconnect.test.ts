@@ -3,7 +3,9 @@
  * a tunnel *rising* to connected re-tries the active remote project and sweeps
  * the armed global machines; the sweep is behind the Machines feature switch
  * and waits for settings to be **loaded** (an unloaded store reads as "off");
- * a second install is a no-op so one tunnel-up never fans out twice.
+ * a second install is a no-op so one tunnel-up never fans out twice. The sweep
+ * ends by re-running the active project's auto-connect, since an armed machine
+ * counts as the opt-in of the project host that is the same login.
  *
  * `installed` is module state, so every test takes a fresh module graph.
  */
@@ -50,7 +52,7 @@ describe("launch-time machine sweep", () => {
     await settle();
     expect(f.load).not.toHaveBeenCalled();
     expect(f.autoConnect).not.toHaveBeenCalled();
-    // The launch sweep is machines only — the project side self-starts from its store.
+    // No sweep, so no project retry behind it either.
     expect(f.retry).not.toHaveBeenCalled();
   });
 
@@ -60,6 +62,11 @@ describe("launch-time machine sweep", () => {
     await settle();
     expect(f.load).toHaveBeenCalledTimes(1);
     expect(f.autoConnect).toHaveBeenCalledTimes(1);
+    // …then the active project, whose hosts an armed machine may opt in.
+    expect(f.retry).toHaveBeenCalledTimes(1);
+    expect(f.autoConnect.mock.invocationCallOrder[0]).toBeLessThan(
+      f.retry.mock.invocationCallOrder[0],
+    );
   });
 
   it("waits for settings to be loaded rather than reading an empty store as off", async () => {
@@ -79,6 +86,7 @@ describe("tunnel-up reaction", () => {
     f.initRemoteAutoReconnect();
     await settle();
     f.autoConnect.mockClear();
+    f.retry.mockClear();
 
     f.useVpnStatusStore.getState().setState("/lab.ovpn", "connecting");
     await settle();
@@ -87,14 +95,15 @@ describe("tunnel-up reaction", () => {
 
     f.useVpnStatusStore.getState().setState("/lab.ovpn", "connected");
     await settle();
-    expect(f.retry).toHaveBeenCalledTimes(1);
+    // Once at once (the tunnel's own reach), once after the machine sweep.
+    expect(f.retry).toHaveBeenCalledTimes(2);
     expect(f.autoConnect).toHaveBeenCalledTimes(1);
 
     // A repeated "connected" collapses in the store; a drop is nobody's cue.
     f.useVpnStatusStore.getState().setState("/lab.ovpn", "connected");
     f.useVpnStatusStore.getState().setState("/lab.ovpn", "off");
     await settle();
-    expect(f.retry).toHaveBeenCalledTimes(1);
+    expect(f.retry).toHaveBeenCalledTimes(2);
     expect(f.autoConnect).toHaveBeenCalledTimes(1);
   });
 
@@ -116,9 +125,10 @@ describe("tunnel-up reaction", () => {
     f.initRemoteAutoReconnect();
     await settle();
     expect(f.autoConnect).toHaveBeenCalledTimes(1);
+    f.retry.mockClear();
     f.useVpnStatusStore.getState().setState("/lab.ovpn", "connected");
     await settle();
-    expect(f.retry).toHaveBeenCalledTimes(1);
+    expect(f.retry).toHaveBeenCalledTimes(2);
     expect(f.autoConnect).toHaveBeenCalledTimes(2);
   });
 });

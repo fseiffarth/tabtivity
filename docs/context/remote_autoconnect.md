@@ -72,6 +72,23 @@ never asked. Every unattended connect now passes the same three, in order:
 3. **eligibility** — a saved password or `key_auth`, so the promise never to
    prompt is kept.
 
+**A global machine armed for auto-connect is the host's opt-in too** (gate 2,
+`machineArmsHost` in `lib/remote/machineSync`, matched by `sameTarget`; only while
+the Machines feature is on). There is **one path**: the project's own
+(`autoConnectPrimary`/`autoConnectWorker`, `silentReconnectDeadHost`,
+`retryAutoConnectAfterVpn`), so HPC, probe, VPN, headless handling and the
+no-prompt rule are the same whichever surface armed the host — a local project's
+`compute_hosts` included (activation fires for them too), and the launch /
+tunnel-up machine sweep ends by re-running it for the active project. *Armed*, not
+*connected*: the toggle is the machine twin of `auto_connect`, while a machine's
+`connected` lamp is never polled and would hand the dead-host reconciler the very
+re-dial loop gate 2 stops. A machine-only opt-in lets the probe stand for
+eligibility (no "nothing saved" toast for a key login the project copy never
+recorded), opens no root-console login tab non-headless (red lamp instead), and
+connects with `viaLogin` so riding the machine's master is never recorded as key
+auth. A hand-connected machine still lights the active project on its own
+`→ connected` edge (`syncGlobalConnected`).
+
 An armed project that fails (3) is no longer *silent*. It used to `return` with no
 lamp, no toast and no console line, which reads exactly like "auto-connect is
 broken" — and, since a locked keyring answers the same as an empty one, that is
