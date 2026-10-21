@@ -113,7 +113,9 @@ fn gemini(home: &Path, directory: &str, since: Option<i64>, version: Option<&str
         for message in record.get("messages")?.as_array()? {
             let role = match message.get("type").and_then(Value::as_str) {
                 Some("user") => "prompt",
-                Some("gemini") => "answer",
+                // An `error` record is Gemini's own notice (a quota limit, a
+                // refused request); `info` and `warning` are chrome.
+                Some("gemini" | "error") => "answer",
                 _ => continue,
             };
             let content = message.get("displayContent").filter(|value| !value.is_null()).or_else(|| message.get("content"));
@@ -323,12 +325,13 @@ mod tests {
             "startTime": "2026-10-15T12:00:00Z", "messages": [
                 {"type": "user", "timestamp": "2026-10-15T12:00:00Z", "content": "expanded private context", "displayContent": [{"text": "fix it"}]},
                 {"type": "gemini", "timestamp": "2026-10-15T12:00:01Z", "model": "gemini-test", "content": [{"thought": true, "text": "private reasoning"}, {"text": "Fixed."}, {"functionCall": {"name": "read_file"}}], "toolCalls": [{"result": "tool output"}]},
-                {"type": "info", "content": "startup logo"}
+                {"type": "info", "content": "startup logo"},
+                {"type": "error", "timestamp": "2026-10-15T12:00:02Z", "content": "You have exhausted your capacity on this model."}
             ]
         }));
         let read = transcript("gemini", home.path(), directory, None, None, 60);
         assert!(read.available);
-        assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed.")]);
+        assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed."), ("answer", "You have exhausted your capacity on this model.")]);
         assert_eq!(read.entries[0].at.as_deref(), Some("2026-10-15T12:00:00Z"));
         assert_eq!(read.model.as_deref(), Some("gemini-test"));
         assert!(!read.version.as_deref().unwrap().contains(directory));
@@ -336,7 +339,7 @@ mod tests {
         let tail = transcript("gemini", home.path(), directory, None, read.version.as_deref(), 1);
         assert!(!tail.unchanged);
         assert!(tail.truncated);
-        assert_eq!(texts(&tail), [("answer", "Fixed.")]);
+        assert_eq!(texts(&tail), [("answer", "You have exhausted your capacity on this model.")]);
         let fresh = transcript("gemini", home.path(), directory, Some(epoch("2026-10-15T13:00:00Z").unwrap()), None, 60);
         assert!(fresh.available && fresh.entries.is_empty());
         assert!(transcript("gemini", home.path(), home.path().to_str().unwrap(), None, None, 60).entries.is_empty());

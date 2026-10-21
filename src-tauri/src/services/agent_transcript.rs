@@ -2099,13 +2099,20 @@ struct WorkflowRun {
 /// reader skips it) and the assistant's `output_text`. The `event_msg` copies
 /// of the same messages are not read, so nothing shows twice; function calls,
 /// their outputs and reasoning items are stepped over. A `/goal` has no
-/// message of its own and is read off the event that sets it.
+/// message of its own and is read off the event that sets it. A turn Codex
+/// ended on an error (a hit usage limit, a policy refusal) has no message
+/// either: the error rides on its `task_complete` event, and is shown as the
+/// answer, as Claude writes its limit notice into the conversation.
 fn codex_entry(value: &Value) -> Option<(&'static str, String)> {
     let payload = value.get("payload")?;
     match value.get("type").and_then(Value::as_str)? {
         "response_item" => {}
         "event_msg" if payload.get("type").and_then(Value::as_str) == Some("thread_goal_updated") => {
             return agent_session::codex_prompt_in_record(value).map(|text| ("prompt", text));
+        }
+        "event_msg" if payload.get("type").and_then(Value::as_str) == Some("task_complete") => {
+            let message = payload.pointer("/error/message")?.as_str()?.trim();
+            return (!message.is_empty()).then(|| ("answer", message.to_string()));
         }
         _ => return None,
     }
@@ -2140,6 +2147,23 @@ mod tests {
             .iter()
             .map(|e| (e.kind.as_str(), e.text.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn a_codex_turn_ended_by_an_error_shows_it_as_an_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"run the suite\"}]}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":null,\"error\":{\"message\":\"You've hit your usage limit. Try again at 3:20 PM.\",\"codex_error_info\":\"usage_limit_exceeded\"}}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"done\",\"error\":null}}\n",
+            ),
+        )
+        .unwrap();
+        let read = read_transcript(&path, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(kinds(&read), vec![("prompt", "run the suite"), ("answer", "You've hit your usage limit. Try again at 3:20 PM.")]);
     }
 
     #[test]

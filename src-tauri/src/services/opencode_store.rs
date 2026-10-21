@@ -430,6 +430,10 @@ fn message_entries(message: &Value, created: i64, parts: &[(i64, Value)]) -> Vec
                 return Vec::new();
             }
             let completed = message.pointer("/time/completed").is_some_and(|t| !t.is_null());
+            let failure = message_error(message).and_then(|text| {
+                let at = message.pointer("/time/completed").and_then(Value::as_i64).unwrap_or(created);
+                transcript_entry("answer", &text, Some(epoch_ms_to_iso(at)))
+            });
             parts
                 .iter()
                 .filter(|(_, part)| is_written(part))
@@ -441,10 +445,23 @@ fn message_entries(message: &Value, created: i64, parts: &[(i64, Value)]) -> Vec
                         .unwrap_or(*part_created);
                     transcript_entry("answer", part_text(part)?, Some(epoch_ms_to_iso(at)))
                 })
+                .chain(failure)
                 .collect()
         }
         _ => Vec::new(),
     }
+}
+
+/// Why OpenCode ended an assistant message early (`error.data.message`: a
+/// provider's usage limit, a rejected key, …), shown as the last answer of
+/// that turn. A turn the user stopped (`MessageAbortedError`) is not one.
+fn message_error(message: &Value) -> Option<String> {
+    let error = message.get("error").filter(|e| e.is_object())?;
+    if error.get("name").and_then(Value::as_str) == Some("MessageAbortedError") {
+        return None;
+    }
+    let text = error.pointer("/data/message")?.as_str()?.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 #[cfg(test)]
@@ -537,6 +554,20 @@ mod tests {
         assert_eq!(t.entries[0].at.as_deref(), Some("1970-01-01T00:00:01.000Z"));
         assert_eq!(t.entries[2].at.as_deref(), Some("1970-01-01T00:00:03.000Z"));
         assert!(!t.truncated);
+    }
+
+    #[test]
+    fn a_message_ended_by_an_error_shows_it_after_its_text_unless_the_user_stopped_it() {
+        let (db, conn) = store();
+        session(&conn, "s", None, "/p", 1, None);
+        message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "user"}));
+        part(&conn, "p1", "m1", "s", 1_000, serde_json::json!({"type": "text", "text": "go"}));
+        message(&conn, "m2", "s", 2_000, serde_json::json!({"role": "assistant", "time": {"created": 2_000, "completed": 2_500},
+            "error": {"name": "APIError", "data": {"message": "Usage limit reached. Try again at 3:20 PM.", "statusCode": 429}}}));
+        message(&conn, "m3", "s", 3_000, serde_json::json!({"role": "assistant", "time": {"created": 3_000, "completed": 3_100},
+            "error": {"name": "MessageAbortedError", "data": {"message": "The operation was aborted."}}}));
+        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
+        assert_eq!(kinds(&t), vec![("prompt", "go"), ("answer", "Usage limit reached. Try again at 3:20 PM.")]);
     }
 
     #[test]
