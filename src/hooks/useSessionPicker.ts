@@ -3,7 +3,7 @@ import { OPENCODE_MODEL_KEYS, OpenCodePickerWalk, isOpenCodeTab, openCodeDialogC
 import { sameSelectStep, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
 import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../lib/agents/readerLive";
-import { submitScheduledAgentCommand } from "../lib/agents/scheduledAgentInput";
+import { holdSessionPicker, submitScheduledAgentCommand } from "../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import type { TabEntry } from "../stores/tabs";
 
@@ -73,6 +73,14 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const walk = useRef<OpenCodePickerWalk | null>(null);
   if (!walk.current) walk.current = new OpenCodePickerWalk((keys) => { void typeKeysNow.current(keys).catch(() => {}); });
   useEffect(() => () => walk.current?.reset(), []);
+
+  // While the picker is up it owns the CLI's keyboard: no prompt may be typed
+  // into the session (it would land in the picker and be lost).
+  const scheduleTargetId = tab.scheduleTargetId;
+  useEffect(() => {
+    if (!picking || !scheduleTargetId) return;
+    return holdSessionPicker(scheduleTargetId);
+  }, [picking, scheduleTargetId]);
 
   useEffect(() => {
     if (!picking) return;

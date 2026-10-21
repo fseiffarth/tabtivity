@@ -5057,6 +5057,7 @@ export const dict: Dict = {
   "terminal.reader.pullFailed": "Nicht zurückgeholt — Claude hat die wartende Nachricht nicht zurückgegeben. Sieh im Terminal des Agenten nach.",
   "terminal.reader.pullLeftover": "Aus der Warteschlange geholt, aber Claudes Eingabefeld enthält noch einen Teil davon — leere es im Terminal, bevor du sendest.",
   "terminal.reader.sendFailed": "Nicht gesendet — das Terminal des Agenten nimmt keine Eingabe an. Dein Text bleibt hier.",
+  "terminal.reader.sendPickerOpen": "Nicht gesendet — im Agenten ist eine Modell- oder Modusliste offen. Wähle daraus oder schließe sie, dann sende. Dein Text bleibt hier.",
   "terminal.reader.clearBusy": "Codex arbeitet noch und kann gerade kein neues Gespräch beginnen. Mit Esc anhalten, dann erneut senden.",
   "terminal.reader.question": "Wartet auf deine Antwort",
   "terminal.reader.moreChoices": "Weitere Optionen stehen im Terminal.",

@@ -6,8 +6,11 @@ vi.mock("../../lib/terminal/terminalInput", () => ({
 
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import {
+  SessionPickerOpenError,
   _clearScheduledAgentInputsForTest,
+  holdSessionPicker,
   registerScheduledAgentInput,
+  scheduledAgentInput,
   submitScheduledAgentMessage,
 } from "../../lib/agents/scheduledAgentInput";
 
@@ -190,5 +193,35 @@ describe("scheduled agent input", () => {
     await expect(submitScheduledAgentMessage("target", "hello")).rejects.toThrow("write failed");
     expect(writeMock).toHaveBeenCalledTimes(2);
     expect(writeMock.mock.calls.some(([, bytes]) => decode(bytes) === "\r")).toBe(false);
+  });
+
+  it("takes no message while a session picker is up, and again once it is closed", async () => {
+    // A prompt sent while the status line's model list was open was typed into
+    // the list, not the agent, and lost. The target reads not ready (a
+    // scheduler waits instead of claiming), and a direct send is refused.
+    registerScheduledAgentInput("target", {
+      ptyId: "project:agent",
+      ready: () => true,
+      started: () => true,
+      bracketedPaste: () => true,
+      recordAuthorizedInput: vi.fn(),
+    });
+    const first = holdSessionPicker("target");
+    const second = holdSessionPicker("target");
+
+    expect(scheduledAgentInput("target")?.ready()).toBe(false);
+    expect(scheduledAgentInput("target")?.started?.()).toBe(false);
+    await expect(submitScheduledAgentMessage("target", "hello", { whileBusy: true })).rejects.toBeInstanceOf(SessionPickerOpenError);
+    expect(writeMock).not.toHaveBeenCalled();
+
+    // Held by two panes: one letting go does not free it; a release is once.
+    first();
+    first();
+    await expect(submitScheduledAgentMessage("target", "hello")).rejects.toBeInstanceOf(SessionPickerOpenError);
+    second();
+
+    expect(scheduledAgentInput("target")?.ready()).toBe(true);
+    await expect(submitScheduledAgentMessage("target", "hello")).resolves.toBe("project:agent");
+    expect(writeMock).toHaveBeenCalled();
   });
 });

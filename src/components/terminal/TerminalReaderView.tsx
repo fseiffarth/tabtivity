@@ -20,7 +20,7 @@ import { actionMatches } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
-import { submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInput";
+import { SessionPickerOpenError, submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInput";
 import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
@@ -636,8 +636,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       setDraft("");
       undo.current.clear();
       historyAt.current = null;
-    } catch {
-      setSendError(t("terminal.reader.sendFailed"));
+    } catch (error) {
+      setSendError(t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen" : "terminal.reader.sendFailed"));
     } finally {
       setSending(false);
     }

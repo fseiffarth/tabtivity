@@ -5226,6 +5226,7 @@ export const enSource = {
   "terminal.reader.pullFailed": "Not taken back — Claude did not hand the queued prompt back. Look in the agent's terminal.",
   "terminal.reader.pullLeftover": "Taken out of the queue, but Claude's input box still holds some of it — clear it in the terminal before you send.",
   "terminal.reader.sendFailed": "Not sent — the agent's terminal is not taking input. Your text is still here.",
+  "terminal.reader.sendPickerOpen": "Not sent — a model or mode list is open in the agent. Choose from it or close it, then send. Your text is still here.",
   "terminal.reader.clearBusy": "Codex is still working and can’t start a new conversation now. Stop it with Esc, then send again.",
   "terminal.reader.question": "Waiting for your answer",
   "terminal.reader.moreChoices": "More choices are listed in the terminal.",

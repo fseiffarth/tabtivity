@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   submit: vi.fn(async () => {}),
   terminal: vi.fn((): unknown => ({ buffer: { active: { length: 0, getLine: () => undefined } } })),
 }));
-vi.mock("../../lib/agents/scheduledAgentInput", () => ({ submitScheduledAgentCommand: mocks.submit }));
+vi.mock("../../lib/agents/scheduledAgentInput", () => ({ submitScheduledAgentCommand: mocks.submit, holdSessionPicker: () => () => {} }));
 vi.mock("../../lib/terminal/terminalRegistry", () => ({ terminalFor: mocks.terminal }));
 vi.mock("../../lib/agents/paneKeys", () => ({ typePaneKeys: vi.fn(async () => {}) }));
 

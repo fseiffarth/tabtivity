@@ -20,7 +20,9 @@
  */
 import { agentDraftPrefixes, agentFamily } from "../../../shared/agentComposer";
 import {
+  SessionPickerOpenError,
   scheduledAgentInput,
+  sessionPickerOpen,
   submitScheduledAgentCommand,
   submitScheduledAgentMessage,
 } from "../agents/scheduledAgentInput";
@@ -138,6 +140,9 @@ const START_POLL_MS = 200;
 export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<void> {
   if (!steeringAgentOffer(tab).prompt || !tab.scheduleTargetId) throw new Error("not an agent tab");
   const target = tab.scheduleTargetId;
+  // A picker up in the CLI would take the words as its own keys, and the
+  // agent never see them: refuse at once rather than wait for it to go.
+  if (sessionPickerOpen(target)) throw new SessionPickerOpenError();
   const deadline = Date.now() + START_WAIT_MS;
   for (;;) {
     const input = scheduledAgentInput(target);

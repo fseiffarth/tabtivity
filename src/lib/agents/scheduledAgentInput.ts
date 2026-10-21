@@ -49,10 +49,52 @@ export interface SubmitOptions {
 
 const inputs = new Map<string, ScheduledAgentInput>();
 
+/** Targets whose CLI has a session picker (`/model`, `/permissions`) up over its
+ * composer, counted: the Reader's facts row, steering's prompt box and the
+ * markup model chip may each hold one for the same tab. */
+const pickersOpen = new Map<string, number>();
+
+/** Mark `scheduleTargetId`'s picker as up until the returned release is
+ * called. While it is, the CLI's keyboard belongs to the picker: a prompt
+ * typed then lands in the picker — a digit in it can even pick a model — and
+ * is never seen by the agent, so the target takes no message (`ready` and
+ * `started` read false, and a scheduled delivery waits rather than being
+ * claimed and lost). */
+export function holdSessionPicker(scheduleTargetId: string): () => void {
+  pickersOpen.set(scheduleTargetId, (pickersOpen.get(scheduleTargetId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (pickersOpen.get(scheduleTargetId) ?? 1) - 1;
+    if (left > 0) pickersOpen.set(scheduleTargetId, left);
+    else pickersOpen.delete(scheduleTargetId);
+  };
+}
+
+/** Whether a session picker is up in `scheduleTargetId`'s CLI ({@link holdSessionPicker}). */
+export function sessionPickerOpen(scheduleTargetId: string): boolean {
+  return pickersOpen.has(scheduleTargetId);
+}
+
+/** A message was refused because a session picker is up in the CLI. */
+export class SessionPickerOpenError extends Error {
+  constructor() {
+    super("a model or mode list is open in the agent: choose from it or close it first");
+    this.name = "SessionPickerOpenError";
+  }
+}
+
 export function registerScheduledAgentInput(
   scheduleTargetId: string,
-  input: ScheduledAgentInput,
+  registered: ScheduledAgentInput,
 ): () => void {
+  // Readiness is the one gate every sender and scheduler asks first.
+  const input: ScheduledAgentInput = {
+    ...registered,
+    ready: () => !sessionPickerOpen(scheduleTargetId) && registered.ready(),
+    ...(registered.started ? { started: () => !sessionPickerOpen(scheduleTargetId) && registered.started!() } : {}),
+  };
   inputs.set(scheduleTargetId, input);
   return () => {
     if (inputs.get(scheduleTargetId) === input) inputs.delete(scheduleTargetId);
@@ -85,6 +127,7 @@ export async function submitScheduledAgentMessage(
   options: SubmitOptions = {},
 ): Promise<string> {
   const input = inputs.get(scheduleTargetId);
+  if (input && sessionPickerOpen(scheduleTargetId)) throw new SessionPickerOpenError();
   const takesInput = options.whileBusy ? (input?.started ?? input?.ready) : input?.ready;
   if (!input || !takesInput?.()) throw new Error("agent terminal is not ready");
   const bracketed = bracketsAgentMessage(input.agent, input.bracketedPaste());
@@ -143,4 +186,5 @@ export async function pressScheduledAgentSubmit(scheduleTargetId: string): Promi
 
 export function _clearScheduledAgentInputsForTest(): void {
   inputs.clear();
+  pickersOpen.clear();
 }
