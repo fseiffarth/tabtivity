@@ -324,3 +324,96 @@ and the Windows/macOS cross-checks were not run (new tests build paths with
 - Scheduler: a due prompt for a host/container/VM agent with no window is not
   delivered by the sidecar any more (it was launched in the wrong place before);
   the `Relaunched` event carries the error, once per backoff window.
+
+## B1. Desktop bridge (plan step 4)
+
+Commit: see `git log` (the commit whose message starts `feat(mobile): desktop
+bridge serves remote, container and VM projects`).
+
+### What was built
+
+New `src/lib/projectTabHost.ts` (the one helper; filemap row added):
+`projectHostKind(project)` (VM before remote, then container, as
+`discovery::project_host`), `tabRunsInContainer` (the expression `PaneSlot` had
+inline for its `sandbox` flag, extracted; `PaneSlot` now calls it),
+`phoneReachesTab(project, tab, scopeKey)` (the Rust `runs_on_this_machine`,
+built on `effectiveTabLocation`), `phoneCreateVerdict` (`all` / `agents` /
+`none`) and `phoneProjectFolder` (local, container: directory; remote:
+`resolveLocalMirror` else `localTabCwd` -> `<directory>/mirror`; VM: the mirror
+only, else `""`).
+
+`MobileBridgeHost.tsx`:
+
+- `mobileProject` is the Mobile switch alone (the remote/sandbox/VM refusals
+  are gone). `mobileScope`'s `cwd` is `phoneProjectFolder`.
+- `phoneTabs(scopeId)` filters the scope's tabs through `phoneReachesTab`; it
+  replaced every `tabsByScope[...]` read (9 sites: agent-turn snapshot, status,
+  timings, prompts, finished-turn lookup, schedule summaries, `like_tab`,
+  `scheduleTargetTab`, `mobileTargetTab`). Those two lookups serve activate,
+  rename, close, colour, reorder, schedules, prompts, agent status/transcript,
+  tab_seen/input/prompt, hold/edit-held, undo_clear and markup, so a tab the
+  phone cannot reach is `tab_not_found` for all of them (`tab_seen` and
+  `tab_input` stay silent `seen` for a missing tab, as before).
+- `create` answers `not_attachable` (before `enterScope` and before the `cwd`
+  check, so a VM answers it rather than `project_ineligible`) when
+  `phoneCreateVerdict` forbids the kind; a remote project's agent is created
+  with `cwd` = the mirror and `location: "local"` stamped on the spec.
+- `reopen_tab` follows the same verdict AND the closed tab's own locality: a
+  closed host-side tab answers `not_attachable` and stays in the closed list;
+  no id means the newest closed tab the phone could attach to. The catalog's
+  `closed` rows list only reachable ones (`closedPhoneTabs`).
+
+`PaneSlot.tsx`: only the `sandbox` extraction. The Mobile switch's tmux wrap
+already requires `localRunning` (verified by test, no change).
+
+Tests (new): `MobileTabReach.test.ts` (the helper; every fixture row against a
+remote and a VM project; container, create verdict, folder; the `localRunning`
+tripwire), `MobileEveryProjectType.test.tsx` (the bridge in a remote, container
+and VM scope: switch alone opens them, catalog/activity list reachable tabs
+only, 12 handlers x 6 unreachable tabs answer `tab_not_found`, remote create is
+local in the mirror, mirror fallback, `not_attachable` for shell/container/VM,
+reopen). `ContainerScope.test.ts` now calls the helper and pins that `PaneSlot`
+calls it.
+
+### Choices where the plan was silent
+
+- `wrapAgentTabForPhone` was not given a separate container branch: a
+  container-running tab is not reachable, so the lookup in front of it already
+  answers `tab_not_found` (the catalog does not list it either). Adding a
+  `session_gone` branch behind that would be dead code.
+- A remote project's create is always `agents` in the window: whether the
+  mirror exists on disk is not visible to the renderer (the sidecar's
+  mirror-less `none` stays the sidecar's), and `launch_prep` creates the mirror
+  at spawn.
+- A VM `local_agent` stays reachable in the bridge (same as the catalog, A1's
+  table); `create` for a VM is `none`, so none is started from the phone.
+- `agentTurnScopes`/the push edges follow the same filter, so no notice is
+  raised for a tab the phone cannot attach to.
+
+### Gotchas for B2 / B3
+
+- B2: `phoneProjectFolder` and `projectHostKind` are the places for "what does
+  this project type share" texts if the titles need the host word; the
+  sidecar's `host` values are the same four words. `ProjectFilesView` can reuse
+  `phoneProjectFolder` instead of its own `resolveLocalMirror` copy.
+- B3: `not_attachable` also arrives from the window path (409 via
+  `answer_created`), same code as the sidecar's own refusal.
+- Untouched by design: `untested.ts` row `mobile-every-project-type` is B2's.
+
+### Gates
+
+`scripts/gates.sh` (diff-selected): brand, whitespace, lint (zero new
+warnings), clippy x3, `npm run build`, vitest `--changed`, `cargo test -p
+tabtivity -p app-serverd`, daemon-build test all PASS. Full `npm test`: 895 of
+896 files, 9015 of 9016 tests pass; the one failure is the known
+`CursorPacks.test.ts` (develop's 8338634a). New: `MobileTabReach.test.ts` (27
+tests), `MobileEveryProjectType.test.tsx` (9 tests); `ContainerScope.test.ts`
+still 7. `ci-local.sh` not run (no Rust change).
+
+### Flagged for user
+
+- A remote project whose mirror has never been created is listed on the phone
+  as folder-less with no ＋ (sidecar verdict), while the window itself would
+  accept an agent create for it; nothing reaches the bridge in that case.
+- A phone-reachable VM `local_agent` (A1's table) cannot be relaunched
+  (A3: every VM tab is `NotAttachable`); it is listed while it runs.

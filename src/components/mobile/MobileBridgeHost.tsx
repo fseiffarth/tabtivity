@@ -35,7 +35,7 @@ import { isTabColor } from "../../lib/theme/tabColors";
 import type { AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
-import { resolveProjectDirectory } from "../../types";
+import { phoneCreateVerdict, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
 import type { CalendarEvent, CalendarTask, ProjectEntry, Subtask, TaskColumn } from "../../types";
 import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
@@ -389,21 +389,24 @@ async function agentChoices(): Promise<CatalogChoice[]> {
 }
 
 /** The one gate every bridge handler applies before it touches a project: the
- * per-project Mobile switch is on, and the project is none of the trust tiers
- * the sidecar deliberately never reaches (remote, sandboxed, VM). */
+ * per-project Mobile switch is on. Every project type has one and nothing else
+ * narrows it (`docs/mobile_every_project_type_plan.md`); what the phone can
+ * reach INSIDE a remote, container or VM project is the tabs' business
+ * (`phoneTabs`, `create`). */
 function mobileProject(projectId: string | undefined) {
   if (!projectId) return undefined;
   const project = useProjectsStore.getState().projects.find((entry) => entry.id === projectId);
-  if (
-    !project
-    || project.remote
-    || project.sandbox?.enabled
-    || project.vm?.enabled
-    || !project[MOBILE_ACCESS_KEY]
-  ) {
-    return undefined;
-  }
-  return project;
+  return project?.[MOBILE_ACCESS_KEY] ? project : undefined;
+}
+
+/** The scope's tabs the phone can attach to: all of a local project's, box's,
+ * root's or assistant's, and of a remote, container or VM project only those
+ * with a local tmux session (`lib/projectTabHost`). EVERY per-tab handler of
+ * this bridge reads its tabs through here, so a tab the phone cannot reach is
+ * `tab_not_found` to all of them, as the sidecar's catalog does not list it. */
+function phoneTabs(scopeId: string): TabEntry[] {
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === scopeId);
+  return (useTabsStore.getState().tabsByScope[scopeId] ?? []).filter((tab) => phoneReachesTab(project, tab, scopeId));
 }
 
 /** A scope the phone may reach, in the four facts a handler needs of it. A
@@ -491,7 +494,9 @@ function mobileScope(id: string | undefined): MobileScope | undefined {
   }
   const project = mobileProject(id);
   if (!project) return undefined;
-  return { id: project.id, name: project.name, cwd: resolveProjectDirectory(project), localFile: project.local_file, project };
+  // The folder the sidecar uses (`discovery::mobile_root`): a remote project's
+  // local mirror, none for a VM without one.
+  return { id: project.id, name: project.name, cwd: phoneProjectFolder(project), localFile: project.local_file, project };
 }
 
 /** Every scope the phone may reach right now: root behind its gate, the
@@ -567,10 +572,9 @@ function agentTurnScopes(): string[] {
 }
 
 function agentTurnSnapshot(): Map<string, MobileAgentState> {
-  const tabsByScope = useTabsStore.getState().tabsByScope;
   const snapshot = new Map<string, MobileAgentState>();
   for (const scopeId of agentTurnScopes()) {
-    for (const tab of tabsByScope[scopeId] ?? []) {
+    for (const tab of phoneTabs(scopeId)) {
       if (isAgentKind(tab.kind) && tab.tmuxSession) snapshot.set(tab.tmuxSession, mobileAgentState(`${scopeId}:${tab.key}`));
     }
   }
@@ -609,7 +613,7 @@ function isAgentKind(kind: TabEntry["kind"]): boolean {
 
 function projectAgentStatuses(projectId: string): AgentTabStatus[] {
   const activity = useActivityStore.getState();
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).flatMap((tab) => {
+  return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
     const ptyId = `${projectId}:${tab.key}`;
     const state = mobileAgentState(ptyId);
@@ -642,7 +646,7 @@ function projectAgentStatuses(projectId: string): AgentTabStatus[] {
  * — and their model, so a quiet card is tagged like a busy one. */
 function projectAgentTimings(projectId: string): AgentTabTiming[] {
   const activity = useActivityStore.getState();
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).flatMap((tab) => {
+  return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
     const ptyId = `${projectId}:${tab.key}`;
     if (mobileAgentState(ptyId) !== "idle") return [];
@@ -747,7 +751,7 @@ function mergePromptRows(recent: readonly { text: string; at: string }[], sent: 
  */
 function projectAgentPrompts(projectId: string): AgentTabPrompts[] {
   const models = useAgentModelsStore.getState();
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).flatMap((tab) => {
+  return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
     void models.refresh(projectId, tab);
     const prompts = tabPromptRows(projectId, tab);
@@ -784,7 +788,7 @@ function tabPromptRows(projectId: string, tab: TabEntry): AgentTabPrompt[] {
  * fresh: the store's 10s floor could still hold the turn before a quick one. */
 async function finishedTurnPrompt(tmuxSession: string): Promise<string | undefined> {
   const found = agentTurnScopes().flatMap((scopeId) =>
-    (useTabsStore.getState().tabsByScope[scopeId] ?? []).flatMap((tab) =>
+    phoneTabs(scopeId).flatMap((tab) =>
       isAgentKind(tab.kind) && tab.tmuxSession === tmuxSession ? [{ scopeId, tab }] : []))[0];
   if (!found) return undefined;
   await useAgentModelsStore.getState().refresh(found.scopeId, found.tab, true).catch(() => undefined);
@@ -824,7 +828,7 @@ const MAX_UPCOMING_SCHEDULES = 3;
 async function agentScheduleSummaries(projectId?: string): Promise<AgentTabSchedules[]> {
   const scope = mobileScope(projectId);
   if (!scope) return [];
-  const targets = (useTabsStore.getState().tabsByScope[scope.id] ?? []).flatMap((tab) =>
+  const targets = phoneTabs(scope.id).flatMap((tab) =>
     isAgentKind(tab.kind) && tab.tmuxSession && tab.scheduleTargetId
       ? [{ tmux: tab.tmuxSession, target: tab.scheduleTargetId }]
       : [],
@@ -847,6 +851,13 @@ async function agentScheduleSummaries(projectId?: string): Promise<AgentTabSched
   }));
 }
 
+/** Whether the phone may start a tab of `kind` in the scope: the project's
+ * verdict (`lib/projectTabHost.phoneCreateVerdict`) against the kind. */
+function phoneMayCreate(scope: MobileScope, kind: CreateRequest["kind"]): boolean {
+  const verdict = phoneCreateVerdict(scope.project);
+  return verdict === "all" || (verdict === "agents" && kind === "agent");
+}
+
 async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promise<DesktopResponse> {
   const scope = mobileScope(request.project_id);
   if (!scope) {
@@ -855,6 +866,13 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   // A chat of the assistant scope is its own thing: the phone names a launch,
   // never an agent, a folder or a mode.
   if (scope.id === ASSISTANT_SCOPE || request.assistant) return createAssistantChat(scope, request);
+  // The sidecar's `creatable` is the perimeter; this repeats it, because the
+  // bridge is reachable without going through it. A tab of a remote host, a
+  // container or a VM has no local tmux session to attach to, so only a remote
+  // project's agents (which run in the mirror) and a local scope's anything.
+  if (!phoneMayCreate(scope, request.kind)) {
+    return { status: "error", code: "not_attachable", message: "A new tab here would run where the phone cannot attach" };
+  }
   const cwd = scope.cwd;
   if (!cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   // The new tab must be in the *shown* scope to get a terminal at all, so the
@@ -889,7 +907,7 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
     // guess. The CLI is the phone's pick, or the one the named tab runs.
     let item: StaticMenuItem | undefined;
     if (request.like_tab) {
-      const tab = (useTabsStore.getState().tabsByScope[scope.id] ?? [])
+      const tab = phoneTabs(scope.id)
         .find((entry) => entry.tmuxSession === request.like_tab && entry.kind === "agent");
       if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
       item = AGENT_ITEMS.find((entry) => entry.cmd === tab.cmd);
@@ -936,6 +954,10 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
       spec = buildStaticTabSpec(choice.item, cwd, scope.name, t);
     }
   }
+  // A remote project's agent runs in the mirror (`cwd`), as the window runs
+  // one by default; saved explicitly so a later default change cannot move it
+  // to the host (`headless::create_tab` stamps the same).
+  if (projectHostKind(scope.project) === "remote") spec = { ...spec, location: "local" };
   let created: TabEntry;
   try {
     created = await useTabsStore.getState().hydrateThenCreateInScope({
@@ -1235,7 +1257,7 @@ function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string |
 }
 
 function scheduleTargetTab(projectId: string, tmuxSession: string) {
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).find((entry) =>
+  return phoneTabs(projectId).find((entry) =>
     (entry.kind === "agent" || entry.kind === "local_agent")
       && (entry.tmuxSession === tmuxSession || entry.tmuxAttach === tmuxSession),
   );
@@ -1270,7 +1292,7 @@ async function renameAgentTab(projectId: string, tmuxSession: string, label: str
  * would refuse half the rows. The tmux name is the identity either way: it is
  * what the catalog published this tab from. */
 function mobileTargetTab(scope: string, tmuxSession: string) {
-  return (useTabsStore.getState().tabsByScope[scope] ?? []).find((entry) =>
+  return phoneTabs(scope).find((entry) =>
     entry.tmuxSession === tmuxSession || entry.tmuxAttach === tmuxSession,
   );
 }
@@ -1304,13 +1326,20 @@ async function closeMobileTab(projectId: string, tmuxSession: string): Promise<D
   return { status: "closed" };
 }
 
+/** The scope's closed agent tabs the phone could attach to again: one that ran
+ * on a remote host or in a container is reopened from the desktop. */
+function closedPhoneTabs(scope: MobileScope) {
+  return (useClosedAgentTabsStore.getState().byScope[scope.id] ?? [])
+    .filter((closed) => phoneReachesTab(scope.project, closed.tab, scope.id));
+}
+
 /** The scope's closed agent tabs for the phone's "Recently closed" row — the
  * desktop's own list (`stores/agents/closedAgentTabs`), so a tab closed on
  * either surface can be reopened from both. Label and agent only. */
 function closedAgentTabRows(projectId?: string): ClosedAgentTabRow[] {
   const scope = mobileScope(projectId);
   if (!scope) return [];
-  return (useClosedAgentTabsStore.getState().byScope[scope.id] ?? []).map((closed) => ({
+  return closedPhoneTabs(scope).map((closed) => ({
     id: closed.id,
     label: closed.tab.label,
     agent: closed.tab.cmd,
@@ -1327,8 +1356,18 @@ async function reopenMobileTab(projectId: string, closedId?: string): Promise<De
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // The sidecar's `creatable` again: a reopen starts an agent where the window
+  // would, so it follows the create verdict AND the closed tab's own locality
+  // (a closed host-side tab stays closed, untouched).
+  const notAttachable: DesktopResponse = { status: "error", code: "not_attachable", message: "That tab would run where the phone cannot attach" };
+  if (!phoneMayCreate(scope, "agent")) return notAttachable;
+  const closed = useClosedAgentTabsStore.getState().byScope[scope.id] ?? [];
+  const wanted = closedId === undefined ? closedPhoneTabs(scope)[0] : closed.find((entry) => entry.id === closedId);
+  if (wanted && !phoneReachesTab(scope.project, wanted.tab, scope.id)) return notAttachable;
+  // No id names the newest tab the phone lists, never a host-side one behind it.
+  if (closedId === undefined && !wanted) return { status: "error", code: "nothing_to_reopen", message: "There is no closed tab to reopen" };
   await enterScope(scope);
-  const entry = reopenClosedAgentTab(scope.id, closedId);
+  const entry = reopenClosedAgentTab(scope.id, wanted?.id ?? closedId);
   if (!entry) return { status: "error", code: "nothing_to_reopen", message: "There is no closed tab to reopen" };
   if (!entry.tmuxSession) {
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
