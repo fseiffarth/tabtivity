@@ -14,9 +14,10 @@ that need no project ("what does this error mean", "find me the paper on X",
 ## Turn it on
 
 1. **Settings → System → Experimental**: switch **Tabby** on.
-2. A cat-head icon appears on the side panel's edge bar, below Files, Git,
-   Apps and Agents (and as a button in the panel's own row of views), and
-   **Settings → Agents** gets a **Tabby** page.
+2. A small Tabtivity-mark icon (a ring with a tree and two hexagons) appears
+   on the side panel's edge bar, below Files, Git, Apps and Agents (and as a
+   button in the panel's own row of views), and **Settings → Agents** gets a
+   **Tabby** page.
 3. Click the icon to open the side panel on Tabby. Tabby is one chat: it opens
    on your last chat (resumed where you left it), or starts a new one on your
    default CLI straight away. Click the icon again to close the panel; the chat
@@ -91,7 +92,7 @@ the logins of your signed-in agent CLIs. **On Windows there is no sandbox**, so
 ## From the phone
 
 With the experimental switch on, **Settings → Mobile → Tabby from the phone**
-(on by default) puts a round Tabby button (the same cat icon) just above the
+(on by default) puts a round Tabby button (the same icon) just above the
 phone's tab bar on Home; Tabby is not listed among the projects. Tap it for the
 same one chat as on the desktop: the last chat, started again if the desktop
 restarted, or a new one on the default CLI. In the chat, tap the CLI name at the
