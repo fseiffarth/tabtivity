@@ -2541,7 +2541,7 @@
   background: none;
   color: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cur-pointer, pointer);
 }
 .machines-name-btn:hover,
 .machines-name-btn:focus-visible {
