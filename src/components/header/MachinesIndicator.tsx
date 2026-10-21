@@ -2120,9 +2120,19 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     busy={busy !== null}
                     label={busy ? `${lampText} — ${busyLabel(busy)}` : lampText}
                   />
-                  <span className="vpn-indicator-config" title={`${targetLabel(m)}\n${stateTip}`}>
+                  {/* The name is the shortcut to the machine's System Monitor,
+                      the same dialog the expanded row's button opens. */}
+                  <button
+                    type="button"
+                    className="vpn-indicator-config machines-name-btn"
+                    title={`${targetLabel(m)}\n${stateTip}\n${t("machines.systemMonitorTitle")}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openMonitor({ id: m.id, user: m.user, host: m.host, port: m.port, label: m.label });
+                    }}
+                  >
                     {name}
-                  </span>
+                  </button>
                   {/* The HPC tag, on the row itself — the whole point of a tag
                       that switches off background work is being able to see, at a
                       glance over the machine list, which machines it is off for. */}

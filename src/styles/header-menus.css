@@ -2533,6 +2533,20 @@
   flex: 1;
   min-width: 0;
 }
+/* The machine name is a button (opens its System Monitor): drop the button
+   chrome so it still reads as the row's label, underline on hover. */
+.machines-name-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.machines-name-btn:hover,
+.machines-name-btn:focus-visible {
+  text-decoration: underline;
+}
 .machines-row-actions {
   display: flex;
   align-items: center;
