@@ -823,7 +823,8 @@ describe("the Reader's live rows", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(written).toEqual(["\u001b[Z"]);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+    // The facts row's mode chip, not the composer's Plan chip.
+    expect(within(document.querySelector(".terminal-reader-facts") as HTMLElement).getByRole("button", { name: "Plan" })).toBeTruthy();
   });
 
   it("chooses Codex permissions from its native picker and follows the Full Access confirmation", async () => {

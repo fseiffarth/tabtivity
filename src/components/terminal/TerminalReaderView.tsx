@@ -53,8 +53,10 @@ import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerM
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
-import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
+import { ReaderComposerChips } from "./ReaderComposerChips";
 import { onReaderInsert } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
@@ -605,12 +607,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       // A new conversation goes in as the Clear key's does, so the window
       // knows of it at once: Codex's hook says so only with the next prompt.
       if (isNewConversationCommand(command)) {
-        if (!(await clearAgentTab(scope, current))) {
-          // Codex refuses one mid-turn, and says so only in its terminal.
-          const busy = agentFamily(agentTabLabel(current)) === "codex" && !!useActivityStore.getState().busyByTab[ptyId];
-          setSendError(t(busy ? "terminal.reader.clearBusy" : "terminal.reader.sendFailed"));
-          return;
-        }
+        if (!(await startNewConversation(current))) return;
       } else if (subagent && !/^\s*\//u.test(text)) {
         // Words go to the open subagent; a command stays the session's.
         const target = current.scheduleTargetId;
@@ -637,11 +634,46 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       undo.current.clear();
       historyAt.current = null;
     } catch (error) {
-      setSendError(t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen" : "terminal.reader.sendFailed"));
+      setSendError(sendFailure(error));
     } finally {
       setSending(false);
     }
   };
+
+  /** `/clear` into the tab; false, with the reason said, when it did not go in. */
+  const startNewConversation = async (current: TabEntry): Promise<boolean> => {
+    if (await clearAgentTab(scope, current)) return true;
+    // Codex refuses one mid-turn, and says so only in its terminal.
+    const busy = agentFamily(agentTabLabel(current)) === "codex" && !!useActivityStore.getState().busyByTab[ptyId];
+    setSendError(t(busy ? "terminal.reader.clearBusy" : "terminal.reader.sendFailed"));
+    return false;
+  };
+  const sendFailure = (error: unknown) =>
+    t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen" : "terminal.reader.sendFailed");
+
+  /** The chip row (`ReaderComposerChips`): Plan / Goal only lead the draft,
+   * as the phone's do; Clear and Commit act at once and leave the draft alone. */
+  const prefixCommands = draftPrefixes(cli);
+  const togglePrefix = (command: string) => {
+    editDraft(toggleDraftPrefix(draftRef.current, command, prefixCommands));
+    composerRef.current?.focus();
+  };
+  const runChip = async (action: (current: TabEntry) => Promise<unknown>) => {
+    const current = tabRef.current;
+    if (!current || sending) return;
+    setSending(true);
+    setSendError("");
+    try {
+      await action(current);
+    } catch (error) {
+      setSendError(sendFailure(error));
+    } finally {
+      setSending(false);
+    }
+  };
+  const clearChat = () => void runChip(startNewConversation);
+  // Shown as sending by the Reader's `onSentPrompt` listener, like any prompt.
+  const commit = (choice: CommitChoice) => void runChip((current) => sendSteeringPrompt(current, COMMIT_PROMPTS[choice]));
 
   /** ↑ on the composer's first line recalls the previous prompt, ↓ on its
    * last line the next one and, past the newest, the draft set aside — the
@@ -753,6 +785,14 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   return <>
     <div className="terminal-reader-composer">
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
+      <ReaderComposerChips
+        prefixes={prefixCommands}
+        active={draftPrefix(draft, prefixCommands)}
+        disabled={sending}
+        onPrefix={togglePrefix}
+        onClear={clearChat}
+        onCommit={commit}
+      />
       <textarea
         ref={composerRef}
         value={draft}

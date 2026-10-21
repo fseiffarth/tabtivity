@@ -3003,6 +3003,67 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel);
 }
+/* The phone composer's Plan / Goal / Clear / Commit chips, a row over the
+   text box; the Commit menu opens upward from it. */
+.terminal-reader-composer { flex-wrap: wrap; }
+.terminal-reader-chips {
+  position: relative;
+  flex: 0 0 100%;
+  display: flex;
+  gap: 6px;
+}
+.terminal-reader-chip {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-chip:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
+.terminal-reader-chip.active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.terminal-reader-chip:disabled {
+  opacity: 0.45;
+  cursor: var(--cur-default, default);
+}
+.terminal-reader-commit-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 28px));
+  padding: 6px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+}
+.terminal-reader-commit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-commit-row:hover { background: var(--bg-hover); }
+.terminal-reader-commit-row small {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
 .terminal-reader-composer textarea {
   flex: 1;
   min-height: 2.6em;
