@@ -50,12 +50,20 @@ if [ "${used:-0}" -le "$CAP_KB" ]; then
 fi
 note "$((used / 1048576)) GB used, cap $((CAP_KB / 1048576)) GB — pruning"
 
-over() { used=$(size_kb); [ "${used:-0}" -gt "$CAP_KB" ]; }
+# `used` is tracked, not re-measured: a du of the whole tree after every
+# deletion took tens of minutes on a 1 TB target/.
+over() { [ "${used:-0}" -gt "$CAP_KB" ]; }
 
 drop() { # path…
-  local p
+  local p kb
   for p in "$@"; do
-    if [ "$DRY" = 1 ]; then echo "would remove $p"; else rm -rf -- "$p"; fi
+    if [ "$DRY" = 1 ]; then
+      echo "would remove $p"
+    else
+      kb=$(du -sk "$p" 2>/dev/null | cut -f1)
+      rm -rf -- "$p"
+      used=$((used - ${kb:-0}))
+    fi
   done
 }
 
@@ -83,6 +91,7 @@ if [ "$DRY" = 1 ] || over; then
       echo "would remove $(find "$d" -maxdepth 1 -type f -atime +"$DEPS_DAYS" | wc -l) stale files in $d"
     else
       find "$d" -maxdepth 1 -type f -atime +"$DEPS_DAYS" -delete 2>/dev/null
+      used=$(size_kb)
     fi
   done
 fi
