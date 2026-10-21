@@ -56,7 +56,7 @@ class FakeWebSocket {
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { SubagentsSheet } from "../../../mobile-web/src/screens/SubagentsSheet";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
 import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
@@ -124,6 +124,21 @@ describe("the pure path through subagents", () => {
     expect(stepSibling(next, 1)).toBe(next);
     expect(stepSibling(path, -1)).toBe(path);
     expect(stepSibling([], 1)).toEqual([]);
+  });
+
+  it("walks into a workflow run and its agents, and types to neither", () => {
+    const run: TranscriptEntry[] = [
+      { kind: "agent", text: "Improve the chart", role: "chart-improve", subagent: "00000000000000c3", workflow: true, running: true, background: true },
+    ];
+    expect(subagentsIn(run)[0]).toMatchObject({ token: "00000000000000c3", workflow: true, background: true });
+    const agents: TranscriptEntry[] = [{ kind: "agent", text: "reviewer R1", role: "Review", subagent: "00000000000000d4", running: true, background: true }];
+    const inRun = openSubagent(openSubagent([], subagentsIn(run)[0], run, 0), subagentsIn(agents)[0], agents, 0);
+    // The agent is not itself a workflow, but sits inside one.
+    expect(inRun[1].workflow).toBeUndefined();
+    expect(inWorkflow(inRun)).toBe(true);
+    expect(inWorkflow(inRun.slice(0, 1))).toBe(true);
+    expect(inWorkflow(openSubagent([], subagentsIn(agents)[0], agents, 0))).toBe(false);
+    expect(inWorkflow([])).toBe(false);
   });
 
   it("knows an open subagent at work by the session's live entries", () => {

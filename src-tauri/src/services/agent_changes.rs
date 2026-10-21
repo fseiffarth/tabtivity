@@ -343,21 +343,31 @@ fn paths_of(changes: &[FileChange]) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-/// A Claude session's subagent transcripts (`agent-<id>.jsonl` in `folder`),
-/// at most [`MAX_SUBAGENT_FILES`] of them, in name order.
+/// A Claude session's subagent transcripts (`agent-<id>.jsonl` in `folder`,
+/// and in each workflow run's folder under `folder/workflows`), at most
+/// [`MAX_SUBAGENT_FILES`] of them, in name order.
 fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return Vec::new();
+    let agents = |dir: &Path| -> Vec<std::path::PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("agent-") && name.ends_with(".jsonl")
+            })
+            .map(|entry| entry.path())
+            .collect()
     };
-    let mut files: Vec<std::path::PathBuf> = entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with("agent-") && name.ends_with(".jsonl")
-        })
-        .map(|entry| entry.path())
-        .collect();
+    let mut files = agents(folder);
+    if let Ok(runs) = std::fs::read_dir(folder.join("workflows")) {
+        // Real directories only: the agent writes them, a link is not followed.
+        for run in runs.flatten().filter(|run| run.file_type().is_ok_and(|kind| kind.is_dir())) {
+            files.extend(agents(&run.path()));
+        }
+    }
     files.sort();
     files.truncate(MAX_SUBAGENT_FILES);
     files

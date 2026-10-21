@@ -56,7 +56,7 @@ import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/term
 import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { onReaderInsert } from "../../lib/terminal/terminalDrop";
-import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
@@ -393,7 +393,7 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 });
 
 /** What a subagent's card or list row opens: its handle and what it says. */
-type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role">;
+type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
 function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
   turn: TranscriptTurn;
@@ -1320,7 +1320,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const token = turn.subagent;
     if (!token) return;
     const top = listRef.current?.scrollTop ?? 0;
-    setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role }, levelEntriesRef.current, top));
+    setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role, ...(turn.workflow ? { workflow: true } : {}) }, levelEntriesRef.current, top));
     if (!fromList) setSubagentListOpen(false);
     setSubLimit(READER_STEP);
     keepFromBottom.current = null;
@@ -1666,7 +1666,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         tabRef={tabRef}
         ptyId={ptyId}
         cli={agentFamily(agentLabel)}
-        subagent={openStep && isClaudeCommand(tab?.cmd) ? openStep : undefined}
+        subagent={openStep && isClaudeCommand(tab?.cmd) && !inWorkflow(subagentPath) ? openStep : undefined}
         history={history}
         queued={queuedPrompts}
         focused={focused}

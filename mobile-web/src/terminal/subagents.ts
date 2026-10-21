@@ -12,6 +12,8 @@ export interface SubagentRef {
   running?: boolean;
   /** It runs in the background (`background`). */
   background?: boolean;
+  /** A Claude `Workflow` run: opening it lists its agents (`workflow`). */
+  workflow?: boolean;
   /** When it was spawned: its entry's own stamp (`at`). */
   at?: string;
   /** The linked worktree it works in (`worktree`). */
@@ -34,8 +36,15 @@ export interface SubagentStep extends SubagentRef {
  * stepped to. */
 export function subagentsIn(entries: readonly TranscriptEntry[]): SubagentRef[] {
   return entries.flatMap((entry) => entry.kind === "agent" && entry.subagent
-    ? [{ token: entry.subagent, task: entry.text, role: entry.role, ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.at ? { at: entry.at } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) }]
+    ? [{ token: entry.subagent, task: entry.text, role: entry.role, ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.workflow ? { workflow: true } : {}), ...(entry.at ? { at: entry.at } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) }]
     : []);
+}
+
+/** Whether the open conversation of `path` is a workflow run or inside one:
+ * an agent of a workflow is not in Claude's own agent list, so nothing typed
+ * in either reaches it. */
+export function inWorkflow(path: readonly SubagentStep[]): boolean {
+  return path.some((step) => step.workflow === true);
 }
 
 /** Whether a subagent the session's entry describes is at work: it has not

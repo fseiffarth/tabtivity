@@ -759,6 +759,9 @@ export interface TranscriptEntry {
   /** On an `agent`: it runs in the background (Claude's async launch), at
    * work while the session's own turn may be over. */
   background?: boolean;
+  /** On an `agent`: a Claude `Workflow` run, not one subagent — its handle
+   * opens the run's agents as entries, and nothing can be typed to it. */
+  workflow?: boolean;
   /** On an `agent`: the linked worktree it works in (Claude's
    * `isolation: "worktree"`, or the one the session was in when it spawned
    * it); absent in the project folder's own checkout. */

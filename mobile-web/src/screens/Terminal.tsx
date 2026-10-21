@@ -132,7 +132,7 @@ import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
-import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
 import { inboxLeaves, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
@@ -2316,11 +2316,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const levelEntries = openStep ? (subTranscript?.entries ?? []) : sessionEntries;
   const levelEntriesRef = useRef(levelEntries);
   levelEntriesRef.current = levelEntries;
-  const openSubagentTurn = useCallback((turn: Pick<TranscriptTurn, "subagent" | "text" | "role">, fromList = false) => {
+  const openSubagentTurn = useCallback((turn: Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">, fromList = false) => {
     const token = turn.subagent;
     if (!token) return;
     const top = readableHost.current?.scrollTop ?? 0;
-    setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role }, levelEntriesRef.current, top));
+    setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role, ...(turn.workflow ? { workflow: true } : {}) }, levelEntriesRef.current, top));
     if (!fromList) setSubagentListOpen(false);
     // A conversation opens on its newest turn, as the session does.
     atBottomRef.current = true;
@@ -2685,7 +2685,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   };
   /** The open subagent the composer writes to: Claude's only, the one CLI
    * whose own TUI takes words for a subagent. */
-  const subagentTarget = openStep && agentFamily(tab.agent_label ?? tab.label) === "claude" ? openStep : undefined;
+  const subagentTarget = openStep && agentFamily(tab.agent_label ?? tab.label) === "claude" && !inWorkflow(subagentPath) ? openStep : undefined;
   /** Words for the open subagent, delivered through Claude's agent list
    * (`subagentInput`); the Reader stays on the subagent, whose conversation
    * shows them once it has taken them. Words that did not get there go back

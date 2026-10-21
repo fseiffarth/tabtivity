@@ -32,6 +32,12 @@
 //! state store, OpenCode a `parent_id` per child session. A handle is only
 //! ever resolved among the subagents of the tab's own session.
 //!
+//! A Claude `Workflow` call is one such `agent` entry too (`workflow`): its
+//! handle opens a synthesized conversation of the run — one `agent` entry per
+//! agent the run's `journal.jsonl` started, its phase as the kind — whose
+//! agents open as subagents, their files in
+//! `<session>/subagents/workflows/<run id>/`.
+//!
 //! A read answers with a `version` fingerprint of the file; a caller that
 //! passes the one it last saw gets `unchanged` back without a parse, which is
 //! what lets the phone poll while the agent is answering.
@@ -119,6 +125,11 @@ pub struct TranscriptEntry {
     /// `Agent` launch), so it can be at work while the session's turn is over.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
+    /// On an `agent` entry: a Claude `Workflow` run, not one subagent. Its
+    /// handle reads the run's agents as entries of their own; nothing can be
+    /// typed to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workflow: bool,
     /// On an `answer` entry: the questions the agent asked the user (Claude's
     /// `AskUserQuestion`), each with the answer it got. The entry is written
     /// once the call has its result, so a question still waiting is the live
@@ -432,7 +443,7 @@ pub(crate) fn stored_chat_file(
         return Some(main);
     };
     match cmd {
-        "claude" => claude_subagent_file(&main.with_extension("").join("subagents"), token),
+        "claude" => claude_conversation_file(&main.with_extension("").join("subagents"), token),
         "codex" => {
             let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
             let child = stores.iter().find_map(|db| {
@@ -596,10 +607,10 @@ fn claude_transcript_at(main: &Path, subagent: Option<&str>, version: Option<&st
     let spawns = Spawns::Claude(&folder);
     match subagent {
         None => read_transcript_in(main, TranscriptKind::Claude, &spawns, false, version, limit),
-        Some(token) => {
-            let file = claude_subagent_file(&folder, token)?;
-            read_transcript_in(&file, TranscriptKind::Claude, &spawns, true, version, limit)
-        }
+        Some(token) => match claude_subagent_file(&folder, token) {
+            Some(file) => read_transcript_in(&file, TranscriptKind::Claude, &spawns, true, version, limit),
+            None => workflow_transcript(&claude_workflow_dir(&folder, token)?, version, limit),
+        },
     }
 }
 
@@ -617,7 +628,7 @@ pub(crate) fn conversation_file(
         return Some(main);
     };
     match cmd {
-        "claude" => claude_subagent_file(&main.with_extension("").join("subagents"), token),
+        "claude" => claude_conversation_file(&main.with_extension("").join("subagents"), token),
         "codex" => {
             let thread = agent_session::read_live_session_for(project_id, launch_id)?;
             let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
@@ -694,14 +705,100 @@ fn conversation_targets(cmd: &str, file: &Path, subagent: bool) -> Vec<crate::se
     targets
 }
 
-/// The subagent file in `folder` whose handle is `token`.
+/// The subagent file whose handle is `token`: in `folder`, or in one of its
+/// workflow runs' folders (`workflows/<run id>/`), where a `Workflow`'s agents
+/// are written.
 fn claude_subagent_file(folder: &Path, token: &str) -> Option<PathBuf> {
-    std::fs::read_dir(folder).ok()?.flatten().map(|entry| entry.path()).find(|path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_prefix("agent-")?.strip_suffix(".jsonl"))
-            .is_some_and(|id| subagent_token(id) == token)
-    })
+    let named = |dir: &Path| {
+        std::fs::read_dir(dir).ok()?.flatten().map(|entry| entry.path()).find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("agent-")?.strip_suffix(".jsonl"))
+                .is_some_and(|id| subagent_token(id) == token)
+        })
+    };
+    named(folder).or_else(|| claude_workflow_dirs(folder).iter().find_map(|run| named(run)))
+}
+
+/// The folders of the workflow runs in `folder` (`workflows/<run id>/`),
+/// real directories only — the agent writes them, a link is not followed.
+fn claude_workflow_dirs(folder: &Path) -> Vec<PathBuf> {
+    let Ok(runs) = std::fs::read_dir(folder.join("workflows")) else {
+        return Vec::new();
+    };
+    runs.flatten().filter(|run| run.file_type().is_ok_and(|kind| kind.is_dir())).map(|run| run.path()).collect()
+}
+
+/// The run folder whose run id has the handle `token`.
+fn claude_workflow_dir(folder: &Path, token: &str) -> Option<PathBuf> {
+    claude_workflow_dirs(folder)
+        .into_iter()
+        .find(|run| run.file_name().and_then(|name| name.to_str()).is_some_and(|id| subagent_token(id) == token))
+}
+
+/// What a subagent handle's conversation is stored in: its file, or — for a
+/// workflow run — the run's journal, which the watch and the changes read go
+/// by (it changes with every agent the run starts or ends).
+fn claude_conversation_file(folder: &Path, token: &str) -> Option<PathBuf> {
+    claude_subagent_file(folder, token).or_else(|| Some(claude_workflow_dir(folder, token)?.join("journal.jsonl")))
+}
+
+/// The most of a run's `journal.jsonl` read; it holds every agent's result.
+const MAX_JOURNAL_BYTES: u64 = 32 * 1024 * 1024;
+
+/// A workflow run as a conversation: one `agent` entry per agent its journal
+/// says started, in that order, the phase as the kind and the label as the
+/// task. An agent is at work until the journal has its result. Only one whose
+/// file is written yet can be opened.
+fn workflow_transcript(run: &Path, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    use std::io::{BufRead, Read};
+    let journal = run.join("journal.jsonl");
+    let mut current = std::fs::metadata(run).map(|meta| fingerprint(&meta)).unwrap_or_default();
+    let file = crate::services::home_io::open_regular(&journal);
+    if let Some(meta) = file.as_ref().and_then(|file| file.metadata().ok()) {
+        current = format!("{current}:{}", fingerprint(&meta));
+    }
+    if version == Some(current.as_str()) {
+        return Some(AgentTranscript { available: true, version: Some(current), unchanged: true, ..Default::default() });
+    }
+    let mut entries: Vec<TranscriptEntry> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    for line in std::io::BufReader::new(file?.take(MAX_JOURNAL_BYTES)).lines().map_while(Result::ok) {
+        let Ok(record) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let text = |key: &str| record.get(key).and_then(Value::as_str);
+        let Some(id) = text("agentId").filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric())) else {
+            continue;
+        };
+        match text("type") {
+            Some("started") => {
+                let Some(mut entry) = agent_entry(text("label").unwrap_or_default(), text("phase"), None) else {
+                    continue;
+                };
+                entry.running = true;
+                entry.background = true;
+                if run.join(format!("agent-{id}.jsonl")).is_file() {
+                    entry.subagent = Some(subagent_token(id));
+                }
+                ids.push(id.to_string());
+                entries.push(entry);
+            }
+            Some("result") => {
+                if let Some(entry) = ids.iter().position(|known| known == id).map(|at| &mut entries[at]) {
+                    entry.running = false;
+                    entry.finished = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let running_agents = running_agents(&entries);
+    let truncated = entries.len() > limit;
+    if truncated {
+        entries.drain(..entries.len() - limit);
+    }
+    Some(AgentTranscript { available: true, version: Some(current), entries, truncated, running_agents, ..Default::default() })
 }
 
 /// A Codex tab's conversation, or one of its subagents'. A subagent is a
@@ -1350,6 +1447,9 @@ fn parse_entries<'a>(
     // (`async_launched`); what it does after is replayed in `agents`.
     let mut returned = std::collections::HashSet::new();
     let mut agents = BackgroundAgents::default();
+    // The `Workflow` calls among `calls`, and the runs their results named.
+    let mut workflows = std::collections::HashSet::new();
+    let mut runs: std::collections::HashMap<String, WorkflowRun> = std::collections::HashMap::new();
     // Where the newest typed prompt's turn starts: a foreground spawn before
     // it that never got its result (the CLI was killed mid-call) is not at
     // work, as a shell from an earlier turn is not.
@@ -1381,6 +1481,7 @@ fn parse_entries<'a>(
             backgrounded.extend(claude_backgrounded(&value));
             ended.extend(claude_tasks_ended(line));
             agents.read(&value, line);
+            runs.extend(claude_workflow_launch(&value));
         }
         let records = match kind {
             TranscriptKind::Claude => claude_records(&value),
@@ -1409,6 +1510,14 @@ fn parse_entries<'a>(
                 Record::Question { call, questions } => {
                     asked.insert(call, (questions, at.clone()));
                 }
+                Record::Workflow { call, title } => {
+                    if let Some(mut entry) = agent_entry(&title, Some("workflow"), at.clone()) {
+                        entry.workflow = true;
+                        workflows.insert(call.clone());
+                        calls.push((entries.len(), call));
+                        entries.push(entry);
+                    }
+                }
                 Record::Spawn { call, task, kind } => {
                     if let Some(mut entry) = agent_entry(&task, kind.as_deref(), at.clone()) {
                         // Where the session was when it spawned it; a
@@ -1422,6 +1531,15 @@ fn parse_entries<'a>(
         }
     }
     for (index, call) in &calls {
+        // A workflow's handle is its run's, known from the launch result.
+        if let Some(run) = workflows.contains(call).then(|| runs.get(call)).flatten() {
+            let entry = &mut entries[*index];
+            entry.subagent = Some(subagent_token(&run.run));
+            let titled = agent_entry(run.summary.as_deref().unwrap_or(&entry.text), run.name.as_deref().or(entry.role.as_deref()), None);
+            if let Some(titled) = titled {
+                (entry.text, entry.cut, entry.role) = (titled.text, titled.cut, titled.role);
+            }
+        }
         let background = agents.at_work.get(call).copied();
         let finished = background.map_or_else(|| returned.contains(call), |at_work| !at_work);
         entries[*index].running = !finished && (background.is_some() || *index >= turn_start);
@@ -1712,6 +1830,8 @@ enum Record {
     Plan(String),
     /// A subagent spawned by tool call `call`, sent to do `task`.
     Spawn { call: String, task: String, kind: Option<String> },
+    /// A `Workflow` run started by tool call `call`, titled `title`.
+    Workflow { call: String, title: String },
     /// A shell command started by tool call `call`.
     Shell { call: String, shell: RunningShell },
     /// Questions put to the user by tool call `call`, not yet answered.
@@ -1803,7 +1923,7 @@ fn claude_records(value: &Value) -> Vec<Record> {
                         .join("\n\n"),
                     blocks
                         .iter()
-                        .filter_map(|b| claude_plan(b).or_else(|| claude_spawn(b)).or_else(|| claude_shell(b)).or_else(|| claude_question(b)))
+                        .filter_map(|b| claude_plan(b).or_else(|| claude_spawn(b)).or_else(|| claude_workflow(b)).or_else(|| claude_shell(b)).or_else(|| claude_question(b)))
                         .collect(),
                 ),
                 _ => return Vec::new(),
@@ -1928,6 +2048,50 @@ fn claude_spawn(block: &Value) -> Option<Record> {
         task: field("description").or_else(|| field("prompt")).unwrap_or_default().to_string(),
         kind: Some(field("subagent_type").unwrap_or("general-purpose").to_string()),
     })
+}
+
+/// A `Workflow` `tool_use` block: a run of agents the script starts, titled by
+/// the script's own `description` (its `meta`) until the launch result names
+/// the run.
+fn claude_workflow(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use") || block.get("name").and_then(Value::as_str) != Some("Workflow") {
+        return None;
+    }
+    let input = block.get("input");
+    let field = |key: &str| input.and_then(|i| i.get(key)).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+    let described = field("script").and_then(|script| {
+        let rest = script.split("description:").nth(1)?.trim_start();
+        let quote = rest.chars().next().filter(|quote| matches!(quote, '\'' | '"' | '`'))?;
+        Some(rest[1..].split(quote).next()?.to_string())
+    });
+    Some(Record::Workflow {
+        call: block.get("id").and_then(Value::as_str)?.to_string(),
+        title: described.or_else(|| field("name").map(str::to_string)).unwrap_or_default(),
+    })
+}
+
+/// The run a Claude `user` record says a `Workflow` call launched
+/// (`toolUseResult`): the call, the run id its folder is named by, the
+/// workflow's name and its summary.
+fn claude_workflow_launch(value: &Value) -> Option<(String, WorkflowRun)> {
+    let result = value.get("toolUseResult")?;
+    if result.get("taskType").and_then(Value::as_str) != Some("local_workflow") {
+        return None;
+    }
+    let text = |key: &str| result.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
+    let run = text("runId").filter(|id| id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))?;
+    let Some(Value::Array(blocks)) = value.get("message").and_then(|m| m.get("content")) else {
+        return None;
+    };
+    let call = blocks.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))?.get("tool_use_id")?.as_str()?;
+    Some((call.to_string(), WorkflowRun { run, name: text("workflowName"), summary: text("summary") }))
+}
+
+/// A launched `Workflow` run, as its launch result names it.
+struct WorkflowRun {
+    run: String,
+    name: Option<String>,
+    summary: Option<String>,
 }
 
 /// A Codex rollout record as a turn: the `response_item` messages — the
@@ -2383,6 +2547,72 @@ mod tests {
             vec![("prompt", "long task"), ("agent", "Dig deeper"), ("answer", "The backend is in src-tauri.")]
         );
         assert!(claude_subagent_file(&folder, &subagent_token("elsewhere")).is_none());
+    }
+
+    #[test]
+    fn a_claude_workflow_is_an_entry_that_opens_its_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("s.jsonl");
+        let launch = r#"{"type":"user","toolUseResult":{"status":"async_launched","taskId":"w1","taskType":"local_workflow","workflowName":"chart-improve","runId":"wf_abc-123","summary":"Improve the chart"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_W","content":"launched"}]}}"#;
+        std::fs::write(
+            &main,
+            format!(
+                "{}\n{}\n",
+                r#"{"type":"assistant","timestamp":"2026-10-20T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_W","name":"Workflow","input":{"script":"export const meta = {\n  name: 'chart-improve',\n  description: 'Improve the chart: review then code',\n}"}}]}}"#,
+                launch,
+            ),
+        )
+        .unwrap();
+        let folder = dir.path().join("s").join("subagents");
+        let run = folder.join("workflows").join("wf_abc-123");
+        std::fs::create_dir_all(&run).unwrap();
+
+        // Launched: at work, titled by the result, its handle the run's.
+        let read = read_transcript_in(&main, TranscriptKind::Claude, &Spawns::Claude(&folder), false, None, DEFAULT_LIMIT).unwrap();
+        let entry = &read.entries[0];
+        assert_eq!((entry.kind.as_str(), entry.text.as_str(), entry.role.as_deref()), ("agent", "Improve the chart", Some("chart-improve")));
+        assert!(entry.workflow && entry.running && entry.background && !entry.finished);
+        assert_eq!(entry.subagent, Some(subagent_token("wf_abc-123")));
+        assert_eq!(read.running_agents, 1);
+
+        // A task notification for the call ends it.
+        let mut text = std::fs::read_to_string(&main).unwrap();
+        text.push_str(r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>w1</task-id>\n<tool-use-id>toolu_W</tool-use-id>\n<status>completed</status>\n</task-notification>"}}"#);
+        std::fs::write(&main, text + "\n").unwrap();
+        let done = read_transcript_in(&main, TranscriptKind::Claude, &Spawns::Claude(&folder), false, None, DEFAULT_LIMIT).unwrap();
+        assert!(done.entries[0].finished && !done.entries[0].running);
+
+        // The run: an entry per started agent, the phase as its kind.
+        std::fs::write(
+            run.join("journal.jsonl"),
+            concat!(
+                "{\"type\":\"launched\"}\n",
+                "{\"type\":\"started\",\"agentId\":\"a1\",\"label\":\"reviewer R1\",\"phase\":\"Review\"}\n",
+                "{\"type\":\"started\",\"agentId\":\"a2\",\"label\":\"coder A\",\"phase\":\"Code\"}\n",
+                "{\"type\":\"result\",\"agentId\":\"a1\",\"result\":{\"summary\":\"fine\"}}\n",
+                "not json\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(run.join("agent-a1.jsonl"), "{\"type\":\"user\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"review it\"}}\n").unwrap();
+        let token = subagent_token("wf_abc-123");
+        let dir_of = claude_workflow_dir(&folder, &token).expect("run folder");
+        let view = workflow_transcript(&dir_of, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(kinds(&view), vec![("agent", "reviewer R1"), ("agent", "coder A")]);
+        assert_eq!(view.entries[0].role.as_deref(), Some("Review"));
+        assert!(view.entries[0].finished && !view.entries[0].running);
+        assert!(view.entries[1].running && view.running_agents == 1);
+        // Only an agent whose file exists can be opened, and it opens by the run's folder.
+        assert_eq!(view.entries[1].subagent, None);
+        let agent = view.entries[0].subagent.clone().expect("handle");
+        let file = claude_subagent_file(&folder, &agent).expect("agent file");
+        assert_eq!(file, run.join("agent-a1.jsonl"));
+        let sub = read_transcript_in(&file, TranscriptKind::Claude, &Spawns::Claude(&folder), true, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(kinds(&sub), vec![("prompt", "review it")]);
+        // Unchanged while the journal stands still; watched and changed by the journal.
+        assert!(workflow_transcript(&dir_of, view.version.as_deref(), DEFAULT_LIMIT).unwrap().unchanged);
+        assert_eq!(claude_conversation_file(&folder, &token), Some(run.join("journal.jsonl")));
+        assert!(claude_workflow_dir(&folder, &subagent_token("wf_elsewhere")).is_none());
     }
 
     #[test]
