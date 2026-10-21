@@ -45,7 +45,7 @@ export interface NewTabLaunch {
  * new session, and the sheet closes on the tap rather than waiting for the
  * desktop, so a slow create is a screen the reader can still read.
  */
-export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, defaultAgent, onDefault, onPick, onSendFile, onClose }: {
+export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, agentsOnly = false, defaultAgent, onDefault, onPick, onSendFile, onClose }: {
   projectId: string;
   agents: AgentRow[];
   /** The desktop lets the phone open shells (off by default). */
@@ -62,6 +62,10 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
    *  the sheet is the send-a-file row alone, titled as such, since the
    *  project inbox is a file the sidecar writes and needs no tab. */
   creates?: boolean;
+  /** The project's type takes agents alone from the phone (`create: "agents"`;
+   *  a remote project's shell would run on the remote host): the sheet says
+   *  so in place of the shell button the caller has already left out. */
+  agentsOnly?: boolean;
   /** The agent a tap on the screen's ＋ starts (`newTabDefault.ts`); with
    *  `onDefault`, each agent tile gets a ★ that makes it that agent. */
   defaultAgent?: string;
@@ -110,6 +114,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         </div>
       </div> : <>
       {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
+      {creates && agentsOnly && <p className="sheet-note">{t("mobile.newTab.agentsOnly")}</p>}
       {creates && headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
         {/* Every row that opens a tab is behind `creates`; the file row at the

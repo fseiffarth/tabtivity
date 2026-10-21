@@ -9,7 +9,14 @@ export type ScopeKind = "project" | "box" | "root" | "assistant";
 /** A project's pending git state, the desktop pill's dot: changes not yet added ▸ staged, not committed ▸ committed, not pushed ▸ `.git` missing. Absent when clean. */
 export type GitDot = "dirty" | "staged" | "unpushed" | "broken";
 export interface AgentCounts { working: number; question: number; done: number }
-export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+/** Where a project runs, as a type word (`host` on the host's project row; absent
+ * from an older desktop, which only listed `local` ones). */
+export type ProjectHost = "local" | "remote" | "container" | "vm";
+/** What the phone may start in a project (`create` on the detail): every kind,
+ * agents alone (a remote project's shell would run on the remote host), or
+ * nothing. Absent from an older desktop is `all`. */
+export type CreateVerdict = "all" | "agents" | "none";
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -145,6 +152,12 @@ export interface ClosedTabRow { id: string; label: string; agent: string; closed
  * (the desktop's switch is on, and it is a project, not a box or root). */
 export interface ProjectDetail {
   project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  /** Whether the host has a folder to give the phone for this project (a remote
+   * project before its first sync, a VM without a mirror: no). Without one the
+   * project screen hides the files, Git and send-a-file entries and says why.
+   * Absent (an older desktop) is `true`. */
+  folder?: boolean;
+  create?: CreateVerdict;
   /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */
   shells?: boolean;
   /** How the host's tabs reach the phone: `tmux`, or `unsupported` on a host

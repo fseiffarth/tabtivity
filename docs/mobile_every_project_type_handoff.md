@@ -479,3 +479,59 @@ gates were skipped by the selector.
 - The container/VM sentences say "in a later version" as the plan decided; a
   container project with scope `agents` does list its host-side shells today
   (sentence says "tabs running inside the container").
+
+## B3. Phone (plan step 6)
+
+Commit: see `git log` (the commit whose message starts `feat(mobile): phone
+reads host, folder and create`).
+
+### What was built
+
+- `mobile-web/src/api.ts`: `ProjectHost`, `CreateVerdict`; `ProjectRow.host?`,
+  `ProjectDetail.folder?` and `.create?` (absent = an older desktop = `true` /
+  `all`).
+- `screens/Project.tsx`: `createVerdict`, `folderless`, `creates`
+  (`terminalsOffered && verdict != none`), `fabOffered`. `creates` replaces
+  `terminalsOffered` for the ＋ label, the quick-agent tap, the NewTabSheet
+  `creates` prop and the Mark up new-tab; `terminalsOffered` stays for the
+  tmux-only things (◷, restart, schedule). Folder-less: `filesOffered` and
+  `gitOffered` are false (so the drawer and the swipe vanish unless the outbox
+  has files). `none` with a folder (container, VM mirror): the ＋ stays as the
+  send-a-file sheet (the no-tmux pattern); `none` and folder-less: no ＋. One
+  `notice` under the header: host note (remote / container / VM) plus, if
+  folder-less, the reason by type (remote: no local copy yet; VM: files stay in
+  the VM; otherwise generic). Recently closed rows are hidden for `none`. The
+  empty-state hint follows what ＋ can do.
+- `NewTabSheet.tsx`: `agentsOnly` prop (note replaces the Shell button, which
+  the caller already leaves out: `shells && verdict == all`).
+- i18n in en/de/es/fr/it (the phone shares `src/lib/i18n.ts`): 6 `mobile.project.host*`
+  / `noFolder*` keys, `emptyHintAgents`, `emptyHintNone`, `mobile.newTab.agentsOnly`.
+  `not_attachable` message already existed (A2) and is shown by the existing
+  `describeFailure` on create and reopen (pinned by a test).
+- Untested pill on the notice: the B2 register row `mobile-every-project-type`.
+- Test: `src/__tests__/mobile/MobileProjectHostTypes.test.tsx` (6).
+- `mobile-dist/` is gitignored; `npm run build` (inside `gates.sh`) runs
+  `mobile:bundle`. Nothing bundle-related is committed.
+- Filemap: no row names `Project.tsx` / `NewTabSheet.tsx`, none changed.
+
+### Choices where the plan was silent
+
+- `none` with a folder keeps ＋ as "Send a file" rather than hiding it (plan:
+  "none -> hidden"): hiding would take away a working feature on container/VM
+  projects with a folder.
+- Phone wording matches `mobile.hostReach.*`; container/VM say "not on the
+  phone yet".
+- The Home list does not use `host` yet (only the project screen).
+
+### Gates
+
+`scripts/gates.sh`: brand, whitespace, lint, build (incl. mobile bundle) PASS;
+vitest `--changed` (671 files, 6373 tests) only the known `CursorPacks`
+failure. Full `npm test`: 896 of 897 files, 9023 of 9024 tests pass (was 9018:
++6); the one failure is `CursorPacks`. One earlier full run showed a second
+failing test that did not recur in two reruns (not identified). No Rust change.
+
+### Flagged for user
+
+- Live check owed: box 31ci on a real remote/container/VM project and a phone.
+- The flaky second failure above.

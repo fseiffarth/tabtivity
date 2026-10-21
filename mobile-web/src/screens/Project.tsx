@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -51,6 +51,22 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
  *  and a row hidden for ever would be a tab the reader can neither see nor
  *  close again. */
 const CLOSED_HELD_MS = 30_000;
+
+/** The line a project type that limits the phone gets under the header (the
+ * desktop says the same in `mobile.hostReach.*`). A local project has none. */
+const HOST_NOTE: Partial<Record<ProjectHost, TranslationKey>> = {
+  remote: "mobile.project.hostRemote",
+  container: "mobile.project.hostContainer",
+  vm: "mobile.project.hostVm",
+};
+/** Why a project the host gave no folder for has no files, Git or send-a-file,
+ * by type: a remote project has no local copy yet, a VM keeps its files. */
+const NO_FOLDER_NOTE: Record<ProjectHost, TranslationKey> = {
+  local: "mobile.project.noFolder",
+  container: "mobile.project.noFolder",
+  remote: "mobile.project.noFolderRemote",
+  vm: "mobile.project.noFolderVm",
+};
 
 /** How many one-second reads the wait for a started chat's session lasts. */
 const CHAT_START_TRIES = 25;
@@ -185,14 +201,27 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   useEffect(() => {
     if (assistantScope) backRef.current();
   }, [assistantScope]);
-  const filesOffered = !!detail?.files && !assistantScope;
-  const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
+  /** The host has no folder to give the phone for this project (a remote one
+   * before its first sync, a VM without a mirror): no files, Git or
+   * send-a-file here, and one line says why. An older desktop sends no field,
+   * which means it has one. */
+  const folderless = detail?.folder === false;
+  const filesOffered = !!detail?.files && !assistantScope && !folderless;
+  const gitOffered = !!detail && (detail.project.kind ?? "project") === "project" && !folderless;
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
    * host with none (Windows) nothing can be opened, scheduled or sent to from
    * here, so the ＋ sheet keeps only its send-a-file row, each card's ◷ and
    * Mark up's Submit stay out and one line says why. An older desktop sends
    * no field, which means tmux. */
   const terminalsOffered = detail?.terminals !== "unsupported";
+  /** What the phone may start here (`detail.create`, the host's verdict for
+   * the project's type): everything; agents alone (a remote project's shell
+   * would run on the remote host); nothing. Absent is everything. */
+  const createVerdict: CreateVerdict = detail?.create ?? "all";
+  const creates = terminalsOffered && createVerdict !== "none";
+  /** The ＋ stays while it can still do something: start a tab, or send a file
+   * into a folder. Before the host answers it is drawn (disabled). */
+  const fabOffered = !detail || creates || !folderless;
   /** Whether the drawer has anything to hold, once the host has answered:
    * no ☰ and no swipe else. */
   const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || gitOffered);
@@ -407,7 +436,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * there is one. A file whose card names an agent tab still open sends
    * there instead (`linked`). */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
-    () => detail?.agents.length && terminalsOffered ? {
+    () => detail?.agents.length && creates ? {
       projectId: id,
       // The tab opens with the view tucked away under its bar: the way back.
       show: (tab: TabRow, markupBack?: MarkupBack) => terminal(tab, { markupBack }),
@@ -416,7 +445,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         return tabId ? tabRows.current.find((row) => row.id === tabId && row.kind === "agent") : undefined;
       },
     } : undefined,
-    [detail?.agents.length, terminalsOffered, id, terminal],
+    [detail?.agents.length, creates, id, terminal],
   );
   const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
     setCreating(true); setError("");
@@ -433,7 +462,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * a hold opens the sheet of every choice, which is also where the default
    * is starred. With no agent to start — a host without tmux, a desktop
    * listing none — the tap opens that sheet as before. */
-  const quickAgent = terminalsOffered ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
+  const quickAgent = creates ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
   const fabPress = useTapHold(
     () => { if (!quickAgent) setNewTabOpen(true); else if (!creating) void create("agent", quickAgent); },
     () => setNewTabOpen(true),
@@ -604,7 +633,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     terminal(tab);
   };
   const projectName = detail?.project.label ?? t("mobile.project.fallbackName");
-  const closedRows = detail?.closed ?? [];
+  // A reopen starts a tab, which a project the phone cannot start tabs in refuses.
+  const closedRows = createVerdict === "none" ? [] : detail?.closed ?? [];
   const showReorderHint = canReorder && !hintsGone.reorder;
   const showSwipeHint = tabs.length > 0 && !hintsGone.swipe;
   return <main className="screen project-screen" ref={screenRef}>
@@ -661,6 +691,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* The host has no tmux (Windows): its tabs never reach a phone, so the
         controls that would open, schedule or send to one are not offered. */}
     {!terminalsOffered && <p className="notice">{t("mobile.project.terminalsUnsupported")} {isUntested("mobile.project.terminalsUnsupported") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {/* Where the project runs, when that limits the phone: a remote project's
+        agents are the ones on this computer, and a container's or VM's tabs are
+        not on the phone yet. A project with no folder to give says so too —
+        the files, Git and send-a-file entries are gone, and the reader should
+        not have to wonder why. */}
+    {detail && (HOST_NOTE[detail.project.host ?? "local"] || folderless) && <p className="notice">{[
+      HOST_NOTE[detail.project.host ?? "local"], folderless ? NO_FOLDER_NOTE[detail.project.host ?? "local"] : undefined,
+    ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
     {projectInbox.view}
     {/* An inactive project is activated before anything else here is worth
@@ -671,7 +709,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && tabs.length === 0 && shownFileTabs.length === 0 && <div className="project-empty">
       <span className="project-empty-glyph" aria-hidden="true">▭</span>
       <strong>{t("mobile.project.emptyTitle")}</strong>
-      <p>{t(terminalsOffered ? "mobile.project.emptyHint" : "mobile.project.emptyHintFiles")}</p>
+      <p>{t(!fabOffered ? "mobile.project.emptyHintNone" : !creates ? "mobile.project.emptyHintFiles" : createVerdict === "agents" ? "mobile.project.emptyHintAgents" : "mobile.project.emptyHint")}</p>
     </div>}
     <section className="cards">{tabs.map((tab) => <TabCard
       key={tab.id}
@@ -745,16 +783,16 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         the phone needs only this host, and the sheet holds its create buttons
         instead — the notice above says why. On a host with no tmux it stays
         for that file row alone, and is named after it. */}
-    <button
+    {fabOffered && <button
       className="primary fab fab-round"
       disabled={!detail}
       {...fabPress}
       aria-haspopup="dialog"
       aria-expanded={newTabOpen}
       aria-busy={creating}
-      aria-label={t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
-      title={quickAgent ? t("mobile.project.fabQuick", { agent: quickAgent.label }) : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
-    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickAgent && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>
+      aria-label={t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send")}
+      title={quickAgent ? t("mobile.project.fabQuick", { agent: quickAgent.label }) : t(creates ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickAgent && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""
@@ -766,10 +804,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {newTabOpen && detail && <NewTabSheet
       projectId={id}
       agents={detail.agents}
-      shells={detail.shells === true}
+      shells={detail.shells === true && createVerdict === "all"}
       busy={creating}
       headless={!detail.desktop_available}
-      creates={terminalsOffered}
+      creates={creates}
+      agentsOnly={createVerdict === "agents"}
       defaultAgent={quickAgent?.id}
       onDefault={(agent) => { writeNewTabAgent(agent.id); setStarredAgent(agent.id); }}
       onClose={() => setNewTabOpen(false)}
