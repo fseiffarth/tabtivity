@@ -268,6 +268,34 @@ Claude's `/fast` — different thing.
   2.1.302 starts `-p` with no mode in `default` only on third-party
   providers, and caps *prompt and agent* hooks at 12 running per event;
   Tabtivity registers `command` hooks only, so neither reaches it.
+  Re-checked against 2.1.306 (2026-10-21, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.303 run of the same dump: keys
+  identical on all 18 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's own `sed` extractions (session_id, permission_mode,
+  source, hook_event_name, reason, transcript_path) matching `jq` on every
+  one; transcript record types and counts identical; `-p --resume` of a
+  `plan` session still reports the default; `--help` differs only in wording
+  (`--resume` now also takes a session *name*; Tabtivity passes UUIDs);
+  notification-type and permission-mode strings unchanged — the extra
+  `auto mode on` hits are plugin-policy prose, not the mode label). 2.1.305
+  re-lays out `/usage`'s "What's contributing" rows as `52%  <advice>`
+  (was `52% of your usage …`): `parseUsageReport` still yields the three
+  meters with every reset resolved and keeps the rows as notes (pinned in
+  `MobileUsageReport.test.ts`). 2.1.304 adds a "Resume this conversation?"
+  dialog (numbered Resume / Start a new conversation) on `--resume` of a
+  long-idle conversation, only where the server-side `tengu_amber_tally` config
+  says a resume costs at least `minPercent` (5) of the 5-hour limit — not
+  reproduced live on this account. It comes up after `SessionStart` and fires
+  no hook, so `stores/activity` reads it off the tail past the post-resume
+  silence (`looksLikeColdResumeDialogStripped`); both parsers are pinned by
+  fixtures built from the bundle's strings, not a capture. The resume start's
+  `seconds_since_last_response`, `context_tokens`, `estimated_cache_write_usd`
+  and `prompt_cache_likely_expired` are now read: the hook writes `<uid>.resume`
+  before `.src`, `agent-session-roll` carries it, and an expired cache shows a
+  chip in the Chat facts row until the first prompt. A custom statusline
+  opening `user@host:path (branch*)` is read for its path and branch
+  (`statusLine.ts` `PATH`). 2.1.304–306 otherwise touch mods, sandbox, Remote
+  Control and `-p` login in cloud sessions — nothing Tabtivity reads.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,

@@ -1645,6 +1645,58 @@ pub fn read_live_source_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     is_session_source(&word).then_some(word)
 }
 
+/// Suffix of the record a resume's `SessionStart` leaves beside the session
+/// record: what that start's first request will cost, as Claude Code 2.1.30x
+/// reports it in the payload — `<seconds idle> <context tokens> <cache-write
+/// USD> <cache expired>`. Written before the source, cleared by any other start.
+pub const LIVE_RESUME_SUFFIX: &str = ".resume";
+
+/// What resuming a conversation costs the next request (see
+/// [`LIVE_RESUME_SUFFIX`]). Figures are Claude's own estimates; Tabtivity prices
+/// nothing here.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeCost {
+    /// Seconds between the conversation's last response and this resume.
+    pub seconds_idle: u64,
+    /// Tokens the first request carries.
+    pub context_tokens: u64,
+    /// Claude's estimate of writing those tokens to the prompt cache again, USD.
+    pub cache_write_usd: f64,
+    /// The idle time outlasted the cache's lifetime: the first request re-caches.
+    pub cache_expired: bool,
+}
+
+/// One `.resume` record. The hook wrote it from agent-visible JSON, so every
+/// field is bounded and anything else is dropped rather than shown.
+fn parse_resume_record(raw: &str) -> Option<ResumeCost> {
+    let mut fields = raw.split_whitespace();
+    let seconds_idle = fields.next()?.parse::<u64>().ok()?;
+    let context_tokens = fields.next()?.parse::<u64>().ok()?;
+    let cache_write_usd = fields.next()?.parse::<f64>().ok()?;
+    let cache_expired = match fields.next()? {
+        "true" => true,
+        "false" => false,
+        _ => return None,
+    };
+    if fields.next().is_some()
+        || context_tokens > 100_000_000
+        || !(0.0..=100_000.0).contains(&cache_write_usd)
+    {
+        return None;
+    }
+    Some(ResumeCost { seconds_idle, context_tokens, cache_write_usd, cache_expired })
+}
+
+/// The resume cost recorded beside `uid`'s session record in `dir`.
+pub fn read_live_resume_in(dir: &std::path::Path, uid: &str) -> Option<ResumeCost> {
+    if !is_uuid_shaped(uid) {
+        return None;
+    }
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_RESUME_SUFFIX}")))?;
+    parse_resume_record(&raw)
+}
+
 /// Read the live session id recorded for `uid` from the shared (host-agent) root
 /// only. Prefer [`read_live_session_for`] on any path that knows its project.
 pub fn read_live_session(uid: &str) -> Option<String> {
@@ -2157,6 +2209,10 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          reason=$(printf '%s' \"$input\" | sed -n 's/.*\"reason\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          tpath=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p')\n\
          tnull=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*null.*/null/p')\n\
+         secs=$(printf '%s' \"$input\" | sed -n 's/.*\"seconds_since_last_response\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')\n\
+         ctxt=$(printf '%s' \"$input\" | sed -n 's/.*\"context_tokens\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')\n\
+         usd=$(printf '%s' \"$input\" | sed -n 's/.*\"estimated_cache_write_usd\"[[:space:]]*:[[:space:]]*\\([0-9][0-9.]*\\).*/\\1/p')\n\
+         cold=$(printf '%s' \"$input\" | sed -n 's/.*\"prompt_cache_likely_expired\"[[:space:]]*:[[:space:]]*\\([a-z]*\\).*/\\1/p')\n\
          [ -n \"$sid\" ] || exit 0\n\
          dir=\"{live_dir}\"\n\
          mkdir -p \"$dir\" 2>/dev/null || exit 0\n\
@@ -2259,6 +2315,13 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          # id sees the source that produced it.\n\
          case \"$event\" in\n\
          \x20 SessionStart|Stop)\n\
+         \x20   # What a resume's first request will cost (Claude 2.1.30x puts it in the\n\
+         \x20   # start's payload), written before the source whose write the app reads\n\
+         \x20   # it on; any other start clears the last one.\n\
+         \x20   if [ \"$event\" = SessionStart ]; then\n\
+         \x20     if [ \"$src\" = resume ] && [ -n \"$secs\" ]; then printf '%s %s %s %s' \"$secs\" \"${{ctxt:-0}}\" \"${{usd:-0}}\" \"${{cold:-false}}\" > \"$dir/${UPPER}_TAB_UID.resume\"\n\
+         \x20     else rm -f \"$dir/${UPPER}_TAB_UID.resume\"; fi\n\
+         \x20   fi\n\
          \x20   [ \"$event\" = SessionStart ] && [ -n \"$src\" ] && printf '%s' \"$src\" > \"$dir/${UPPER}_TAB_UID.src\"\n\
          \x20   printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
          \x20   [ -n \"$mode\" ] && printf '%s' \"$mode\" > \"$dir/${UPPER}_TAB_UID.mode\" ;;\n\
@@ -2300,6 +2363,10 @@ fn hook_script_body(live_dir: &str) -> String {
          $me = [regex]::Match($payload, '\"hook_event_name\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mn = [regex]::Match($payload, '\"notification_type\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mr = [regex]::Match($payload, '\"reason\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
+         $mq = [regex]::Match($payload, '\"seconds_since_last_response\"\\s*:\\s*([0-9]+)')\r\n\
+         $mc = [regex]::Match($payload, '\"context_tokens\"\\s*:\\s*([0-9]+)')\r\n\
+         $mu = [regex]::Match($payload, '\"estimated_cache_write_usd\"\\s*:\\s*([0-9.]+)')\r\n\
+         $mx = [regex]::Match($payload, '\"prompt_cache_likely_expired\"\\s*:\\s*([a-z]+)')\r\n\
          if (-not $m.Success) {{ exit 0 }}\r\n\
          $sid = $m.Groups[1].Value\r\n\
          $event = ''\r\n\
@@ -2365,6 +2432,16 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 if ($sid -ne $was) {{ [IO.File]::WriteAllText(($rec + '.prev'), $was) }}\r\n\
          }}\r\n\
          if (($event -eq 'SessionStart') -or ($event -eq 'Stop')) {{\r\n\
+         \x20 # What a resume's first request will cost, written before the source the\r\n\
+         \x20 # app reads it on; any other start clears the last one (see the POSIX twin).\r\n\
+         \x20 if ($event -eq 'SessionStart') {{\r\n\
+         \x20   if ($ms.Success -and ($ms.Groups[1].Value -eq 'resume') -and $mq.Success) {{\r\n\
+         \x20     $cx = '0'; if ($mc.Success) {{ $cx = $mc.Groups[1].Value }}\r\n\
+         \x20     $us = '0'; if ($mu.Success) {{ $us = $mu.Groups[1].Value }}\r\n\
+         \x20     $cd = 'false'; if ($mx.Success) {{ $cd = $mx.Groups[1].Value }}\r\n\
+         \x20     [IO.File]::WriteAllText(($rec + '.resume'), ($mq.Groups[1].Value + ' ' + $cx + ' ' + $us + ' ' + $cd))\r\n\
+         \x20   }} else {{ Remove-Item -LiteralPath ($rec + '.resume') -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }}\r\n\
          \x20 if (($event -eq 'SessionStart') -and $ms.Success) {{ [IO.File]::WriteAllText(($rec + '.src'), $ms.Groups[1].Value) }}\r\n\
          \x20 [IO.File]::WriteAllText($rec, $sid)\r\n\
          \x20 if ($mm.Success) {{ [IO.File]::WriteAllText(($rec + '.mode'), $mm.Groups[1].Value) }}\r\n\
@@ -3739,6 +3816,60 @@ mod tests {
         std::fs::write(path(again), "{}").unwrap();
         let (rec, _) = run_hook(&script, &live, other, claude, true, &start(fresh, &own(fresh)));
         assert_eq!(rec.as_deref(), Some(again));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_resume_record_is_four_bounded_fields_and_nothing_else() {
+        let ok = parse_resume_record("4 25960 0.1038 false\n").unwrap();
+        assert_eq!(
+            ok,
+            ResumeCost { seconds_idle: 4, context_tokens: 25960, cache_write_usd: 0.1038, cache_expired: false }
+        );
+        assert!(parse_resume_record("90000 183000 0.42 true").unwrap().cache_expired);
+        for junk in ["", "4 25960 0.1038", "4 25960 0.1038 maybe", "4 25960 0.1038 true extra", "x 1 1 true", "1 1 -2 true", "1 1 NaN true", "1 999999999999 1 true", "1 1 1e9 true"] {
+            assert_eq!(parse_resume_record(junk), None, "{junk:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_script_records_what_a_resume_will_cost_and_clears_it_on_any_other_start() {
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-resume"));
+        let live = tmp.join("live");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let script = tmp.join("hook.sh");
+        std::fs::write(&script, hook_script_body(&live.to_string_lossy())).unwrap();
+        let uid = "11111111-1111-4111-8111-111111111111";
+        let claude = Some("claude");
+        let cost = || read_live_resume_in(&live, uid);
+        let start = |source: &str, extra: &str| {
+            format!(r#"{{"session_id":"{uid}","hook_event_name":"SessionStart","source":"{source}"{extra}}}"#)
+        };
+
+        // The 2.1.306 payload: the figures in the order the CLI sends them, and
+        // in another one — keys are matched by name.
+        let figures = r#","seconds_since_last_response":90000,"context_tokens":183000,"prompt_cache_likely_expired":true,"estimated_cache_write_usd":0.4213"#;
+        run_hook(&script, &live, uid, claude, true, &start("resume", figures));
+        assert_eq!(
+            cost(),
+            Some(ResumeCost { seconds_idle: 90000, context_tokens: 183000, cache_write_usd: 0.4213, cache_expired: true })
+        );
+        // A warm resume says so.
+        let warm = r#","seconds_since_last_response":4,"context_tokens":25960,"estimated_cache_write_usd":0.1038,"prompt_cache_likely_expired":false"#;
+        run_hook(&script, &live, uid, claude, true, &start("resume", warm));
+        assert_eq!(cost().map(|c| c.cache_expired), Some(false));
+        // A resume start without the fields (an older CLI) leaves none.
+        run_hook(&script, &live, uid, claude, true, &start("resume", ""));
+        assert_eq!(cost(), None);
+        // Any other start clears the last one, and a Stop does not write one.
+        run_hook(&script, &live, uid, claude, true, &start("resume", figures));
+        assert!(cost().is_some());
+        let stop = format!(r#"{{"session_id":"{uid}","hook_event_name":"Stop"{figures}}}"#);
+        run_hook(&script, &live, uid, claude, true, &stop);
+        assert!(cost().is_some(), "a Stop leaves the record alone");
+        run_hook(&script, &live, uid, claude, true, &start("clear", figures));
+        assert_eq!(cost(), None);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -125,6 +125,22 @@ export function looksLikeDecisionPromptStripped(plain: string): boolean {
 }
 
 /**
+ * Claude Code's cold-resume dialog (2.1.304): `--resume` of a long-idle
+ * conversation on Pro/Max asks "Resume this conversation?" before it spends a
+ * share of the 5-hour limit. Title and cost line are the CLI's own wording,
+ * matched space-tolerantly because a PTY tail that lost its cursor moves has
+ * lost its spaces too. Distinctive enough to be read off a repainted
+ * conversation, which no other menu is (see `stores/activity`'s
+ * `awaitingHookByPty`).
+ */
+const COLD_RESUME_DIALOG = /Resume\s*this\s*conversation\?[\s\S]{0,800}?5-hour\s*usage\s*limit/;
+
+/** `COLD_RESUME_DIALOG` on already ANSI-stripped text. */
+export function looksLikeColdResumeDialogStripped(plain: string): boolean {
+  return plain.includes("conversation?") && COLD_RESUME_DIALOG.test(plain);
+}
+
+/**
  * True when the given RAW terminal text (typically the tail of an agent's
  * output) looks like an agent decision/permission prompt awaiting the user's
  * input.

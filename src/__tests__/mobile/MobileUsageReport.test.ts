@@ -72,6 +72,32 @@ describe(`${BRAND.display} Mobile agent usage panel`, () => {
     expect(week?.label).toBe("Current week (all models)");
   });
 
+  it("reads 2.1.306's advice rows (`52%  Give … a cheaper model`) as notes too", () => {
+    // What Claude Code 2.1.306 prints (2026-10-21): the same section, but each
+    // share now leads with the advice it earns instead of "of your usage …".
+    const report = parseUsageReport([
+      "Current session: 11% used · resets Oct 21, 8:10pm (Europe/Berlin)",
+      "Current week (all models): 97% used · resets Oct 22, 2pm (Europe/Berlin)",
+      "Current week (Fable): 0% used · resets Oct 22, 2pm (Europe/Berlin)",
+      "",
+      "What's contributing to your limits usage?",
+      "Approximate · sessions on this machine only · shares overlap",
+      "",
+      "Last 24h · 684 requests · 18 sessions",
+      '  52%  Give "general-purpose" subagents a cheaper model',
+      "  30%  Trim ~/proj/AGENTS.md · 3k tokens per request",
+      "  19%  Start fresh when you switch tasks · run /clear",
+      "  Top subagents: general-purpose 33%",
+    ].join("\n"));
+    expect(report.meters.map((meter) => meter.label)).toEqual([
+      "Current session",
+      "Current week (all models)",
+      "Current week (Fable)",
+    ]);
+    expect(report.notes).toContainEqual({ label: undefined, value: "52%  Give \"general-purpose\" subagents a cheaper model" });
+    expect(report.notes).toContainEqual({ label: "Top subagents", value: "general-purpose 33%" });
+  });
+
   it("keeps a readout with no percentage as a note rather than dropping it", () => {
     const report = parseUsageReport(CLAUDE_PANEL);
     expect(report.notes).toEqual([{ label: "Last 24h", value: "41 requests · 6 sessions" }]);

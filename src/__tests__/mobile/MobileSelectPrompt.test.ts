@@ -42,6 +42,27 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     });
   });
 
+  it("reads Claude Code 2.1.304's cold-resume dialog with its cost line as the question", () => {
+    // Shown on `--resume` of a long-idle conversation (Pro/Max): the figures are
+    // what the answer costs, so they stay with the rows on the phone.
+    const body = "This conversation has been inactive for 3d 4h and is 183k tokens long. Resuming it will use about 12% of your 5-hour usage limit.";
+    const prompt = readSelectPrompt(lines(
+      "Resume this conversation?",
+      body,
+      "Your unsent message will still be there after you answer.",
+      "",
+      "❯ 1. Resume",
+      "  2. Start a new conversation",
+      "     Claude can look this one up if you refer to it later",
+      "",
+      "Enter to confirm · Esc to resume",
+    ), "Claude Code");
+    expect(prompt?.title).toBe("Resume this conversation?");
+    expect(prompt?.current).toBe(0);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Resume", "Start a new conversation"]);
+    expect(prompt?.options[1].description).toBe("Claude can look this one up if you refer to it later");
+  });
+
   it("reads a picker whose rows carry no second column", () => {
     const prompt = readSelectPrompt(lines("› 1. gpt-5-codex", "  2. gpt-5"));
     expect(prompt?.current).toBe(0);

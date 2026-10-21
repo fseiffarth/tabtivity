@@ -5094,6 +5094,8 @@ export const dict: Dict = {
   "terminal.reader.worktree": "worktree {name}",
   "terminal.reader.worktreeHint": "L'agente lavora in questo worktree git collegato",
   "terminal.reader.contextLeft": "{percent} di contesto",
+  "terminal.reader.resumeCold": "Cache fredda · {tokens} token ≈ {cost} da rimettere in cache",
+  "terminal.reader.resumeColdHint": "Inattiva da {idle}: la cache del prompt è scaduta, quindi il prossimo messaggio riscrive l'intera conversazione. Stima di Claude stesso.",
   "terminal.reader.status.button": "Stato",
   "terminal.reader.status.title": "Stato di {agent}",
   "terminal.reader.status.hint": "Mostra /status di {agent} con indicatori di contesto e utilizzo e dettagli della sessione",

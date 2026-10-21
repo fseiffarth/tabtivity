@@ -8,6 +8,8 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
+import { formatTokens } from "../../lib/tokenStats";
+import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
@@ -74,6 +76,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   chipSlot?: (slot: HTMLDivElement | null) => void;
 }) {
   const t = useT();
+  const resumeCost = useAgentResumeCostStore((state) => state.byPty[ptyId]);
   const status = live.status;
   const [limits, setLimits] = useState<LimitMeters>({});
   const [readAt, setReadAt] = useState(() => Date.now());
@@ -440,6 +443,18 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         {worktree && <span className="terminal-reader-fact worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: worktree })}</span>}
         {status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}
         {contextLeft && <span className="terminal-reader-fact">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
+        {resumeCost && (
+          <span
+            className="terminal-reader-fact high"
+            title={t("terminal.reader.resumeColdHint", { idle: formatIdleTime(resumeCost.secondsIdle) })}
+          >
+            {t("terminal.reader.resumeCold", {
+              tokens: formatTokens(resumeCost.contextTokens),
+              cost: formatCacheWriteUsd(resumeCost.cacheWriteUsd),
+            })}
+            <UntestedTag id="terminal.reader.resumeCold" />
+          </span>
+        )}
         {limitFact(shown.session, "mobile.facts.session")}
         {limitFact(shown.week, "mobile.facts.week")}
       </div>

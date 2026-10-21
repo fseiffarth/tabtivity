@@ -19,6 +19,7 @@ import { noteAgentSessionStart, noteAgentTurn, notePtyOutput, startActivityTicks
 import { onAnyTerminalOutput } from "../../lib/terminal/terminalBus";
 import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/activityDigests";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
+import { useAgentResumeCostStore, type ResumeCost } from "../../stores/agents/agentResumeCost";
 import type { AgentTurnState } from "../../stores/activity";
 import {
   usePowerStore,
@@ -1037,14 +1038,17 @@ export function AppShell() {
       // A prompt went into the new conversation: the clear is no longer undone
       // by resuming — that would leave the prompt behind.
       if (ev.payload.state === "working") useAgentClearUndoStore.getState().dismiss(ev.payload.id);
+      // …and a resume's cold-cache cost is spent by the first prompt.
+      if (ev.payload.state === "working") useAgentResumeCostStore.getState().dismiss(ev.payload.id);
     })
       .then((fn) => { unlistenTurn = fn; })
       .catch(() => {});
     // How a tab's session just (re)started, off the same hook's source record:
     // a `/clear` offers "Undo clear" on that terminal until the next prompt.
     let unlistenRoll: (() => void) | undefined;
-    listen<{ id: string; source: string }>("agent-session-roll", (ev) => {
+    listen<{ id: string; source: string; resume?: ResumeCost | null }>("agent-session-roll", (ev) => {
       useAgentClearUndoStore.getState().noteRoll(ev.payload.id, ev.payload.source);
+      useAgentResumeCostStore.getState().noteRoll(ev.payload.id, ev.payload.source, ev.payload.resume);
       noteAgentSessionStart(ev.payload.id, ev.payload.source);
     })
       .then((fn) => { unlistenRoll = fn; })

@@ -166,8 +166,10 @@ function codexUpdatedMode(
 const MODEL =
   /\b(claude[\w.-]*|(?:opus|sonnet|haiku|fable|mythos)(?:[ -][\w.]+)?|gpt-[\w.-]+|codex(?:-[\w.-]+)?|o[134](?:-mini)?|gemini[\w.-]*|qwen[\w.:-]*|llama[\w.:-]*|deepseek[\w.:-]*|mistral[\w.:-]*)\b/iu;
 
-/** A working directory as the CLIs print one: `~`, `~/…`, `/…` or `C:\…`. */
-const PATH = /(?:^|\s)(~(?:\/[^\s]*)?|\/[^\s]+|[A-Za-z]:\\[^\s]+)(?=\s|$)/u;
+/** A working directory as the CLIs print one: `~`, `~/…`, `/…` or `C:\…` — alone
+ * or after the `user@host:` a custom statusline copied from a shell prompt
+ * opens with (`me@box:~/proj (main*)`). */
+const PATH = /(?:^|\s|[\w.-]+@[\w.-]+:)(~(?:\/[^\s]*)?|\/[^\s]+|[A-Za-z]:\\[^\s]+)(?=\s|$)/u;
 
 /** `(branch)` — no spaces inside, at least one letter, so "(shift+tab to
  * cycle)" and "(3)" stay unmatched. */
@@ -226,7 +228,9 @@ function classify(segment: string, status: SessionStatus) {
       status.path = path[1];
       if (!status.branch) {
         const branch = PAREN_BRANCH.exec(segment.slice(path.index + path[0].length));
-        if (branch) status.branch = branch[1];
+        // A prompt-style statusline marks a dirty tree with `*` (`(main*)`); git
+        // refuses `*` in a ref name, so it is never part of the branch.
+        if (branch) status.branch = branch[1].replace(/\*$/u, "");
       }
       return;
     }

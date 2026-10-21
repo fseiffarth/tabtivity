@@ -36,7 +36,8 @@ use std::time::{Duration, Instant};
 use app_core::CoreCtx;
 
 use crate::services::agent_session::{
-    live_sessions_dir, project_live_sessions_dir, read_live_source_in, LIVE_SOURCE_SUFFIX,
+    live_sessions_dir, project_live_sessions_dir, read_live_resume_in, read_live_source_in, ResumeCost,
+    LIVE_SOURCE_SUFFIX,
 };
 use crate::services::home_io;
 
@@ -240,17 +241,22 @@ pub fn resolve_event(path: &Path) -> Option<(String, TurnState)> {
 /// `agent_session::LIVE_SOURCE_SUFFIX`) means for the window: the PTY and how
 /// the tab's session just (re)started. `None` for any other file, a tab of
 /// another run, or a word the hook should not have written.
-pub fn resolve_roll_event(path: &Path) -> Option<(String, String)> {
+pub fn resolve_roll_event(path: &Path) -> Option<(String, String, Option<ResumeCost>)> {
     let uid = uid_with_suffix(path, LIVE_SOURCE_SUFFIX)?;
     let pty = pty_for(&uid)?;
-    let source = read_live_source_in(path.parent()?, &uid)?;
-    Some((pty, source))
+    let dir = path.parent()?;
+    let source = read_live_source_in(dir, &uid)?;
+    // Only a resume carries one (the hook clears it on any other start).
+    let resume = if source == "resume" { read_live_resume_in(dir, &uid) } else { None };
+    Some((pty, source, resume))
 }
 
 #[derive(serde::Serialize, Clone)]
 struct RollPayload {
     id: String,
     source: String,
+    /// What the resume's first request costs, when the CLI reported it.
+    resume: Option<ResumeCost>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -814,8 +820,8 @@ pub fn start(ctx: CoreCtx) {
                 Ok(path) => {
                     // A source record says how the session rolled (a `/clear`,
                     // a `/resume`); it carries no turn state.
-                    if let Some((id, source)) = resolve_roll_event(&path) {
-                        ctx.emit(ROLL_EVENT, RollPayload { id, source });
+                    if let Some((id, source, resume)) = resolve_roll_event(&path) {
+                        ctx.emit(ROLL_EVENT, RollPayload { id, source, resume });
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {

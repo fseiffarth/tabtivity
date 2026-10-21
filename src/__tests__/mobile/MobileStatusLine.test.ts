@@ -22,6 +22,24 @@ describe(`${BRAND.display} Mobile session status line`, () => {
     });
   });
 
+  it("reads the path and branch of a prompt-style statusline (`user@host:path (branch*)`)", () => {
+    // A custom Claude Code statusline copied from a shell's PS1, as drawn by
+    // 2.1.306 above the mode row: the `user@host:` before the path used to hide
+    // both the path and the branch, and the dirty marker was kept in the branch.
+    expect(sessionStatus(lines(
+      '❯ Try "refactor <filepath>"',
+      `  me@box:~/proj/app (develop*) · Sonnet 5.5 [high] ⏵ auto · ctx 90% · 5h 89%/3h10m · +10/-2`,
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent",
+    ))).toEqual({
+      path: "~/proj/app",
+      branch: "develop",
+      model: "Sonnet 5.5",
+      mode: "auto",
+      context: "90%",
+    });
+    expect(sessionStatus(lines(">", "me@box:/srv/app (main) · Opus 5.5"))).toMatchObject({ path: "/srv/app", branch: "main" });
+  });
+
   it("takes the model from a fresh /model notice over a statusline not yet redrawn", () => {
     const below = `~/p (main) · Haiku 4.5 · auto mode on (shift+tab to cycle) · 5h 94%`;
     expect(sessionStatus(lines(

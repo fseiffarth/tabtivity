@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
-import { looksLikeDecisionPromptStripped, stripAnsi } from "../lib/agents/prompt/prompt";
+import { looksLikeColdResumeDialogStripped, looksLikeDecisionPromptStripped, stripAnsi } from "../lib/agents/prompt/prompt";
 import { METRIC, agentPromptLeaf } from "../lib/usageMetrics";
 import { splitPtyId } from "../lib/terminal/ptyId";
 import { allGroups, isPtyTabKind, useTabsStore } from "./tabs";
@@ -905,6 +905,17 @@ function attentionFor(
     awaitingHookByPty[ptyId] === undefined &&
     quiet >= DECISION_QUIET_MS &&
     tailLooksLikeDecision(ptyId)
+  ) {
+    return "decision";
+  }
+  // The one question a resume itself asks: Claude's cold-resume dialog comes up
+  // after the `SessionStart` that set `awaitingHookByPty`, fires no hook of its
+  // own, and its text is not something a repainted conversation produces. The
+  // user's answer empties the tail (`noteUserInput`), which retires it.
+  if (
+    awaitingHookByPty[ptyId] !== undefined &&
+    quiet >= DECISION_QUIET_MS &&
+    looksLikeColdResumeDialogStripped(tailByPty[ptyId] ?? "")
   ) {
     return "decision";
   }
