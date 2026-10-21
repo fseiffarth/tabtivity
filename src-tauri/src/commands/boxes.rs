@@ -749,9 +749,9 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
 /// `set_project_mobile_access`. The machine-wide preconditions are the same
 /// (persistent local sessions, tmux), because a box tab reaches the phone the
 /// way a project tab does: through the tmux session the tab already runs in.
-/// The trust tiers need no check here — a `box:<id>` scope's tabs always run
+/// No project type is checked here — a `box:<id>` scope's tabs always run
 /// locally, and the sidecar takes only those whose cwd is the box folder or a
-/// local member root. Enabling also resolves the box folder: the sidecar lists
+/// member's phone folder (`discovery::mobile_root`). Enabling also resolves the box folder: the sidecar lists
 /// a box by that folder, and a box never opened on the desktop has none yet.
 /// `devices` narrows it to some paired phones, as for a project; omitted,
 /// every phone. Turning it off drops the list with the switch.

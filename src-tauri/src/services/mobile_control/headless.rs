@@ -2137,6 +2137,9 @@ mod tests {
             roots: vec![state.path().to_path_buf()],
             tabs: Vec::new(),
             devices: None,
+            host: super::super::discovery::ProjectHost::Local,
+            folder: false,
+            create: super::super::discovery::CreateVerdict::All,
         };
         let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
         let sink = seen.clone();

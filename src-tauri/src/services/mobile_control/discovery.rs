@@ -30,6 +30,12 @@ struct ProjectRecord {
     sandbox: Option<Value>,
     #[serde(default)]
     vm: Option<Value>,
+    /// A remote (or VM) project's explicitly chosen local mirror folder, the
+    /// entry's flattened top-level `mirror` key (`remote_sync::mirror_override`
+    /// reads the same key). Lenient: a value that is not a string is no
+    /// mirror, never a parse error for the file.
+    #[serde(default, deserialize_with = "lenient_string")]
+    mirror: Option<String>,
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
     #[serde(default, rename = "tabtivity_mobile_access")]
     app_mobile_access: bool,
@@ -39,6 +45,12 @@ struct ProjectRecord {
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
     #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices")]
     app_mobile_devices: Option<Vec<String>>,
+}
+
+/// `deserialize_with` for an optional string that must never fail the record:
+/// a string is kept, anything else is `None`.
+fn lenient_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_str().map(str::to_string))
 }
 
 /// The slice of `boxes.json` the catalog reads (#31aa). A box is listed as a
@@ -86,6 +98,11 @@ struct SavedTab {
     tmux_session: Option<String>,
     #[serde(default)]
     tmux_attach: Option<String>,
+    /// Where the tab runs (`"local"`, `"remote"`, `"host:<id>"`); absent until
+    /// the user or the Run-host picker sets it, then the per-kind default
+    /// applies ([`tab_is_local`]). Loose, so an odd shape never drops the file.
+    #[serde(default)]
+    location: Option<Value>,
     #[serde(default)]
     ephemeral: bool,
     /// The user's tab colour, a palette id (see `protocol::TAB_COLORS`).
@@ -353,14 +370,40 @@ pub struct ResolvedTab {
     pub local_model: bool,
 }
 
+/// Where a project's tabs run, a type word and nothing more (it crosses the
+/// browser API as `host`). Read from the entry's `vm`, `remote` and `sandbox`
+/// values, never from a path (AGENTS: remoteness is explicit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectHost {
+    #[default]
+    Local,
+    Remote,
+    Container,
+    Vm,
+}
+
+/// What a phone may create in a scope (it crosses the browser API as
+/// `create`): any tab, agents only, or nothing — the tabs of a remote host, a
+/// container or a VM have no local tmux session to attach to (phase 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CreateVerdict {
+    All,
+    Agents,
+    None,
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedProject {
     pub public: PublicProject,
     /// The desktop's own id for the scope: a project id, or a `box:<id>` scope
     /// id, which the desktop bridge resolves the same way.
     pub raw_id: String,
-    /// The scope's home: the project folder, or the box folder. The inbox
-    /// lives here.
+    /// The scope's home: the project folder (a remote project's local mirror),
+    /// or the box folder. The inbox lives here. When [`Self::folder`] is false
+    /// it names no folder that exists: nothing may be read from or written to
+    /// it.
     pub root: PathBuf,
     /// Every canonical directory a tab of this scope may run in — `root`
     /// first, then (for a box) each local member's root, because a box's
@@ -370,12 +413,28 @@ pub struct ResolvedProject {
     /// The paired phones this scope is open to: `None` is every phone, a list
     /// only those device ids (none when empty). Never crosses the browser API.
     pub devices: Option<Vec<String>>,
+    /// Where the project's tabs run. `Local` for a box, root and the assistant.
+    pub host: ProjectHost,
+    /// Whether the scope has a folder the phone may read, write and probe: its
+    /// first root resolved. False for a remote project whose mirror is not
+    /// there yet, a VM project with no mirror (both are listed, with no
+    /// tabs) and the assistant, which has a work folder and no project folder.
+    pub folder: bool,
+    /// What the phone may create here ([`CreateVerdict`]).
+    pub create: CreateVerdict,
 }
 
 impl ResolvedProject {
     /// Whether the phone paired as `device_id` may see this scope at all.
     pub fn reaches(&self, device_id: &str) -> bool {
         device_listed(self.devices.as_deref(), device_id)
+    }
+
+    /// Whether [`Self::root`] is a real folder: the one test every
+    /// folder-shaped route makes (files, git, upload, inbox, markup), instead
+    /// of asking the scope's kind.
+    pub fn has_folder(&self) -> bool {
+        self.folder
     }
 }
 
@@ -385,11 +444,21 @@ struct ScopeSource {
     label: String,
     status: String,
     kind: ScopeKind,
-    /// Uncanonicalized; the first entry is the home and must exist, the rest
-    /// are best-effort.
+    /// Uncanonicalized; the first entry is the home and must exist (a remote
+    /// or VM project, and the assistant, are listed without it; a VM without
+    /// a mirror has none at all), the rest are best-effort.
     roots: Vec<PathBuf>,
     /// [`ResolvedProject::devices`].
     devices: Option<Vec<String>>,
+    /// [`ResolvedProject::host`].
+    host: ProjectHost,
+    /// A remote project's tabs are saved with `cwd` = the entry's `directory`
+    /// (the window swaps the mirror in only at spawn); a tab saved with
+    /// exactly this cwd is read as running in the first root (the mirror).
+    cwd_alias: Option<PathBuf>,
+    /// A container project whose spec scope is `all`: its shells run in the
+    /// container too, not only its agents.
+    shells_in_container: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -781,13 +850,91 @@ fn canonical_below_any(path: &Path, roots: &[PathBuf]) -> bool {
         .is_some_and(|p| roots.iter().any(|root| p.starts_with(root)))
 }
 
-/// The trust-tier gate every mobile scope passes: a local project that is
-/// neither a container nor a VM. A box
-/// applies it to each member before that member's root may host a box tab.
-fn mobile_local(project: &ProjectRecord) -> bool {
-    project.remote.is_none()
-        && !enabled(&project.sandbox)
-        && !enabled(&project.vm)
+/// Where a project's tabs run, from its record: a VM first (a VM project is
+/// also a remote one, but pinned to the VM), then a remote host, then a
+/// container; else this machine.
+fn project_host(project: &ProjectRecord) -> ProjectHost {
+    if enabled(&project.vm) {
+        ProjectHost::Vm
+    } else if project.remote.is_some() {
+        ProjectHost::Remote
+    } else if enabled(&project.sandbox) {
+        ProjectHost::Container
+    } else {
+        ProjectHost::Local
+    }
+}
+
+/// The folder a project gives the phone — the scope root that files, uploads,
+/// the inbox and outbox, markup and the git dot use:
+/// - local and container: the entry's `directory` (a container mounts the host
+///   folder at the same path);
+/// - remote: the local mirror, the entry's `mirror` if set, else the default
+///   `remote_sync::default_mirror_dir_in` (the `directory` of a remote project
+///   holds only its `project.json` and `sync.json`);
+/// - VM: the `mirror` folder only if the user opted into one — a VM project has
+///   no mirror by default, its overlay is the working tree.
+///
+/// It is computed from the record and `state_dir`, never through
+/// `remote_sync::mirror_dir` (which reads the global `projects.json`). `None`
+/// when there is no such folder on the record at all; the folder may still be
+/// missing on disk.
+fn mobile_root(state_dir: &Path, project: &ProjectRecord) -> Option<PathBuf> {
+    let mirror = project.mirror.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(PathBuf::from);
+    match project_host(project) {
+        ProjectHost::Vm => mirror,
+        ProjectHost::Remote => Some(mirror.unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &project.id))),
+        ProjectHost::Local | ProjectHost::Container => project.directory.as_deref().map(PathBuf::from),
+    }
+}
+
+/// Whether a saved tab runs on this machine, by the window's rule
+/// (`effectiveTabLocation` in `src/stores/tabs.ts`): a `local_agent` is always
+/// local; on a VM project everything else is pinned to the VM; otherwise the
+/// tab's `location` if set, else an agent is local and a shell is remote.
+/// Only an exact `"local"` is local — `"remote"`, `"host:<id>"` and anything
+/// unknown are not. Pinned against the window by one shared fixture.
+fn tab_is_local(kind: &str, location: Option<&str>, vm_project: bool) -> bool {
+    if kind == "local_agent" {
+        return true;
+    }
+    if vm_project {
+        return false;
+    }
+    match location {
+        Some(location) => location == "local",
+        None => kind != "shell",
+    }
+}
+
+/// Whether a saved tab of this scope has a local tmux session the phone can
+/// attach to: a local project's always; a remote or VM project's only when the
+/// tab is local ([`tab_is_local`]); a container project's only when it runs on
+/// the host — not an agent, and not a shell while the spec's scope is `all`
+/// (the window's `sandbox` flag in `PaneSlot`).
+fn tab_on_this_machine(source: &ScopeSource, tab: &SavedTab) -> bool {
+    match source.host {
+        ProjectHost::Local => true,
+        ProjectHost::Remote | ProjectHost::Vm => {
+            tab_is_local(&tab.kind, tab.location.as_ref().and_then(Value::as_str), source.host == ProjectHost::Vm)
+        }
+        ProjectHost::Container => match tab.kind.as_str() {
+            "agent" => false,
+            "shell" => !source.shells_in_container,
+            _ => true,
+        },
+    }
+}
+
+/// What the phone may create in a project: local projects anything; a remote
+/// project with a mirror its agents (they run in the mirror); a remote
+/// project without one, a container and a VM nothing (phase 1).
+fn create_verdict(host: ProjectHost, folder: bool) -> CreateVerdict {
+    match host {
+        ProjectHost::Local => CreateVerdict::All,
+        ProjectHost::Remote if folder => CreateVerdict::Agents,
+        ProjectHost::Remote | ProjectHost::Container | ProjectHost::Vm => CreateVerdict::None,
+    }
 }
 
 /// `tmux ls` through Tabtivity's effective PATH, the one the desktop's own tmux
@@ -986,6 +1133,9 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             // Root has its own switch and gate; per-phone root is out of
             // scope (docs/done/mobile_device_scoped_access_plan.md).
             devices: None,
+            host: ProjectHost::Local,
+            cwd_alias: None,
+            shells_in_container: false,
         });
     }
     if assistant_open(state_dir) {
@@ -1000,10 +1150,13 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             roots: vec![crate::services::assistant::work_root(state_dir)],
             // Like root: one switch, not a per-phone list.
             devices: None,
+            host: ProjectHost::Local,
+            cwd_alias: None,
+            shells_in_container: false,
         });
     }
     for project in &projects {
-        if !project.app_mobile_access || !mobile_local(project) {
+        if !project.app_mobile_access {
             continue;
         }
         // Root is listed above, by its own switch and gate, and is not a
@@ -1014,16 +1167,27 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
         if is_root_scope_id(&project.id) || is_assistant_scope_id(&project.id) || crate::storage::is_reserved_scope(&project.id) {
             continue;
         }
-        let Some(root_raw) = project.directory.as_deref() else {
-            continue;
+        let host = project_host(project);
+        // A remote project's folder is its mirror, a default that needs no
+        // `directory`; a VM without a mirror has none and is listed all the
+        // same (no tabs, no folder) so the switch shows on the phone. A local
+        // or container project with no `directory` is no project folder.
+        let roots: Vec<PathBuf> = match mobile_root(state_dir, project) {
+            Some(root) => vec![root],
+            None if host == ProjectHost::Vm => Vec::new(),
+            None => continue,
         };
         sources.push(ScopeSource {
             raw_id: project.id.clone(),
             label: project.name.clone(),
             status: project.status.clone(),
             kind: ScopeKind::Project,
-            roots: vec![PathBuf::from(root_raw)],
+            roots,
             devices: project.app_mobile_devices.clone(),
+            host,
+            cwd_alias: (host == ProjectHost::Remote).then(|| project.directory.as_deref().map(PathBuf::from)).flatten(),
+            shells_in_container: host == ProjectHost::Container
+                && project.sandbox.as_ref().and_then(|s| s.get("scope")).and_then(Value::as_str) != Some("agents"),
         });
     }
     for b in &boxes {
@@ -1043,13 +1207,11 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             };
             // A member's own Mobile switch is not consulted: the box's
             // switch is the consent, and what it covers is the box's tabs
-            // — which run locally, in the folder or a local member's root.
-            // A remote/VM/container member contributes no root at all.
-            if !mobile_local(member) {
-                continue;
-            }
-            if let Some(dir) = member.directory.as_deref() {
-                roots.push(PathBuf::from(dir));
+            // — which run locally, in the folder or a member's phone folder
+            // (a remote member's mirror). A VM member without a mirror
+            // contributes no root, as a missing member root does.
+            if let Some(dir) = mobile_root(state_dir, member) {
+                roots.push(dir);
             }
         }
         sources.push(ScopeSource {
@@ -1063,6 +1225,10 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             // The box's own list; a member's list, like its switch, is
             // not consulted.
             devices: b.app_mobile_devices.clone(),
+            // A box's tabs run locally whatever its members are.
+            host: ProjectHost::Local,
+            cwd_alias: None,
+            shells_in_container: false,
         });
     }
     Ok(sources)
@@ -1214,6 +1380,9 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             local_model: false,
         }],
         devices,
+        host: ProjectHost::Local,
+        folder: true,
+        create: CreateVerdict::All,
     }
 }
 
@@ -1242,9 +1411,19 @@ fn assistant_chat(tab: &SavedTab, roots: &[PathBuf]) -> Option<crate::services::
     (plain && own_folder).then_some(launch)
 }
 
+/// Whether two paths name the same folder: equal as written, or both resolving
+/// to one canonical path.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || a.canonicalize().ok().zip(b.canonicalize().ok()).is_some_and(|(a, b)| a == b)
+}
+
 /// Read one scope's saved tabs and join them to the live tmux rows. `None`
 /// when the scope's home directory does not resolve — a scope with no home has
-/// nowhere for an inbox and nothing a tab could be checked against.
+/// nowhere for an inbox and nothing a tab could be checked against. The
+/// exceptions are listed with no tab and `folder: false`: the assistant (until
+/// its first chat makes the work folder), and a remote or VM project, whose
+/// mirror may not be there yet (or, for a VM, at all) while its Mobile switch
+/// must still show on the phone.
 fn resolve_scope(
     state_dir: &Path,
     host_key: &[u8],
@@ -1253,6 +1432,8 @@ fn resolve_scope(
     source: ScopeSource,
 ) -> Option<ResolvedProject> {
     let assistant = source.kind == ScopeKind::Assistant;
+    let listed_without_folder = assistant
+        || (source.kind == ScopeKind::Project && matches!(source.host, ProjectHost::Remote | ProjectHost::Vm));
     let mut roots: Vec<PathBuf> = Vec::new();
     for (index, raw) in source.roots.iter().enumerate() {
         match raw.canonicalize() {
@@ -1261,16 +1442,25 @@ fn resolve_scope(
             // until then the scope is listed with no tab, so the phone can
             // start that chat (a tab cannot sit below a root that is not
             // there, so none is listed).
-            Err(_) if assistant && index == 0 => {}
+            Err(_) if listed_without_folder && index == 0 => {}
             // The home must exist; a member root that does not simply hosts
             // no box tab, exactly as the fence's root list treats it.
             Err(_) if index == 0 => return None,
             Err(_) => {}
         }
     }
+    let folder = !assistant && !roots.is_empty();
     let root = match roots.first() {
         Some(root) => root.clone(),
-        None if assistant => source.roots.first()?.clone(),
+        // A root that is not there: the assistant's, or a remote/VM project's
+        // mirror. A VM with no mirror has no path at all; the default mirror
+        // location stands in, which nothing creates for it and no route
+        // reads while `folder` is false.
+        None if listed_without_folder => source
+            .roots
+            .first()
+            .cloned()
+            .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &source.raw_id)),
         None => return None,
     };
     let session_path = state_dir
@@ -1285,6 +1475,8 @@ fn resolve_scope(
     // the phone could see, with nothing anywhere to say why. Such a scope
     // simply has no attachable tabs until the desktop rewrites the file.
     let session = match fs::read(&session_path) {
+        // No root, no tab: nothing could be checked against one.
+        _ if roots.is_empty() => SessionFile { tab_layout: vec![] },
         Ok(bytes) => serde_json::from_slice::<SessionFile>(&bytes)
             .unwrap_or_else(|_| SessionFile { tab_layout: vec![] }),
         Err(_) => SessionFile { tab_layout: vec![] },
@@ -1314,10 +1506,19 @@ fn resolve_scope(
                 && tab.local_launch.as_ref().is_some_and(|launch| {
                     crate::services::terminal_service::local_launch_ok(launch, &tab.cmd)
                 }));
+        // A remote project's tab is saved with the project's state-dir
+        // `directory` as its cwd, though the agent runs in the mirror (the
+        // window swaps it in at spawn): read it as the mirror, so it is below
+        // the root and its transcript is looked up where the agent ran.
+        let cwd = match &source.cwd_alias {
+            Some(alias) if same_dir(Path::new(&tab.cwd), alias) => root.to_string_lossy().into_owned(),
+            _ => tab.cwd.clone(),
+        };
         if !eligible_kind
             || tab.ephemeral
             || tab.tmux_attach.is_some()
-            || !canonical_below_any(Path::new(&tab.cwd), &roots)
+            || !tab_on_this_machine(&source, &tab)
+            || !canonical_below_any(Path::new(&cwd), &roots)
         {
             continue;
         }
@@ -1370,7 +1571,7 @@ fn resolve_scope(
             session_id: tab.session_id.clone(),
             schedule_target_id: tab.schedule_target_id.clone(),
             cmd: transcript_cmd_of(&tab).to_string(),
-            cwd: tab.cwd.clone(),
+            cwd,
             since: fresh_since(&tab),
             local_model: local_agent || chat.as_ref().is_some_and(|launch| launch.cli.is_local()),
         });
@@ -1395,6 +1596,9 @@ fn resolve_scope(
         roots,
         tabs,
         devices: source.devices,
+        host: source.host,
+        folder,
+        create: create_verdict(source.host, folder),
     })
 }
 
@@ -2160,6 +2364,7 @@ mod tests {
             resume_args: None,
             tmux_session: None,
             tmux_attach: None,
+            location: None,
             ephemeral: false,
             color: None,
             local_launch: None,
@@ -2333,12 +2538,13 @@ mod tests {
 
     /// A mobile-enabled box is a scope of its own (#31aa): listed as `kind:
     /// box` under its own opaque id, with tabs from `sessions/box_<id>/` whose
-    /// cwd is the box folder OR a local member's root. Its switch is the only
-    /// consent consulted — a member's own Mobile bit is not — while a member
-    /// outside the trust tiers contributes no root, and a box with the bit
-    /// off or no folder is not listed at all.
+    /// cwd is the box folder OR a member's phone folder. Its switch is the only
+    /// consent consulted — a member's own Mobile bit is not — and every member
+    /// contributes its folder (a remote member its mirror), except a VM
+    /// without a mirror, which has none; a box with the bit off or no folder
+    /// is not listed at all.
     #[test]
-    fn a_mobile_enabled_box_is_a_scope_with_the_folder_and_local_member_roots() {
+    fn a_mobile_enabled_box_is_a_scope_with_the_folder_and_member_roots() {
         let dir = tempfile::tempdir().expect("state dir");
         let state = dir.path();
         allow_shells(state);
@@ -2355,8 +2561,12 @@ mod tests {
                 { "id": "p-lib", "name": "Lib", "status": "inactive",
                   "directory": member.to_string_lossy() },
                 { "id": "p-remote", "name": "Remote", "status": "active",
-                  "directory": remote_mirror.to_string_lossy(),
-                  "remote": { "host": "h" } },
+                  "directory": state.join("remote-projects").join("p-remote").to_string_lossy(),
+                  "remote": { "host": "h" }, "mirror": remote_mirror.to_string_lossy() },
+                // A VM project without a mirror has no folder to give.
+                { "id": "p-vm", "name": "Vm", "status": "active",
+                  "directory": state.join("remote-projects").join("p-vm").to_string_lossy(),
+                  "remote": { "host": "h" }, "vm": { "enabled": true } },
             ]))
             .expect("projects"),
         )
@@ -2364,7 +2574,7 @@ mod tests {
         fs::write(
             state.join("boxes.json"),
             serde_json::to_vec(&serde_json::json!([
-                { "id": "b1", "name": "Paper", "member_ids": ["p-lib", "p-remote", "p-gone"],
+                { "id": "b1", "name": "Paper", "member_ids": ["p-lib", "p-remote", "p-vm", "p-gone"],
                   "folder": folder.to_string_lossy(), concat!(crate::app_slug!(), "_mobile_access"): true },
                 { "id": "b2", "name": "Off", "folder": folder.to_string_lossy() },
                 { "id": "b3", "name": "Unopened", concat!(crate::app_slug!(), "_mobile_access"): true },
@@ -2400,10 +2610,272 @@ mod tests {
         assert_eq!(b.public.label, "Paper");
         assert_eq!(b.public.status, "active");
         assert_eq!(b.root, folder.canonicalize().unwrap());
-        assert_eq!(b.roots.len(), 2, "the folder and the one local member: {:?}", b.roots);
+        assert_eq!(b.roots.len(), 3, "the folder, the local member and the remote member's mirror: {:?}", b.roots);
+        assert!(b.roots.contains(&remote_mirror.canonicalize().unwrap()));
+        assert_eq!((b.host, b.folder, b.create), (ProjectHost::Local, true, CreateVerdict::All));
         let labels: Vec<&str> = b.tabs.iter().map(|t| t.public.label.as_str()).collect();
-        assert_eq!(labels, vec!["Box shell", "Lib shell"]);
+        assert_eq!(labels, vec!["Box shell", "Lib shell", "Remote shell"]);
         assert!(!b.public.id.contains("b1"), "the opaque id must not carry the box id");
+    }
+
+    /// One project record per host type, each with Mobile on.
+    fn typed_projects(state: &Path) -> Vec<serde_json::Value> {
+        let access = crate::brand::MOBILE_ACCESS_KEY;
+        let record = |id: &str, extra: serde_json::Value| {
+            let mut record = serde_json::json!({
+                "id": id, "name": id, "status": "active",
+                "directory": state.join("dirs").join(id).to_string_lossy(), access: true,
+            });
+            for (key, value) in extra.as_object().expect("object") {
+                record[key] = value.clone();
+            }
+            record
+        };
+        vec![
+            record("p-local", serde_json::json!({})),
+            record("p-box", serde_json::json!({ "sandbox": { "enabled": true } })),
+            record("p-remote", serde_json::json!({ "remote": { "host": "h" } })),
+            record(
+                "p-moved",
+                serde_json::json!({ "remote": { "host": "h" }, "mirror": state.join("moved").to_string_lossy() }),
+            ),
+            record("p-vm", serde_json::json!({ "remote": { "host": "h" }, "vm": { "enabled": true } })),
+            record(
+                "p-vm-mirror",
+                serde_json::json!({
+                    "remote": { "host": "h" }, "vm": { "enabled": true },
+                    "mirror": state.join("vm-mirror").to_string_lossy(),
+                }),
+            ),
+        ]
+    }
+
+    fn load_all(state: &Path, live: &HashMap<String, LiveTmux>) -> Vec<ResolvedProject> {
+        let env = RootEnv { dir: state.join("root"), fenced: || true };
+        Catalog::load_with(state, &[7; 32], &env, live).expect("catalog").projects
+    }
+
+    fn tab_json(label: &str, kind: &str, cwd: &Path, tmux: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut tab = serde_json::json!({
+            "label": label, "cmd": if kind == "shell" { "bash" } else { "claude" }, "kind": kind,
+            "cwd": cwd.to_string_lossy(), "tmuxSession": tmux, "signIn": kind == "agent",
+        });
+        for (key, value) in extra.as_object().expect("object") {
+            tab[key] = value.clone();
+        }
+        tab
+    }
+
+    fn write_session(state: &Path, id: &str, tabs: Vec<serde_json::Value>) {
+        let sessions = state.join("sessions").join(id);
+        fs::create_dir_all(&sessions).expect("session dir");
+        fs::write(sessions.join("terminals.json"), serde_json::json!({ "tabLayout": tabs }).to_string())
+            .expect("write session");
+    }
+
+    /// No project type is special (plan step 1): a local, container, remote
+    /// and VM project each opted in are listed, with the folder their type
+    /// gives the phone — the entry's `directory` for a local or container
+    /// project, the mirror for a remote one (the default under the state dir,
+    /// or the entry's `mirror`), a VM's only if it has opted into one — and
+    /// the create verdict their type allows.
+    #[test]
+    fn every_project_type_is_listed_with_its_own_folder() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let default_mirror = crate::services::remote_sync::default_mirror_dir_in(state, "p-remote");
+        for d in [
+            state.join("dirs").join("p-local"),
+            state.join("dirs").join("p-box"),
+            default_mirror.clone(),
+            state.join("moved"),
+            state.join("vm-mirror"),
+        ] {
+            fs::create_dir_all(d).expect("dir");
+        }
+        fs::write(state.join("projects.json"), serde_json::to_vec(&typed_projects(state)).expect("projects"))
+            .expect("write projects");
+        let listed = load_all(state, &HashMap::new());
+        let row = |id: &str| listed.iter().find(|p| p.raw_id == id).unwrap_or_else(|| panic!("{id} is listed"));
+        let canon = |p: &Path| p.canonicalize().expect("canonical");
+
+        let local = row("p-local");
+        assert_eq!((local.host, local.folder, local.create), (ProjectHost::Local, true, CreateVerdict::All));
+        assert_eq!(local.root, canon(&state.join("dirs").join("p-local")));
+        let container = row("p-box");
+        assert_eq!((container.host, container.folder, container.create), (ProjectHost::Container, true, CreateVerdict::None));
+        assert_eq!(container.root, canon(&state.join("dirs").join("p-box")));
+        let remote = row("p-remote");
+        assert_eq!((remote.host, remote.folder, remote.create), (ProjectHost::Remote, true, CreateVerdict::Agents));
+        assert_eq!(remote.root, canon(&default_mirror), "not the entry's directory");
+        let moved = row("p-moved");
+        assert_eq!(moved.root, canon(&state.join("moved")), "an explicit mirror wins over the default");
+        let vm = row("p-vm");
+        assert_eq!((vm.host, vm.folder, vm.create), (ProjectHost::Vm, false, CreateVerdict::None));
+        assert!(vm.roots.is_empty() && vm.tabs.is_empty());
+        assert!(!vm.root.exists(), "a folder-less project's root names nothing that exists");
+        let vm_mirror = row("p-vm-mirror");
+        assert_eq!((vm_mirror.host, vm_mirror.folder, vm_mirror.create), (ProjectHost::Vm, true, CreateVerdict::None));
+        assert_eq!(vm_mirror.root, canon(&state.join("vm-mirror")));
+        assert_eq!(listed.len(), 6);
+
+        // The per-phone check agrees with the catalog, for every type.
+        let env = RootEnv { dir: state.join("root"), fenced: || true };
+        let access = ScopeAccess::load_with(state, &env).expect("access");
+        for id in ["p-local", "p-box", "p-remote", "p-moved", "p-vm", "p-vm-mirror"] {
+            assert_eq!(access.reaches(id, "any-phone"), Ok(true), "{id}");
+        }
+    }
+
+    /// A remote project whose mirror is not there yet (never opened on the
+    /// desktop) and a VM project without one are listed, with no tab and no
+    /// folder, so the Mobile switch shows on the phone. A local project whose
+    /// folder is gone is still dropped.
+    #[test]
+    fn a_remote_project_without_a_mirror_is_listed_empty() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        allow_shells(state);
+        fs::write(state.join("projects.json"), serde_json::to_vec(&typed_projects(state)).expect("projects"))
+            .expect("write projects");
+        // Saved tabs exist, but nothing can be checked against a missing root.
+        let tmux = concat!(crate::app_slug!(), "-p-remote--agent-123456789");
+        write_session(state, "p-remote", vec![tab_json("Agent", "agent", &state.join("dirs").join("p-remote"), tmux, serde_json::json!({}))]);
+        let listed = load_all(state, &HashMap::new());
+        let mut ids: Vec<&str> = listed.iter().map(|p| p.raw_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["p-moved", "p-remote", "p-vm", "p-vm-mirror"], "the local and container folders are missing: dropped");
+        for p in &listed {
+            assert!(!p.folder && !p.has_folder() && p.tabs.is_empty(), "{}", p.raw_id);
+            assert_eq!(p.create, CreateVerdict::None, "{}", p.raw_id);
+        }
+        let remote = listed.iter().find(|p| p.raw_id == "p-remote").unwrap();
+        assert_eq!(remote.root, crate::services::remote_sync::default_mirror_dir_in(state, "p-remote"));
+    }
+
+    /// A remote project's desktop-made agent is saved with `cwd` = the entry's
+    /// state-dir `directory` (the window swaps the mirror in only at spawn):
+    /// it is listed, and read as running in the mirror. Any other cwd must lie
+    /// below the mirror; one that does not is dropped.
+    #[test]
+    fn a_remote_tab_saved_with_the_project_directory_is_read_in_the_mirror() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        allow_shells(state);
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(state, "p-remote");
+        let directory = state.join("dirs").join("p-remote");
+        for d in [&mirror, &directory, &mirror.join("src"), &state.join("elsewhere")] {
+            fs::create_dir_all(d).expect("dir");
+        }
+        let projects = typed_projects(state).into_iter().filter(|p| p["id"] == "p-remote").collect::<Vec<_>>();
+        fs::write(state.join("projects.json"), serde_json::to_vec(&projects).expect("projects")).expect("write projects");
+        let name = |n: u32| format!("{}-p-remote--agent-{n}23456789", crate::app_slug!());
+        write_session(
+            state,
+            "p-remote",
+            vec![
+                tab_json("Window made", "agent", &directory, &name(1), serde_json::json!({})),
+                tab_json("In the mirror", "agent", &mirror.join("src"), &name(2), serde_json::json!({})),
+                tab_json("Elsewhere", "agent", &state.join("elsewhere"), &name(3), serde_json::json!({})),
+            ],
+        );
+        let listed = load_all(state, &HashMap::new());
+        let remote = &listed[0];
+        let tabs: Vec<(&str, PathBuf)> = remote.tabs.iter().map(|t| (t.public.label.as_str(), PathBuf::from(&t.cwd))).collect();
+        assert_eq!(
+            tabs,
+            [
+                ("Window made", remote.root.clone()),
+                ("In the mirror", mirror.join("src")),
+            ],
+        );
+    }
+
+    /// On a remote or VM project the catalog lists only the tabs the window
+    /// runs locally: a location-less shell is remote, a `host:w1` or `remote`
+    /// agent is on a host, a location-less agent is local. A container project
+    /// drops what runs in the container — every agent, and a shell while the
+    /// spec's scope is `all` — and lists a scope-`agents` spec's shells.
+    #[test]
+    fn only_tabs_with_a_local_session_are_listed_on_remote_vm_and_container_projects() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        allow_shells(state);
+        let mut projects = typed_projects(state);
+        projects.push(serde_json::json!({
+            "id": "p-agents", "name": "p-agents", "status": "active",
+            "directory": state.join("dirs").join("p-agents").to_string_lossy(),
+            crate::brand::MOBILE_ACCESS_KEY: true,
+            "sandbox": { "enabled": true, "scope": "agents" },
+        }));
+        fs::write(state.join("projects.json"), serde_json::to_vec(&projects).expect("projects")).expect("write projects");
+        let dirs = state.join("dirs");
+        let roots = [
+            ("p-local", dirs.join("p-local")),
+            ("p-box", dirs.join("p-box")),
+            ("p-agents", dirs.join("p-agents")),
+            ("p-vm-mirror", state.join("vm-mirror")),
+            ("p-remote", crate::services::remote_sync::default_mirror_dir_in(state, "p-remote")),
+        ];
+        for (id, root) in &roots {
+            fs::create_dir_all(root).expect("root");
+            let n = |kind: &str, i: u32| format!("{}-{id}--{kind}-{i}23456789", crate::app_slug!());
+            let tabs = vec![
+                tab_json("agent", "agent", root, &n("agent", 1), serde_json::json!({})),
+                tab_json("agent remote", "agent", root, &n("agent", 2), serde_json::json!({ "location": "remote" })),
+                tab_json("agent w1", "agent", root, &n("agent", 3), serde_json::json!({ "location": "host:w1" })),
+                tab_json("shell", "shell", root, &n("shell", 4), serde_json::json!({})),
+                tab_json("shell local", "shell", root, &n("shell", 5), serde_json::json!({ "location": "local" })),
+            ];
+            write_session(state, id, tabs);
+        }
+        let listed = load_all(state, &HashMap::new());
+        let labels = |id: &str| -> Vec<String> {
+            listed.iter().find(|p| p.raw_id == id).unwrap_or_else(|| panic!("{id}")).tabs.iter().map(|t| t.public.label.clone()).collect()
+        };
+        assert_eq!(labels("p-local"), ["agent", "agent remote", "agent w1", "shell", "shell local"], "a local project is unfiltered");
+        assert_eq!(labels("p-remote"), ["agent", "shell local"]);
+        assert!(labels("p-vm-mirror").is_empty(), "a VM project is pinned to the VM");
+        assert!(labels("p-box").is_empty(), "scope all: agents and shells run in the container");
+        assert_eq!(labels("p-agents"), ["shell", "shell local"], "scope agents leaves the shells on the host");
+    }
+
+    /// The tab-locality rule is the window's `effectiveTabLocation`, pinned
+    /// to it by one table both sides read
+    /// (`src/__tests__/mobile/tabLocality.fixture.json`).
+    #[test]
+    fn the_tab_locality_rule_matches_the_windows_table() {
+        let table: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../src/__tests__/mobile/tabLocality.fixture.json"
+        )))
+        .expect("fixture");
+        assert!(table.len() > 10);
+        for row in table {
+            let (kind, location, vm) = (row["kind"].as_str().unwrap(), row["location"].as_str(), row["vm"].as_bool().unwrap());
+            assert_eq!(tab_is_local(kind, location, vm), row["local"].as_bool().unwrap(), "{row}");
+        }
+    }
+
+    /// The `mirror` key is read leniently: a string is the folder, anything
+    /// else is none, and a record with an odd one still parses.
+    #[test]
+    fn the_mirror_key_is_read_leniently() {
+        let project = |value: &str| -> ProjectRecord {
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"P","status":"active","mirror":{value}}}"#)).unwrap()
+        };
+        assert_eq!(project(r#""/m""#).mirror.as_deref(), Some("/m"));
+        for odd in ["7", "null", "[]", r#"{"a":1}"#, "true"] {
+            assert_eq!(project(odd).mirror, None, "{odd}");
+        }
+        let absent: ProjectRecord = serde_json::from_str(r#"{"id":"p","name":"P","status":"active"}"#).unwrap();
+        assert_eq!(absent.mirror, None);
+        // A blank mirror is no mirror: the default stands in.
+        let blank = project(r#""  ""#);
+        let state = Path::new("state");
+        assert_eq!(mobile_root(state, &blank), None, "a local record keeps its directory rule");
+        let remote = ProjectRecord { remote: Some(serde_json::json!({ "host": "h" })), ..blank };
+        assert_eq!(mobile_root(state, &remote), Some(crate::services::remote_sync::default_mirror_dir_in(state, "p")));
     }
 
     /// The per-phone list, end to end through a load: absent reaches every

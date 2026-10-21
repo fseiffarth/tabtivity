@@ -2155,46 +2155,17 @@ pub fn set_project_mobile_access(
     enabled: bool,
     devices: Option<Vec<String>>,
 ) -> Result<MobileAccessState, String> {
-    let projects = get_projects()?;
-    let project = projects
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or("project not found")?;
+    if !get_projects()?.iter().any(|p| p.id == project_id) {
+        return Err("project not found".into());
+    }
+    // No project type is refused: the switch (and its per-phone list) is the
+    // whole consent; what the phone reaches of a remote, container or VM
+    // project is the catalog's call (`mobile_control::discovery`).
     if enabled {
-        if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
-            return Err("Mobile access is available only for local projects".into());
-        }
-        let runtime_enabled = |key: &str| {
-            project
-                .extra
-                .get(key)
-                .and_then(|v| v.get("enabled"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        };
-        if runtime_enabled("sandbox") || runtime_enabled("vm") {
-            return Err("Mobile access is unavailable for container and VM projects".into());
-        }
         mobile_access_prerequisites()?;
     }
     let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
-        if enabled {
-            if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
-                return Err("Mobile access is available only for local projects".into());
-            }
-            let runtime_enabled = |key: &str| {
-                project
-                    .extra
-                    .get(key)
-                    .and_then(|v| v.get("enabled"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            };
-            if runtime_enabled("sandbox") || runtime_enabled("vm") {
-                return Err("Mobile access is unavailable for container and VM projects".into());
-            }
-        }
         apply_mobile_access(project, enabled, devices.as_deref());
         Ok(())
     })?;
