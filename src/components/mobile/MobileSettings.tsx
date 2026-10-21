@@ -14,9 +14,11 @@ import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "./MobileAccessPicker";
+import { projectHostKind } from "../../lib/projectTabHost";
+import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
-import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
+import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
 
 /** `translate` at the live language, for code that runs outside a render: the
@@ -511,14 +513,23 @@ export function MobileSettings() {
     }
   };
 
-  const eligible = projects.filter(isMobileEligible);
-  const eligibleIds = new Set(eligible.map((project) => project.id));
+  // A remote, container or VM project is listed like any other; its row says
+  // (in the switch's title) what the phone reaches of it.
+  const projectRowLabel = (project: ProjectEntry) => (
+    projectHostKind(project) === "local"
+      ? project.name
+      : <>{project.name} <UntestedTag id="mobile-every-project-type" /></>
+  );
+  const projectRowTitle = (project: ProjectEntry) => {
+    const host = projectHostKind(project);
+    return host === "local" ? undefined : t(HOST_REACH_KEY[host]);
+  };
   const normalizedProjectSearch = projectSearch.trim().toLocaleLowerCase();
-  const matchingEligible = normalizedProjectSearch
-    ? eligible.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
-    : eligible;
-  // Boxes ride under the same search box: every box is eligible (a box's tabs
-  // run locally whatever its members are), so the list is the box list.
+  const matchingProjects = normalizedProjectSearch
+    ? projects.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
+    : projects;
+  // Boxes ride under the same search box: every project type and every box may
+  // be shared (a box's tabs run locally whatever its members are).
   const matchingBoxes = normalizedProjectSearch
     ? boxes.filter((box) => box.name.toLocaleLowerCase().includes(normalizedProjectSearch))
     : boxes;
@@ -731,7 +742,7 @@ export function MobileSettings() {
       )}
 
       <div className="settings-subheader"><Hint help={t("mobile.projectAccessHelp")}>{t("mobile.projectAccess")}</Hint></div>
-      {eligible.length > 0 && <input
+      {projects.length > 0 && <input
         className="mobile-project-access-search"
         value={projectSearch}
         placeholder={t("mobile.searchProjects")}
@@ -739,10 +750,11 @@ export function MobileSettings() {
         onChange={(event) => setProjectSearch(event.target.value)}
       />}
       <div className="mobile-project-access-list">
-        {matchingEligible.map((project) => (
+        {matchingProjects.map((project) => (
           <ToggleRow
             key={project.id}
-            label={project.name}
+            label={projectRowLabel(project)}
+            title={projectRowTitle(project)}
             checked={project[MOBILE_ACCESS_KEY] ?? false}
             onChange={(event) => {
               setError(null);
@@ -752,8 +764,8 @@ export function MobileSettings() {
             aside={phoneScopeButton("project", project.id, project.name, project[MOBILE_ACCESS_KEY] ?? false, project[MOBILE_DEVICES_KEY])}
           />
         ))}
-        {eligible.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
-        {eligible.length > 0 && matchingEligible.length === 0 && <p className="settings-help">{t("mobile.noProjectsMatch", { query: projectSearch.trim() })}</p>}
+        {projects.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
+        {projects.length > 0 && matchingProjects.length === 0 && <p className="settings-help">{t("mobile.noProjectsMatch", { query: projectSearch.trim() })}</p>}
       </div>
 
       {boxes.length > 0 && <>
@@ -785,6 +797,7 @@ export function MobileSettings() {
             x={phonePicker.x}
             y={phonePicker.y}
             kind={phonePicker.kind}
+            host={phonePicker.kind === "project" ? projectHostKind(target as ProjectEntry) : undefined}
             enabled={target[MOBILE_ACCESS_KEY] ?? false}
             devices={target[MOBILE_DEVICES_KEY]}
             onApply={(enabled, list) => phonePicker.kind === "project"
@@ -820,7 +833,6 @@ export function MobileSettings() {
               <PairedDeviceAccess
                 device={device}
                 pairedIds={(pairedPhones ?? devices).map((phone) => phone.id)}
-                eligibleProjectIds={eligibleIds}
                 onChanged={() => void refresh()}
               />
             </div>

@@ -89,7 +89,8 @@ import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { ArrowDownIcon, ArrowUpIcon, AssistantIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TerminalIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
-import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { projectHostKind } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
@@ -504,11 +505,10 @@ export function ProjectFilesView({
   const alertsHere = alertsEnabled && !compact;
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const setProjectMobileAccess = useProjectsStore((s) => s.setProjectMobileAccess);
-  const mobileEligible = !!projectId
-    && !!project
-    && !project.remote
-    && !project.sandbox?.enabled
-    && !project.vm?.enabled;
+  // Every project type may be shared with the phone: the Mobile switch is the
+  // whole consent. What the phone then reaches differs by type (`mobileHost`).
+  const mobileEligible = !!projectId && !!project;
+  const mobileHost = projectHostKind(project);
   const [mobileAccessBusy, setMobileAccessBusy] = useState(false);
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
@@ -1657,13 +1657,14 @@ export function ProjectFilesView({
             aria-haspopup="menu"
             aria-label={t("projectFilesView.mobileAccessAria", { name: project?.name ?? "" })}
             title={
-              mobileReach.kind === "all"
+              (mobileReach.kind === "all"
                 ? t("projectFilesView.mobileAccessAllTitle")
                 : mobileReach.kind === "some"
                   ? t("projectFilesView.mobileAccessSomeTitle", { phones: phoneReachLabel(mobileReach, t) })
                   : mobileReach.kind === "none"
                     ? t("projectFilesView.mobileAccessNoneTitle")
-                    : t("projectFilesView.mobileAccessOffTitle")
+                    : t("projectFilesView.mobileAccessOffTitle"))
+              + (mobileHost === "local" ? "" : ` ${t(HOST_REACH_KEY[mobileHost])}`)
             }
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
@@ -1678,6 +1679,7 @@ export function ProjectFilesView({
             x={mobilePicker.x}
             y={mobilePicker.y}
             kind="project"
+            host={mobileHost}
             enabled={mobileAccessOn}
             devices={mobileDevices}
             onApply={applyMobileAccess}

@@ -3730,6 +3730,42 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31ci — The phone reaches every project type** (2026-10-21; ✅ code-complete,
+  automated tests passing — catalog `discovery.rs` (per-type folder, locality
+  rule, folder-less listing), host `not_attachable`/`folder`/`create`/`host`,
+  `launch_options` locality, desktop bridge `MobileEveryProjectType.test.tsx` +
+  `MobileTabReach.test.ts`, the phone button/picker/Settings rows in
+  `MobileProjectAccess.test.tsx` + `MobilePairedDeviceAccess.test.tsx`;
+  ⚠️ never run live). Plan `docs/mobile_every_project_type_plan.md`, handoff
+  `docs/mobile_every_project_type_handoff.md`. The trust tiers are gone: a
+  remote, container and VM project get the phone button and the Mobile switch;
+  a remote project shares its local agents and its mirror, a container or VM
+  project is listed and its tabs inside it reach the phone in a later version.
+  Untested id `mobile-every-project-type`.
+  - Needs the sidecar updated and the PWA rebuilt (`npm run backend:stale`,
+    `npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, desktop + phone — (1) A remote project: the side panel's
+    phone button shows (hover: it names the local agents and the mirror); turn it
+    on → the phone lists the project and the agents running on this computer,
+    including one the desktop started earlier; no "＋ Shell" is offered.
+    (2) Start an agent from the phone's ＋ → on the desktop it is a local tab in
+    the mirror, and no new process appears on the host. (3) A container project
+    and a VM project: the switch turns on and the phone lists both, with no ＋;
+    a container project with scope `agents` lists its shells. (4) A remote
+    project whose mirror was never created, and a VM project without a mirror:
+    listed with the one-line reason and no Files/Upload. (5) Settings → Mobile →
+    Project access and a paired phone's own list show remote, container and VM
+    projects too; the picker's first line names what the phone reaches. (6) A
+    box with a remote member: its mirror's files appear in the box on the phone.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **31ch — Back steps back inside the phone app** (2026-10-18;
   ✅ code-complete, `MobileBackStack.test.tsx` passing; ⚠️ never run on a
   phone). `mobile-web/src/backStack.ts`: while a sheet, viewer, library,

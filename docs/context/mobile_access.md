@@ -13,9 +13,33 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    dev builds included: the dev-only overlay from `target/mobile-pwa/` let any
    agent plant the app every paired phone runs, and is gone (threat recheck
    2026-10-08, gap 20; `dev_builds.md`).
-2. **Trust tiers** — only a *local* project that is neither a container nor a
-   VM is ever a phone scope (`discovery::mobile_local`, and its desktop twin
-   `MobileBridgeHost` `mobileProject`). No switch can widen this.
+2. **Which folder a project type gives the phone** — no project type is
+   barred (the old trust tiers are gone, 2026-10-21): the switch below is the
+   whole consent, for a local, remote, container and VM project and for every
+   box member alike. The type decides only *what the phone reaches*
+   (`discovery::mobile_root`, `project_host`; desktop twin
+   `lib/projectTabHost.ts`, used by `MobileBridgeHost`):
+   - local and container: the entry's `directory` (a container mounts the host
+     folder at the same path);
+   - remote: the local mirror (`mirror` key, else
+     `remote_sync::default_mirror_dir_in`), never `directory`, which holds only
+     `project.json`/`sync.json`; a tab saved with `cwd = directory` is read as
+     running in the mirror;
+   - VM: the opted-in `mirror` only; without one the project is listed with no
+     folder (`folder: false`).
+
+   **Locality rule.** The phone attaches through a tmux session on this
+   machine, so on a remote, VM or container project only tabs that run here are
+   listed (`runs_on_this_machine`, the window's `effectiveTabLocation` table;
+   the fixture `tabLocality.fixture.json` pins both). `create` is `all` (local),
+   `agents` (remote with a mirror; the agent runs `local_only` in the mirror and
+   is saved `location: "local"`) or `none` (container, VM, mirror-less remote):
+   a refused create/reopen answers `not_attachable`, in the sidecar and the
+   bridge. The scheduler's headless relaunch follows the same placement
+   (`launch_place`); a host/container/VM agent is not relaunched without a
+   window. Tabs on a host, in a container or in a VM reach the phone in a
+   later version. The desktop's phone button and Settings → Mobile rows say this
+   per type (`mobile.hostReach.*`, pill `mobile-every-project-type`).
 3. **The scope's switch** — `tabtivity_mobile_access` (`MOBILE_ACCESS_KEY`) on
    the project entry in `projects.json` or the box in `boxes.json`. Absent or
    false = off. A box's switch is the one consent for the box's `box:<id>`
@@ -53,8 +77,8 @@ cooldown. `agent_tab_ref` (the push lookup, not a phone request) is the one
 unfiltered catalog read.
 
 The desktop never decides access by which phone asked: it only ever sees raw
-ids the sidecar mapped, and `mobileScope` repeats the switch and trust tiers
-only. The one exception is bookkeeping, not access: a request that makes a
+ids the sidecar mapped, and `mobileScope` repeats the switch and the folder
+rule only. The one exception is bookkeeping, not access: a request that makes a
 rule in `agent_tasks.json` (`ScheduleMutate`, `PromptMutate` send,
 `HoldPrompt`, `MarkupAnswer`) carries the asking phone's `device_id`, and the
 rule records it as `phone_device` (see *What a phone leaves behind*).

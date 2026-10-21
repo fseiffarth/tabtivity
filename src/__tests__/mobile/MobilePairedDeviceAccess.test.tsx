@@ -66,7 +66,9 @@ describe("Settings → Mobile, a paired phone's access", () => {
         entry("everyone", "Everyone", { [MOBILE_ACCESS_KEY]: true }),
         entry("ipad-only", "iPad only", { [MOBILE_ACCESS_KEY]: true, [MOBILE_DEVICES_KEY]: [IPAD] }),
         entry("off", "Off project"),
-        entry("remote", "Remote project"),
+        entry("remote", "Remote project", { remote: { host: "h.invalid", user: "u", remote_path: "/srv/p" } as ProjectEntry["remote"] }),
+        entry("box-vm", "VM project", { vm: { enabled: true } as ProjectEntry["vm"] }),
+        entry("boxed", "Container project", { sandbox: { enabled: true } }),
       ],
       loaded: true,
     });
@@ -85,7 +87,6 @@ describe("Settings → Mobile, a paired phone's access", () => {
       <PairedDeviceAccess
         device={{ id: PIXEL, name: "Pixel", created_at: 1_790_000_000, hidden_sections: hidden }}
         pairedIds={PAIRED}
-        eligibleProjectIds={new Set(["everyone", "ipad-only", "off"])}
         onChanged={onChanged}
       />,
     );
@@ -132,7 +133,10 @@ describe("Settings → Mobile, a paired phone's access", () => {
     const user = userEvent.setup();
     renderPixel();
     await user.click(screen.getByRole("button", { name: /Add project/ }));
-    expect(screen.queryByRole("button", { name: /Remote project/ })).toBeNull();
+    // Every project type is offered: the Mobile switch is the whole consent.
+    expect(await screen.findByRole("button", { name: /Remote project/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /VM project/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Container project/ })).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: /iPad only/ }));
     expect(invokeMock).toHaveBeenCalledWith("set_project_mobile_access", { projectId: "ipad-only", enabled: true, devices: [IPAD, PIXEL] });
 

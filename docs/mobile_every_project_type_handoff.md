@@ -417,3 +417,65 @@ still 8. `ci-local.sh` not run (no Rust change).
   accept an agent create for it; nothing reaches the bridge in that case.
 - A phone-reachable VM `local_agent` (A1's table) cannot be relaunched
   (A3: every VM tab is `NotAttachable`); it is listed while it runs.
+
+## B2. Desktop UI + texts (plan steps 5 and 7)
+
+Commit: see `git log` (the commit whose message starts `feat(mobile): phone
+button and texts for every project type`).
+
+### What was built
+
+- `ProjectFilesView.tsx`: `mobileEligible` is now just "has a project" (every
+  type); the phone button's title appends one sentence per non-local type
+  (`mobile.hostReach.remote|container|vm`), and the picker gets `host`. The
+  type comes from B1's `projectHostKind`.
+- `MobileAccessPicker.tsx`: new optional `host` prop; a non-local project shows
+  that sentence plus the `mobile-every-project-type` pill as a first
+  `context-menu-note`. `HOST_REACH_KEY` (exported) maps type -> i18n key.
+- `PairedDeviceAccess.tsx`: `isMobileEligible` and the `eligibleProjectIds`
+  prop are deleted; every project is a scope. `PairedDeviceDialog.tsx` lost its
+  project-store read. `MobileSettings.tsx` lists every project; non-local rows
+  get the pill and the sentence as the switch's title; the picker gets `host`.
+- i18n (en + de/es/fr/it, real translations): new `mobile.hostReach.*` (3), and
+  reworded the five "local only" texts: `mobile.noEligibleProjects`,
+  `mobile.boxAccessHelp`, `mobile.guideStep5`,
+  `lessons.mobileLesson.projectAccessBody` (the key `noEligibleProjects` keeps
+  its name; only the text changed). `docs/help/mobile.md` step 5 plus a
+  "Remote, container and VM projects" section.
+- `src/lib/untested.ts`: row `mobile-every-project-type`.
+- Docs: `docs/context/mobile_access.md` layer 2 is now "Which folder a project
+  type gives the phone" (folder per type, cwd alias, locality rule, create
+  verdict, scheduler); two filemap_frontend rows; `todo/group-h-crossplatform.md`
+  box **31ci** (🖐️ + four platform pairs, unticked).
+- Tests: `MobilePairedDeviceAccess` (remote/VM/container are offered in Add
+  project), `MobileProjectAccess` (+2: title and picker note per type, nothing
+  extra for local).
+
+### Choices where the plan was silent
+
+- Kept the existing title text ("…eligible terminal sessions…") and appended the
+  per-type sentence rather than adding per-type variants of all four titles.
+- The pill sits in the picker head and Settings rows, not on the header icon.
+- `ProjectFilesView` still uses its own `resolveLocalMirror` import for other
+  things; it needed no `phoneProjectFolder` (the button does not use the folder).
+
+### Gotchas for B3
+
+- Nothing in `mobile-web` was touched. The phone-side wording for `host` should
+  match `mobile.hostReach.*` in meaning (remote: local agents + mirror;
+  container/VM: listed, tabs inside later).
+- Phone lists the VM `local_agent` etc. per A1/B1 (see their sections).
+
+### Gates
+
+`scripts/gates.sh`: brand, whitespace, lint (no new warnings), build PASS;
+vitest `--changed` (664 files, 6313 tests) only the known `CursorPacks`
+failure. Full `npm test`: 895 of 896 files, 9017 of 9018 tests pass (was 9016:
++2 new); the one failure is `CursorPacks.test.ts`. No Rust change, so cargo
+gates were skipped by the selector.
+
+### Flagged for user
+
+- The container/VM sentences say "in a later version" as the plan decided; a
+  container project with scope `agents` does list its host-side shells today
+  (sentence says "tabs running inside the container").

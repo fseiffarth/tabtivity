@@ -4,7 +4,16 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
 import { CheckboxIcon, CheckIcon, SquareIcon } from "../common/icons/Icon";
+import type { ProjectHostKind } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones, type PairedPhone, type PhoneReach } from "./usePairedPhones";
+
+/** What the phone reaches of a project that does not run in a plain local
+ *  folder (the sidecar's `host` word); a local project needs no sentence. */
+export const HOST_REACH_KEY = {
+  remote: "mobile.hostReach.remote",
+  container: "mobile.hostReach.container",
+  vm: "mobile.hostReach.vm",
+} as const satisfies Record<Exclude<ProjectHostKind, "local">, TranslationKey>;
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -46,6 +55,7 @@ export function MobileAccessPicker({
   x,
   y,
   kind,
+  host = "local",
   enabled,
   devices,
   onApply,
@@ -54,6 +64,8 @@ export function MobileAccessPicker({
   x: number;
   y: number;
   kind: "project" | "box";
+  /** A project's type, so the head says what the phone reaches of it. */
+  host?: ProjectHostKind;
   enabled: boolean;
   /** The stored per-phone list (`undefined` = every phone). */
   devices: unknown;
@@ -107,6 +119,11 @@ export function MobileAccessPicker({
           <div className="context-menu-group-label">
             {t("mobile.phones.pickerTitle")} <UntestedTag id="mobile.phonePicker" />
           </div>
+          {host !== "local" && (
+            <div className="context-menu-note">
+              {t(HOST_REACH_KEY[host])} <UntestedTag id="mobile-every-project-type" />
+            </div>
+          )}
           <button
             type="button"
             className="context-menu-check"

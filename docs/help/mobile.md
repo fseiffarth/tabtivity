@@ -49,8 +49,9 @@ Tailscale command.
    loopback port and origin it fills in, then switch Mobile on. Tabtivity checks
    the Serve mapping before it starts the host.
 5. **Choose what the phone may open.** Under **Project access**, switch on the
-   projects and boxes the phone may reach. All start off. Only local,
-   non-container projects are eligible. A switch turned on reaches **all
+   projects and boxes the phone may reach. All start off. Every project type
+   can be switched on (see below for what a remote, container or VM project
+   shares). A switch turned on reaches **all
    phones**, including ones you pair later; to limit it, press the
    **All phones ▾** button beside it and pick **Only these phones**, then tick
    the phones. The side panel's phone button opens the same choice.
@@ -72,6 +73,17 @@ terminal session for the phone to attach to yet. Tap it on the phone and the
 desktop restarts it in one, resuming its conversation; that waits until the
 agent is idle, and a tab that cannot resume its conversation (a local-model,
 sign-in or cloud tab) is reopened on the desktop instead.
+
+### Remote, container and VM projects
+
+Any project type can be shared. A **remote** project gives the phone its agents
+that run on this computer (the default for agents) and the files of its local
+mirror, and you can start an agent from the phone, which runs in the mirror;
+tabs that run on the remote host are not reachable, and the phone shows no git
+dot or "uncommitted changes" card for it. A **container** or **VM** project is
+listed on the phone with its tabs that run on this computer; the tabs inside the
+container or VM reach the phone in a later version. A VM has files on the phone
+only if you set up a local mirror for it.
 
 ### Which phones see a project
 

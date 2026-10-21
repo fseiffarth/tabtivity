@@ -8,7 +8,6 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
 import type { PairedPhone } from "./usePairedPhones";
-import type { ProjectEntry } from "../../types";
 
 /** The phone sections a device can be kept out of — the sidecar's
  *  `auth::HIDEABLE_SECTIONS`, in its order. */
@@ -34,12 +33,6 @@ interface Scope {
 function listOf(devices: unknown): string[] | null {
   if (devices === undefined || devices === null) return null;
   return Array.isArray(devices) && devices.every((d) => typeof d === "string") ? devices : [];
-}
-
-/** Whether a project may have Mobile access at all: local, outside a container
- *  or VM. Settings' access list and the header menu's phone dialog share it. */
-export function isMobileEligible(project: ProjectEntry): boolean {
-  return !project.remote && !project.sandbox?.enabled && !project.vm?.enabled;
 }
 
 /** Whether `scope` is open to the phone `deviceId`, as the sidecar decides it. */
@@ -91,14 +84,11 @@ export function withDevice(
 export function PairedDeviceAccess({
   device,
   pairedIds,
-  eligibleProjectIds,
   onChanged,
 }: {
   device: PairedPhone;
   /** Every paired phone's id: the "every phone" a Disconnect narrows from. */
   pairedIds: string[];
-  /** The projects that may have Mobile access at all (local, unsandboxed). */
-  eligibleProjectIds: Set<string>;
   onChanged: () => void;
 }) {
   const t = useT();
@@ -112,15 +102,13 @@ export function PairedDeviceAccess({
 
   const hidden = new Set(device.hidden_sections ?? []);
   const scopes: Scope[] = [
-    ...projects
-      .filter((project) => eligibleProjectIds.has(project.id))
-      .map((project): Scope => ({
-        kind: "project",
-        id: project.id,
-        name: project.name,
-        enabled: project[MOBILE_ACCESS_KEY] ?? false,
-        devices: project[MOBILE_DEVICES_KEY],
-      })),
+    ...projects.map((project): Scope => ({
+      kind: "project",
+      id: project.id,
+      name: project.name,
+      enabled: project[MOBILE_ACCESS_KEY] ?? false,
+      devices: project[MOBILE_DEVICES_KEY],
+    })),
     ...boxes.map((box): Scope => ({
       kind: "box",
       id: box.id,
