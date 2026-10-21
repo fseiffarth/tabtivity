@@ -1829,6 +1829,10 @@
   background: color-mix(in srgb, var(--danger) 12%, var(--control-bg));
   color: var(--danger);
 }
+.ollama-ghost-btn.primary {
+  color: var(--success);
+  font-weight: 600;
+}
 .ollama-ghost-btn:disabled {
   opacity: 0.5;
   cursor: var(--cur-default, default);

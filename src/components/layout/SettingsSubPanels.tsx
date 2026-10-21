@@ -12,6 +12,9 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
+import { useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
+import { ollamaVersionStatus } from "../../lib/agents/localDrivers";
+import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollamaUpdateActions";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
 import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
@@ -3106,6 +3109,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const vibeInstallLogRef = useRef<HTMLPreElement>(null);
   const [models, setModels] = useState<OllamaModelInfo[]>([]);
   const [serverRunning, setServerRunning] = useState<boolean | null>(null);
+  // The update check shared with the header dropdown (`lib/agents/
+  // ollamaUpdateActions`): its verdicts live in the activity store, so a check
+  // run there shows here and the other way round.
+  const updateVerdicts = useOllamaActivityStore((s) => s.updates);
+  const checkingUpdates = useOllamaActivityStore((s) => s.checkingUpdates);
+  const checkResult = useOllamaActivityStore((s) => s.checkResult);
+  const ollamaVersion = useOllamaActivityStore((s) => s.version);
   // Where Ollama downloads models (`settings.ollama_models_path`) and how the
   // chosen path would reach the running server. The plan is re-read whenever the
   // path changes — an empty path asks only for the default + systemd facts.
@@ -3226,6 +3236,15 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     invoke<VibeInstallStrategy>("vibe_install_strategy").then(setVibeStrategy).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The installed Ollama version — a local read, no network (the registry half
+  // only runs when the user presses "Check for updates").
+  useEffect(() => {
+    if (!installed) return;
+    ollamaVersionStatus(false)
+      .then((v) => useOllamaActivityStore.getState().mergeInstalledVersion(v))
+      .catch(() => {});
+  }, [installed]);
 
   // Track live download progress emitted by `pull_ollama_model`.
   useEffect(() => {
@@ -4009,6 +4028,54 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             </button>
           )}
         </div>
+        {installed && serverRunning === true && (
+          <div className="ollama-runtime-row">
+            <span className="ollama-runtime-name">
+              {ollamaVersion?.current
+                ? ollamaVersion.latest && !ollamaVersion.update_available
+                  ? t("localModel.ollamaVersionCurrent", { current: ollamaVersion.current })
+                  : t("localModel.ollamaVersion", { current: ollamaVersion.current })
+                : "Ollama"}
+            </span>
+            <span className="lm-status-actions">
+              {!checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
+                <span className="lm-status-note">
+                  {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
+                </span>
+              )}
+              {ollamaVersion?.update_available && (
+                <button
+                  type="button"
+                  className="ollama-action-btn primary"
+                  title={`${t("localModel.ollamaUpdateSentence", {
+                    latest: ollamaVersion.latest,
+                    current: ollamaVersion.current,
+                  })} — ${t("localModel.ollamaUpgradeTitle", { latest: ollamaVersion.latest })}`}
+                  onClick={() =>
+                    upgradeOllamaInTab(
+                      t,
+                      ollamaVersion,
+                      models.filter((m) => m.running).map((m) => m.name),
+                    )
+                  }
+                >
+                  {t("localModel.ov.upgradeTo", { latest: ollamaVersion.latest })}
+                </button>
+              )}
+              {models.length > 0 && (
+                <button
+                  type="button"
+                  className="ollama-action-btn"
+                  disabled={checkingUpdates}
+                  title={t("localModel.checkUpdatesTitle")}
+                  onClick={() => runOllamaUpdateCheck(t)}
+                >
+                  {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
+                </button>
+              )}
+            </span>
+          </div>
+        )}
         <div className="ollama-runtime-row">
           <span className="ollama-runtime-name">{t("ollama.vibeTitle")}</span>
           <span className={`ollama-runtime-state${vibeInstalled ? " ok" : ""}`}>
@@ -4205,7 +4272,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-actions-end">
                     <button
                       type="button"
-                      className="ollama-ghost-btn"
+                      className={`ollama-ghost-btn${updateVerdicts[m.name]?.update_available ? " primary" : ""}`}
                       disabled={busy[`${m.name}:pull`]}
                       title={t("ollama.updateTitle")}
                       onClick={() =>
