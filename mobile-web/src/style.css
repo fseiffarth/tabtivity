@@ -1236,7 +1236,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
    column, so Refresh/Done still sit at the sheet's foot. */
 .status-sheet { display:flex; flex-direction:column; height:92dvh; max-height:92dvh; }
 .status-sheet > * { flex-shrink:0; }
-.status-sheet > .mobile-schedule-actions { margin-top:auto; }
+.status-sheet > .mobile-schedule-actions { margin-top:auto; flex-wrap:wrap; align-items:center; }
+.status-sheet .sheet-pending { flex-basis:100%; }
 .status-sheet header .terminal-view-switch { flex:0 0 auto; }
 .status-headline { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
 .status-headline strong { padding:3px 9px; border-radius:999px; background:#242938; color:#c9cddb; font-size:.8rem; }

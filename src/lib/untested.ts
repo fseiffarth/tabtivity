@@ -444,7 +444,7 @@ export const UNTESTED = {
   "mobile.sheet.schedules": { area: "mobile", what: "Schedule sheet · scheduled prompts" },
   "mobile.sheet.scheduleIn": { area: "mobile", what: "Schedule sheet · Recurrence In … : hours + minutes boxes send the prompt once that long after Save (an ordinary one-time rule at the desktop-local time it comes to)" },
   "mobile.sheet.prompts": { area: "mobile", what: "Prompts sheet · collected prompts" },
-  "mobile.sheet.status": { area: "mobile", what: "Status sheet · agent state and usage" },
+  "mobile.sheet.status": { area: "mobile", what: "Status sheet · agent state and usage; local-path rows are omitted without hiding quota meters, and cached/sign-in/refresh/done actions wrap on narrow screens" },
   "mobile.boxAccess": { area: "mobile", what: "MobileSettings · Box access" },
   "mobile.phonePicker": { area: "mobile", what: "Per-phone Mobile access picker · the side panel's phone button and the \"All phones ▾\" buttons of Settings → Mobile (projects and boxes): All phones / Only these phones checklist / Turn off; a phone left off neither lists nor opens the project or box and gets no agent push for it" },
   "mobile-every-project-type": { area: "mobile", what: "Mobile access for every project type · the side panel's phone button, its picker head and the Settings → Mobile project rows now offer remote, container and VM projects too, with a line on what the phone reaches (remote: its local agents and the mirror; container/VM: listed, tabs in a later version)" },

@@ -32,7 +32,7 @@ import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
 import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
-import type { AgentUsageReport } from "../../lib/agents/agentUsage";
+import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
 import { phoneCreateVerdict, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
@@ -1613,6 +1613,7 @@ async function agentStatusFor(
       projectId: scope.id,
     }).catch(() => null),
   ]);
+  const raw = mobileUsageText(usage.raw);
   return {
     status: "agent_status",
     report: {
@@ -1624,22 +1625,15 @@ async function agentStatusFor(
       usage: {
         label: usage.label,
         supported: usage.supported,
-        // The panel goes as printed, unless the CLI printed a path of this
-        // machine into it — then the phone is told that, not the path.
-        raw: usage.raw && !namesLocalPath(usage.raw) ? usage.raw : undefined,
-        error: usage.raw && namesLocalPath(usage.raw)
+        // Path-bearing rows go, while the rest of the panel stays readable.
+        raw,
+        error: usage.raw && !raw
           ? "cli_output_withheld"
           : usage.code ?? (usage.error ? "cli_error" : undefined),
         cached: usage.cached,
       },
     },
   };
-}
-
-/** Whether a CLI's text names a place on this machine — a home directory, a
- * temp or system path, a Windows drive — which the phone must not be shown. */
-function namesLocalPath(text: string): boolean {
-  return /(^|[\s("'`])(?:~\/|\/(?:home|Users|tmp|var|etc|opt|usr|root|mnt|media|private)\/|[A-Za-z]:\\)/.test(text);
 }
 
 async function taskId(task: CalendarTask) {
