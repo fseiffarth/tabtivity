@@ -36,8 +36,11 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    is saved `location: "local"`) or `none` (container, VM, mirror-less remote):
    a refused create/reopen answers `not_attachable`, in the sidecar and the
    bridge. The scheduler's headless relaunch follows the same placement
-   (`launch_place`); a host/container/VM agent is not relaunched without a
-   window. Tabs on a host, in a container or in a VM reach the phone in a
+   (`launch_place`, via `headless::restart_options`): a remote project's local
+   agent restarts in the mirror, a container project's agent as it always did
+   (`launch_prep` puts it in the container); a remote-host or VM agent is not
+   restarted without a window (there is no pool to reach it; it failed before
+   too). Tabs on a host, in a container or in a VM reach the phone in a
    later version. The desktop's phone button and Settings → Mobile rows say this
    per type (`mobile.hostReach.*`, pill `mobile-every-project-type`).
 3. **The scope's switch** — `tabtivity_mobile_access` (`MOBILE_ACCESS_KEY`) on

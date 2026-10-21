@@ -19,6 +19,7 @@ import {
   tabRunsInContainer,
 } from "../../lib/projectTabHost";
 import table from "./tabLocality.fixture.json";
+import hostTable from "./projectHostReach.fixture.json";
 
 const base: ProjectEntry = {
   id: "p1",
@@ -49,6 +50,21 @@ describe("the shared locality table, over a project of each host", () => {
     it(`${name} is ${row.local ? "reachable" : "not reachable"}`, () => {
       const project = row.vm ? vmProject : remoteProject;
       expect(phoneReachesTab(project, tab(row.kind, row.location), "p1")).toBe(row.local);
+    });
+  }
+});
+
+/** The whole table (project type x tab kind x location), read by the sidecar's
+ * `the_project_host_table_matches_the_windows` too: the host word, whether the
+ * phone reaches the tab and the create verdict (of a project with a folder). */
+describe("the shared project-host table", () => {
+  for (const row of hostTable) {
+    const name = `${row.project}: ${row.kind} ${row.location ?? "(no location)"}`;
+    it(`${name} is ${row.reach ? "reachable" : "not reachable"}, host ${row.host}, create ${row.create}`, () => {
+      const project = { ...base, ...row.record } as ProjectEntry;
+      expect(projectHostKind(project)).toBe(row.host);
+      expect(phoneReachesTab(project, tab(row.kind, row.location), "p1")).toBe(row.reach);
+      expect(phoneCreateVerdict(project)).toBe(row.create);
     });
   }
 });
