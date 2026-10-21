@@ -321,9 +321,10 @@ and the Windows/macOS cross-checks were not run (new tests build paths with
 
 - A closed host-side agent tab on a remote project now cannot be reopened from
   the phone (`not_attachable`, record kept); it is reopened from the desktop.
-- Scheduler: a due prompt for a host/container/VM agent with no window is not
-  delivered by the sidecar any more (it was launched in the wrong place before);
-  the `Relaunched` event carries the error, once per backoff window.
+- Scheduler: a due prompt for a host/VM agent with no window is not
+  delivered by the sidecar any more (it failed on the base too: no pool); the
+  `Relaunched` event carries the error, once per backoff window. (A container
+  agent IS restarted again, `restart_options`: see R1/R2.)
 
 ## B1. Desktop bridge (plan step 4)
 
@@ -676,3 +677,111 @@ server_secrets` (4244 + 1) all pass. New: `the_project_host_table_matches_the_
 windows` (Rust, 81 rows) and 81 cases in `MobileTabReach.test.ts` (102 total).
 `ci-local.sh` and the Windows/macOS cross-checks were not run (no `cfg(...)`
 code; the new tests use `Path::join` only).
+
+## R2. Verifier + final review (2026-10-21)
+
+Fix commits: `a1b1134c` (bridge guard, legacy `directory`, root/box restart)
+and the `fix(mobile): gate the unix-socket window test` commit after it; this
+section's own commit last.
+
+### Part 1: R1 verified independently (base 6490fd90 against HEAD)
+
+- **(a) Container restart fix: CORRECT, confirmed.** `restart_options` is called
+  only from `scheduler.rs` (grep: one caller); `launch_options` (create, reopen,
+  undo relaunch, chat start) answers `InContainer` with `NotAttachable`, so no
+  phone action starts a container process; a remote-host or VM tab is
+  `NotAttachable` in both. The base really failed for remote and VM projects:
+  `launch_prep.rs` ~1119 returns "needs a window's remote pool" when
+  `remote_target_for_host` is `Some` and `pool` is `None` (the headless spawn
+  passes `None`); a container agent went `wrap_pty_options_docker` (no pool),
+  so the base delivered it and A3's refusal was a regression, now undone.
+- **`attachDesktopImage` passing `scope.cwd` unchecked: CONFIRMED (latent), fixed
+  in `a1b1134c`.** Also reachable for the assistant scope (`cwd: ""`) on the
+  base. It now answers `project_ineligible` when the scope has no folder. Test:
+  `MobileEveryProjectType.test.tsx` "copies a desktop image only into a folder
+  the scope has" (VM without mirror: refused and no `invoke`; with a mirror:
+  written into it). Every other `scope.cwd` use was grepped: `create` (877) and
+  the worktree list (1053) already guard; the transcript `tab.cwd || scope.cwd`
+  is a read-only lookup of a tab that has its own cwd.
+- **VM detection (`vm.enabled` vs `remote.vm`): NOT a bug.** The `vm` spec in the
+  entry (`extra["vm"]`, `enabled: true`) is written at creation and is what the
+  window (`project.vm?.enabled`), `entry_is_vm`, `vm_spec_for` and `commands/
+  projects.rs` read; `remote.vm = true` is set later, by `vm.rs` ~1476 when the
+  VM boots and its forwarded endpoint is written. The catalog therefore
+  classifies a VM project at least as early as `launch_prep` does; no real
+  record has `remote.vm` without `vm.enabled` (VmSpec has "no in-place
+  disable"). Adding `remote.vm` to the catalog would only make Rust disagree
+  with the window and the shared fixture. No change.
+- **Legacy remote project without `directory`: CONFIRMED real shape, fixed in
+  `a1b1134c`.** `ProjectEntry::directory()` and `resolveProjectDirectory` fall
+  back to the folder of `local_file` (`<dir>/project.json`); startup's
+  `normalize_entry` backfills the key, but the sidecar reads the raw file (and
+  the daemon never runs that migration). `ProjectRecord` now reads `local_file`
+  leniently and `directory()` applies the same rule, for the mirror alias and
+  for a local/container root. Test:
+  `discovery::a_legacy_record_without_a_directory_key_still_names_its_folder`.
+- **R1 flag 5 (unreadable `projects.json` stops EVERY scope's restart):
+  CONFIRMED stricter than base, fixed in `a1b1134c`.** `launch_place` returns
+  `AsRecorded` for the root console and `box:` scopes before reading the file.
+  Test: the root/box lines added to
+  `headless::container_and_vm_tabs_are_refused_and_other_scopes_are_unchanged`.
+- **R1 flag 4 (headless git dot for a remote project with a mirror): flagged,
+  below.** **Flag 6 (bridge `agents` vs sidecar `none` for a mirror-less
+  remote): flagged, below.**
+
+### Part 2: integration
+
+- Payload names agree across `discovery.rs`/`host.rs` (`host` on the project row,
+  `folder`, `create` on the detail) and `mobile-web/src/api.ts` (`ProjectHost`,
+  `CreateVerdict`, `folder?`, `create?`); `not_attachable` is 409 in the sidecar
+  (`creatable`, `headless_create_error`, `answer_created`), in the bridge
+  (`MobileBridgeHost`, create and reopen) and in `connection.ts`'s table. The two
+  shared fixtures are read by both sides (Rust `discovery` tests, `MobileTabReach`
+  and `MobileTabLocality`). No TODO/FIXME in the range.
+- i18n: all 17 changed/new keys are in `en`, `de`, `es`, `fr`, `it` (same set in
+  each dictionary); the new desktop and phone strings go through `t()`. The
+  `UntestedTag` row `mobile-every-project-type` exists, with pills in the picker
+  head and the Settings rows, and the phone's notice. Filemap rows
+  (`mobile_control/`, `discovery.rs`, `MobileSettings`, picker, paired-device
+  rows, `lib/projectTabHost.ts`) are updated. Box 31ci has the four platform
+  child pairs. `docs/context/mobile_access.md` matches the code (layer 2,
+  scheduler placement).
+- `scripts/brand-check.sh` and `scripts/privacy-check.sh 6490fd90..HEAD` pass
+  (3777 added lines, 40 paths, 11 commits).
+- **Found by `ci-local.sh`: a Windows compile error in A2's new host test** (it
+  binds `tokio::net::UnixListener`); gated `#[cfg(unix)]` like its siblings.
+- The A3 "Flagged" line about the scheduler is corrected (a container agent is
+  restarted again).
+
+### R2 — Flagged for user
+
+1. **Headless git dot for a remote project with a mirror** (A2): the sidecar
+   reads the mirror (hardened, read-only) when no window is open; the window's
+   probe skips remote projects, and `docs/help/mobile.md` says the phone shows
+   no git dot for one. Narrowing it is not one place (`is_git_project` also
+   gates files/search/upload for the mirror). Pick: keep the dot (it describes
+   the local mirror, not the host repo) or fix the help text.
+2. **Bridge `phoneCreateVerdict` is `agents` for every remote project** while
+   the sidecar says `none` for one with no mirror yet; harmless (nothing reaches
+   the bridge then) but the two differ.
+3. Live check owed (box 31ci). `npm run mobile:bundle` was reported stale by the
+   commit hook (the PWA bundle is not rebuilt from B3's `mobile-web` changes in
+   this worktree); rebuild before shipping.
+
+### Gates
+
+`scripts/gates.sh --base 6490fd90`: brand, whitespace, lint, clippy (tabtivity +
+app-serverd all targets), daemon-lib clippy, daemon clippy, `npm run build` PASS
+at zero warnings (a clippy `cloned_ref_to_slice_refs` in my own new test was
+fixed first). vitest: 6459 of 6460 pass, the one failure the known
+`CursorPacks.test.ts` (develop's 8338634a). Cargo tests by hand: `cargo test -p
+tabtivity -p app-serverd` (tabtivity lib 4346 passed, 4 ignored; 481 in
+`mobile_control`, +2 new), daemon build `--no-default-features --lib --test
+server_secrets` (4245 + 1) all pass.
+
+`scripts/ci-local.sh --fast`: brand, toolchain, drift, privacy, npm-deps, all
+lints, build-frontend, test-backend, test-daemon-lib, daemon-ldd (no GTK/WebKit/
+X11/dbus), windows-clippy, windows-check and macos-check (`aarch64-apple-darwin`)
+all ok after the Windows fix; test-frontend failed only on `CursorPacks`;
+test-core and test-gateway SKIPPED ("nothing it tests changed"); gitleaks
+SKIPPED (not installed). No missing target or msvc shim was reported.
