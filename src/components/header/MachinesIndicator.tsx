@@ -245,8 +245,9 @@ export { targetLabel };
  * framed by `header/MachinesOverlay`), where the same rows are tiles in a grid
  * — the Models & agents overlay's `.models-tile` look. Both are this component
  * (`surface`), so every rule above holds in both; the overlay only drops what
- * belongs to a narrow pop-up: the drag grip (reordering stays the dropdown's)
- * and the ▸ fold (a tile has the room to show its details).
+ * belongs to a narrow pop-up: the ▸ fold (a tile has the room to show its
+ * details). Reordering is in both: the grip drags a row up and down the
+ * dropdown, and a tile across the grid.
  */
 export function MachinesIndicator() {
   return <MachinesSurface surface="menu" />;
@@ -391,10 +392,19 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // `transform` only, which changes no layout, so the rects measured at
   // pointerdown stay true for the whole gesture. Re-measuring a moved row
   // against the cursor that moved it is the feedback loop this avoids.
+  //
+  // In the overlay the rows are a wrapping grid of tiles, so the same gesture
+  // runs on both axes: the tile follows the pointer by `(dx, dy)`, `to` is the
+  // slot whose centre is nearest the pointer, and every tile between the old
+  // and new slot steps into its neighbour's rect (`partShift`). Slots are fixed
+  // rects measured once, so — as in the column — no feedback loop.
   const [reorderDrag, setReorderDrag] = useState<
-    { id: string; dy: number; to: number } | null
+    { id: string; dx: number; dy: number; to: number } | null
   >(null);
-  const dragRects = useRef<{ id: string; top: number; height: number }[]>([]);
+  const dragRects = useRef<
+    { id: string; left: number; top: number; width: number; height: number }[]
+  >([]);
+  const dragStartX = useRef(0);
   const dragStartY = useRef(0);
   const reorderDragRef = useRef(false);
 
@@ -413,7 +423,22 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   /** Where the dragged row would land, from the pointer's Y: the number of OTHER
    *  rows whose midpoint the cursor has passed — i.e. an index into the list
    *  without the dragged row, which is exactly what `commitMove` splices at. */
-  const dropSlot = (id: string, clientY: number) => {
+  const dropSlot = (id: string, clientX: number, clientY: number) => {
+    if (isOverlay) {
+      // A grid has no single axis to pass midpoints on: the slot is the tile
+      // whose centre is nearest the pointer (an index into the full list, which
+      // is the dragged tile's final index once `commitMove` splices it there).
+      let best = 0;
+      let bestD = Infinity;
+      dragRects.current.forEach((r, i) => {
+        const d = (clientX - (r.left + r.width / 2)) ** 2 + (clientY - (r.top + r.height / 2)) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      });
+      return best;
+    }
     const rest = dragRects.current.filter((r) => r.id !== id);
     return rest.filter((r) => clientY > r.top + r.height / 2).length;
   };
@@ -730,22 +755,32 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartX.current = e.clientX;
     dragStartY.current = e.clientY;
     // Measure every row ONCE, up front: the DOM order is frozen for the duration
     // of the drag precisely so these stay true.
     dragRects.current = machines.map((mm) => {
       const rect = rowRefs.current.get(mm.id)?.getBoundingClientRect();
-      return { id: mm.id, top: rect?.top ?? 0, height: rect?.height ?? 0 };
+      return {
+        id: mm.id,
+        left: rect?.left ?? 0,
+        top: rect?.top ?? 0,
+        width: rect?.width ?? 0,
+        height: rect?.height ?? 0,
+      };
     });
     reorderDragRef.current = true;
-    setReorderDrag({ id, dy: 0, to: dropSlot(id, e.clientY) });
+    setReorderDrag({ id, dx: 0, dy: 0, to: dropSlot(id, e.clientX, e.clientY) });
   };
 
   const moveReorderDrag = (e: React.PointerEvent<HTMLElement>) => {
     if (!reorderDrag) return;
+    const dx = isOverlay ? e.clientX - dragStartX.current : 0;
     const dy = e.clientY - dragStartY.current;
-    const to = dropSlot(reorderDrag.id, e.clientY);
-    if (dy !== reorderDrag.dy || to !== reorderDrag.to) setReorderDrag({ ...reorderDrag, dy, to });
+    const to = dropSlot(reorderDrag.id, e.clientX, e.clientY);
+    if (dx !== reorderDrag.dx || dy !== reorderDrag.dy || to !== reorderDrag.to) {
+      setReorderDrag({ ...reorderDrag, dx, dy, to });
+    }
   };
 
   const endReorderDrag = (e: React.PointerEvent<HTMLElement>, commit: boolean) => {
@@ -753,7 +788,30 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     const { id } = reorderDrag;
     reorderDragRef.current = false;
     setReorderDrag(null);
-    if (commit) commitMove(id, dropSlot(id, e.clientY));
+    if (commit) commitMove(id, dropSlot(id, e.clientX, e.clientY));
+  };
+
+  /** Where a row that is NOT being dragged steps to while a drag is in flight:
+   *  the column shifts by the dragged row's height; the grid sends each tile into
+   *  the rect of the slot it will occupy once the dragged tile lands. */
+  const partShift = (idx: number): { x: number; y: number } => {
+    if (!reorderDrag) return { x: 0, y: 0 };
+    const from = machines.findIndex((mm) => mm.id === reorderDrag.id);
+    if (idx === from) return { x: 0, y: 0 };
+    const dest =
+      idx > from && idx <= reorderDrag.to
+        ? idx - 1
+        : idx < from && idx >= reorderDrag.to
+          ? idx + 1
+          : idx;
+    if (dest === idx) return { x: 0, y: 0 };
+    if (isOverlay) {
+      const a = dragRects.current[idx];
+      const b = dragRects.current[dest];
+      return a && b ? { x: b.left - a.left, y: b.top - a.top } : { x: 0, y: 0 };
+    }
+    const dragH = dragRects.current[from]?.height ?? 0;
+    return { x: 0, y: dest < idx ? -dragH : dragH };
   };
 
   // FLIP: after the reordered rows paint, translate each card from where it was
@@ -1888,18 +1946,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               localErrors[m.id] ??
               (check && check.at >= sweepAt ? check.error : undefined) ??
               errors[m.id];
-            const dragH = reorderDrag
-              ? (dragRects.current.find((r) => r.id === reorderDrag.id)?.height ?? 0)
-              : 0;
-            const dragFrom = reorderDrag ? machines.findIndex((mm) => mm.id === reorderDrag.id) : -1;
-            const shift =
-              !reorderDrag || idx === dragFrom
-                ? 0
-                : idx > dragFrom && idx <= reorderDrag.to
-                  ? -dragH
-                  : idx < dragFrom && idx >= reorderDrag.to
-                    ? dragH
-                    : 0;
+            const shift = partShift(idx);
             // A row shows its icon actions only while nothing has taken the row
             // over: an armed confirm (remove/disconnect), the retry password
             // field, or the edit form each replace them with worded buttons.
@@ -2036,34 +2083,32 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                 }`}
                 style={
                   reorderDrag?.id === m.id
-                    ? { transform: `translateY(${reorderDrag.dy}px)` }
-                    : shift
-                      ? { transform: `translateY(${shift}px)` }
+                    ? { transform: `translate(${reorderDrag.dx}px, ${reorderDrag.dy}px)` }
+                    : shift.x || shift.y
+                      ? { transform: `translate(${shift.x}px, ${shift.y}px)` }
                       : undefined
                 }
               >
                 <div className="vpn-indicator-head">
-                  {/* No grip on a tile: reordering is the dropdown's, whose
-                      single column is what the drag's slot maths measures. */}
-                  {!isOverlay && (
-                    <button
-                      type="button"
-                      className="machines-row-grip"
-                      aria-label={t("machines.gripAria")}
-                      title={t("machines.gripTitle")}
-                      onPointerDown={(e) => startReorderDrag(m.id, e)}
-                      onPointerMove={moveReorderDrag}
-                      onPointerUp={(e) => endReorderDrag(e, true)}
-                      onPointerCancel={(e) => endReorderDrag(e, false)}
-                      onKeyDown={(e) => {
-                        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-                        e.preventDefault();
-                        nudgeMachine(m.id, e.key === "ArrowUp" ? -1 : 1);
-                      }}
-                    >
-                      ⠿
-                    </button>
-                  )}
+                  {/* The same grip on a tile: the drag runs on both axes there. */}
+                <button
+                    type="button"
+                    className="machines-row-grip"
+                    aria-label={t("machines.gripAria")}
+                    title={t("machines.gripTitle")}
+                    onPointerDown={(e) => startReorderDrag(m.id, e)}
+                    onPointerMove={moveReorderDrag}
+                    onPointerUp={(e) => endReorderDrag(e, true)}
+                    onPointerCancel={(e) => endReorderDrag(e, false)}
+                    onKeyDown={(e) => {
+                      const back = e.key === "ArrowUp" || e.key === "ArrowLeft";
+                      if (!back && e.key !== "ArrowDown" && e.key !== "ArrowRight") return;
+                      e.preventDefault();
+                      nudgeMachine(m.id, back ? -1 : 1);
+                    }}
+                  >
+                    ⠿
+                  </button>
                   {/* The Models overlay tile's icon box. */}
                   {isOverlay && (
                     <span className="models-tile-icon machines-tile-icon" aria-hidden="true">
