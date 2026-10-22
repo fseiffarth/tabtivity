@@ -222,10 +222,21 @@ and so no Tabby on the desktop.
 The view shows the scope's newest chat (or the one a jump named), resumed by
 `startAssistantChat`; with none it starts one on the default CLI at once
 (`defaultCliOf`), and a blocked default waits behind its card until the
-options poll sees it clear. The head's CLI (and local-model) dropdown and
-Relaunch start a fresh chat (`assistant_new_chat`) and then remove every other
-chat of the scope, so the scope holds the chat both surfaces show. A pick
-whose CLI is blocked shows its card and leaves the chat alone.
+options poll sees it clear. The head's CLI dropdown and Relaunch start a
+fresh chat (`assistant_new_chat`) and then remove every other chat of the
+scope, so the scope holds the chat both surfaces show. A pick whose CLI is
+blocked shows its card and leaves the chat alone.
+
+**The model switches in place.** A chat's slash commands are off, so the
+Reader's usual chips that type `/model`, `/effort` or `/status` cannot reach
+it. In a Tabby chat the Reader's model chip and the head's model dropdown list
+`assistantModelChoices` instead: Claude's aliases, Codex's catalog
+(`CliOption.models`, `assistant::codex_offered_models`, read without writing)
+or the installed Ollama models. A pick is `switchAssistantModel`: it rewrites
+the tab's `assistant` launch (and a local chat's label), ends its tmux session,
+waits for the old CLI's exit, and respawns the same tab. The backend resumes
+the conversation on the new `--model`. The effort chip and Claude's Status
+button only show what they read.
 
 ## The phone
 

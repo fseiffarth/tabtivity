@@ -3403,7 +3403,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * drawn its first frame: sent any earlier, `/model` lands before the agent's
    * prompt exists, and the sheet's own wait for the picker would run out on
    * the attach rather than on the agent. */
-  const pickModelPending = useRef(pickModel && tab.kind === "agent" && !tab.local_model);
+  const pickModelPending = useRef(pickModel && tab.kind === "agent" && !tab.local_model && !bare);
   useEffect(() => {
     if (!pickModelPending.current || !connected || liveScreen.length === 0) return;
     pickModelPending.current = false;
@@ -4535,8 +4535,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {tab.kind === "agent" && <>
           <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
           {/* A local-model tab keeps the model it was launched on: the
-              driver's list would only offer to move it off. */}
-          {tab.local_model
+              driver's list would only offer to move it off. A chat of the
+              assistant scope runs with its slash commands off, so `/model`
+              cannot reach it (the desktop switches its model by restarting it). */}
+          {tab.local_model || bare
             ? <span className="fact-model">{modelChip}</span>
             : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>

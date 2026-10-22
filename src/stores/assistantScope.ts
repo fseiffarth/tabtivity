@@ -1,8 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import { isDetachedWindow } from "./detachedContext";
 import { hydrateScopeFromDisk, refreshWorkspaceScope, useTabsStore, type TabEntry } from "./tabs";
 import { ASSISTANT_SCOPE } from "../lib/assistant";
 import { useOverlayAgentStore } from "./overlayAgent";
 import { onTerminalExit, onTerminalReady } from "../lib/terminal/terminalBus";
+import { IS_HOST_WINDOWS } from "../lib/platform";
 
 /**
  * The **Tabby scope** in the tabs store: the chats of the assistant
@@ -84,6 +86,52 @@ export function startAssistantChat(key: string): void {
   }
   watchChatEnd(key);
   store.markAssistantStarted(key);
+}
+
+/** How long a model switch waits for the old CLI to exit once its tmux session
+ *  is ended. */
+const SWITCH_EXIT_WAIT_MS = 3_000;
+
+/**
+ * Switch a running chat to `model` in place: the same tab, conversation and
+ * folder, its CLI restarted on the new model. A chat's slash commands are off,
+ * so the CLI's own `/model` cannot do it. The tab's launch (and, for a local
+ * model, its label) is rewritten, its tmux session ended (a session left
+ * running would only be reattached), and the pane respawns: the backend builds
+ * the line from the launch and resumes the conversation (Claude `--resume`,
+ * Codex `resume`, OpenCode and local Claude `--continue`). Resolves false when
+ * nothing was switched (no such chat, the same model, the session would not end).
+ */
+export async function switchAssistantModel(key: string, model: string): Promise<boolean> {
+  const tab = assistantTabs().find((c) => c.key === key);
+  const launch = tab?.assistant;
+  if (!tab || !launch || !model || (launch.model ?? null) === model) return false;
+  if (tab.tmuxSession && !IS_HOST_WINDOWS) {
+    // The old CLI's exit is waited for, so it lands before the respawn and not
+    // on the new one (the chat would read as ended while it runs).
+    let off = () => {};
+    const exited = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, SWITCH_EXIT_WAIT_MS);
+      off = onTerminalExit(`${ASSISTANT_SCOPE}:${key}`, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    try {
+      await invoke("local_tmux_kill", { session: tab.tmuxSession });
+      await exited;
+    } catch {
+      return false;
+    } finally {
+      off();
+    }
+  }
+  // A local chat's label names its model (`assistant::new_chat_record`: "<CLI> · <model>").
+  const named = launch.model ? ` · ${launch.model}` : "";
+  const label = named && tab.label.endsWith(named) ? `${tab.label.slice(0, -named.length)} · ${model}` : tab.label;
+  useTabsStore.getState().relaunchTabInScope(ASSISTANT_SCOPE, key, [], { label, assistant: { ...launch, model } });
+  useOverlayAgentStore.getState().markAssistantEnded(key, false);
+  return true;
 }
 
 /** The scope's chat tabs, in the order the scope holds them (oldest first). */

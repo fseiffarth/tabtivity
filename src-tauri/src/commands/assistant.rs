@@ -64,6 +64,10 @@ pub struct CliOption {
     /// A chat can start now: installed and signed in, or installed with
     /// Ollama reachable and a model pulled.
     pub ready: bool,
+    /// Codex: the models its chat can be switched to
+    /// (`assistant::codex_offered_models`). Empty for every other CLI (Claude's
+    /// aliases are the renderer's list, a local CLI takes `local_models`).
+    pub models: Vec<String>,
 }
 
 /// The search backend's state. Never the key.
@@ -144,6 +148,11 @@ fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready
                     .is_some_and(|l| l.signed_in || l.api_key || l.uses_admin_key)
             });
             let ready = installed && signed_in.unwrap_or(ollama_ready);
+            let models = if cli == AssistantCli::Codex && installed {
+                assistant::codex_offered_models(&crate::services::agent_home::scope_home(Some(storage::ASSISTANT_SCOPE)))
+            } else {
+                Vec::new()
+            };
             CliOption {
                 id: cli.id().to_string(),
                 label: cli.label().to_string(),
@@ -151,6 +160,7 @@ fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready
                 installed,
                 signed_in,
                 ready,
+                models,
             }
         })
         .collect()

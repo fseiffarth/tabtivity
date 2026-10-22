@@ -23,6 +23,8 @@ import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared
 import { STATUS_AGENTS, TerminalReaderStatus } from "./TerminalReaderStatus";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
+import { assistantModelChoices, assistantOptions } from "../../lib/assistant";
+import { switchAssistantModel } from "../../stores/assistantScope";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
@@ -160,6 +162,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setModeOpen(false);
   };
   const openModes = () => {
+    closeAssistantModels();
     if (codex) {
       if (permissionPicking) close();
       else openPicker("/permissions");
@@ -229,6 +232,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       return;
     }
     onStatusClose();
+    closeAssistantModels();
     if (effortOpen) {
       closeEffort();
       return;
@@ -258,6 +262,58 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     );
   };
 
+  // --- A Tabby chat's model ----------------------------------------------
+  // Its slash commands are off (`--disable-slash-commands`), so neither
+  // `/model` nor `/effort` reaches the session: the model is the chat's launch,
+  // and a pick restarts the chat on it (`switchAssistantModel`), resumed.
+  const assistantLaunch = tab.assistant;
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  /** `null` while the choices are read. */
+  const [assistantModels, setAssistantModels] = useState<string[] | null>(null);
+  const [assistantSwitching, setAssistantSwitching] = useState("");
+  const [assistantFailed, setAssistantFailed] = useState(false);
+  const closeAssistantModels = () => {
+    setAssistantOpen(false);
+    setAssistantSwitching("");
+  };
+  const openAssistantModels = () => {
+    if (!assistantLaunch) return;
+    if (assistantOpen) {
+      closeAssistantModels();
+      return;
+    }
+    onStatusClose();
+    closeModes();
+    closeEffort();
+    setAssistantFailed(false);
+    setAssistantModels(null);
+    setAssistantOpen(true);
+    void assistantOptions().then(
+      (options) => {
+        const cli = options.clis.find((c) => c.id === assistantLaunch.cli);
+        setAssistantModels(cli ? assistantModelChoices(cli, options) : []);
+      },
+      () => setAssistantModels([]),
+    );
+  };
+  const chooseAssistantModel = (model: string) => {
+    if (assistantSwitching) return;
+    if (model === assistantLaunch?.model) {
+      closeAssistantModels();
+      return;
+    }
+    setAssistantFailed(false);
+    setAssistantSwitching(model);
+    void switchAssistantModel(tab.key, model).then((switched) => {
+      if (switched) {
+        closeAssistantModels();
+        return;
+      }
+      setAssistantSwitching("");
+      setAssistantFailed(true);
+    });
+  };
+
   const contextLeft = status?.context ?? (usage?.contextLeft != null ? `${usage.contextLeft}%` : undefined);
   const clock = new Date(now);
   const fromPanel = !!(limits.session || limits.week);
@@ -285,7 +341,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   return (
     <div className="terminal-reader-facts-wrap">
-      {statusOpen && STATUS_AGENTS[tab.cmd] && <TerminalReaderStatus key={ptyId}
+      {statusOpen && STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderStatus key={ptyId}
         tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         model={modelLabel} effort={effortLabel} path={shownPath} contextLeft={contextLeft} usage={usage}
@@ -330,6 +386,42 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           {listing
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
+        </div>
+      )}
+      {assistantOpen && assistantLaunch && (
+        <div
+          className="terminal-reader-picker"
+          role="dialog"
+          aria-label={t("terminal.reader.modelTitle")}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAssistantModels(); } }}
+        >
+          <div className="terminal-reader-picker-head">
+            <strong>{t("terminal.reader.modelTitle")}</strong>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeAssistantModels} aria-label={t("terminal.reader.modelClose")} title={t("terminal.reader.modelClose")}>✕</button>
+          </div>
+          {assistantModels === null ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.assistantModelLoading")}</small>
+          ) : assistantModels.length === 0 ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.assistantModelNone")}</small>
+          ) : (
+            <div className="terminal-reader-options">
+              {assistantModels.map((model, index) => (
+                <button
+                  key={model}
+                  type="button"
+                  className={model === assistantLaunch.model ? "terminal-reader-option current" : "terminal-reader-option"}
+                  disabled={!!assistantSwitching}
+                  aria-busy={model === assistantSwitching}
+                  onClick={() => chooseAssistantModel(model)}
+                >
+                  <span className="terminal-reader-option-number">{model === assistantSwitching ? "…" : index + 1}</span>
+                  <span className="terminal-reader-option-label"><span>{model}</span></span>
+                </button>
+              ))}
+            </div>
+          )}
+          {assistantFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.assistantModelFailed")}</small>}
+          <small className="terminal-reader-question-more">{t("terminal.reader.assistantModelNote")}</small>
         </div>
       )}
       {effortOpen && (
@@ -395,12 +487,25 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         </div>
       )}
       <div className="terminal-reader-facts">
-        {STATUS_AGENTS[tab.cmd] && <button type="button" className="terminal-reader-fact-model"
+        {STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <button type="button" className="terminal-reader-fact-model"
           onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); onStatusRequest(); }}
           aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
           {t("terminal.reader.status.button")} {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
         </button>}
-        {modelPickable ? (
+        {assistantLaunch ? (
+          <button
+            type="button"
+            className="terminal-reader-fact-model"
+            onClick={openAssistantModels}
+            disabled={!assistantOpen && (!!live.working || !!live.question || picking)}
+            aria-haspopup="dialog"
+            aria-expanded={assistantOpen}
+            title={t("terminal.reader.assistantModelHint")}
+          >
+            {modelLabel ?? assistantLaunch.model ?? t("terminal.reader.model")}
+            <UntestedTag id="assistant.modelSwitch" />
+          </button>
+        ) : modelPickable ? (
           <button
             type="button"
             className="terminal-reader-fact-model"
@@ -415,7 +520,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         ) : modelLabel && <span className="terminal-reader-fact">{modelLabel}</span>}
         {/* Outside Claude the effort is set on the model picker's next step,
             so a local-model tab, which has no picker, only shows it. */}
-        {!claude && !modelPickable ? (
+        {(!claude && !modelPickable) || assistantLaunch ? (
           effortLabel && <span className="terminal-reader-fact">{t("terminal.reader.effort", { effort: effortLabel })}</span>
         ) : (effortLabel || claude) && (
           <button

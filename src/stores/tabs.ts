@@ -1570,7 +1570,9 @@ interface TabsStore {
   // Respawn a tab's PTY in place with `args` — same tab, key and position.
   // The caller ends a tmux session the tab owns first, or the respawn would
   // just reattach to it ("Undo clear", `stores/agents/agentClearUndo`).
-  relaunchTabInScope: (scope: string, key: string, args: string[]) => void;
+  // `patch` changes the tab's label and Tabby launch on the way (a chat's model
+  // switch, `switchAssistantModel`).
+  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Pick<TabEntry, "label" | "assistant">) => void;
   // Swap the built-in viewer an embed tab renders its file with, in place — same
   // tab, same key, same position in the layout. `viewer` is persisted, so a tab
   // saved under a viewer choice the app has since revised comes back under the
@@ -3657,12 +3659,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  relaunchTabInScope: (scope, key, args) => {
+  relaunchTabInScope: (scope, key, args, patch) => {
     set((s) => {
       const { tabs, layout, focusedGroupId } = scopeState(s, scope);
       if (!tabs.some((t) => t.key === key)) return {};
       const nextTabs = tabs.map((t) =>
-        t.key === key ? { ...t, args, relaunchSeq: (t.relaunchSeq ?? 0) + 1 } : t,
+        t.key === key ? { ...t, ...patch, args, relaunchSeq: (t.relaunchSeq ?? 0) + 1 } : t,
       );
       return writeScope(s, scope, nextTabs, layout, focusedGroupId);
     });

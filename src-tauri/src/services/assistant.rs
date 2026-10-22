@@ -660,6 +660,8 @@ fn build_codex_catalog(cache: &[u8]) -> Option<Vec<u8>> {
 struct CatalogModels {
     slugs: Vec<String>,
     default: String,
+    /// The slugs Codex's own `/model` list shows (`visibility: "list"`).
+    listed: Vec<String>,
 }
 
 /// Check `catalog` against the allowlist and say what it offers: every entry
@@ -684,7 +686,12 @@ fn checked_codex_catalog(catalog: &[u8]) -> Option<CatalogModels> {
     }
     let rank = |m: &serde_json::Value| (m["visibility"] != "list", m["priority"].as_i64().unwrap_or(i64::MAX));
     let default = models.iter().min_by_key(|m| rank(m))?["slug"].as_str()?.to_string();
-    Some(CatalogModels { slugs, default })
+    let listed = models
+        .iter()
+        .filter(|m| m["visibility"] == "list")
+        .filter_map(|m| m["slug"].as_str().map(str::to_string))
+        .collect();
+    Some(CatalogModels { slugs, default, listed })
 }
 
 /// Whether `catalog` is one [`build_codex_catalog`] makes.
@@ -742,22 +749,44 @@ fn seed_codex_models_cache(home: &Path) {
 /// [`Refusal::CodexCatalog`]: the spawn is refused, never run with the file
 /// tool.
 fn write_codex_catalog(home: &Path) -> Result<CatalogModels, Refusal> {
-    use std::io::Read;
     seed_codex_models_cache(home);
-    let cache = crate::services::home_io::HomeFile::open_existing(home, &format!(".codex/{CODEX_MODELS_CACHE}"))
-        .and_then(|file| file.open_read())
-        .and_then(|file| {
-            let mut bytes = Vec::new();
-            file.take(CODEX_CACHE_CAP + 1).read_to_end(&mut bytes).ok()?;
-            (bytes.len() as u64 <= CODEX_CACHE_CAP).then_some(bytes)
-        })
-        .ok_or(Refusal::CodexCatalog)?;
+    let cache = read_codex_models_cache(home).ok_or(Refusal::CodexCatalog)?;
     let catalog = build_codex_catalog(&cache).ok_or(Refusal::CodexCatalog)?;
     let target = crate::services::home_io::HomeFile::open(home, &format!(".codex/{CODEX_CATALOG_FILE}"))
         .ok_or(Refusal::CodexCatalog)?;
     target.write(&catalog).map_err(|_| Refusal::CodexCatalog)?;
     let written = target.read().ok_or(Refusal::CodexCatalog)?;
     checked_codex_catalog(&written).ok_or(Refusal::CodexCatalog)
+}
+
+/// The home's `models_cache.json`, read no-follow through `home_io` and capped
+/// at [`CODEX_CACHE_CAP`]; `None` when it is missing, unreadable or too big.
+fn read_codex_models_cache(home: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = crate::services::home_io::HomeFile::open_existing(home, &format!(".codex/{CODEX_MODELS_CACHE}"))?.open_read()?;
+    let mut bytes = Vec::new();
+    file.take(CODEX_CACHE_CAP + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= CODEX_CACHE_CAP).then_some(bytes)
+}
+
+/// The models a Codex chat can be switched to: the listed slugs of the
+/// catalog the home's `models_cache.json` builds (the spawn's allowlist and
+/// check, so every one is a model the spawn accepts), the one Codex starts
+/// with first. Read only — nothing is seeded or written — so a home Codex
+/// never ran in offers none until its first chat. Empty on any failure.
+pub fn codex_offered_models(home: &Path) -> Vec<String> {
+    let Some(offered) = read_codex_models_cache(home)
+        .and_then(|cache| build_codex_catalog(&cache))
+        .and_then(|catalog| checked_codex_catalog(&catalog))
+    else {
+        return Vec::new();
+    };
+    let mut models = offered.listed;
+    if let Some(at) = models.iter().position(|slug| *slug == offered.default) {
+        let default = models.remove(at);
+        models.insert(0, default);
+    }
+    models
 }
 
 /// The `-c` overrides that take Codex's shell, file and device tools away and
@@ -1393,6 +1422,20 @@ mod tests {
         let cache = serde_json::json!({ "fetched_at": "2026-10-15T21:10:09Z", "etag": "W/x", "models": models });
         std::fs::write(home.path().join(".codex").join(CODEX_MODELS_CACHE), cache.to_string()).unwrap();
         home
+    }
+
+    #[test]
+    fn codex_offers_the_listed_catalog_models_its_start_model_first() {
+        let mut hidden = codex_model("gpt-b");
+        hidden["visibility"] = "hide".into();
+        let mut first = codex_model("gpt-c");
+        first["priority"] = 0.into();
+        let home = home_with_models_cache(serde_json::json!([codex_model("gpt-a"), hidden, first]));
+        assert_eq!(codex_offered_models(home.path()), vec!["gpt-c".to_string(), "gpt-a".to_string()]);
+        // Read only: no catalog is written.
+        assert!(!home.path().join(".codex").join(CODEX_CATALOG_FILE).exists());
+        let empty = tempfile::tempdir().unwrap();
+        assert!(codex_offered_models(empty.path()).is_empty());
     }
 
     #[test]

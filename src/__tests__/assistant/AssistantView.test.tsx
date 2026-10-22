@@ -309,7 +309,7 @@ describe("replacing the chat", () => {
     await waitFor(() => expect(attached()[0]?.getAttribute("data-testid")).toBe(`pane-attach-${fresh.key}`));
   });
 
-  it("picking a local CLI asks for its model in the head", async () => {
+  it("picking a local CLI asks for its model in the head; another model switches that chat in place", async () => {
     await show();
     await waitFor(() => expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Codex"));
     fireEvent.click(screen.getByRole("button", { name: "CLI" }));
@@ -317,12 +317,22 @@ describe("replacing the chat", () => {
     await waitFor(() => expect(newChatCalls()).toEqual([{ cli: "opencode_local", model: "qwen3:8b" }]));
     await waitFor(() => expect(screen.getByRole("button", { name: "Local model" }).textContent).toContain("qwen3:8b"));
     fireEvent.click(screen.getByRole("button", { name: "Local model" }));
-    newChat = { tabId: "fresh2", uid: UID_A };
     fireEvent.click(screen.getByRole("option", { name: "llama3.2" }));
-    await waitFor(() => expect(newChatCalls()).toEqual([
-      { cli: "opencode_local", model: "qwen3:8b" },
-      { cli: "opencode_local", model: "llama3.2" },
-    ]));
+    // The same chat, respawned on the new model: no second chat.
+    await waitFor(() => expect(assistantTabs().map((t) => t.assistant)).toEqual([{ cli: "opencode_local", model: "llama3.2" }]));
+    expect(assistantTabs().map((t) => t.id)).toEqual(["fresh"]);
+    expect(assistantTabs()[0].relaunchSeq).toBe(1);
+    expect(newChatCalls()).toEqual([{ cli: "opencode_local", model: "qwen3:8b" }]);
+  });
+
+  it("offers a cloud CLI's models too, Default until one is picked", async () => {
+    await show(await assistantTabsKey("a"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Model" }).textContent).toContain("Default model"));
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    fireEvent.click(screen.getByRole("option", { name: "sonnet" }));
+    await waitFor(() => expect(assistantTabs().find((t) => t.id === "a")?.assistant).toEqual({ cli: "claude", model: "sonnet" }));
+    expect(newChatCalls()).toEqual([]);
+    expect(assistantTabs()).toHaveLength(2);
   });
 
   it("a signed-out pick shows its sign-in card and keeps the chat", async () => {

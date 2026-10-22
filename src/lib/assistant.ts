@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Settings } from "../types";
+import { DEFAULT_AGENT_MODELS } from "./agents/agentPrefaces";
 
 /**
  * The chat assistant's shared frontend constants (`docs/assistant_plan.md`).
@@ -87,6 +88,22 @@ export interface AssistantCliOption {
   signedIn: boolean | null;
   /** A chat can start now. */
   ready: boolean;
+  /** Codex: the models its chat can be switched to (its catalog's listed
+   *  slugs, the start model first). Empty for every other CLI. */
+  models?: string[];
+}
+
+/**
+ * The models a chat on `cli` can run, for the Reader's model chip and the
+ * head's model dropdown: a local CLI's installed Ollama models, Claude's
+ * aliases, Codex's catalog. A chat's slash commands are off
+ * (`--disable-slash-commands`), so a pick never goes through the CLI's own
+ * `/model`: the chat restarts on it (`switchAssistantModel`).
+ */
+export function assistantModelChoices(cli: AssistantCliOption, options: AssistantOptions): string[] {
+  if (cli.local) return options.localModels;
+  if (cli.id === "claude") return DEFAULT_AGENT_MODELS.claude ?? [];
+  return cli.models ?? [];
 }
 
 /** The web lane's search backend. Never carries the key. */

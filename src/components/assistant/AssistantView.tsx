@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isAiOffRefusal } from "../../lib/aiSwitch";
-import { ASSISTANT_SCOPE, assistantNewChat } from "../../lib/assistant";
+import { ASSISTANT_SCOPE, assistantModelChoices, assistantNewChat } from "../../lib/assistant";
 import { useT } from "../../lib/i18n";
 import { useAssistantViewStore } from "../../stores/assistantView";
 import {
@@ -10,6 +10,7 @@ import {
   forgetAssistantChat,
   mountAssistantChat,
   startAssistantChat,
+  switchAssistantModel,
 } from "../../stores/assistantScope";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -34,7 +35,7 @@ interface Launch {
  * the experimental switch on), so every effect below — the options poll
  * included — is visible-only.
  *
- * **One chat.** On top, the CLI it runs (and the local model) as a dropdown and
+ * **One chat.** On top, the CLI it runs and its model as dropdowns and
  * Relaunch; below, the chat — an attach-only view of its tab
  * (`AttachedAgentPane` with `readerAlways`: the Reader is always on here, and
  * the agent's own terminal one toggle away). The PTY belongs to the tab's pane
@@ -42,8 +43,9 @@ interface Launch {
  *
  * Opening the view shows the last chat, started again if its CLI is not
  * running (`startAssistantChat` resumes it); with none it starts one on the
- * default CLI at once. Picking another CLI, or Relaunch, starts a fresh chat
- * and removes the one it replaces (every other chat of the scope with it, so
+ * default CLI at once. Picking another model restarts the same chat on it
+ * (`switchAssistantModel`, the conversation resumed). Picking another CLI, or
+ * Relaunch, starts a fresh chat and removes the one it replaces (every other chat of the scope with it, so
  * the scope holds the one chat shown here and on the phone).
  */
 export function AssistantView() {
@@ -72,6 +74,8 @@ export function AssistantView() {
   // why) and goes once the poll sees the block cleared.
   const [want, setWant] = useState<Launch | null>(null);
   const [busy, setBusy] = useState(false);
+  /** A model switch of the shown chat is under way (the chat stays shown). */
+  const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const defaultLaunch = (): Launch | null => {
@@ -137,6 +141,7 @@ export function AssistantView() {
     ?? (chat?.assistant ? { cli: chat.assistant.cli, model: chat.assistant.model ?? null } : null)
     ?? defaultLaunch();
   const currentCli = current ? options?.clis.find((c) => c.id === current.cli) : undefined;
+  const modelChoices = currentCli && options ? assistantModelChoices(currentCli, options) : [];
 
   const pick = (next: Launch) => {
     setError(null);
@@ -148,6 +153,19 @@ export function AssistantView() {
     if (!cli || !options) return;
     const model = cli.local ? (current?.model && options.localModels.includes(current.model) ? current.model : defaultModelOf(options, stored?.default_model)) : null;
     pick({ cli: id, model });
+  };
+  /** A model for the shown chat's own CLI switches that chat in place (the
+   *  conversation carries on); with no chat, or a CLI pick pending, it is part
+   *  of the launch asked for. */
+  const pickModel = (model: string) => {
+    if (!current) return;
+    if (!want && chat?.assistant?.cli === current.cli) {
+      setError(null);
+      setSwitching(true);
+      void switchAssistantModel(chat.key, model).finally(() => setSwitching(false));
+      return;
+    }
+    pick({ cli: current.cli, model });
   };
   const relaunch = () => {
     if (!chat?.assistant || busy) return;
@@ -195,26 +213,26 @@ export function AssistantView() {
           title={t("assistant.newChat.cli")}
           options={options?.clis.map((c) => ({ value: c.id, label: c.label })) ?? []}
           placeholder={t("assistant.loading")}
-          disabled={!options || busy}
+          disabled={!options || busy || switching}
           onChange={pickCli}
         />
-        {currentCli?.local && options && (
+        {currentCli && (currentCli.local || modelChoices.length > 0) && (
           <Dropdown
             className="assistant-head-pick"
             value={current?.model ?? ""}
-            ariaLabel={t("assistant.newChat.model")}
-            title={t("assistant.newChat.model")}
-            options={options.localModels.map((m) => ({ value: m, label: m }))}
-            placeholder={t("assistant.newChat.noModel")}
-            disabled={options.localModels.length === 0 || busy}
-            onChange={(m) => current && pick({ cli: current.cli, model: m })}
+            ariaLabel={t(currentCli.local ? "assistant.newChat.model" : "assistant.newChat.cloudModel")}
+            title={t(currentCli.local ? "assistant.newChat.model" : "assistant.newChat.cloudModel")}
+            options={modelChoices.map((m) => ({ value: m, label: m }))}
+            placeholder={t(currentCli.local ? "assistant.newChat.noModel" : "assistant.newChat.defaultModel")}
+            disabled={modelChoices.length === 0 || busy || switching}
+            onChange={pickModel}
           />
         )}
         <button
           type="button"
           className="settings-btn sm assistant-relaunch"
           title={t("assistant.relaunchHint")}
-          disabled={!chat || busy || !!want}
+          disabled={!chat || busy || switching || !!want}
           onClick={relaunch}
         >
           {t("assistant.relaunch")}

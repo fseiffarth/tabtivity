@@ -908,6 +908,41 @@ describe("the Reader's live rows", () => {
     expect(written).toEqual([]);
   });
 
+  it("switches a Tabby chat's model by restarting it, never through its disabled /model or /effort", async () => {
+    submitCommand.mockClear();
+    written.length = 0;
+    const chat: TabEntry = { ...tab, assistant: { cli: "claude", model: "opus" } };
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { ...state.tabsByScope, assistant: [chat] } }));
+    invoke.mockImplementation((command: string) => {
+      if (command === "agent_tab_transcript") return Promise.resolve(transcript);
+      if (command === "assistant_options") {
+        return Promise.resolve({
+          clis: [{ id: "claude", label: "Claude", local: false, installed: true, signedIn: true, ready: true }],
+          localModels: [], ollamaReachable: false, defaultCli: null, defaultModel: null,
+          search: { kind: null, searxngUrl: null, ollamaKeyStored: false, keyring: "unlocked", configured: false },
+        });
+      }
+      return Promise.resolve([]);
+    });
+    const rows = [">", "~/p · Opus 4.1 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("assistant:agent-1", term);
+    render(<TerminalReaderView host={host} ptyId="assistant:agent-1" scope="assistant" tabKey="agent-1" cwd="/p" visible focused />);
+    const chip = await screen.findByRole("button", { name: /Opus 4\.1/ });
+    const facts = host.querySelector(".terminal-reader-facts") as HTMLElement;
+    // `/effort` and `/status` cannot reach the chat: shown, not offered.
+    expect(within(facts).queryByRole("button", { name: /Effort|Status/ })).toBeNull();
+    await act(async () => { fireEvent.click(chip); });
+    const list = await screen.findByRole("dialog", { name: "Select model" });
+    expect(submitCommand).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(await within(list).findByRole("button", { name: /sonnet/ })); });
+    await waitFor(() => expect(useTabsStore.getState().tabsByScope.assistant?.[0].assistant).toEqual({ cli: "claude", model: "sonnet" }));
+    expect(useTabsStore.getState().tabsByScope.assistant?.[0].relaunchSeq).toBe(1);
+    expect(submitCommand).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
+    unregisterTerminal("assistant:agent-1", term);
+  });
+
   it("opens the session's own /model picker as a list and answers it there", async () => {
     submitCommand.mockClear();
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
