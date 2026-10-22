@@ -765,7 +765,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Kiro, Cline, OpenClaw, OpenHands, Plandex, SWE-agent, mini-SWE-agent, Mentat, gpt-engineer, Qoder | — | — | see `AGENTS` |
 
 Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
-(`agy --version` → `1.3.3`, the same bare shape as 1.2.9) and Muse (`muse --version` →
+(`agy --version` → `1.4.5`, the same bare shape as 1.2.9) and Muse (`muse --version` →
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
@@ -894,7 +894,23 @@ three-stop gauge moved by →, Enter applying both, `/effort`, the sign-in
 menu and OAuth link page, each byte-identical to 1.2.14's but the banner's
 version (the captures are in `MobileAntigravity.test.ts`), and `--continue`
 reopening the last conversation, whose store is still
-`~/.gemini/antigravity-cli/conversations/<id>.db`). That run signs in with no
+`~/.gemini/antigravity-cli/conversations/<id>.db`; 1.4.5 on 2026-10-22, the
+same setup beside the 1.3.0 binary the updater left behind: first-run
+screens, idle footer, gauge shape, Enter's `Model set to … (High)`,
+`/effort`, sign-in menu and link page unchanged; `--version` still bare.
+What moved: the catalog gained `Gemini 4 Argon` (low/medium/high), and
+`/model` now opens with the highlight on the `(current)` row, so its gauge is
+the session's model's — Gemini 3.1 Pro's two stops, which the reader takes
+(captures in `MobileAntigravity.test.ts`). `--help` differs only in `--mode`
+gaining `auto` — Tabtivity passes no mode. A second `--continue` while the
+first is open still resumes, under a `⚠ Conversation already open` notice
+(1.3.0 has it too; `presence/<id>.lock` marks the open one). The link page
+pages itself in a short pane — `(1–20 of 34 lines)` at 42×24 cuts the URL
+before `state=` (1.3.0 the same); at 80×24 it fits whole. The phone refuses a
+link cut by that note and pages with Shift+↓/↑ (`ESC[1;2B`/`ESC[1;2A`, one
+line each, the logo scrolling too) until every line was on screen
+(`readSignInPage` in `signIn.ts`); a release that renames the note or its
+keys leaves a narrow phone tab without the link again). That run signs in with no
 account: a private `HOME`, `"modelProvider": "gemini"` in
 `~/.gemini/antigravity-cli/settings.json`, a dummy `GEMINI_API_KEY` and
 `GOOGLE_GEMINI_BASE_URL` at a dead local port — the UI draws fully, turns
@@ -931,6 +947,11 @@ descriptor defines user input as type 14, field 19 → field 2; answers as
 type 15, field 20 → field 1; completion status 3; timestamps at field 5 →
 field 1. Re-check these against the binary descriptor and database schema on
 update. Thinking and tools are omitted. Versions include the WAL's timestamp.
+1.4.5 (2026-10-22) checked by a live turn: `GOOGLE_GEMINI_BASE_URL` at a local
+stub answering `POST /v1beta/models/<id>:streamGenerateContent?alt=sse` with
+one SSE `candidates` chunk gives a real answer step, and every field above
+decodes from the stored rows (schema of both databases unchanged). That stub
+is the way to see type 15 without an account.
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an

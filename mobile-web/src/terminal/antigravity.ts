@@ -1,6 +1,6 @@
 /**
  * Google Antigravity's own screens (`agy` 1.2.7, drawn the same through
- * 1.3.3), for a tab whose label names it: the model and reasoning effort its
+ * 1.4.5), for a tab whose label names it: the model and reasoning effort its
  * footer prints, and the `Switch Model` dialog `/model` opens.
  *
  * Neither is the shape the other readers know. This is what the CLI draws,

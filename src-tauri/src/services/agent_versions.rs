@@ -72,7 +72,7 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
-    // "1.3.3" (1.2.9 and 1.2.14 printed the same bare shape)
+    // "1.4.5" (1.2.9 through 1.3.3 printed the same bare shape)
     ("antigravity", &["--version"]),
     // "Muse Code 1.3.0 (1.3.0-R3057.1)" — only with [`VERSION_ENV`]'s flag.
     ("muse", &["--version"]),
@@ -144,7 +144,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.3.3",
+        version: "1.4.5",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {

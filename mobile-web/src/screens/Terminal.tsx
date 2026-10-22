@@ -142,7 +142,7 @@ import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../ter
 import { ageLabel, sizeLabel } from "../terminal/fileLabels";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
-import { copiedSignIn, hasSignInTab, osc52Text, readHiddenSignIn, readSignedOut, readSignIn, signInAlternate, signInCommand, signInDone, type SignIn } from "../terminal/signIn";
+import { copiedSignIn, hasSignInTab, osc52Text, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, signInPageKeys, type SignIn, type SignInPage } from "../terminal/signIn";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
@@ -978,7 +978,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The browser sign-in an agent is waiting on (`signIn.ts`): a notice over
    * the composer, and the sheet that finishes it from the phone. A notice the
    * reader hid stays hidden for that link only — a retry prints a new one. */
-  const screenSignIn = useMemo(() => (tab.kind === "agent" ? readSignIn(liveScreen) : null), [tab.kind, liveScreen]);
+  /** A sign-in page the CLI scrolls in its own window because the pane is too
+   * short for its link (`readSignInPage`): every line any frame has shown,
+   * which the walk below pages through until the link is whole. */
+  const [signInPage, setSignInPage] = useState<SignInPage | null>(null);
+  useEffect(() => {
+    setSignInPage((known) => (tab.kind === "agent" ? readSignInPage(liveScreen, known) : null));
+  }, [tab.kind, liveScreen]);
+  const screenSignIn = useMemo(
+    () => (tab.kind === "agent" ? readSignIn(liveScreen) ?? (signInPage ? readPagedSignIn(signInPage) : null) : null),
+    [tab.kind, liveScreen, signInPage],
+  );
   const [signInSheet, setSignInSheet] = useState(signInTab);
   const [hiddenSignIn, setHiddenSignIn] = useState("");
   /** A sign-in whose page went to the desktop's browser with no link on
@@ -3326,6 +3336,22 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     // `deliver` is a fresh closure every render; the walk runs on the frames.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, reveal]);
+  /** Walks a paged sign-in page with Shift+↓/↑ until every line of it has
+   * been on screen. Only scroll keys; keys sent from one window position are
+   * not sent again from it, so a walk that never shows stops there. */
+  const pageWalkFrom = useRef("");
+  useEffect(() => {
+    if (!signInPage) {
+      pageWalkFrom.current = "";
+      return;
+    }
+    const at = `${signInPage.first}-${signInPage.last}`;
+    const keys = signInPageKeys(signInPage);
+    if (pageWalkFrom.current === at || keys.length === 0) return;
+    if (deliver(keys)) pageWalkFrom.current = at;
+    // `deliver` is a fresh closure every render; the walk runs on the frames.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signInPage]);
   /** The highlight has reached the model an Antigravity tap chose, so the
    * dialog has redrawn its slider for *that* model: a model with stops asks
    * for one here, and a model with none — every Claude model it offers — is
