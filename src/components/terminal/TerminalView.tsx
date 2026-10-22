@@ -59,7 +59,7 @@ import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
-import { readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
+import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
 import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
@@ -2381,7 +2381,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
-          changes: { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) },
+          changes: changesOffered(readerAgent) ? { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) } : undefined,
           cwd,
         } : undefined}
       />

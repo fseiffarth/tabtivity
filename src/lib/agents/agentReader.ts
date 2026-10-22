@@ -16,7 +16,17 @@ export type { SessionTranscript };
 
 /** The agents whose transcript the backend reads; any other family answers
  * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
-const READER_AGENTS = new Set(["claude", "codex", "opencode"]);
+const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy"]);
+
+/** The agents whose session is found by the tab's folder (and launch moment)
+ * rather than by a launch id Tabtivity mints: they read with no `sessionId`. */
+const FOLDER_AGENTS = new Set(["opencode", "agy"]);
+
+/** Whether a Reader of `agent` can list the files its conversation changed:
+ * Antigravity's transcript carries no tool results to diff. */
+export function changesOffered(agent: string): boolean {
+  return agent !== "agy";
+}
 
 /** A local-model tab's driver (`list_local_drivers` id): the one it was
  * started with, or the one its saved launch line names. Empty for any other
@@ -47,8 +57,8 @@ export function readerOffered(
 export const READER_STEP = 60;
 
 /** The `agent_tab_transcript` arguments for `tab` in `scope` — the phone
- * bridge's resolution: OpenCode's session is the newest one of the folder the
- * tab runs in, begun since it launched unless it was restored with
+ * bridge's resolution: OpenCode's and Antigravity's session is the newest one
+ * of the folder the tab runs in, begun since it launched unless it was restored with
  * `--continue`. Null for a tab with no session id yet (the agent's hook has
  * not recorded one): there is no transcript to name — except a local-model
  * OpenCode tab, which never gets one and is read by folder from the scope's
@@ -66,7 +76,7 @@ export function readerRequest(
   chat?: string,
 ): Record<string, unknown> | null {
   const localModel = tab.kind === "local_agent";
-  if (!tab.sessionId && !localModel) return null;
+  if (!tab.sessionId && !localModel && !FOLDER_AGENTS.has(readerAgent(tab))) return null;
   return {
     agent: readerAgent(tab),
     projectId: scope === "root" ? null : scope,

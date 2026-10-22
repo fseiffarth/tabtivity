@@ -29,7 +29,7 @@ vi.mock("../../lib/terminal/terminalInput", () => ({
 
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
-import { composerHistory, mergeTranscript, readerOffered, readerRequest, rememberReader, rememberedReader, shortPath } from "../../lib/agents/agentReader";
+import { changesOffered, composerHistory, mergeTranscript, readerOffered, readerRequest, rememberReader, rememberedReader, shortPath } from "../../lib/agents/agentReader";
 import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
@@ -1104,6 +1104,14 @@ describe("agentReader helpers", () => {
     expect(readerOffered({ kind: "agent", cmd: "gemini", localDriver: "opencode" })).toBe(false);
     expect(readerOffered({ kind: "shell", cmd: "bash" })).toBe(false);
     expect(readerOffered(undefined)).toBe(false);
+  });
+
+  it("reads an Antigravity tab by its folder, as OpenCode's: no launch id, no Diffs", () => {
+    const agy = { ...tab, cmd: "agy", sessionId: undefined };
+    expect(readerOffered(agy)).toBe(true);
+    expect(readerRequest("p", agy, "/p", undefined, 60)).toMatchObject({ agent: "agy", sessionId: "", localModel: false });
+    expect(changesOffered("agy")).toBe(false);
+    expect(changesOffered("claude")).toBe(true);
   });
 
   it("builds the read like the phone bridge: root has no project, --continue has no launch floor", () => {
