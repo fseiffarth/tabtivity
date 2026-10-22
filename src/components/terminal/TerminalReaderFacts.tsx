@@ -1,23 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { readAgentUsage } from "../../lib/agents/agentUsage";
 import type { ReaderLive } from "../../lib/agents/readerLive";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { shortPath } from "../../lib/agents/agentReader";
 import {
-  agentSwitchChoices,
   CARRIES_CONVERSATION,
   sameDir,
+  worktreeChoiceText,
+  worktreeMoveNote,
   worktreeName,
   worktreeOfPath,
   type GitWorktree,
 } from "../../lib/agents/agentWorktrees";
-import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { useProjectsStore } from "../../stores/projects";
-import { resolveProjectDirectory } from "../../types";
-import { switchAgentWorktree } from "../../stores/agents/agentWorktreeSwitch";
+import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
@@ -39,17 +37,6 @@ import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import { assistantModelChoices, assistantOptions } from "../../lib/assistant";
 import { switchAssistantModel } from "../../stores/assistantScope";
-
-/** The tab's label for its move from the worktree `from` to `to`: the "+"
- * menu's `<agent> · <branch>` names the new branch (none in the project
- * folder); a label the user gave stays as it is. */
-function movedTabLabel(label: string, from: GitWorktree | undefined, to: GitWorktree, t: ReturnType<typeof useT>): string {
-  const branchOf = (w: GitWorktree) => w.branch || worktreeName(w.path);
-  const oldTail = from && !from.is_main ? t("newTabMenu.agentWorktreeLabel", { agent: "", branch: branchOf(from) }) : "";
-  if (from && !from.is_main && !label.endsWith(oldTail)) return label;
-  const base = oldTail ? label.slice(0, -oldTail.length) : label;
-  return to.is_main ? base : t("newTabMenu.agentWorktreeLabel", { agent: base, branch: branchOf(to) });
-}
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
@@ -371,9 +358,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   // resumes: the move is a respawn in the new folder.
   const scope = splitPtyId(ptyId)?.scope ?? "";
   const project = useProjectsStore((state) => state.projects.find((p) => p.id === scope));
-  const projectDir = project && !project.remote && !project.vm?.enabled ? resolveProjectDirectory(project) : "";
-  const worktreeMovable = tab.kind === "agent" && !assistantLaunch && !!tab.sessionId
-    && (tab.cmd in RESUMABLE_AGENTS || !!tab.resumeArgs?.length) && !!projectDir;
+  const projectDir = worktreeMoveDir(tab, project, !!assistantLaunch);
+  const worktreeMovable = !!projectDir;
   const [worktreesOpen, setWorktreesOpen] = useState(false);
   /** `null` while the worktrees are read. */
   const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
@@ -396,21 +382,13 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setWorktreeFailed(false);
     setWorktrees(null);
     setWorktreesOpen(true);
-    void invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" }).then(
-      (list) => setWorktrees(agentSwitchChoices(list ?? [], projectDir)),
-      () => setWorktrees([]),
-    );
+    void agentSwitchChoicesIn(projectDir).then(setWorktrees);
   };
   const chooseWorktree = (wt: GitWorktree) => {
     if (worktreeSwitching) return;
-    if (sameDir(wt.path, tab.cwd)) {
-      closeWorktrees();
-      return;
-    }
-    const from = worktrees?.find((w) => sameDir(w.path, tab.cwd));
     setWorktreeFailed(false);
     setWorktreeSwitching(wt.path);
-    void switchAgentWorktree(scope, tab, wt.path, movedTabLabel(tab.label, from, wt, t)).then((result) => {
+    void moveAgentToWorktree(scope, tab, worktrees ?? [], wt, t).then((result) => {
       if (result !== "failed") {
         closeWorktrees();
         return;
@@ -589,8 +567,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <small className="terminal-reader-question-more">{t("terminal.reader.worktreeNone")}</small>
           ) : (
             <div className="terminal-reader-options">
-              {worktrees.map((wt, index) => (
-                <button
+              {worktrees.map((wt, index) => {
+                const text = worktreeChoiceText({ branch: wt.branch, name: worktreeName(wt.path), main: wt.is_main }, t);
+                return <button
                   key={wt.path}
                   type="button"
                   className={sameDir(wt.path, tab.cwd) ? "terminal-reader-option current" : "terminal-reader-option"}
@@ -601,16 +580,16 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
                 >
                   <span className="terminal-reader-option-number">{wt.path === worktreeSwitching ? "…" : index + 1}</span>
                   <span className="terminal-reader-option-label">
-                    <span>{wt.branch || worktreeName(wt.path)}</span>
-                    <small>{wt.is_main ? t("terminal.reader.worktreeMain") : t("terminal.reader.worktree", { name: worktreeName(wt.path) })}</small>
+                    <span>{text.label}</span>
+                    <small>{text.description}</small>
                   </span>
-                </button>
-              ))}
+                </button>;
+              })}
             </div>
           )}
           {worktreeFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.worktreeFailed")}</small>}
           <small className="terminal-reader-question-more">
-            {t(CARRIES_CONVERSATION.has(tab.cmd) ? "terminal.reader.worktreeCarries" : "terminal.reader.worktreeFresh", { agent: agentLabel })}
+            {worktreeMoveNote(CARRIES_CONVERSATION.has(tab.cmd), agentLabel, t)}
           </small>
         </div>
       )}

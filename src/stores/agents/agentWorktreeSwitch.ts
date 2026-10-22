@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
+import { agentSwitchChoices, sameDir, worktreeName, type GitWorktree, type Translate } from "../../lib/agents/agentWorktrees";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { onTerminalExit } from "../../lib/terminal/terminalBus";
+import { resolveProjectDirectory, type ProjectEntry } from "../../types";
 import { useTabsStore, type TabEntry } from "../tabs";
 import { resumeArgsOf } from "./closedAgentTabs";
 
@@ -17,6 +20,53 @@ import { resumeArgsOf } from "./closedAgentTabs";
  * A move that fails respawns the tab where it was. Local projects only, as the
  * "+" menu's worktree agents (`components/tabs/agentWorktrees.ts`).
  */
+
+/** The folder a tab of `project` can be moved between worktrees of, or ""
+ * where the move does not apply: local projects only (not remote, not a VM),
+ * and only an agent whose conversation a restart resumes — the move is a
+ * respawn in the new folder. The phone's ⎇ chip asks the same
+ * (`discovery`'s `worktree_movable`, the bridge's `TabWorktrees`). */
+export function worktreeMoveDir(tab: TabEntry, project: ProjectEntry | undefined, assistant: boolean): string {
+  const dir = project && !project.remote && !project.vm?.enabled ? resolveProjectDirectory(project) : "";
+  return tab.kind === "agent" && !assistant && !!tab.sessionId
+    && (tab.cmd in RESUMABLE_AGENTS || !!tab.resumeArgs?.length) ? dir : "";
+}
+
+/** The folders a tab of the project at `projectDir` can move to
+ * (`agentSwitchChoices`); empty when they cannot be read. */
+export async function agentSwitchChoicesIn(projectDir: string): Promise<GitWorktree[]> {
+  try {
+    return agentSwitchChoices((await invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" })) ?? [], projectDir);
+  } catch {
+    return [];
+  }
+}
+
+/** Move `tab` to `to`, one of `choices` (`agentSwitchChoicesIn`) — the one
+ * move both the Reader's ⎇ chip and the phone's run: the label follows the
+ * branch (`movedTabLabel`), and a pick of the folder it is in moves nothing. */
+export function moveAgentToWorktree(
+  scope: string,
+  tab: TabEntry,
+  choices: GitWorktree[],
+  to: GitWorktree,
+  t: Translate,
+): Promise<WorktreeSwitchResult | "unchanged"> {
+  if (sameDir(to.path, tab.cwd)) return Promise.resolve("unchanged");
+  const from = choices.find((w) => sameDir(w.path, tab.cwd));
+  return switchAgentWorktree(scope, tab, to.path, movedTabLabel(tab.label, from, to, t));
+}
+
+/** The tab's label for its move from the worktree `from` to `to`: the "+"
+ * menu's `<agent> · <branch>` names the new branch (none in the project
+ * folder); a label the user gave stays as it is. */
+function movedTabLabel(label: string, from: GitWorktree | undefined, to: GitWorktree, t: Translate): string {
+  const branchOf = (w: GitWorktree) => w.branch || worktreeName(w.path);
+  const oldTail = from && !from.is_main ? t("newTabMenu.agentWorktreeLabel", { agent: "", branch: branchOf(from) }) : "";
+  if (from && !from.is_main && !label.endsWith(oldTail)) return label;
+  const base = oldTail ? label.slice(0, -oldTail.length) : label;
+  return to.is_main ? base : t("newTabMenu.agentWorktreeLabel", { agent: base, branch: branchOf(to) });
+}
 
 /** How long the old CLI's exit is waited for before the move goes ahead. */
 const EXIT_WAIT_MS = 3_000;
