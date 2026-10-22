@@ -20,8 +20,10 @@ related: [agent-clis, local-models, remote-projects, settings-and-appearance]
 
 ## An install fails
 
-- **npm: command not found / Node too old**: use the Node.js helper at the
-  top of Manage CLIs, then Re-check. See `agent-clis`.
+- **npm: command not found**: use the Node.js helper at the top of Manage
+  CLIs, then Re-check. See `agent-clis`.
+- **Node too old (`EBADENGINE`)**: the same helper appears in that CLI's card;
+  run it, Re-check, then install the CLI again.
 - **EACCES / permission denied with npm**: Node was installed system-wide.
   Use **Run with sudo**, or install Node with nvm (per user).
 - **Ollama install stops at sudo**: use **Run in terminal** and enter your

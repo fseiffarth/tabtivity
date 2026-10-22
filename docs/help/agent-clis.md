@@ -40,7 +40,9 @@ Droid and several others install with their own script and need no Node.js.
 Gemini, Copilot, Qwen, Cline, Auggie, Continue, CodeBuddy, Crush, Amp and
 Pi install with `npm install -g` and need Node.js 24 or newer.
 
-When npm is missing or Node is too old, Manage CLIs shows a Node.js helper:
+When npm is missing, Manage CLIs shows a Node.js helper at the top. When
+Node is older than that, the same helper shows only in the card of a CLI whose
+install npm refused for it (`EBADENGINE`); an older Node is fine otherwise:
 
 - Linux/macOS: installs nvm and the current Node LTS for your user (no
   administrator rights): `curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash`, then `nvm install --lts`.

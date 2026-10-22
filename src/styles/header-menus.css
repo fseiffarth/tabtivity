@@ -297,10 +297,17 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.agent-remote-result {
-  margin-top: 6px;
-  color: var(--success);
+/* The card foot's one-click "Install on remote…" picker: the trigger sits in
+   the row of small outlined buttons, so it takes their height. */
+.agent-remote-foot-picker .dropdown-trigger {
+  min-height: 0;
+  padding: 3px 8px;
   font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.agent-remote-foot-picker .dropdown-menu {
+  max-width: 260px;
 }
 /* An installed agent's head, right side: its Ctrl+N chord, ↑/↓ (the + menu's
    order, hence the chords') and the Enabled toggle. */

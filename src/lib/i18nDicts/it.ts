@@ -2629,12 +2629,12 @@ export const dict: Dict = {
   "agents.noRemoteMachines": "Nessuna macchina remota configurata",
   "agents.remoteMachineAria": "Macchina remota su cui installare {label}",
   "agents.installOnRemote": "Installa da remoto",
-  "agents.installingRemote": "Installazione remota…",
-  "agents.remoteInstalled": "{label} installato su {machine}.",
-  "agents.installOnRemoteTerminal": "Installa in un terminale",
   "agents.installOnRemoteTerminalTitle":
-    "Esegue lo stesso installer via SSH in una scheda del terminale root, così ne vedi l'output e puoi rispondere alle richieste (password sudo, chiave host).",
+    "Esegue l'installer via SSH in una scheda del terminale root e apre la console root, così ne segui l'output e puoi rispondere alle richieste (password sudo, chiave host).",
   "agents.installRemoteTabLabel": "Installa {label} su {machine}",
+  "agents.installOnRemoteFoot": "Installa in remoto…",
+  "agents.installOnRemoteFootTitle":
+    "Installa {label} su una macchina remota: sceglila e il programma di installazione gira via SSH in una scheda terminale.",
   "agents.orInstallInShellPre": "Oppure installalo in una scheda terminale",
   "agents.orInstallInShellPost": ":",
   "agents.noWindowsInstallerPre": "Ancora nessun installer a riga singola per Windows — vedi",
@@ -2682,11 +2682,11 @@ export const dict: Dict = {
     ", poi usa il tasto di esame/fiducia indicato nel piè di pagina e verifica che la riga risulti accesa.",
   "agents.openInCodex": "Apri in Codex",
   "agents.nodeNotDetected": "non rilevato",
-  "agents.nodeTooOld": "{version} — precedente a Node.js {min}",
+  "agents.nodeTooOld": "Versione {version}, precedente a {min}",
   "agents.nodeTooOldHelpPre":
-    "Sempre più CLI di agenti richiedono Node.js {min} o successivo (OpenClaw e i pacchetti npm inclusi da diversi altri). Installa una volta l’LTS attuale (senza diritti di amministratore) in una scheda terminale",
+    "Secondo npm questa CLI richiede un Node.js più recente di quello su questo computer. Node.js è separato da {app}: le CLI che arrivano da npm vengono installate ed eseguite con esso. Installa una volta l’LTS attuale (senza diritti di amministratore) in una scheda terminale",
   "agents.nodeTooOldHelpPost":
-    ", poi premi Ricontrolla: da quel momento {app} usa il nuovo Node per installare gli agenti:",
+    ", premi Ricontrolla e reinstalla questa CLI. Da quel momento {app} installa gli agenti con il nuovo Node.",
   "agents.nodeHelpPre": "La maggior parte delle CLI degli agenti si installa con",
   "agents.nodeHelpMid": ", che viene fornito con Node.js. Installalo una volta (nessun diritto da amministratore necessario) in una scheda terminale",
   "agents.nodeHelpPost": ", poi installa i tuoi agenti qui sotto:",

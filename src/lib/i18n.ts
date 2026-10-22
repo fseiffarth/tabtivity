@@ -2664,12 +2664,12 @@ export const enSource = {
   "agents.noRemoteMachines": "No remote machines configured",
   "agents.remoteMachineAria": "Remote machine for installing {label}",
   "agents.installOnRemote": "Install remotely",
-  "agents.installingRemote": "Installing remotely…",
-  "agents.remoteInstalled": "{label} installed on {machine}.",
-  "agents.installOnRemoteTerminal": "Install in a terminal",
   "agents.installOnRemoteTerminalTitle":
-    "Runs the same installer over SSH in a root-terminal tab, so you can watch its output and answer any prompt (sudo password, host key).",
+    "Runs the installer over SSH in a root-terminal tab and brings the root console up, so you can follow its output and answer any prompt (sudo password, host key).",
   "agents.installRemoteTabLabel": "Install {label} on {machine}",
+  "agents.installOnRemoteFoot": "Install on remote…",
+  "agents.installOnRemoteFootTitle":
+    "Install {label} on a remote machine: pick one and the installer runs over SSH in a terminal tab.",
   "agents.orInstallInShellPre": "Or install it in a",
   "agents.orInstallInShellPost": "terminal tab:",
   "agents.noWindowsInstallerPre": "No one-line Windows installer yet — see",
@@ -2723,11 +2723,11 @@ export const enSource = {
   "agents.nodeHelpPre": "Most agent CLIs install with",
   "agents.nodeHelpMid": ", which ships with Node.js. Install it once (no administrator rights needed) in a",
   "agents.nodeHelpPost": "terminal tab, then install your agents below:",
-  "agents.nodeTooOld": "{version} — older than Node.js {min}",
+  "agents.nodeTooOld": "Version {version}, older than {min}",
   "agents.nodeTooOldHelpPre":
-    "Agent CLIs increasingly require Node.js {min} or newer (OpenClaw, and the npm packages several others pull in). Install the current LTS once (no administrator rights needed) in a",
+    "npm says this CLI needs a newer Node.js than the one on this computer. Node.js is separate from {app}: CLIs that come from npm are installed and run with it. Install the current LTS once (no administrator rights needed) in a",
   "agents.nodeTooOldHelpPost":
-    "terminal tab, then press Re-check — {app} uses the new Node for agent installs from then on:",
+    "terminal tab, press Re-check, then install this CLI again. {app} installs agents with the new Node from then on.",
   "agents.nodeManualPre": "Prefer a manual install? See",
   "agents.nodeDownloads": "the Node.js downloads",
 

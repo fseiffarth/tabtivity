@@ -2631,12 +2631,12 @@ export const dict: Dict = {
   "agents.noRemoteMachines": "Aucune machine distante configurée",
   "agents.remoteMachineAria": "Machine distante pour installer {label}",
   "agents.installOnRemote": "Installer à distance",
-  "agents.installingRemote": "Installation à distance…",
-  "agents.remoteInstalled": "{label} installé sur {machine}.",
-  "agents.installOnRemoteTerminal": "Installer dans un terminal",
   "agents.installOnRemoteTerminalTitle":
-    "Exécute le même installateur via SSH dans un onglet du terminal racine, afin que vous voyiez sa sortie et répondiez aux invites (mot de passe sudo, clé d'hôte).",
+    "Exécute l'installateur via SSH dans un onglet du terminal racine et ouvre la console racine, afin que vous suiviez sa sortie et répondiez aux invites (mot de passe sudo, clé d'hôte).",
   "agents.installRemoteTabLabel": "Installer {label} sur {machine}",
+  "agents.installOnRemoteFoot": "Installer à distance…",
+  "agents.installOnRemoteFootTitle":
+    "Installer {label} sur une machine distante : choisissez-la, l’installateur s’exécute via SSH dans un onglet terminal.",
   "agents.orInstallInShellPre": "Ou installez-le dans un onglet terminal",
   "agents.orInstallInShellPost": " :",
   "agents.noWindowsInstallerPre": "Pas encore d'installateur en une ligne pour Windows — voir",
@@ -2684,11 +2684,11 @@ export const dict: Dict = {
     ", puis utilisez la touche d'examen/confiance indiquée en pied de page, et vérifiez que la ligne finit activée.",
   "agents.openInCodex": "Ouvrir dans Codex",
   "agents.nodeNotDetected": "non détecté",
-  "agents.nodeTooOld": "{version} — antérieur à Node.js {min}",
+  "agents.nodeTooOld": "Version {version}, antérieure à {min}",
   "agents.nodeTooOldHelpPre":
-    "Les CLI d’agents exigent de plus en plus Node.js {min} ou plus récent (OpenClaw, et les paquets npm qu’embarquent plusieurs autres). Installez une fois la LTS actuelle (sans droits administrateur) dans un onglet de terminal",
+    "Selon npm, cette CLI exige un Node.js plus récent que celui de cet ordinateur. Node.js est distinct de {app} : les CLI issues de npm sont installées et exécutées avec lui. Installez une fois la LTS actuelle (sans droits administrateur) dans un onglet de terminal",
   "agents.nodeTooOldHelpPost":
-    ", puis cliquez sur Revérifier — {app} utilise ensuite ce nouveau Node pour installer les agents :",
+    ", cliquez sur Revérifier, puis réinstallez cette CLI. {app} installe ensuite les agents avec ce nouveau Node.",
   "agents.nodeHelpPre": "La plupart des CLI d'agents s'installent avec",
   "agents.nodeHelpMid": ", fourni avec Node.js. Installez-le une fois (aucun droit administrateur requis) dans un onglet terminal",
   "agents.nodeHelpPost": ", puis installez vos agents ci-dessous :",

@@ -1603,26 +1603,41 @@ function AgentFenceCard() {
   );
 }
 
+/** npm's words for "this package wants a newer Node" — a warning it installs
+ *  through anyway (the CLI then fails at start) or the error it stops on. */
+const NODE_ENGINE_FAILURE = /EBADENGINE|Unsupported engine|engine "node" is incompatible/i;
+
+/** The host's Node.js as `node_runtime_status` reports it; null while probing
+ *  (or when the probe failed, which shows nothing). */
+function useNodeRuntimeStatus() {
+  const [status, setStatus] = useState<NodeRuntimeStatus | null>(null);
+  const recheck = () =>
+    void invoke<NodeRuntimeStatus>("node_runtime_status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  useEffect(() => recheck(), []);
+  return { status, recheck };
+}
+
 /**
  * "Install Node/npm first" helper for the Manage Agents panel. Most agent CLIs
  * install through `npm`, so when `npm` isn't on the host's PATH — or the Node
  * that is there is older than the current LTS the CLIs require — this points
- * the user at the one-click, no-admin Node install for their OS (and stays
- * hidden once a current Node is detected). Follows Tabtivity's
- * install-via-terminal-tab policy.
+ * the user at the one-click, no-admin Node install for their OS. Follows
+ * Tabtivity's install-via-terminal-tab policy. The panel owns the probe
+ * ({@link useNodeRuntimeStatus}) because the two cases sit in different places:
+ * a missing npm blocks every install and goes above the CLIs, while an old Node
+ * is fine for most of them and shows only in the card of an install npm
+ * refused for it ({@link NODE_ENGINE_FAILURE}).
  */
-function NodeRuntimeNotice() {
+function NodeRuntimeNotice({
+  status,
+  onRecheck,
+}: {
+  status: NodeRuntimeStatus;
+  onRecheck: () => void;
+}) {
   const t = useT();
-  // null = still probing.
-  const [status, setStatus] = useState<NodeRuntimeStatus | null>(null);
-  const recheck = () =>
-    invoke<NodeRuntimeStatus>("node_runtime_status")
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  useEffect(() => void recheck(), []);
-
-  // While probing, or once a current npm is present, there is nothing to nudge about.
-  if (!status || (status.npm && !status.too_old)) return null;
   const tooOld = status.npm && status.too_old;
 
   const { command, shellKey, shellKind } = NODE_INSTALL[HOST_OS];
@@ -1632,7 +1647,12 @@ function NodeRuntimeNotice() {
         <span className="agents-notice-title">Node.js / npm</span>
         <AgentsStatus tone="warn">
           {tooOld
-            ? t("agents.nodeTooOld", { version: status.version ?? "", min: status.min_major })
+            ? t("agents.nodeTooOld", {
+                // "v22.22.1" would read "V22.22.1" under the status text's
+                // capitalised first letter.
+                version: (status.version ?? "").replace(/^v/, ""),
+                min: status.min_major,
+              })
             : t("agents.nodeNotDetected")}
         </AgentsStatus>
         {tooOld && <UntestedTag id="settingsSubPanels.1" />}
@@ -1657,7 +1677,7 @@ function NodeRuntimeNotice() {
         >
           {t("agents.runInTerminal")}
         </button>
-        <button type="button" className="settings-btn sm" onClick={() => void recheck()}>
+        <button type="button" className="settings-btn sm" onClick={onRecheck}>
           {t("common.recheck")}
         </button>
       </div>
@@ -2149,12 +2169,10 @@ export function AgentsPanel({
   // Per-agent live install log, keyed by agent id.
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  // Per-agent target selection and outcome for explicit installs on a global
+  // Per-agent target selection and failure for explicit installs on a global
   // remote machine. This is independent of local `installed`: each machine has
   // its own CLI state.
   const [remoteTargets, setRemoteTargets] = useState<Record<string, string>>({});
-  const [remoteInstalling, setRemoteInstalling] = useState<string | null>(null);
-  const [remoteResults, setRemoteResults] = useState<Record<string, string>>({});
   const [remoteErrors, setRemoteErrors] = useState<Record<string, string>>({});
   // Per-agent installed version + drift verdict, keyed by agent id.
   const [versions, setVersions] = useState<Record<string, AgentVersionReport>>({});
@@ -2165,6 +2183,7 @@ export function AgentsPanel({
   const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
   // Filter over the *not installed* half only (see the two sections below).
   const [search, setSearch] = useState("");
+  const node = useNodeRuntimeStatus();
   // The shared sign-in each installed card reports (`agent_logins`, read only;
   // the Accounts & keys group owns the import and sign-out). Re-read when that
   // group changes one.
@@ -2360,46 +2379,18 @@ export function AgentsPanel({
       .catch(() => {});
   };
 
-  const installAgentRemote = async (agent: AgentInfo) => {
-    const machineId = remoteTargets[agent.id];
+  // Install a CLI on a remote machine, watched: the backend hands back an
+  // `ssh -t` command line for the registry-owned install script, and
+  // `runInstallInTab` types it into a root-terminal tab and brings the root
+  // console up above this panel — so an npm install that takes minutes, an nvm
+  // PATH that isn't there, or a prompt (sudo, a host key) is seen and
+  // answerable, where a headless run reported one string only once it was over.
+  // No spinner: the tab is the progress, and this call is over once it opens.
+  // `machineId` comes from the card foot's one-click picker; the fold's
+  // button passes none and uses the machine chosen in its own picker.
+  const installAgentRemoteInTerminal = async (agent: AgentInfo, machineId = remoteTargets[agent.id]) => {
     const machine = remoteMachines.find((m) => m.id === machineId);
     if (!machine) return;
-    const key = `${agent.id}:${machine.id}`;
-    setRemoteInstalling(key);
-    setRemoteResults(({ [agent.id]: _drop, ...rest }) => rest);
-    setRemoteErrors(({ [agent.id]: _drop, ...rest }) => rest);
-    try {
-      await invoke<string>("install_agent_remote", {
-        agentId: agent.id,
-        machineId: machine.id,
-      });
-      setRemoteResults((prev) => ({
-        ...prev,
-        [agent.id]: t("agents.remoteInstalled", {
-          label: agent.label,
-          machine: machine.label || machine.host,
-        }),
-      }));
-    } catch (err) {
-      setRemoteErrors((prev) => ({ ...prev, [agent.id]: String(err) }));
-    } finally {
-      setRemoteInstalling(null);
-    }
-  };
-
-  // The same install, watched. `install_agent_remote` reports one string when it
-  // is over and nothing while it runs — which hides exactly what goes wrong on
-  // someone else's machine: an npm install that takes minutes, an nvm PATH that
-  // isn't there, or a prompt (sudo, a host key) nobody can answer headlessly. The
-  // backend hands back an `ssh -t` command line for the *same* registry-owned
-  // script, and `runInstallInTab` types it into a root-terminal tab, where the
-  // output is readable and the prompts are answerable. No `remoteInstalling`
-  // spinner: the tab is the progress, and this call is over the moment it opens.
-  const installAgentRemoteInTerminal = async (agent: AgentInfo) => {
-    const machineId = remoteTargets[agent.id];
-    const machine = remoteMachines.find((m) => m.id === machineId);
-    if (!machine) return;
-    setRemoteResults(({ [agent.id]: _drop, ...rest }) => rest);
     setRemoteErrors(({ [agent.id]: _drop, ...rest }) => rest);
     try {
       const command = await invoke<string>("install_agent_remote_command", {
@@ -2633,8 +2624,30 @@ export function AgentsPanel({
     const parts = a.installed ? versionParts(a) : null;
     const signIn = a.installed ? loginFacts(a) : null;
     const busy = installing !== null || removing !== null;
-    const remoteBusy = remoteInstalling !== null && remoteInstalling.startsWith(`${a.id}:`);
     const hasOptions = (a.id === "claude") || (a.id === "codex" && a.installed);
+    // Install on a remote machine, one click from the foot: picking a machine
+    // opens the watched install tab at once (the fold below is the same install
+    // with the machine picked first). Only when a remote machine exists, so a local-only setup sees
+    // no dead control on every card.
+    const remotePicker = !adminInstalls && remoteMachines.length > 0 && (
+      <>
+        <Dropdown
+          className="agent-remote-foot-picker"
+          title={t("agents.installOnRemoteFootTitle", { label: a.label })}
+          value=""
+          placeholder={t("agents.installOnRemoteFoot")}
+          options={remoteMachines.map((machine) => ({
+            value: machine.id,
+            label: machine.label || machine.host,
+          }))}
+          onChange={(v) => {
+            setRemoteTargets((prev) => ({ ...prev, [a.id]: v }));
+            void installAgentRemoteInTerminal(a, v);
+          }}
+        />
+        <UntestedTag id="settingsSubPanels.remoteFoot" />
+      </>
+    );
     return (
     <SettingsCard key={a.id} className={`agents-card${a.installed ? "" : " is-available"}${hidden ? " is-hidden" : ""}`}>
       <div className="agents-card-head">
@@ -2705,15 +2718,18 @@ export function AgentsPanel({
           {installedExtras(a)}
         </div>
       )}
-      {remoteResults[a.id] && <div className="agent-remote-result">{remoteResults[a.id]}</div>}
       {remoteErrors[a.id] && <div className="project-dialog-error">{remoteErrors[a.id]}</div>}
-      {remoteBusy && <div className="agents-note">{t("agents.installingRemote")}</div>}
       {logs[a.id] && (
         <pre className="ollama-install-log" ref={installing === a.id ? logRef : undefined}>
           {logs[a.id]}
         </pre>
       )}
       {errors[a.id] && <div className="project-dialog-error">{errors[a.id]}</div>}
+      {node.status?.npm &&
+        node.status.too_old &&
+        NODE_ENGINE_FAILURE.test(`${logs[a.id] ?? ""}\n${errors[a.id] ?? ""}`) && (
+          <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
+        )}
       {adminInstalls && (
         <p className="settings-help">
           {t(a.installed ? "agents.askAdminInstalled" : "agents.askAdminMissing", { label: a.label })}{" "}
@@ -2738,6 +2754,7 @@ export function AgentsPanel({
             </button>
             <UntestedTag id="settingsSubPanels.agentUpdates" />
             <UntestedTag id="settingsSubPanels.3" />
+            {remotePicker}
             {!adminInstalls && (
               <>
                 <span className="agents-spacer" />
@@ -2778,6 +2795,7 @@ export function AgentsPanel({
               {installing === a.id ? t("agents.installing") : t("agents.installLabel", { label: a.label })}
             </button>
             {installing === a.id && <span className="agents-note">{t("agents.runningInstaller")}</span>}
+            {remotePicker}
           </div>
         )}
         {!a.installed && !adminInstalls && a.install_cmd === "" && (
@@ -2916,7 +2934,7 @@ export function AgentsPanel({
                     ? t("agents.noRemoteMachines")
                     : t("agents.chooseRemoteMachine")
               }
-              disabled={!remoteMachinesLoaded || remoteMachines.length === 0 || remoteInstalling !== null}
+              disabled={!remoteMachinesLoaded || remoteMachines.length === 0}
               options={remoteMachines.map((machine) => ({
                 value: machine.id,
                 label: machine.label || machine.host,
@@ -2926,19 +2944,11 @@ export function AgentsPanel({
             <button
               type="button"
               className="settings-btn sm"
-              disabled={!remoteTargets[a.id] || remoteInstalling !== null}
-              onClick={() => void installAgentRemote(a)}
-            >
-              {remoteBusy ? t("agents.installingRemote") : t("agents.installOnRemote")}
-            </button>
-            <button
-              type="button"
-              className="settings-btn sm"
               title={t("agents.installOnRemoteTerminalTitle")}
-              disabled={!remoteTargets[a.id] || remoteInstalling !== null}
+              disabled={!remoteTargets[a.id]}
               onClick={() => void installAgentRemoteInTerminal(a)}
             >
-              {t("agents.installOnRemoteTerminal")}
+              {t("agents.installOnRemote")}
             </button>
           </div>
         </div>
@@ -2963,7 +2973,9 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
-      <NodeRuntimeNotice />
+      {node.status && !node.status.npm && (
+        <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
+      )}
       {agents === null ? (
         <p className="settings-help">{t("agents.checkingInstalled")}</p>
       ) : (
