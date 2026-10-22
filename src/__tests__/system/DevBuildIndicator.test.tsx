@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -136,6 +136,25 @@ describe("DevBuildIndicator", () => {
     fireEvent.click(await screen.findByLabelText("Dev build: Up to date (99e2c74)", undefined, { timeout: 5000 }));
     fireEvent.click(await screen.findByText("Pause auto-builds"));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("dev_build_set_paused", { paused: true }));
+  });
+
+  it("stays open when the pointer comes back inside the close grace", async () => {
+    answer(idle);
+    const { container } = render(<DevBuildIndicator />);
+    const button = await screen.findByLabelText("Dev build: Up to date (99e2c74)", undefined, { timeout: 5000 });
+    const anchor = container.firstElementChild as HTMLElement;
+    fireEvent.mouseEnter(anchor);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseLeave(anchor);
+      act(() => void vi.advanceTimersByTime(100));
+      fireEvent.mouseEnter(anchor);
+      act(() => void vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(button.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("shows a paused build as a quiet member and resumes it", async () => {

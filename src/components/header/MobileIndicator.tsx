@@ -183,7 +183,10 @@ export function MobileIndicator() {
         })
         : t("mobile.indDeviceNeverSeen");
 
-  const reveal = () => openMenu(MENU_ID);
+  const reveal = () => {
+    window.clearTimeout(closeTimer.current);
+    openMenu(MENU_ID);
+  };
   const scheduleClose = () => {
     window.clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);
