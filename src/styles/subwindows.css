@@ -3222,8 +3222,19 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   white-space: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Scrolls, shows nothing: an app-painted thumb over the text hid the dotted
+     underlines, and the path below gives way first so it rarely scrolls. */
+  --app-scrollbar: none;
 }
 .terminal-reader-fact { flex: none; }
+/* The one elastic fact: in a narrow pane (a file viewer beside the chat) the
+   path is ellipsised instead of the whole row becoming a scroller. */
+.terminal-reader-fact.terminal-reader-fact-path {
+  flex: 0 1 auto;
+  min-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .terminal-reader-fact.high { color: var(--warning, #f0a35e); }
 .terminal-reader-fact.worktree { color: var(--accent); }
 /* A limit fact flips between its percentage and a bar of what is left. */

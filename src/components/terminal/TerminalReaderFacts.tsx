@@ -711,7 +711,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         {tab.cmd === "opencode" && <UntestedTag id="agents.opencode.v2" />}
         <UntestedTag id="terminal.reader.facts" />
         <UntestedTag id="terminal.reader.factsMore" />
-        {shownPath && <span className="terminal-reader-fact" title={shownPath}>{shortPath(shownPath)}</span>}
+        {shownPath && <span className="terminal-reader-fact terminal-reader-fact-path" title={shownPath}>{shortPath(shownPath)}</span>}
         {worktree && <span className="terminal-reader-fact worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: worktree })}</span>}
         {worktreeMovable ? (
           <button
