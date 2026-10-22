@@ -1826,6 +1826,10 @@ export function FileTree({
     loadTargetRef.current = rel;
     setError(null);
     setMissingCrumbDepth(null);
+    // The hovered row is about to unmount, so its `mouseleave` never fires: a
+    // pending dwell or an open tooltip would otherwise outlive it.
+    cancelTooltipTimer();
+    setTooltip(null);
     // Navigating into a different folder abandons the current selection (its
     // paths aren't on screen anymore). The quiet fs-watch `refresh()` deliberately
     // does NOT clear — a background re-list must not wipe an in-progress selection.
@@ -2185,6 +2189,10 @@ export function FileTree({
     cancelTooltipTimer();
     tooltipTimer.current = setTimeout(() => {
       tooltipTimer.current = null;
+      // A row unmounted during the dwell (navigated away, re-listed) measures as
+      // an all-zero rect and would pin a tooltip to the window's top-left corner
+      // that no `mouseleave` ever closes.
+      if (!row.isConnected) return;
       // Always shows the name (the row can truncate it); Created/Modified/Ignored
       // lines below are conditional on the entry actually having that data.
       setTooltip({ rect: row.getBoundingClientRect(), entry });
