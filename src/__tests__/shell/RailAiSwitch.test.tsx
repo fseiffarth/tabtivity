@@ -1,6 +1,6 @@
 /**
  * The side panel's AI switch (`lib/aiSwitch.ts`, `docs/ai_switch_plan.md`):
- * the ⏻ in the panel chrome writes `ai_off` through `patch_settings` and
+ * the ⏻ on the edge rail writes `ai_off` through `patch_settings` and
  * shows the state it reads back; `whenAiOn` is what an agent tab refused at
  * spawn waits on before it starts.
  */
@@ -25,7 +25,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { SidePanel } from "../../components/layout/SidePanel";
+import { RailAiSwitch } from "../../components/layout/RailAiSwitch";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
 import { useSettingsStore } from "../../stores/settings";
@@ -42,16 +42,16 @@ beforeEach(() => {
 });
 
 function powerButton(container: HTMLElement): HTMLButtonElement {
-  const button = container.querySelector<HTMLButtonElement>("button.side-panel-ai");
-  if (!button) throw new Error("no AI switch in the panel chrome");
+  const button = container.querySelector<HTMLButtonElement>("button.srh-ai");
+  if (!button) throw new Error("no AI switch on the edge rail");
   return button;
 }
 
-describe("side panel AI switch", () => {
+describe("edge rail AI switch", () => {
   it("switches AI off and back on through the settings", async () => {
     let container!: HTMLElement;
     await act(async () => {
-      ({ container } = render(<SidePanel open={true} onHide={() => {}} />));
+      ({ container } = render(<RailAiSwitch />));
     });
     const button = powerButton(container);
     expect(button.getAttribute("aria-pressed")).toBe("false");

@@ -105,7 +105,6 @@ vi.mock("../../components/layout/SidePanel", () => ({
   SidePanel: (p: {
     open: boolean;
     overlay?: boolean;
-    onHide?: () => void;
     onResizeReset?: () => void;
     onResizeStart?: (e: never) => void;
     onResizeMove?: (e: never) => void;
@@ -113,7 +112,6 @@ vi.mock("../../components/layout/SidePanel", () => ({
   }) =>
     p.open ? (
       <div data-testid="side-panel" className={`side-panel${p.overlay ? " overlay" : ""}`}>
-        <button title="hide-panel" onClick={p.onHide} />
         <div
           data-testid="sash"
           onDoubleClick={p.onResizeReset}
@@ -219,13 +217,6 @@ describe("side panel rail — docked (default)", () => {
     expect(screen.getByTestId("side-panel")).toBeTruthy();
     expect(viewPatches()).toHaveLength(0);
     await click("Hide the side panel");
-    expect(screen.queryByTestId("side-panel")).toBeNull();
-  });
-
-  it("the panel's own hide button closes it", async () => {
-    await mount();
-    await click("Show the Files panel");
-    await click("hide-panel");
     expect(screen.queryByTestId("side-panel")).toBeNull();
   });
 

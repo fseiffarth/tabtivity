@@ -194,7 +194,7 @@ two days of work, and every step leans on the switch added in step 1.
 - Run `scripts/gates.sh` for the touched gates. Then run `npm run
   backend:stale` and report its result. Never run the app live.
 - Click-through for the user:
-  1. Click ⏻ in the side panel. Typing into an agent tab does nothing and
+  1. Click ⏻ on the edge rail. Typing into an agent tab does nothing and
      shows the note, and a new agent tab shows the note instead of starting.
   2. The phone shows the banner and refuses a prompt.
   3. Restart Tabtivity. AI is still off.

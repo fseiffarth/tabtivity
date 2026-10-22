@@ -121,6 +121,7 @@ import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT, useI18nStore, translate, type TranslationKey } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
+import { RailAiSwitch } from "./RailAiSwitch";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
@@ -1213,9 +1214,9 @@ export function AppShell() {
       panelCloseTimer.current = null;
     }
     const handle = (event.target as HTMLElement).closest<HTMLElement>(".side-panel-reveal-handle");
-    // The side switch moves the panel; resting on it must never do that, and it
-    // opens nothing either.
-    if (handle?.dataset.railAction === "switch") {
+    // The side switch moves the panel and the AI switch flips AI; resting on
+    // either must never do that, and neither opens anything.
+    if (handle?.dataset.railAction === "switch" || handle?.dataset.railAction === "ai") {
       cancelRailDwell();
       return;
     }
@@ -1428,9 +1429,7 @@ export function AppShell() {
             onResizeStart={onResizeStart}
             onResizeMove={onResizeMove}
             onResizeEnd={onResizeEnd}
-            onHide={() => setSidePanelOpen(false)}
             onResizeReset={onResizeReset}
-            onToggleSide={toggleSide}
             onMouseEnter={() => autoHide && reveal(panelCloseTimer, setPanelOpen)}
             onMouseLeave={() => autoHide && scheduleClose(panelCloseTimer, setPanelOpen)}
           />
@@ -1524,6 +1523,7 @@ export function AppShell() {
                 );
               })}
             </div>
+            <RailAiSwitch />
           </div>
         )}
         {railMenu && (

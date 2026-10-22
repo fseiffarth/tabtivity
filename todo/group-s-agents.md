@@ -2825,11 +2825,11 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
-### AI switch (side panel ⏻) — `docs/ai_switch_plan.md`
+### AI switch (edge rail ⏻) — `docs/ai_switch_plan.md`
 
 - [x] Built 2026-10-20 (uncommitted): `services::ai_switch` + gates, side
   panel button, waiting agent tabs, timers, completions, mail AI, phone.
-- [ ] 🖐️ Manual test — click ⏻ in the side panel: it turns red. Typing into a
+- [ ] 🖐️ Manual test — click ⏻ on the edge rail: it turns red. Typing into a
   running Claude tab does nothing and the red strip says AI is off; Ctrl+C
   still interrupts it. A new agent tab prints the yellow "AI is off" line and
   does not start. `claude` typed in a shell tab prints that AI is off. The

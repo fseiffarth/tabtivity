@@ -647,6 +647,21 @@
   border-top: none;
 }
 
+/* The AI switch, pinned to the bottom of the bar opposite the side switch. It
+   wakes to full strength in the danger colour while AI is off, so the rail says
+   so at a glance. */
+.side-panel-reveal-rail .srh-ai {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-bottom: none;
+}
+.side-panel-reveal-rail .srh-ai.off {
+  opacity: 1;
+  color: var(--danger);
+}
+
 /* Edge to edge across the bar: no side padding, no side borders, no corner
    radius. A tab inset from the bar's own edges left two hairlines of panel
    ground running the height of the rail and read as a button floating in a

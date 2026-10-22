@@ -33,7 +33,7 @@ export type UntestedEntry = {
 export const UNTESTED = {
   "desktop.tooltips": { area: "common", what: "Theme-aware hover and keyboard hints replace native title tooltips throughout the desktop and browser client, including popout windows" },
   "sidePanel.hiddenRename": { area: "shell", what: "Side panel Hidden list · one row per hidden subwindow named \"Hidden <n>\" (tooltip lists its tabs, a click restores it); ✎ renames it inline and the name survives a restart; a restored subwindow opens beside the focused one" },
-  "sidePanel.aiSwitch": { area: "shell", what: "Side panel ⏻ AI switch: off blocks typing to agents, new agent tabs (they wait and start on resume), schedules/auto-continue/cron, completions, mail AI and the phone; survives a restart; on again resumes" },
+  "sidePanel.aiSwitch": { area: "shell", what: "Edge rail ⏻ AI switch: off blocks typing to agents, new agent tabs (they wait and start on resume), schedules/auto-continue/cron, completions, mail AI and the phone; survives a restart; on again resumes" },
   "sidePanel.ideToggle": { area: "shell", what: "Side panel as a VS Code-style docked bar: always-on rail, click-to-toggle, Ctrl+B, snap-close sash, Auto-hide mode" },
   "settings.closeSubwindowOnLastTab": { area: "shell", what: "Closing a subwindow's last tab leaves it standing empty (+ opens the next tab there, × closes it); Settings → Layout toggle closes it with the tab instead" },
   "centerPanel.openTab": { area: "shell", what: "Empty workspace · Open a tab opens the empty group's new-tab menu" },

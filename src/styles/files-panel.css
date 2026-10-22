@@ -88,19 +88,7 @@
   right: -3px;
 }
 
-/* Side-flip button in the header — shares the pin's box. Its icon is inline
-   line-art in currentColor (a frame, the panel filled on its present edge, an
-   arrow at the other one), so it honours `color`: the resting tone is the
-   header's secondary text and hover lights it accent — the pin, drawn the same
-   way since it stopped being the 📌 emoji, does the same. Same opacity step as
-   the pin, so the pair dims and wakes together. */
-.side-panel-flip {
-  font-size: 14px;
-}
-.side-panel-flip svg {
-  display: block;
-}
-.side-panel-flip:hover,
+/* The pin-slot buttons light accent on hover. */
 .side-panel-pin:hover {
   color: var(--accent);
 }
@@ -1069,13 +1057,6 @@
 .side-panel-pin:hover {
   opacity: 1;
   background: var(--bg-hover);
-}
-
-/* The AI switch (⏻) wakes to full strength in the danger colour while AI is
-   off, so the panel says so at a glance. */
-.side-panel-pin.side-panel-ai.off {
-  opacity: 1;
-  color: var(--danger);
 }
 
 /* The hide-panel chevron shares the pin's box (it replaced the 📌). */
