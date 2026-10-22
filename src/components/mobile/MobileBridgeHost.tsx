@@ -238,7 +238,7 @@ interface MobileAgentTranscript {
   unchanged?: boolean;
   entries: { kind: string; text: string; at?: string; cut?: boolean; subagent?: string; role?: string }[];
   truncated: boolean;
-  agentsEarlier?: boolean;
+  agentsEarlier?: number;
   /** Codex's context and rate-limit figures, passed through untouched. */
   usage?: { contextLeft?: number; session?: { used: number; resetsAt?: number }; week?: { used: number; resetsAt?: number } };
 }

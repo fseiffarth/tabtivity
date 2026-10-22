@@ -197,11 +197,11 @@ pub struct AgentTranscript {
     /// read, or beyond the entry limit. A larger `limit` reaches the latter.
     #[serde(default)]
     pub truncated: bool,
-    /// The turns `truncated` leaves out hold a subagent this answer does not
-    /// list — what the Subagents index's "+" promises. A long session that
-    /// never spawned one is `truncated` without it.
-    #[serde(default, rename = "agentsEarlier", skip_serializing_if = "std::ops::Not::not")]
-    pub agents_earlier: bool,
+    /// How many of the session's subagents only the turns `truncated` leaves
+    /// out spawned — the Subagents index counts them with the ones it lists.
+    /// A long session that never spawned one is `truncated` with zero.
+    #[serde(default, rename = "agentsEarlier", skip_serializing_if = "is_zero")]
+    pub agents_earlier: u32,
     /// How many of the session's subagents are at work right now (`running`
     /// entries, the cut-off ones included) — the count the phone's tab cards
     /// show. Zero on a CLI whose record does not say.
@@ -1063,8 +1063,10 @@ fn read_transcript_in(
                         entries[index].cwd = spawn.worktree.clone();
                     }
                 }
+                // A subagent's own spawns answer to a call in its file, never
+                // this one's: no read of the session lists them.
                 if !sidechain {
-                    spawned_tokens = spawned.values().map(|spawn| subagent_token(&spawn.id)).collect();
+                    spawned_tokens = spawned.values().filter(|spawn| !spawn.nested).map(|spawn| subagent_token(&spawn.id)).collect();
                 }
             }
         }
@@ -1087,7 +1089,7 @@ fn read_transcript_in(
         entries.drain(..drop);
         truncated = true;
     }
-    let agents_earlier = truncated && agents_unlisted(&entries, &spawned_tokens);
+    let agents_earlier = if truncated { agents_unlisted(&entries, &spawned_tokens) } else { 0 };
     Some(AgentTranscript {
         available: true,
         reason: None,
@@ -1274,6 +1276,8 @@ fn newest_tokens(lines: &[&str], kind: TranscriptKind) -> Option<u64> {
 struct ClaudeSpawn {
     id: String,
     worktree: Option<String>,
+    /// Spawned by another subagent (`parentAgentId`), not the session.
+    nested: bool,
 }
 
 /// The subagents in a Claude session's `folder`, by the tool call that
@@ -1298,17 +1302,19 @@ fn claude_spawned(folder: &Path) -> std::collections::HashMap<String, ClaudeSpaw
         };
         let text = |key: &str| meta.get(key).and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string);
         if let Some(call) = text("toolUseId") {
-            spawned.insert(call, ClaudeSpawn { id: id.to_string(), worktree: text("worktreePath") });
+            let nested = text("parentAgentId").is_some() || meta.get("spawnDepth").and_then(Value::as_u64).is_some_and(|depth| depth > 1);
+            spawned.insert(call, ClaudeSpawn { id: id.to_string(), worktree: text("worktreePath"), nested });
         }
     }
     spawned
 }
 
-/// Whether any of the session's `spawned` subagents (tokens) is missing from
-/// `entries` — one only the turns a truncated answer leaves out list.
-pub(crate) fn agents_unlisted(entries: &[TranscriptEntry], spawned: &[String]) -> bool {
+/// How many of the session's `spawned` subagents (tokens) are missing from
+/// `entries` — ones only the turns a truncated answer leaves out list.
+pub(crate) fn agents_unlisted(entries: &[TranscriptEntry], spawned: &[String]) -> u32 {
     let listed: std::collections::HashSet<&str> = entries.iter().filter_map(|entry| entry.subagent.as_deref()).collect();
-    spawned.iter().any(|token| !listed.contains(token.as_str()))
+    let unlisted = spawned.iter().collect::<std::collections::HashSet<_>>().into_iter().filter(|token| !listed.contains(token.as_str())).count();
+    u32::try_from(unlisted).unwrap_or(u32::MAX)
 }
 
 /// A spawned Codex thread as its parent's `agent` entry, at the moment it was
@@ -2706,18 +2712,30 @@ mod tests {
 
         // Truncated, but no subagent was ever spawned: nothing earlier to find.
         let none = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, 2).unwrap();
-        assert!(none.truncated && !none.agents_earlier);
+        assert!(none.truncated && none.agents_earlier == 0);
+        assert!(serde_json::to_value(&none).unwrap().get("agentsEarlier").is_none());
 
+        // One the session's subagent spawned answers to a call in that
+        // subagent's file: never listed here, so never counted (it read
+        // "Subagents (0+)" in a session that spawned none itself).
         std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("agent-c3d4.meta.json"),
+            r#"{"agentType":"general-purpose","toolUseId":"toolu_N","parentAgentId":"a1b2","spawnDepth":2}"#,
+        )
+        .unwrap();
+        let nested = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, 2).unwrap();
+        assert!(nested.truncated && nested.agents_earlier == 0);
+
         std::fs::write(folder.join("agent-a1b2.meta.json"), r#"{"agentType":"Explore","toolUseId":"toolu_A"}"#).unwrap();
         let cut = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, 2).unwrap();
-        assert!(cut.truncated && cut.agents_earlier);
-        assert!(serde_json::to_value(&cut).unwrap()["agentsEarlier"].as_bool().unwrap());
-        // The subagent is among the turns read: listed, not promised.
+        assert!(cut.truncated && cut.agents_earlier == 1);
+        assert_eq!(serde_json::to_value(&cut).unwrap()["agentsEarlier"].as_u64(), Some(1));
+        // The subagent is among the turns read: listed, not counted twice.
         let listed = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, 3).unwrap();
-        assert!(listed.truncated && !listed.agents_earlier);
+        assert!(listed.truncated && listed.agents_earlier == 0);
         let whole = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, DEFAULT_LIMIT).unwrap();
-        assert!(!whole.truncated && !whole.agents_earlier);
+        assert!(!whole.truncated && whole.agents_earlier == 0);
     }
 
     #[test]

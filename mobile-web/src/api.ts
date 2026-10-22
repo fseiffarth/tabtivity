@@ -806,9 +806,9 @@ export interface SessionTranscript {
   entries: TranscriptEntry[];
   /** Earlier turns exist that this answer does not carry. */
   truncated: boolean;
-  /** Those earlier turns hold a subagent the answer does not list — what
-   * the Subagents index's "+" stands for. */
-  agentsEarlier?: boolean;
+  /** How many subagents only those earlier turns hold — the Subagents
+   * index counts them with the ones it lists. */
+  agentsEarlier?: number;
   /** How many of the session's subagents are at work right now, the ones
    * the answer leaves out included; absent at zero and on a CLI whose record
    * does not say (only Claude's does). */

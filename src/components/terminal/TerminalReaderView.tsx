@@ -1413,9 +1413,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const backLabel = t("mobile.subagent.back", {
     name: subagentPath.length > 1 ? subagentPath[subagentPath.length - 2].task : t("mobile.subagent.main"),
   });
-  // Only when those earlier turns hold a subagent: a long session that never
-  // spawned one would otherwise show "Subagents (0+)".
-  const moreEarlier = !!transcript?.available && transcript.truncated && !!transcript.agentsEarlier && !sinceClear;
+  /** The session's subagents only earlier turns hold, counted with the
+   * listed ones; none for a long session that never spawned one. */
+  const agentsEarlier = transcript?.available && transcript.truncated && !sinceClear ? transcript.agentsEarlier ?? 0 : 0;
+  const moreEarlier = agentsEarlier > 0;
   /** The open subagent at work — it has not reported back, and the session
    * is at work or it runs in the background — and the model its own
    * conversation names. */
@@ -1523,8 +1524,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           )}
         </nav>
       ) : transcript?.available && (sessionAgents.length > 0 || moreEarlier) && (
-        // Every subagent of the session by name — "+" while earlier turns may
-        // hold more, which the list's last row reads in.
+        // Every subagent of the session by name, counted with the ones only
+        // earlier turns hold, which the list's last row reads in.
         <nav className="terminal-reader-subagent-index" aria-label={t("mobile.subagent.indexRegion")}>
           <button
             type="button"
@@ -1533,7 +1534,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             aria-controls={subagentListId}
             onClick={() => setSubagentListOpen((open) => !open)}
           >
-            <span>{t("mobile.subagent.index", { count: `${sessionAgents.length}${moreEarlier ? "+" : ""}` })}</span>
+            <span>{t("mobile.subagent.index", { count: sessionAgents.length + agentsEarlier })}</span>
             <UntestedTag id="terminal.reader.subagents" />
             <span className={subagentListOpen ? "terminal-reader-subagent-caret open" : "terminal-reader-subagent-caret"} aria-hidden="true">▾</span>
           </button>

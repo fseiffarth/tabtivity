@@ -109,15 +109,15 @@ describe("the agent pane's Reader", () => {
     expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({
       agent: "claude", projectId: "p", sessionId: "launch-1", tabDir: "/p", since: 1000, version: null,
     }));
-    // A long session that never spawned a subagent has no "Subagents (0+)".
+    // A long session that never spawned a subagent has no "Subagents (0)".
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
   });
 
-  it("offers the subagents of earlier turns only when those turns hold one", async () => {
+  it("counts the subagents of earlier turns only when those turns hold one", async () => {
     invoke.mockImplementation((command: string) =>
-      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: true } : []));
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: 2 } : []));
     reader(host);
-    await screen.findByRole("button", { name: /^Subagents \(0\+\)/ });
+    await screen.findByRole("button", { name: /^Subagents \(2\)/ });
   });
 
   it("sends a prompt through the prompt box's path and shows it as sending", async () => {

@@ -156,7 +156,7 @@ pub fn session_transcript(
         entries.drain(..entries.len() - limit);
         truncated = true;
     }
-    let agents_earlier = truncated && agents_unlisted(&entries, &spawned);
+    let agents_earlier = if truncated { agents_unlisted(&entries, &spawned) } else { 0 };
     Some(AgentTranscript {
         available: true,
         reason: None,

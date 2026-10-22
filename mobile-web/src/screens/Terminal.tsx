@@ -2261,9 +2261,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const storedEntries = useMemo(() => sinceClear ?? transcript?.entries ?? [], [sinceClear, transcript]);
   const sessionEntries = useMemo(() => withPending(storedEntries, pending), [storedEntries, pending]);
   const sessionAgents = useMemo(() => sessionEntries.filter((entry) => entry.kind === "agent"), [sessionEntries]);
-  /** Earlier turns not read in hold a subagent — the index's "+". A long
-   * session that never spawned one would otherwise read "Subagents (0+)". */
-  const agentsEarlier = !!transcript?.truncated && !!transcript.agentsEarlier && !sinceClear;
+  /** The session's subagents only earlier turns not read in hold, counted
+   * with the listed ones; none for a long session that never spawned one. */
+  const earlierAgents = transcript?.truncated && !sinceClear ? transcript.agentsEarlier ?? 0 : 0;
+  const agentsEarlier = earlierAgents > 0;
   /** A prompt the desktop still holds sits below the agent at work. */
   const queuedShown = sessionEntries.some((entry) => entry.queued);
   /** The files the agent sent while this conversation ran, as its messages. */
@@ -4369,7 +4370,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
               <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => { setSentListOpen(false); setSubagentListOpen((open) => !open); }}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v7a4 4 0 0 0 4 4h7m-3-3 3 3-3 3" /></svg>
-                <span>{t("mobile.subagent.index", { count: `${sessionAgents.length}${agentsEarlier ? "+" : ""}` })}{subagentUntested && <em> · {subagentUntested}</em>}</span>
+                <span>{t("mobile.subagent.index", { count: sessionAgents.length + earlierAgents })}{subagentUntested && <em> · {subagentUntested}</em>}</span>
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {subagentListOpen && <div id="mobile-subagent-list" className="subagent-index-list">

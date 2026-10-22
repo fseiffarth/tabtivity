@@ -364,7 +364,7 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
       if (url.includes("/transcript")) {
         const expanded = new URL(url, "http://phone").searchParams.get("limit") === "240";
         return Promise.resolve(jsonResponse(200, { transcript: {
-          available: true, version: expanded ? "older:2" : "older:1", truncated: !expanded, agentsEarlier: !expanded,
+          available: true, version: expanded ? "older:2" : "older:1", truncated: !expanded, agentsEarlier: expanded ? 0 : MAIN.entries.filter((entry) => entry.kind === "agent").length,
           entries: expanded ? MAIN.entries : MAIN.entries.filter((entry) => entry.kind !== "agent"),
         } }));
       }
@@ -374,7 +374,7 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
     const index = screen.getByRole("navigation", { name: "Subagents in this conversation" });
-    fireEvent.click(within(index).getByRole("button", { name: /^Subagents \(0\+\)/ }));
+    fireEvent.click(within(index).getByRole("button", { name: /^Subagents \(3\)/ }));
     fireEvent.click(within(index).getByRole("button", { name: "Find subagents in earlier turns" }));
     await settle();
     within(index).getByRole("button", { name: "Explore · Map the backend" });
