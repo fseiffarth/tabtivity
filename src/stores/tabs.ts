@@ -1033,6 +1033,10 @@ export interface GroupNode {
   // and width — so it persists with the layout, travels with a detach, and is
   // freed when the group (subwindow) is dropped.
   filesFolder?: string;
+  // Emptied by closing its last tab while `close_subwindow_on_last_tab` is off:
+  // the subwindow stays standing, empty with its +, instead of collapsing away.
+  // Session-only (never persisted); dropped once a tab lands in the group.
+  keepEmpty?: boolean;
 }
 
 export type LayoutNode = SplitNode | GroupNode;
@@ -2067,7 +2071,11 @@ export function orderedTabKeys(node: LayoutNode | null): string[] {
  *  returns the input unchanged if the key isn't present. Used by the detached
  *  subtree mutators, which (post-split) operate on a LayoutNode, not a single
  *  group. */
-export function removeKeyFromTree(node: LayoutNode, key: string): LayoutNode | null {
+export function removeKeyFromTree(
+  node: LayoutNode,
+  key: string,
+  keepEmpty = false,
+): LayoutNode | null {
   const found = findGroupOfTab(node, key);
   if (!found) return node;
   const removed = mapGroup(node, found.group.id, (g) => {
@@ -2076,6 +2084,7 @@ export function removeKeyFromTree(node: LayoutNode, key: string): LayoutNode | n
       ...g,
       tabKeys,
       activeKey: g.activeKey === key ? (tabKeys[0] ?? null) : g.activeKey,
+      ...(keepEmpty && tabKeys.length === 0 ? { keepEmpty: true } : {}),
     };
   });
   return collapse(removed);
@@ -2225,11 +2234,29 @@ function firstGroup(node: LayoutNode): GroupNode {
   return cur;
 }
 
+/** Whether closing a group's last tab leaves the subwindow standing — the
+ *  `close_subwindow_on_last_tab` setting, off (keep it) unless set. */
+function keepEmptiedSubwindow(): boolean {
+  return useSettingsStore.getState().settings?.close_subwindow_on_last_tab !== true;
+}
+
+/** An empty group the collapse drops: one without the `keepEmpty` mark. */
+function isDroppableGroup(node: LayoutNode): boolean {
+  return node.type === "group" && node.tabKeys.length === 0 && !node.keepEmpty;
+}
+
+/** A group emptied so the collapse drops it (merged, moved, detached, hidden
+ *  away) — never left standing as an empty subwindow. */
+function vacated(g: GroupNode): GroupNode {
+  return { ...g, tabKeys: [], activeKey: null, keepEmpty: false };
+}
+
 /**
  * Collapse a tree bottom-up:
  *  - a split with a single remaining child is replaced by that child;
  *  - empty groups inside a split are dropped (a lone empty root group is kept
- *    so an empty scope still has a root container, but callers may pass null).
+ *    so an empty scope still has a root container, but callers may pass null),
+ *    except one marked `keepEmpty`.
  * Returns the new (possibly null) root.
  */
 function collapse(node: LayoutNode | null): LayoutNode | null {
@@ -2243,7 +2270,7 @@ function collapse(node: LayoutNode | null): LayoutNode | null {
   node.children.forEach((child, i) => {
     const c = collapse(child);
     if (!c) return;
-    if (c.type === "group" && c.tabKeys.length === 0) return; // drop empty group
+    if (isDroppableGroup(c)) return; // drop empty group
     children.push(c);
     sizes.push(node.sizes[i] ?? 1);
   });
@@ -2283,13 +2310,15 @@ function pruneCollapseCollect(
       node.activeKey && tabKeys.includes(node.activeKey)
         ? node.activeKey
         : (tabKeys[0] ?? null);
+    // A kept-empty subwindow that got a tab again is an ordinary group.
+    const unmark = !!node.keepEmpty && tabKeys.length > 0;
     // Identity is preserved when nothing was pruned: `layout` must not change
     // for a write that only touched a tab payload (performance plan §3.1) — a
     // fresh tree per write re-rendered every group on a viewer's scroll pause.
     const next: GroupNode =
-      tabKeys.length === node.tabKeys.length && activeKey === node.activeKey
+      tabKeys.length === node.tabKeys.length && activeKey === node.activeKey && !unmark
         ? node
-        : { ...node, tabKeys, activeKey };
+        : { ...node, tabKeys, activeKey, ...(unmark ? { keepEmpty: false } : {}) };
     groupsOut.push(next);
     return next;
   }
@@ -2306,7 +2335,7 @@ function pruneCollapseCollect(
       same = false;
       return;
     }
-    if (c.type === "group" && c.tabKeys.length === 0) {
+    if (isDroppableGroup(c)) {
       same = false;
       return; // drop empty group
     }
@@ -3389,9 +3418,11 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           g.activeKey === key
             ? (tabKeys[Math.min(found.index, tabKeys.length - 1)] ?? null)
             : g.activeKey;
-        return { ...g, tabKeys, activeKey };
+        const keepEmpty = tabKeys.length === 0 && keepEmptiedSubwindow();
+        return { ...g, tabKeys, activeKey, ...(keepEmpty ? { keepEmpty } : {}) };
       });
-      // collapse() in writeScope drops the emptied group + lone splits.
+      // collapse() in writeScope drops the emptied group + lone splits, unless
+      // the setting keeps the emptied subwindow standing.
       return writeScope(s, s.scope, nextTabs, next, focusedGroupId);
     });
   },
@@ -3429,7 +3460,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         s,
         scope,
         nextTabs,
-        layout ? removeKeyFromTree(layout, key) : null,
+        layout ? removeKeyFromTree(layout, key, keepEmptiedSubwindow()) : null,
         s.focusedGroupByScope[scope] ?? null,
       );
       if (!detached) return base;
@@ -3469,11 +3500,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // Discard the closing tabs' link routes (#50) and prompt state.
       group.tabKeys.forEach((k) => forgetClosedTab(s.scope, k));
       const nextTabs = tabs.filter((t) => !removing.has(t.key));
-      const next = mapGroup(layout, groupId, (g) => ({
-        ...g,
-        tabKeys: [],
-        activeKey: null,
-      }));
+      const next = mapGroup(layout, groupId, vacated);
       return writeScope(s, s.scope, nextTabs, next, focusedGroupId);
     });
   },
@@ -3827,11 +3854,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         tabKeys: [...g.tabKeys, ...moved],
         activeKey: g.activeKey ?? moved[0] ?? null,
       }));
-      next = mapGroup(next, sourceGroupId, (g) => ({
-        ...g,
-        tabKeys: [],
-        activeKey: null,
-      }));
+      next = mapGroup(next, sourceGroupId, vacated);
       return writeScope(s, scope, tabs, next, targetGroupId);
     });
   },
@@ -3854,7 +3877,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           tabKeys.splice(at, 0, ...source.tabKeys);
           return { ...g, tabKeys, activeKey: source.activeKey ?? g.activeKey };
         });
-        next = mapGroup(next, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }));
+        next = mapGroup(next, groupId, vacated);
         return writeScope(s, scope, tabs, next, targetGroupId);
       }
       // Lift the group node out (its sibling split unwraps), then re-inject the
@@ -4028,6 +4051,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const group = findGroup(layout, groupId);
     const split = group ? null : findSplit(layout, groupId);
     if (!group && !split) return null;
+    // A kept-empty subwindow has nothing to pop out.
+    if (group && group.tabKeys.length === 0) return null;
     // Refuse to detach the only group: the in-window layout must keep a body —
     // except on restart respawn (`allowLastGroup`), where the popout legitimately
     // becomes the scope's only window and the main center is left empty.
@@ -4055,7 +4080,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const stripped = !layout
         ? null
         : group
-          ? mapGroup(layout, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }))
+          ? mapGroup(layout, groupId, vacated)
           : removeNodeById(layout, groupId);
       // Re-pick focus off the detached subtree onto a surviving group.
       const nextFocus = focus && detachedGroupIds.has(focus) ? null : focus;
@@ -4240,6 +4265,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const group = findGroup(layout, groupId);
     const split = group ? null : findSplit(layout, groupId);
     if (!group && !split) return;
+    // A kept-empty subwindow has nothing to park.
+    if (group && group.tabKeys.length === 0) return;
     // Unlike detachGroup we DO allow hiding the only group: hiding everything
     // leaves the scope empty (the +-placeholder), a valid resting state.
 
@@ -4260,7 +4287,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const stripped = !layout
         ? null
         : group
-          ? mapGroup(layout, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }))
+          ? mapGroup(layout, groupId, vacated)
           : removeNodeById(layout, groupId);
       const nextFocus = focus && hiddenGroupIds.has(focus) ? null : focus;
       const base = writeScope(s, scope, tabs, stripped, nextFocus);

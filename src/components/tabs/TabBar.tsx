@@ -1770,7 +1770,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             ◫
           </button>
         )}
-        {groupId !== EMPTY_GROUP_ID && (
+        {groupId !== EMPTY_GROUP_ID && tabs.length > 0 && (
           <button
             className="subwindow-hide"
             title={chordHint(t("tabBar.hideSubwindowTitle"), "hideSubwindow")}

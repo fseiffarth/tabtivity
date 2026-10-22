@@ -19,6 +19,7 @@ import {
   VIEWER_STATE_FLUSH_MS,
   type SavedLayoutTree,
 } from "../../stores/tabs";
+import { useSettingsStore } from "../../stores/settings";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -201,6 +202,7 @@ describe("setViewerState", () => {
     expect(snap().focus).toBe(before.focus);
 
     // A group removed (its last tab closed collapses the split).
+    useSettingsStore.setState({ settings: { close_subwindow_on_last_tab: true } });
     before = snap();
     useTabsStore.getState().removeTab(b.key);
     changed(before);

@@ -17,12 +17,15 @@ import {
   type SplitNode,
   type LayoutNode,
 } from "../../stores/tabs";
+import { useSettingsStore } from "../../stores/settings";
 
 function tab(label: string) {
   return { label, cmd: "bash", cwd: "/p", kind: "shell" as const };
 }
 
 function reset() {
+  // These cases pin the collapse; the kept-empty default has its own block.
+  useSettingsStore.setState({ settings: { close_subwindow_on_last_tab: true } });
   useTabsStore.setState({
     scope: "p",
     tabsByScope: {},
@@ -261,6 +264,60 @@ describe("tabs store — split layout", () => {
     const layout = useTabsStore.getState().layout as GroupNode;
     expect(layout.type).toBe("group");
     expect(layout.tabKeys).toEqual([a.key]);
+  });
+
+  describe("closing a subwindow's last tab, setting unset (keep it)", () => {
+    beforeEach(() => useSettingsStore.setState({ settings: {} }));
+
+    function splitAB() {
+      const a = useTabsStore.getState().addTab(tab("a"));
+      const b = useTabsStore.getState().addTab(tab("b"));
+      useTabsStore.getState().splitWithTab(b.key, rootGroupId(), "right");
+      const bGroup = findGroupOfTab(useTabsStore.getState().layout, b.key)!.group;
+      return { a, b, bGroup };
+    }
+
+    it("leaves the emptied subwindow standing and focused", () => {
+      const { a, b, bGroup } = splitAB();
+      useTabsStore.getState().focusGroup(bGroup.id);
+      useTabsStore.getState().removeTab(b.key);
+      const layout = useTabsStore.getState().layout as SplitNode;
+      expect(layout.type).toBe("split");
+      const kept = findGroup(layout, bGroup.id)!;
+      expect(kept.tabKeys).toEqual([]);
+      expect(kept.activeKey).toBeNull();
+      expect(findGroupOfTab(layout, a.key)).toBeTruthy();
+      expect(useTabsStore.getState().focusedGroupId).toBe(bGroup.id);
+      expect(useTabsStore.getState().activeKey).toBeNull();
+    });
+
+    it("a new tab lands in the kept subwindow, which is ordinary again", () => {
+      const { b, bGroup } = splitAB();
+      useTabsStore.getState().focusGroup(bGroup.id);
+      useTabsStore.getState().removeTab(b.key);
+      const c = useTabsStore.getState().addTab(tab("c"));
+      const group = findGroup(useTabsStore.getState().layout, bGroup.id)!;
+      expect(group.tabKeys).toEqual([c.key]);
+      expect(group.keepEmpty).toBeFalsy();
+      // Moved away (not closed), the tab takes the subwindow with it.
+      const aGroup = allGroups(useTabsStore.getState().layout).find((g) => g.id !== bGroup.id)!;
+      useTabsStore.getState().moveTab(c.key, aGroup.id);
+      expect(useTabsStore.getState().layout?.type).toBe("group");
+    });
+
+    it("the subwindow's × still closes it", () => {
+      const { b, bGroup } = splitAB();
+      useTabsStore.getState().removeTab(b.key);
+      useTabsStore.getState().closeGroup(bGroup.id);
+      expect(useTabsStore.getState().layout?.type).toBe("group");
+      expect(findGroup(useTabsStore.getState().layout, bGroup.id)).toBeNull();
+    });
+
+    it("the last subwindow of the scope still falls back to the placeholder", () => {
+      const a = useTabsStore.getState().addTab(tab("a"));
+      useTabsStore.getState().removeTab(a.key);
+      expect(useTabsStore.getState().layout).toBeNull();
+    });
   });
 
   it("removing the last tab leaves an empty scope", () => {
