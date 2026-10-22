@@ -30,6 +30,55 @@ pub mod windows_park;
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 pub mod x11;
 
+// ── Other apps' windows ───────────────────────────────────────────────────
+
+/// A top-level window of any app, as [`named_windows`] lists it.
+#[derive(Debug, Clone)]
+pub struct NamedWindow {
+    /// The X11 window id / Windows `HWND`, as the backends number windows.
+    pub id: u64,
+    /// The X11 `WM_CLASS` (raw, NUL-separated) or the Windows executable's
+    /// file name.
+    pub class: String,
+    pub title: String,
+}
+
+/// Every top-level window this platform lets Tabtivity see by class and title:
+/// the X11 client list (under Wayland, its XWayland clients) and Windows'
+/// visible top-levels. Empty on macOS and wherever the scan fails.
+pub fn named_windows() -> Vec<NamedWindow> {
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    {
+        x11::named_client_windows()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::named_windows()
+    }
+    #[cfg(not(any(all(target_os = "linux", feature = "desktop"), target_os = "windows")))]
+    {
+        Vec::new()
+    }
+}
+
+/// Raise and focus a window [`named_windows`] listed, past the window
+/// manager's focus-stealing prevention where the platform allows it.
+pub fn activate_window(window_id: u64) -> Result<(), String> {
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    {
+        x11::activate_window(window_id)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::activate_window(window_id)
+    }
+    #[cfg(not(any(all(target_os = "linux", feature = "desktop"), target_os = "windows")))]
+    {
+        let _ = window_id;
+        Err("window activation is not supported here".into())
+    }
+}
+
 // ── Backend trait ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -92,3 +92,31 @@
       monitor, tools still come before the portal, snap still rescues.
 
 ---
+
+21. **Open in <IDE> raises an IDE that already shows the project (2026-10-22,
+    ✅ Built · 🧪 Untested).** `commands::ide::open_project_in_ide` first looks
+    for the IDE's window on the project (`platform::named_windows`: X11/XWayland
+    client list or Windows top-levels, matched by `WM_CLASS`/exe and a title
+    part equal to the folder name, `.idea/.name` or the `.code-workspace` stem —
+    `ide_detect::window_shows_project`) and raises it (EWMH
+    `_NET_ACTIVE_WINDOW`, pager source / `SetForegroundWindow`) instead of
+    launching again. Native Wayland windows are out of reach: those still just
+    launch. macOS lists no windows, so it launches as before.
+    - [ ] 🖐️ PyCharm already open on the project, behind Tabtivity: pill →
+      Open in PyCharm brings that window to the front and focuses it; no second
+      window, no "PyCharm is ready" notification only.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+    - [ ] 🖐️ Same with VS Code (`.vscode/` project), including a minimized
+      window; a VS Code window on *another* folder is left alone and the
+      project opens in a new window.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows

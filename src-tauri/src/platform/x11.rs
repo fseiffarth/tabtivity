@@ -616,6 +616,54 @@ pub fn find_window_for_title(target: &str, attempts: usize) -> Option<u64> {
     None
 }
 
+/// Every client window with its `WM_CLASS` and title, for
+/// [`super::named_windows`]. Unlike the scans above this one runs under
+/// Wayland too: there it sees the XWayland clients, which is where the IDEs
+/// that run on XWayland (JetBrains, VS Code by default) put their windows.
+pub fn named_client_windows() -> Vec<super::NamedWindow> {
+    let Ok((conn, screen_num)) = xcb::Connection::connect(None) else {
+        return Vec::new();
+    };
+    let Ok(atoms) = intern_atoms(&conn) else {
+        return Vec::new();
+    };
+    list_client_windows(&conn, screen_num, &atoms)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|wid| super::NamedWindow {
+            id: wid.resource_id() as u64,
+            class: get_wm_class(&conn, wid).unwrap_or_default(),
+            title: get_window_title(&conn, wid, &atoms).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Ask the window manager to raise and focus `window_id` (switching to its
+/// desktop) with an EWMH `_NET_ACTIVE_WINDOW` request. Source indication 2
+/// (pager) marks it as on the user's behalf, which Mutter, Muffin and KWin
+/// honour past their focus-stealing prevention. Under Wayland it reaches
+/// XWayland windows only.
+pub fn activate_window(window_id: u64) -> Result<(), String> {
+    let wid = window_from_u64(window_id)
+        .ok_or_else(|| format!("invalid x11 window id {window_id}"))?;
+    let (conn, screen_num) =
+        xcb::Connection::connect(None).map_err(|e| format!("xcb connect: {e}"))?;
+    let net_active_window = intern_atom(&conn, b"_NET_ACTIVE_WINDOW")?;
+    let root = root_window(&conn, screen_num);
+    let event = x::ClientMessageEvent::new(
+        wid,
+        net_active_window,
+        x::ClientMessageData::Data32([2, x::CURRENT_TIME, 0, 0, 0]),
+    );
+    conn.send_and_check_request(&x::SendEvent {
+        propagate: false,
+        destination: x::SendEventDest::Window(root),
+        event_mask: x::EventMask::SUBSTRUCTURE_REDIRECT | x::EventMask::SUBSTRUCTURE_NOTIFY,
+        event: &event,
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// The topmost (front-most) mapped client window under the X11 pointer, by its
 /// X11 id, or `None` if the pointer is over no client (bare root) or the query
 /// fails. Used to decide whether a detached subwindow is actually at the front

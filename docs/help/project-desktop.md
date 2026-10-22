@@ -56,6 +56,12 @@ choose a different program. A JetBrains project without its own IDE installed
 opens in IntelliJ IDEA when that is installed. The IDE's window counts as one
 of the project's windows.
 
+When the IDE already has the project open, the same click brings that window
+to the front instead of opening it again. This works on X11 and Windows, and
+on a Wayland desktop for IDEs that run through XWayland (JetBrains IDEs and
+VS Code do unless set to native Wayland); a native Wayland window cannot be
+raised by another app, so there the IDE is only asked to open the project.
+
 ## Windows a project opened
 
 Opening a file in an external app (double-click a type Tabtivity has no

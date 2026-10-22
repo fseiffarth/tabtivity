@@ -282,6 +282,101 @@ impl IdeId {
             _ => &[],
         }
     }
+
+    /// Lower-case names this IDE's top-level windows carry: an X11 `WM_CLASS`
+    /// segment (`jetbrains-pycharm`, `code`) or, on Windows, the executable's
+    /// file stem (`pycharm64`, `code`). A name also claims its `-suffix`
+    /// editions (`jetbrains-pycharm-ce`, `jetbrains-idea-ce`).
+    fn window_classes(self) -> &'static [&'static str] {
+        match self {
+            IdeId::PyCharm => &["jetbrains-pycharm", "pycharm64"],
+            IdeId::CLion => &["jetbrains-clion", "clion64"],
+            IdeId::WebStorm => &["jetbrains-webstorm", "webstorm64"],
+            IdeId::PhpStorm => &["jetbrains-phpstorm", "phpstorm64"],
+            IdeId::RubyMine => &["jetbrains-rubymine", "rubymine64"],
+            IdeId::Rider => &["jetbrains-rider", "rider64"],
+            IdeId::RustRover => &["jetbrains-rustrover", "rustrover64"],
+            IdeId::GoLand => &["jetbrains-goland", "goland64"],
+            IdeId::AndroidStudio => &["jetbrains-studio", "studio64"],
+            IdeId::Idea => &["jetbrains-idea", "idea64"],
+            IdeId::VisualStudio => &["devenv"],
+            // The `code` launcher may be any of these (`path_candidates`).
+            IdeId::VsCode => &["code", "code - insiders", "vscodium", "codium", "cursor"],
+            IdeId::Cursor => &["cursor"],
+            IdeId::Windsurf => &["windsurf"],
+            IdeId::Zed => &["dev.zed.zed", "zed"],
+            IdeId::Xcode => &["xcode"],
+            IdeId::Eclipse => &["eclipse"],
+            IdeId::SublimeText => &["sublime_text"],
+            IdeId::RStudio => &["rstudio"],
+            IdeId::Spyder => &["spyder"],
+        }
+    }
+}
+
+// ── Open windows ───────────────────────────────────────────────────────────
+
+/// The names an IDE window may title the project with: the folder's, a
+/// JetBrains project's own (`.idea/.name`), and a `.code-workspace` target's
+/// stem. The `.name` file is only ever compared against window titles.
+pub fn project_window_names(dir: &Path, target: &Path) -> Vec<String> {
+    use std::io::Read;
+    let mut names = Vec::new();
+    let mut push = |name: &str| {
+        let name = name.trim();
+        if !name.is_empty() && !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    };
+    if let Some(name) = dir.file_name() {
+        push(&name.to_string_lossy());
+    }
+    let mut idea_name = String::new();
+    if let Ok(file) = fs::File::open(dir.join(".idea").join(".name")) {
+        let _ = file.take(256).read_to_string(&mut idea_name);
+        push(&idea_name);
+    }
+    if has_ext(target, "code-workspace") {
+        if let Some(stem) = target.file_stem() {
+            push(&stem.to_string_lossy());
+        }
+    }
+    names
+}
+
+/// Whether a top-level window is `ide`'s window on a project called one of
+/// `names`. `class` is the X11 `WM_CLASS` (NUL-separated instance and class)
+/// or a Windows executable's file name. Pure, so the title shapes are tested
+/// with literals.
+pub fn window_shows_project(ide: IdeId, class: &str, title: &str, names: &[String]) -> bool {
+    window_is_ide(ide, class) && title_names_project(title, names)
+}
+
+fn window_is_ide(ide: IdeId, class: &str) -> bool {
+    class
+        .to_lowercase()
+        .split('\0')
+        .map(|seg| seg.trim().trim_end_matches(".exe"))
+        .filter(|seg| !seg.is_empty())
+        .any(|seg| {
+            ide.window_classes()
+                .iter()
+                .any(|c| seg == *c || seg.strip_prefix(c).is_some_and(|rest| rest.starts_with('-')))
+        })
+}
+
+/// JetBrains titles a project window `name – file` (older builds
+/// `name [~/path] – file`), VS Code `file - name - Visual Studio Code` (a
+/// workspace `name (Workspace)`, an unsaved file `● file`): the project's name
+/// is one whole dash-separated part of the title.
+fn title_names_project(title: &str, names: &[String]) -> bool {
+    let title = title.replace(" – ", " - ").replace(" — ", " - ");
+    title.split(" - ").any(|part| {
+        let part = part.trim().trim_start_matches('●').trim();
+        let part = part.split(" [").next().unwrap_or(part);
+        let part = part.trim_end_matches(" (Workspace)").trim();
+        names.iter().any(|n| n == part)
+    })
 }
 
 /// One IDE a directory carries a marker for.
@@ -1273,5 +1368,55 @@ mod tests {
             assert_eq!(serde_json::to_value(ide).unwrap(), ide.id());
         }
         assert_eq!(IdeId::parse("emacs"), None);
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn an_open_ide_window_is_found_by_class_and_project_title() {
+        let proj = names(&["my-app"]);
+        for (ide, class, title) in [
+            (IdeId::PyCharm, "jetbrains-pycharm\0jetbrains-pycharm\0", "my-app – main.py"),
+            (IdeId::PyCharm, "jetbrains-pycharm-ce\0jetbrains-pycharm-ce\0", "my-app [~/src/my-app] – main.py"),
+            (IdeId::PyCharm, "pycharm64.exe", "my-app – main.py"),
+            (IdeId::VsCode, "code\0Code\0", "● main.py - my-app - Visual Studio Code"),
+            (IdeId::VsCode, "code\0Code\0", "my-app - Visual Studio Code"),
+            (IdeId::VsCode, "Code.exe", "my-app (Workspace) - Visual Studio Code"),
+            (IdeId::VsCode, "vscodium\0VSCodium\0", "main.py — my-app — VSCodium"),
+        ] {
+            assert!(window_shows_project(ide, class, title, &proj), "{class:?} {title:?}");
+        }
+    }
+
+    #[test]
+    fn other_projects_and_other_apps_are_not_raised() {
+        let proj = names(&["app"]);
+        for (ide, class, title) in [
+            // Another project, its name merely containing this one's.
+            (IdeId::PyCharm, "jetbrains-pycharm\0jetbrains-pycharm\0", "my-app – main.py"),
+            (IdeId::VsCode, "code\0Code\0", "main.py - webapp - Visual Studio Code"),
+            // The right title in another program.
+            (IdeId::PyCharm, "jetbrains-idea\0jetbrains-idea\0", "app – main.py"),
+            (IdeId::VsCode, "xcode", "app - Xcode"),
+            (IdeId::VsCode, "firefox\0firefox\0", "app - Visual Studio Code - Mozilla Firefox"),
+        ] {
+            assert!(!window_shows_project(ide, class, title, &proj), "{class:?} {title:?}");
+        }
+        assert!(!window_shows_project(IdeId::VsCode, "code\0Code\0", "", &[]));
+    }
+
+    #[test]
+    fn window_names_add_the_jetbrains_name_and_the_workspace_stem() {
+        let p = project();
+        let dir = p.path().join("proj");
+        touch(&dir, ".idea/.name", "Pretty Name\n");
+        touch(&dir, "team.code-workspace", "{}");
+        assert_eq!(
+            project_window_names(&dir, &dir.join("team.code-workspace")),
+            names(&["proj", "Pretty Name", "team"])
+        );
+        assert_eq!(project_window_names(&dir, &dir), names(&["proj", "Pretty Name"]));
     }
 }

@@ -120,6 +120,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "git_pull.rs",
     "global_machines.rs",
     "hpc_ws.rs",
+    "ide.rs",
     "local_loss.rs",
     "markdown.rs",
     "markup_mcp.rs",
