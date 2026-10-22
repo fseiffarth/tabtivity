@@ -802,6 +802,7 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     // ever goes into one (#2389): refused before the container comes up.
     crate::services::agent_api_keys::refuse_in_container(
         &opts.cmd,
+        opts.api_key,
         crate::services::agent_api_keys::is_local_model(opts)
             || crate::services::agent_api_keys::keyless_subcommand(&opts.cmd, &opts.args),
     )?;
@@ -2428,6 +2429,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         wrap_pty_options_docker(&mut opts).unwrap();
         assert_eq!(opts.cmd, "claude");
@@ -2459,6 +2461,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         enforce_spawn_authority(&mut opts);
         assert!(!opts.sandbox, "box tabs must never spawn containerized");

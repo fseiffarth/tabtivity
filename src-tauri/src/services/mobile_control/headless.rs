@@ -900,6 +900,8 @@ fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool
         host_bound_uid: None,
         local_model: kind == Some("local_agent"),
         host_session: false,
+        // The ＋ menu's login-or-key pick, as the window would pass it.
+        api_key: tab.extra.get(crate::services::terminal_service::API_KEY_KEY).and_then(serde_json::Value::as_bool),
     })
 }
 
@@ -944,6 +946,7 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
         host_bound_uid: None,
         local_model: false,
         host_session: false,
+        api_key: None,
         assistant: launch,
     }
 }

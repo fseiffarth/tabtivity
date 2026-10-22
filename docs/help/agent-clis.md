@@ -110,6 +110,16 @@ a key or base URL you exported yourself wins; a project container's agent tab
 of a CLI on a key does not start (no key goes into a container). Changing what a
 CLI runs on reaches new tabs only; removing a key stops running tabs at their next request. A tab
 that outlives a Tabtivity crash in tmux loses its token — restart the CLI in it.
+
+**Login and API key side by side.** Once a key with its monthly limit is
+saved, the tab bar's **+** menu gets an **API key** section with
+"Claude (API)" (and Gemini or Codex when their key is saved): that row opens a
+tab on the key, while the plain **Claude** row in Agents always opens one on
+Claude's own login (your subscription) — so a Max-plan tab and an API tab can
+run next to each other. The pick stays with the tab across a restart and a
+resume. **runs on** then only decides for tabs opened without the menu: from
+the phone, by a scheduled agent, from the mail/calendar dock. A row whose
+budget is spent is greyed out.
 If a tab reports an invalid key, fix or remove it there — signing in
 again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
 are not offered: no environment variable points them at Tabtivity's proxy (use

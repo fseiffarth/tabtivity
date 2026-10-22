@@ -34,10 +34,12 @@ import {
   compactAgentMenuEntries,
   isFileTabKind,
   itemLabel,
+  onOwnLogin,
   type StaticMenuItem,
 } from "./newTabItems";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
+import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
 import { TabColorPicker } from "./TabColorPicker";
 import { TabMarkBadge } from "./TabMarkBadge";
 import { TabMarkMenuItems } from "./TabMarkMenuItems";
@@ -661,6 +663,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const menuOpen = menuPos !== null;
   // The local-model group's GPU gate; probes only while the menu is open.
   const localModelGpu = useLocalModelPlacement(localModel, menuOpen);
+  // The API section's CLIs (a stored key can run them); asked while open.
+  const keyableAgents = useKeyableAgents(menuOpen);
 
   const updateScrollState = useCallback(() => {
     const el = stripRef.current;
@@ -1018,7 +1022,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     const item =
       request.kind === "shell" ? SHELL_ITEM : agentSlots.current()[request.slot]?.item;
     if (!item) return false;
-    handleAdd(item);
+    // A chord opens what its "+" row would: an agent on its own login.
+    handleAdd(request.kind === "shell" ? item : onOwnLogin(item));
     return true;
   };
   useEffect(() => {
@@ -1845,6 +1850,13 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   compactAgentBins,
                 ),
               },
+              ...apiKeyMenuGroups({
+                keyable: keyableAgents,
+                installedBuiltins: enabledAgents,
+                remoteScope: isRemoteScope,
+                pick: handleAdd,
+                t,
+              }),
               // Box scope: one row-trio per member — files view, shell, and a
               // (resume-safe, member-cwd) Claude tab. Empty members list (or a
               // non-box scope) contributes no group at all.

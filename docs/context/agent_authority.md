@@ -464,7 +464,11 @@ took the port. Injection happens inside both fence wraps and in
 `launch_prep`'s Host-session and fence-less-platform arms, only while the
 proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
 shell tab, its own process) gets nothing and stays on its login. Only CLIs
-listed in `agent_api_key_clis` get a token; never a remote, container or
+listed in `agent_api_key_clis` get a token — unless the tab picked for itself
+(`PtyOptions::api_key`, `agent_api_keys::with_pick`: the ＋ menu's API section
+`true`, its plain rows `false`; persisted on the tab, dropped by the
+untrusted-layout sanitizer so an adopted folder or imported bundle cannot
+spend the key); never a remote, container or
 local-model spawn, nor a subcommand (a sign-in tab); a credential or base URL
 the user set wins. On Linux and macOS the token travels under an app-named
 carrier (`<APP>_AGENT_SECRET_<VAR>`, `agent_api_keys::CARRIERS`), and only the

@@ -39,6 +39,7 @@ export interface TerminalSpawnInputs {
   tmuxAttach?: string | null;
   hostBoundUid?: string | null;
   hostSession?: boolean;
+  apiKey?: boolean | null;
   assistant?: AssistantLaunch | null;
   kind?: string;
   scheduleTargetId?: string;
@@ -70,6 +71,7 @@ export function terminalSpawnKey(p: TerminalSpawnInputs): string {
     p.tmuxAttach ?? null,
     p.hostBoundUid ?? null,
     !!p.hostSession,
+    p.apiKey ?? null,
     p.assistant ?? null,
     p.kind ?? null,
     p.scheduleTargetId ?? null,
@@ -128,6 +130,7 @@ export function tabTerminalSpawn(
     tmuxAttach: tab.login ? null : (tab.tmuxAttach ?? null),
     hostBoundUid: tab.hostBoundUid ?? null,
     hostSession: !!tab.hostSession,
+    apiKey: tab.apiKey ?? null,
     assistant,
     kind: tab.kind,
     // Tabby chats take no schedule (the backend refuses one for the scope).

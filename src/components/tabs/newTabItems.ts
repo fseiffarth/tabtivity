@@ -43,6 +43,10 @@ export interface StaticMenuItem {
   // returned strings are appended to the spawn args. Lets us surface the
   // session id on hover and later resume the session.
   sessionIdArgs?: (uuid: string) => string[];
+  // The tab's pick between the CLI's own login and the stored API key
+  // (`TabEntry.apiKey`): the "+" menu's plain rows set `false`, its API
+  // section `true`; unset leaves it to the Manage CLIs switch.
+  apiKey?: boolean;
 }
 
 // Only Claude and Gemini accept a caller-supplied session UUID at launch
@@ -147,6 +151,7 @@ export function buildStaticTabSpec(
     initialInput,
     sessionId,
     ...(item.resumeArgs?.length ? { resumeArgs: item.resumeArgs } : {}),
+    ...(item.apiKey !== undefined ? { apiKey: item.apiKey } : {}),
   };
 }
 
@@ -377,6 +382,12 @@ export function agentShortcutSlots(opts: {
   return [def, ...rows.filter((row) => row !== def)].slice(0, AGENT_TAB_ACTIONS.length);
 }
 
+/** A plain "+" row's item: on the CLI's own login whatever the Manage CLIs
+ *  switch says — the API section is where a stored key is picked. */
+export function onOwnLogin(item: StaticMenuItem): StaticMenuItem {
+  return { ...item, apiKey: false };
+}
+
 /**
  * Build the "Agents" group's rows for the add-tab menu, shared by the main-window
  * `TabBar` and the popout's `NewTabMenu` so both list agents identically:
@@ -421,7 +432,7 @@ export function agentMenuEntries(opts: {
     label: item.label,
     color: TAB_ACCENT[item.kind],
     shortcut: chordByKey.get(item.cmd),
-    onPick: () => opts.pick(item),
+    onPick: () => opts.pick(onOwnLogin(item)),
   }));
   // One row whose fly-out holds every installed built-in's cloud launches,
   // rather than a cloud twin per agent: most agents have none, and the plain
@@ -460,7 +471,7 @@ export function agentMenuEntries(opts: {
       color: TAB_ACCENT.agent,
       disabled: missing,
       shortcut: chordByKey.get(`custom:${ca.id}`),
-      onPick: () => opts.pick(customAgentToItem(ca)),
+      onPick: () => opts.pick(onOwnLogin(customAgentToItem(ca))),
     };
   });
   return [

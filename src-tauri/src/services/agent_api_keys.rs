@@ -265,23 +265,37 @@ pub fn enabled_clis() -> Vec<String> {
     settings().agent_api_key_clis.unwrap_or_default()
 }
 
-/// Whether CLI `cmd` is in the table and switched on. Settings only, no
+/// `enabled` (the switched-on CLIs) as one spawn of `cmd` sees it: the tab's
+/// own pick (`PtyOptions::api_key`, the ＋ menu's API section or a plain row)
+/// puts its CLI in or takes it out; `None` leaves the switch to decide.
+fn with_pick(mut enabled: Vec<String>, cmd: &str, pick: Option<bool>) -> Vec<String> {
+    if let (Some(id), Some(on)) = (cli_of(cmd), pick) {
+        enabled.retain(|c| c != id);
+        if on {
+            enabled.push(id.to_string());
+        }
+    }
+    enabled
+}
+
+/// Whether CLI `cmd` is in the table and takes the key on this spawn: the
+/// tab's `pick` when it made one, else switched on. Settings only, no
 /// keychain.
-pub fn applies_to(cmd: &str, settings: &crate::schema::Settings) -> bool {
+pub fn applies_to(cmd: &str, pick: Option<bool>, settings: &crate::schema::Settings) -> bool {
     cli_of(cmd).is_some_and(|id| {
         !routes_of(id).is_empty()
-            && settings
-                .agent_api_key_clis
-                .as_deref()
-                .is_some_and(|on| on.iter().any(|c| c == id))
+            && with_pick(settings.agent_api_key_clis.clone().unwrap_or_default(), cmd, pick)
+                .iter()
+                .any(|c| c == id)
     })
 }
 
-/// Whether a local session of `cmd` would start on the proxy: switched on, the
-/// proxy running in this process, and one of its providers keyed. Reads the
-/// keychain (once, then `api_proxy`'s cache) only when switched on.
-pub fn keyed(cmd: &str, settings: &crate::schema::Settings) -> bool {
-    applies_to(cmd, settings)
+/// Whether a local session of `cmd` would start on the proxy: picked or
+/// switched on ([`applies_to`]), the proxy running in this process, and one of
+/// its providers keyed. Reads the keychain (once, then `api_proxy`'s cache)
+/// only when it applies.
+pub fn keyed(cmd: &str, pick: Option<bool>, settings: &crate::schema::Settings) -> bool {
+    applies_to(cmd, pick, settings)
         && crate::services::api_proxy::running()
         && cli_of(cmd).is_some_and(|id| {
             routes_of(id).iter().any(|r| crate::services::api_proxy::key_for(r.provider).is_some())
@@ -353,7 +367,8 @@ pub(crate) fn inject_env_with(
 
 /// Point a local agent session of `cmd` at the proxy for its keyed providers.
 /// `subcommand` is `agent_fence::runs_subcommand` of the CLI's own argv, taken
-/// before a fence rewrites it. `admin` is the CLI a hosted server's user runs
+/// before a fence rewrites it. `pick` is the tab's own login-or-key choice
+/// ([`with_pick`]). `admin` is the CLI a hosted server's user runs
 /// on the administrator's key (`server::agent_keys::admin_for_spawn`, which
 /// checked the offer): its grants forward with that key, whatever the
 /// own-key switches say. Settings first, so a spawn of a CLI nobody switched
@@ -363,6 +378,7 @@ pub fn inject_env(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
+    pick: Option<bool>,
     admin: Option<&'static str>,
     binding: Binding<'_>,
     env: &mut HashMap<String, String>,
@@ -380,7 +396,7 @@ pub fn inject_env(
         cmd,
         subcommand,
         local_model,
-        &enabled_clis(),
+        &with_pick(enabled_clis(), cmd, pick),
         admin,
         env,
         CARRY,
@@ -410,7 +426,7 @@ pub(crate) fn codex_proxy_args(base: &str) -> Vec<String> {
 pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'static str>, binding: Binding<'_>) {
     let subcommand = keyless_subcommand(&opts.cmd, &opts.args);
     let local_model = is_local_model(opts);
-    let injected = inject_env(&opts.cmd, subcommand, local_model, admin, binding, &mut opts.env);
+    let injected = inject_env(&opts.cmd, subcommand, local_model, opts.api_key, admin, binding, &mut opts.env);
     if injected.contains(&OPENAI_BASE_ENV) {
         // Put global overrides before `resume`/`fork` and their positional id.
         let mut args = codex_proxy_args(&opts.env[OPENAI_BASE_ENV]);
@@ -428,13 +444,13 @@ pub(crate) fn keyless_subcommand(cmd: &str, args: &[String]) -> bool {
 }
 
 /// A project-container spawn of `cmd` (`sandbox`): refused when the CLI runs
-/// on an API key — the user's own (switched on, with a key saved) or a
-/// server administrator's — since the container cannot reach this process's
-/// loopback proxy and no key is ever put into one (#2389). The message names
-/// the way out. `keyless`: a spawn that never takes a key (a local-model tab,
-/// a CLI subcommand such as a sign-in). Settings first: the keychain is read
-/// only for a switched-on CLI.
-pub fn refuse_in_container(cmd: &str, keyless: bool) -> Result<(), String> {
+/// on an API key — the user's own (picked by the tab or switched on, with a
+/// key saved) or a server administrator's — since the container cannot reach
+/// this process's loopback proxy and no key is ever put into one (#2389). The
+/// message names the way out. `keyless`: a spawn that never takes a key (a
+/// local-model tab, a CLI subcommand such as a sign-in). Settings first: the
+/// keychain is read only for a CLI the key applies to.
+pub fn refuse_in_container(cmd: &str, pick: Option<bool>, keyless: bool) -> Result<(), String> {
     if keyless {
         return Ok(());
     }
@@ -443,7 +459,7 @@ pub fn refuse_in_container(cmd: &str, keyless: bool) -> Result<(), String> {
     };
     let admin = crate::services::server::is_server()
         && crate::services::server::agent_keys::chosen_in(&crate::storage::state_dir()).contains(id);
-    let own = applies_to(cmd, &settings()) && routes_of(id).iter().any(|r| has_key(r.provider));
+    let own = applies_to(cmd, pick, &settings()) && routes_of(id).iter().any(|r| has_key(r.provider));
     if admin || own {
         let label = crate::commands::agents::agent_label_for_id(id).unwrap_or(id);
         return Err(format!(
@@ -600,6 +616,20 @@ fn status_with(
 /// switched-on CLI, so with nothing switched on it never touches it.
 pub fn ready_clis() -> Vec<&'static str> {
     ready_clis_with(&enabled_clis(), has_key)
+}
+
+/// The CLIs the ＋ menu's API section offers: served by the proxy, which runs
+/// in this process, with a key saved for one of their providers — switched on
+/// or not. Only a provider with a monthly limit set is looked up (a key is
+/// saved only beside one, [`require_limit`]), so a user who never saved a key
+/// never has the keychain read; the lookups go through `api_proxy`'s cache.
+pub fn keyable_clis() -> Vec<&'static str> {
+    if !crate::services::api_proxy::running() {
+        return Vec::new();
+    }
+    let limits = crate::services::api_usage::limits_in(&settings());
+    let all: Vec<String> = CLI_ROUTES.iter().map(|(id, _)| id.to_string()).collect();
+    ready_clis_with(&all, |p| limits.contains_key(p.id()) && crate::services::api_proxy::key_for(p).is_some())
 }
 
 fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'static str> {
@@ -866,7 +896,7 @@ mod tests {
         assert!(!crate::services::api_proxy::running());
         let mut env = HashMap::new();
         let binding = Binding { tab: "t", scope: "s", tmux: None };
-        assert!(inject_env("claude", false, false, None, binding, &mut env).is_empty());
+        assert!(inject_env("claude", false, false, Some(true), None, binding, &mut env).is_empty());
         assert!(env.is_empty());
     }
 
@@ -995,12 +1025,30 @@ mod tests {
     #[test]
     fn applies_to_reads_only_the_settings() {
         let mut settings = crate::schema::Settings::default();
-        assert!(!applies_to("claude", &settings));
+        assert!(!applies_to("claude", None, &settings));
         settings.agent_api_key_clis = Some(on(&["claude", "codex", "vibe"]));
-        assert!(applies_to("claude", &settings));
-        assert!(applies_to("/opt/bin/claude", &settings));
-        assert!(applies_to("codex", &settings));
-        assert!(!applies_to("vibe", &settings), "dropped: no proxy route");
-        assert!(!applies_to("gemini", &settings));
+        assert!(applies_to("claude", None, &settings));
+        assert!(applies_to("/opt/bin/claude", None, &settings));
+        assert!(applies_to("codex", None, &settings));
+        assert!(!applies_to("vibe", None, &settings), "dropped: no proxy route");
+        assert!(!applies_to("gemini", None, &settings));
+    }
+
+    #[test]
+    fn a_tabs_own_pick_outranks_the_switch() {
+        let mut settings = crate::schema::Settings::default();
+        // The ＋ menu's API section: the key with the switch off.
+        assert!(applies_to("claude", Some(true), &settings));
+        assert!(!applies_to("gemini", Some(false), &settings));
+        settings.agent_api_key_clis = Some(on(&["claude", "gemini"]));
+        // A plain row: the login with the switch on, for its own CLI only.
+        assert!(!applies_to("claude", Some(false), &settings));
+        assert!(applies_to("gemini", None, &settings));
+        // A pick never reaches a CLI the proxy cannot serve.
+        assert!(!applies_to("vibe", Some(true), &settings));
+        assert_eq!(with_pick(on(&["claude", "gemini"]), "/opt/bin/claude", Some(false)), on(&["gemini"]));
+        assert_eq!(with_pick(on(&["gemini"]), "claude", Some(true)), on(&["gemini", "claude"]));
+        assert_eq!(with_pick(on(&["claude"]), "claude", Some(true)), on(&["claude"]));
+        assert_eq!(with_pick(on(&["claude"]), "bash", Some(false)), on(&["claude"]));
     }
 }

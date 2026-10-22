@@ -1968,6 +1968,7 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
         local_model: false,
         schedule_target_id: None,
         host_session: false,
+        api_key: None,
     };
     crate::services::sandbox::enforce_spawn_authority(&mut opts);
     let remote_run =
@@ -2961,6 +2962,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 

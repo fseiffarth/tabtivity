@@ -393,6 +393,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         o.env.insert(crate::app_env!("TAB_UID").to_string(), UID.to_string());
         o

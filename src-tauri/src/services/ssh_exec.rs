@@ -2021,6 +2021,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 

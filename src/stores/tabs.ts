@@ -957,6 +957,12 @@ export interface TabEntry {
   // Runtime only: a restored Host session waits for an explicit Resume before
   // anything is spawned (see TabPane's HostSessionHold).
   hostSessionPaused?: boolean;
+  // The tab's pick between its CLI's own login and the user's stored API key
+  // (`PtyOptions::api_key`): `true` from the ＋ menu's API section, `false`
+  // from its plain rows, unset (the phone, scheduled agents, older tabs) for
+  // the Manage CLIs switch. Persisted, so a resumed tab keeps its billing;
+  // the backend drops it from an adopted or imported layout.
+  apiKey?: boolean;
   // Idempotency key of the request that created this tab, for the callers that
   // create one without a click behind them: a Mobile create (a keyed hash — it
   // contains no client token) whose timed-out retry must resolve to this exact
@@ -1233,6 +1239,8 @@ export interface SavedTabEntry {
   cloud?: boolean;
   // Persisted Host session marker (see TabEntry.hostSession).
   hostSession?: boolean;
+  // Persisted login-or-key pick (see TabEntry.apiKey).
+  apiKey?: boolean;
   // Persisted local-model launch line (see TabEntry.localLaunch).
   localLaunch?: LocalLaunch;
   // Persisted Tabby chat launch (see TabEntry.assistant).
@@ -1297,6 +1305,7 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     mark: t.mark,
     todoId: t.todoId,
     hostSession: t.hostSession || undefined,
+    apiKey: t.apiKey,
     localLaunch: t.localLaunch,
     assistant: t.assistant,
     signIn: t.signIn || undefined,
@@ -6098,6 +6107,12 @@ function restoreSavedTab(
     hostBoundUid: t.hostBoundUid,
     mobileRequestHash: t.mobileRequestHash,
     localLaunch,
+    // The login-or-key pick: only a boolean is taken from disk.
+    ...(typeof t.apiKey !== "boolean"
+      ? {}
+      : {
+          apiKey: t.apiKey,
+        }),
     // The launch of a Tabby chat; in any other scope the block is ignored (a
     // project's layout file is attacker-controlled).
     ...(ctx.scope === ASSISTANT_SCOPE ? { assistant: readAssistantLaunch(t.assistant) } : {}),

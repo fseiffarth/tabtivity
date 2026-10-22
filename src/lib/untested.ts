@@ -305,6 +305,7 @@ export const UNTESTED = {
   "settings.agentApiKeys.codex": { area: "layout", what: "API keys · OpenAI/Codex: save an OpenAI key with a monthly token limit, select my API key in Codex runs on, then open a new local Codex tab or resume a conversation; it uses a per-tab proxy token with HTTP Responses streaming, never the real key or saved ChatGPT login; usage includes cached input and reasoning output, compaction is metered, budget and key removal stop requests; switching back restores its own login on new tabs; not verified live" },
   "pill.agentFenceStatus": { area: "projects", what: "ProjectPill · Agent fence: on (status row; the toggle is gone, the fence is the only mode)" },
   "tab.hostSession": { area: "tabs", what: "TabBar/TabPane · HOST badge and the paused 'Resume unfenced' card of a restored Host session" },
+  "newTabMenu.apiKey": { area: "tabs", what: "＋ menu → API key section: \"Claude (API)\" (and Gemini/Codex) appear once a key with a monthly limit is saved, open a tab on the key whatever Manage CLIs says, while the plain Agents rows stay on the CLI's own login; the pick survives a restart and resume; a spent budget greys the row" },
   "settings.browser": { area: "layout", what: "SettingsPanel · Browser" },
   "settings.calendarGlobalApp": { area: "layout", what: "SettingsPanel · Calendar in the header" },
   "settings.copilotCompletion": { area: "layout", what: "SettingsPanel · GitHub Copilot autocomplete" },

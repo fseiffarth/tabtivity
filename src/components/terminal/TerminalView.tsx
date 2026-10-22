@@ -160,6 +160,9 @@ interface Props {
    *  home (`PtyOptions.host_session`). Honoured by the backend only with no
    *  project id. */
   hostSession?: boolean;
+  /** The tab's login-or-key pick (`TabEntry.apiKey`); null leaves it to the
+   *  Manage CLIs switch. */
+  apiKey?: boolean | null;
   /** A Tabby chat's launch (`PtyOptions.assistant`): the backend builds the
    *  argv from it and ignores `cmd`/`args`/`env` but the `TAB_UID` in `env`. */
   assistant?: AssistantLaunch | null;
@@ -284,7 +287,7 @@ function sweepXtermElements(container: HTMLElement) {
   }
 }
 
-export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, promptTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
+export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, apiKey = null, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, promptTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
   // The id the pane's prompt input is registered under (scheduler, Reader).
   const inputTargetId = promptTargetId ?? scheduleTargetId;
   const viewerId = useRef(crypto.randomUUID()).current;
@@ -472,7 +475,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // Mode's synthetic cleanup, which therefore still sees the PTY parked.
     const spawnKey = attachOnly
       ? null
-      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
     // Ends a spawn waiting on the AI switch when this lifecycle does.
     const aiWait = new AbortController();
     const parked = attachOnly ? undefined : asleepPty(id);
@@ -1650,7 +1653,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
-          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
+          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
@@ -2170,7 +2173,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       fitRef.current = null;
       openedRef.current = false;
     };
-  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, inputTargetId, relaunchSeq]);
+  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, apiKey, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, inputTargetId, relaunchSeq]);
 
   // Re-theme a LIVE, OPEN terminal. Both halves of that guard are load-bearing,
   // and `termRef.current` alone was neither: assigning `options.theme` makes

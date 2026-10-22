@@ -772,8 +772,13 @@ pub struct LoginStatus {
     pub api_key: bool,
     /// Of an `api_key` CLI: its provider's monthly budget is spent, or no
     /// limit is set, so its keyed tabs are refused (`services::api_usage`).
-    /// Filled by the `agent_logins` command too.
+    /// Filled by the `agent_logins` command too, for `api_key_saved` CLIs as
+    /// well.
     pub api_budget_reached: bool,
+    /// A stored provider API key could run this CLI, switched on or not: the
+    /// ＋ menu's API section offers it (`agent_api_keys::keyable_clis`).
+    /// Filled by the `agent_logins` command.
+    pub api_key_saved: bool,
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
@@ -819,6 +824,7 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 uses_admin_key: on_admin_key.contains(cli),
                 api_key: false,
                 api_budget_reached: false,
+                api_key_saved: false,
             }
         })
         .collect()

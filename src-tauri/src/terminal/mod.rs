@@ -1158,6 +1158,13 @@ pub struct PtyOptions {
     /// Chooses a home only; it grants nothing — both homes are fenced alike.
     #[serde(default)]
     pub local_model: bool,
+    /// The tab's own pick between its CLI's login and the user's stored API
+    /// key (`services::agent_api_keys`): `Some(true)` from the ＋ menu's API
+    /// section, `Some(false)` from its plain rows, `None` (the phone, a
+    /// scheduled agent, a tab saved before the pick existed) leaves it to the
+    /// Manage CLIs switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<bool>,
     /// A **login PTY** (`commands::credentials`): the backend runs the ssh /
     /// OpenVPN login for this target as the PTY's own program, ignoring `cmd`,
     /// `args`, `env` and `cwd`, and only such a PTY may receive a saved secret
@@ -1972,6 +1979,7 @@ pub fn join_tab(
         project_id: None,
         schedule_target_id: None,
         host_session: false,
+        api_key: None,
         remote_host_id: None,
         tmux_session: None,
         tmux_attach: None,
@@ -3447,7 +3455,7 @@ mod tests {
             id: id.into(), cmd: "codex".into(), args: vec!["resume".into(), "0199aaaa-0000-7000-8000-00000000c0de".into()],
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
             project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
-            local_model: false, schedule_target_id: None, host_session: false,
+            local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         codex_bind::reserve_resume(&mut opts).expect("the respawn claims its session").keep();
         let claim = codex_bind::resume_seq(id);
@@ -4027,6 +4035,7 @@ mod client_tests {
             project_id: None,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
             remote_host_id: None,
             tmux_session: None,
             tmux_attach: None,
@@ -4090,6 +4099,7 @@ mod client_tests {
             project_id: None,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
             remote_host_id: None,
             tmux_session: None,
             tmux_attach: None,
@@ -4178,6 +4188,7 @@ mod client_tests {
             project_id: None,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
             remote_host_id: None,
             tmux_session: Some(session.to_string()),
             tmux_attach: None,

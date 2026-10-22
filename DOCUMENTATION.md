@@ -1277,6 +1277,14 @@ agent runs (Part C, C1). Claude takes the bearer token without its custom-key
 dialog; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude tab
 runs without Remote Control. A project's CLI config can still point the CLI at
 another host, which then receives only the token — worthless off this machine.
+The "+" menu's **API key** section (`components/tabs/apiKeyGroup.ts`) opens a
+tab on the key ("Claude (API)") beside the Agents group's plain rows, which
+always open one on the CLI's own login: the tab's pick (`TabEntry.apiKey` →
+`PtyOptions::api_key`, persisted, dropped from an adopted or imported layout)
+outranks `agent_api_key_clis`, which now decides only for launches without a
+menu pick (phone, scheduled agents, overlay dock). The section lists CLIs with
+a key saved (`agent_logins`' `api_key_saved`, `agent_api_keys::keyable_clis`,
+which looks up only providers with a monthly limit set).
 
 **Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
 `services/api_prices.rs`, Part C, C3; tokens since #2389). Saving a key requires

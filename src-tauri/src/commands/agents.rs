@@ -2382,11 +2382,17 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
         // `agent_auth::status_in`, whose tests stay keyring-free. With no CLI
         // switched on this reads no keychain entry at all.
         let ready = crate::services::agent_api_keys::ready_clis();
-        // Of those, the ones whose provider is out of budget this month (or
+        // The ones a key could run, switched on or not: the ＋ menu's API
+        // section. Only providers with a limit set are looked up.
+        let keyable = crate::services::agent_api_keys::keyable_clis();
+        // Of both, the ones whose provider is out of budget this month (or
         // has no limit): their keyed tabs are refused.
-        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&ready);
+        let mut either = ready.clone();
+        either.extend(keyable.iter().copied().filter(|id| !ready.contains(id)));
+        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&either);
         for login in &mut logins {
             login.api_key = ready.contains(&login.id.as_str());
+            login.api_key_saved = keyable.contains(&login.id.as_str());
             login.api_budget_reached = blocked.contains(&login.id.as_str());
         }
         logins

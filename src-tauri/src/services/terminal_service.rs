@@ -425,6 +425,7 @@ const ASSISTANT_DROPPED_KEYS: &[&str] = &[
     "localOnly",
     "remoteHostId",
     "hostSession",
+    API_KEY_KEY,
 ];
 
 /// The layout rule of the chat assistant's scope (plan "Call sites", the
@@ -522,6 +523,7 @@ fn sanitize_untrusted_layout_with(tabs: &mut [TabEntry], custom: &HashMap<String
         tab.extra.remove(LOCAL_LAUNCH_KEY);
         tab.extra.remove(ENV_KEY);
         tab.extra.remove(EMBED_EXEC_KEY);
+        tab.extra.remove(API_KEY_KEY);
         if let Some(spec) = custom.get(&tab.cmd).filter(|spec| !spec.env.is_empty()) {
             let env = spec.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
             tab.extra.insert(ENV_KEY.to_string(), Value::Object(env));
@@ -909,6 +911,11 @@ const ENV_KEY: &str = "env";
 /// on mount. Never adopted.
 const EMBED_EXEC_KEY: &str = "embedExec";
 
+/// A tab's pick between its CLI's login and the user's stored API key
+/// (`TabEntry.apiKey`, `PtyOptions::api_key`). Never adopted: a copy that
+/// arrived from elsewhere does not get to spend this user's key.
+pub(crate) const API_KEY_KEY: &str = "apiKey";
+
 /// `<project>/.tabtivity/sessions/` — where the **export** copies of the session
 /// files live (and where `filetabs.json` / `layout.json` / `windows.json` still
 /// live outright; none of those is executable intent).
@@ -1064,10 +1071,13 @@ mod tests {
             tabs[0]
                 .extra
                 .insert("env".to_string(), serde_json::json!({ "FOO": "bar", "PATH": "/tmp/evil" }));
+            tabs[0].extra.insert(API_KEY_KEY.to_string(), serde_json::json!(true));
             sanitize_untrusted_layout_with(&mut tabs, &no_custom());
             assert_eq!(tabs[0].cmd, cmd, "'{cmd}' stays known");
             assert!(!tabs[0].extra.contains_key("env"), "'{cmd}' loses env");
             assert!(!tabs[0].extra.contains_key("embedExec"), "'{cmd}' loses embedExec");
+            // A copy from elsewhere never picks this user's API key.
+            assert!(!tabs[0].extra.contains_key(API_KEY_KEY), "'{cmd}' loses apiKey");
             // Identity stays: the frontend rebuilds TAB_UID from it.
             assert!(tabs[0].session_id.is_some(), "'{cmd}' keeps its session id");
         }

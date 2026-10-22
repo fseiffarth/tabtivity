@@ -1524,6 +1524,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 
@@ -1583,6 +1584,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         wrap_pty_options_local(&mut opts);
         assert_eq!(opts.cmd, "bash");
@@ -1610,6 +1612,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 

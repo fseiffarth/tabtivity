@@ -187,10 +187,11 @@ fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<Str
 
 /// Whether this `claude` spawn runs here, as a session, on an Anthropic key
 /// through the API proxy: the user's stored one (`agent_api_keys::keyed`:
-/// Claude switched on in Manage CLIs → API keys, the proxy running, a key
-/// saved) or a hosted server administrator's that this user chose for Claude
-/// (#2389) — in a local, non-container, non-local-model tab. Reads the
-/// keychain (once, then the proxy's cache) only when Claude is switched on.
+/// the tab's API pick or Claude switched on in Manage CLIs → API keys, the
+/// proxy running, a key saved) or a hosted server administrator's that this
+/// user chose for Claude (#2389) — in a local, non-container, non-local-model
+/// tab. Reads the keychain (once, then the proxy's cache) only when the key
+/// applies to this tab.
 fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
     if remote_agent_run || opts.sandbox || crate::services::agent_api_keys::is_local_model(opts) {
         return false;
@@ -200,7 +201,7 @@ fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
     let admin = crate::services::server::is_server()
         && crate::services::agent_api_keys::cli_of(&opts.cmd) == Some("claude")
         && crate::services::server::agent_keys::chosen_in(&storage::state_dir()).contains("claude");
-    admin || crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
+    admin || crate::services::agent_api_keys::keyed(&opts.cmd, opts.api_key, &settings)
 }
 
 /// Whether Claude agent tabs of `project_id` should spawn with
@@ -1369,7 +1370,7 @@ mod tests {
             id: "p:t".into(), cmd: cmd.into(), args: args.iter().map(|a| a.to_string()).collect(),
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false,
             agent: true, project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None,
-            host_bound_uid: None, local_model: false, schedule_target_id: None, host_session: false,
+            host_bound_uid: None, local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         assert!(is_ai_spawn(&opts("claude", &[])));
         assert!(is_ai_spawn(&opts("claude", &["--resume", "x"])));
@@ -1405,7 +1406,7 @@ mod tests {
             id: tab.into(), cmd: "claude".into(), args: Vec::new(), env: HashMap::new(), cwd: "/p".into(),
             cols: 80, rows: 24, local_only: false, sandbox: false, agent: true, project_id: None,
             remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
-            local_model: false, schedule_target_id: None, host_session: false,
+            local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         PreparedLaunch {
             opts, named: false, interrupted: false, resting: false, drop_dir: None, ai: true, mcp_spawn_guard: None,
@@ -1818,6 +1819,7 @@ mod tests {
             local_model: false,
             schedule_target_id: Some("sched".into()),
             host_session: false,
+            api_key: None,
         }
     }
 
