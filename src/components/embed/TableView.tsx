@@ -671,11 +671,16 @@ export function TableView({
     focusGrid();
     dragMode.current = "rows";
     const extend = e.shiftKey;
-    setGridSel((cur) => ({
-      kind: "rows",
-      anchor: extend && cur?.kind === "rows" ? cur.anchor : row,
-      focus: row,
-    }));
+    setGridSel((cur) =>
+      // A plain click on the one row already picked puts it back.
+      !extend && cur?.kind === "rows" && cur.anchor === row && cur.focus === row
+        ? null
+        : {
+            kind: "rows",
+            anchor: extend && cur?.kind === "rows" ? cur.anchor : row,
+            focus: row,
+          },
+    );
   };
 
   const pickCol = (e: React.MouseEvent, col: number) => {
@@ -683,11 +688,16 @@ export function TableView({
     focusGrid();
     dragMode.current = "cols";
     const extend = e.shiftKey;
-    setGridSel((cur) => ({
-      kind: "cols",
-      anchor: extend && cur?.kind === "cols" ? cur.anchor : col,
-      focus: col,
-    }));
+    setGridSel((cur) =>
+      // A plain click on the one column already picked puts it back.
+      !extend && cur?.kind === "cols" && cur.anchor === col && cur.focus === col
+        ? null
+        : {
+            kind: "cols",
+            anchor: extend && cur?.kind === "cols" ? cur.anchor : col,
+            focus: col,
+          },
+    );
   };
 
   /** The pointer entering a cell / row number / column name while a drag of the
