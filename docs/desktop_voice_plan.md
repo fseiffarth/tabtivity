@@ -1,6 +1,7 @@
 # Desktop voice: dictation, read-aloud and hands-free in the Chat
 
-Status: plan only (2026-10-21). Nothing implemented.
+Status: plan only (2026-10-21; reviewed and amended 2026-10-22). Nothing
+implemented.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds
@@ -82,9 +83,14 @@ The rules navigation must follow:
    downloaded once, from a catalog with pinned SHA-256s, through a one-click
    install tab.
 2. **Read-aloud: the OS voice first; Piper only if the OS voice is not good
-   enough.** Phase 1 uses the `tts` crate: speech-dispatcher on Linux (already
-   installed on the host), SAPI/WinRT on Windows, AVSpeechSynthesizer on
-   macOS. The user tests it live. Only if they find it not good enough does
+   enough.** Phase 1 speaks through speech-dispatcher on Linux (already
+   installed on the host) as a **child process**, `spd-say --wait` per chunk
+   (decided 2026-10-22): nothing links `libspeechd`, so the binary starts on a
+   machine without speech-dispatcher (read-aloud then reports itself
+   unavailable), and the child's exit is the end-of-utterance signal. The
+   `tts` crate is used on Windows (SAPI/WinRT) and macOS
+   (AVSpeechSynthesizer) only, as a target-specific dependency. The user
+   tests it live. Only if they find it not good enough does
    phase 2 add Piper neural voices (step 7). Phase 1 still builds the
    `TtsEngine` seam and the voice-engine setting, so adding Piper only adds
    code and changes nothing that was built in phase 1.
@@ -93,6 +99,11 @@ The rules navigation must follow:
    send, and a read-aloud toggle. Hands-free: voice-activity detection sends
    after a pause, the mic opens again once the answer has been read, and a key
    interrupts it (also your voice, with a headset).
+   **Send guard (decided 2026-10-22):** a hands-free send is never immediate.
+   After the pause a short chime plays and a ~1.5 s cancel window opens;
+   "stop" (German "stopp"), the stop key or a click on the indicator cancels
+   it and leaves the draft in place. Then it sends. The spoken send ("go on")
+   is deliberate and skips the window.
 4. **The phone gets hands-free too, in two stages.** In phase 1 (step 5),
    a phone-only loop on Chrome's Web Speech, which needs nothing from the
    desktop work. Later (step 10), the phone acts as mic and speaker for the
@@ -111,9 +122,11 @@ Defaults chosen here (an implementer may not change them; the user may):
   Starting it in a second tab stops the first. A header mic indicator, in the
   status cluster like `VpnIndicator` for its machine-wide state, shows which
   tab owns the mic and stops it with one click.
-- **Hands-free stays bound to its tab.** If the tab is hidden, the mic pauses
-  and nothing is read aloud. When the tab is shown again, the answer that came
-  meanwhile is read and the mic reopens (`PaneVisibleContext`).
+- **Hands-free stays bound to its tab.** If the tab is hidden inside
+  Tabtivity, the mic pauses and nothing is read aloud. When the tab is shown
+  again, the answer that came meanwhile is read and the mic reopens
+  (`PaneVisibleContext`). The Tabtivity window losing focus or being
+  minimised does **not** pause it: working in another app is the point.
 - **Hands-free is behind `useExperimental`** until it has been tested live.
   Dictation and read-aloud are not.
 - **Default model: multilingual `small` q5_1** (~190 MB), good enough for
@@ -139,6 +152,7 @@ renderer: ReaderComposer ◀─────────────────�
   Reader transcript grows → new answer at turn end → voice_speak(chunks)
                                                    │
             TtsEngine: OsTts ◀────────────────────┘ ──▶ speaking on/off → mute gate
+            (spd-say child on Linux, `tts` crate on Windows/macOS)
             (phase 2 adds PiperTts behind the same seam)
 ```
 
@@ -151,18 +165,37 @@ state all behave exactly as for a typed prompt.
 
 ### 0. Probes (before any code lands)
 
-- `whisper-rs` (pin the newest version that is at least two weeks old) builds
-  with cmake in all three CI jobs **and** in `scripts/ci-local.sh`'s
-  cross-checks. The Windows clippy/check runs build scripts through the msvc
-  shims, and the `aarch64-apple-darwin` check runs them too. If the
-  cross-checks cannot compile whisper.cpp, decide with the user before step 2:
-  gate it out of the cross-check target via a `voice` feature, or ship
-  whisper.cpp's server as a wrapped tool instead.
+- **System packages first.** The host has neither ALSA's nor
+  speech-dispatcher's development files (`pkg-config` finds no `alsa`), and
+  no `clang` binary. Find the exact set `cpal` (ALSA: `libasound2-dev`) and
+  `whisper-rs-sys` (cmake, and libclang if its build script runs bindgen
+  rather than falling back to its bundled bindings) need. Then:
+  - give the user the `apt install` line to run outside the fence (the fence
+    cannot install packages);
+  - add the same packages to every `apt-get install` list in `ci-cd.yml`;
+  - add the runtime libraries to `tauri.conf.json`'s deb `depends`
+    (`libasound2`) and `speech-dispatcher` to `recommends`, never `depends`:
+    it is a child process, not a link (fixed decision 2).
+- **All three audio crates in all three CI jobs and in both cross-checks.**
+  Pin the newest versions at least two weeks old. `scripts/ci-local.sh`'s
+  macOS check uses do-nothing `cc`/`ar` stand-ins and the Windows check has
+  no `cl.exe`, so a cmake build (whisper.cpp) will most likely fail there, and
+  so may the platform system crates under `cpal` (CoreAudio, WASAPI) and `tts`
+  (AVFoundation, WinRT). Planned answer: the cross-checks build without the
+  `voice` feature, and the real Windows and macOS CI jobs build with it.
+  Wire that into `ci-local.sh` (and say so in its output) rather than finding
+  it at push time. Only if the real CI jobs cannot build whisper.cpp either,
+  decide with the user before step 2: ship whisper.cpp's server as a wrapped
+  tool instead.
 - Check whether the pinned `whisper-rs` exposes whisper.cpp's Silero VAD (a
   ggml model of about 1 MB). If not, fall back to the `webrtc-vad` crate.
-- `cpal` capture on PipeWire (the host), and the `tts` crate's
-  speech-dispatcher backend, including whether it reports the end of an
-  utterance (the hands-free loop needs it). Test each in a scratch binary
+- Check that the pinned `whisper-rs` exposes each segment's no-speech
+  probability (step 2's phantom-text filter needs it).
+- `cpal` capture on PipeWire (the host), and `spd-say --wait -e` (text on
+  stdin): that it returns when the audio has finished playing (not when
+  synthesis ends), and
+  how much output-buffer latency remains after it returns; this sets the mute
+  gate's tail (300 ms is the starting value). Test each in a scratch binary
   outside the repo.
 - Record the results in this file.
 
@@ -171,17 +204,23 @@ state all behave exactly as for a typed prompt.
 Move these pure helpers out of `mobile-web/src/` into `shared/voice.ts`, next
 to `shared/agentComposer.ts`:
 
-- `spokenSend` and `sanitizeVoiceTranscript`;
-- the `DictationProgress` trio: `settleDictation`, `dictationPreview` and the
-  insert step;
-- `spokenText` and `speechChunks`.
+- `spokenSend` and `sanitizeVoiceTranscript` (`voiceInput.ts`);
+- `spokenText` and `speechChunks` (`speechOutput.ts`).
 
-`mobile-web` re-imports them from there, so the phone's behaviour does not
-change. Their existing tests (`src/__tests__/mobile/MobileVoiceInput.test.ts`
-etc.) move with them. Add two new helpers:
+Leave the rest where it is. The `DictationProgress` helpers
+(`readDictation`, `advanceDictation`, `settleDictation`, `dictationPreview`)
+clean up Chrome's repeated, cumulative results. Whisper hands back one final
+text per segment, so the desktop does not need them. `speechRecognitionError`
+uses the phone's `TranslationKey` type.
+
+`mobile-web` re-imports the moved helpers from there, so the phone's
+behaviour does not change. Their tests (in
+`src/__tests__/mobile/MobileVoiceInput.test.ts` and
+`MobileSpeechOutput.test.ts`) move with them. Add two new helpers:
 
 - a stop-word helper next to `spokenSend`: "stop" (German "stopp") said
-  alone, used only in headset mode;
+  alone. It cancels the hands-free send window (fixed decision 3) and, in
+  headset mode, interrupts the voice;
 - an option matcher for question cards ("one", "option two", "zwei" …).
 
 ### 2. Backend voice service — `src-tauri/src/services/voice/`
@@ -194,6 +233,9 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
   - Each entry has an `id`, a file name, its URL in the whisper.cpp
     Hugging Face repo, a pinned SHA-256, the size and a label key. Models live
     in `<state_dir>/voice/models/`.
+  - The URL names a fixed commit of the repo (`resolve/<commit>/<file>`),
+    never `main`: otherwise an upstream re-upload breaks the hash check for
+    every user.
   - `install_script(id)` writes a fetch-and-verify script, copying the pair
     `vm.rs` uses for `fetch-base.sh` / `.ps1`: `curl` to `.part`, verify the
     hash, `mv`. It runs in a tab, following the one-click install rule.
@@ -212,16 +254,30 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
   - Unit-tested on synthetic tone/silence buffers.
 - `voice/stt.rs` — one worker thread holding the `WhisperContext`:
   - Loaded lazily, dropped 5 minutes after the last listen.
-  - Each finished segment comes back as `final` text.
-  - While a segment is still open, it re-runs about once a second on the
-    growing buffer and returns `partial` text for the "Heard:" line. A
-    partial is skipped while the last one is still running, which caps the
-    cost.
+  - Each finished segment comes back as `final` text, or as an empty `final`
+    when it is dropped (below), so the renderer always knows the segment is
+    settled.
+  - **Phantom text filter.** On silence or noise, whisper produces text
+    nobody said ("Thank you for watching.", "Untertitel von …"). A segment is
+    dropped when whisper's no-speech probability is high, or when its whole
+    text is on a short per-language list of known phantom lines (a unit-tested
+    table). Only segments the voice detector marked as speech are
+    transcribed at all.
+  - While a segment is still open, it re-runs about once a second and returns
+    `partial` text for the "Heard:" line. A partial transcribes only the
+    segment's last ~5 s, not the whole growing buffer, and is skipped while
+    the last one is still running, which caps the cost.
   - It takes an optional initial prompt, for step 9's name hints.
-  - Language: the desktop speech language (see step 3), or whisper's
-    auto-detect.
+  - Language: the desktop speech language (see step 3). Whisper's
+    auto-detect runs only if the user picks it explicitly: it often gets short
+    utterances wrong (a lone "los" comes out as Spanish).
 - `voice/tts.rs` — `trait TtsEngine { speak(chunk, lang), stop(), voices() }`:
-  - Phase 1's only implementation is `OsTts` over the `tts` crate.
+  - Phase 1's only implementation is `OsTts`: on Linux, one
+    `spd-say --wait -l <lang> -r <rate>` child per chunk (the text goes on
+    stdin through `-e`, never as an argument), killed on `stop()`. On Windows
+    and macOS, it uses the `tts` crate, a `cfg(not(target_os = "linux"))`
+    dependency. No `spd-say` on the PATH means read-aloud is unavailable,
+    reported by `voice_status`, never a crash.
   - A queue of chunks; `stop()` empties it.
   - A `speaking` flag drives the capture's mute gate and its 300 ms tail.
 - `voice/mod.rs` — one `VoiceSession { owner, mode: Dictate | HandsFree,
@@ -233,6 +289,10 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
     takes `tauri_host::Ctx`: `voice_status` (models installed, devices,
     engine), `voice_model_install_script`, `voice_listen_start`,
     `voice_listen_stop`, `voice_speak`, `voice_speak_stop`, `voice_voices`.
+  - The Voice settings live on the renderer side, like the phone's
+    `speechLang`. `voice_listen_start` takes language, mode, pause length and
+    headset as arguments, and checks each against its allowed range;
+    `voice_speak` takes language and rate.
   - Events: `voice://level`, `voice://partial`, `voice://final`,
     `voice://speaking`, `voice://error`, `voice://owner`.
   - Each command gets a `Client` row in `command_class`; regenerate
@@ -240,8 +300,8 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
   - Register the teardown in `RunEvent::Exit`.
 - macOS: add `NSMicrophoneUsageDescription` to the bundle's Info.plist, and
   `com.apple.security.device.audio-input` if the build is hardened.
-- `docs/third_party_update_checklist.md`: rows for whisper.cpp / `whisper-rs`
-  and the model catalog hashes.
+- `docs/third_party_update_checklist.md`: rows for whisper.cpp / `whisper-rs`,
+  the model catalog's commit and hashes, and `spd-say`'s flags.
 
 ### 3. Desktop dictation in the Chat
 
@@ -272,9 +332,12 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
     directions, as in `mobile-web/src/speechLang.ts`;
   - headset mode;
   - the hands-free pause length.
-- Rebindable shortcuts in `src/lib/shortcuts/steeringBindings.ts`: toggle mic
-  and stop speaking. Pick defaults that do not collide with the
-  `terminal.reader` or steering keys, and check the shortcut tables.
+- Rebindable shortcuts in `src/lib/shortcuts/shortcuts.ts` (`SHORTCUT_DEFS`,
+  next to `AGENT_TAB_ACTIONS`): toggle mic and stop speaking. The stop key
+  also cancels the hands-free send window. Pick defaults that do not collide
+  with the `terminal.reader` keys or other chords, and check the shortcut
+  tables. (`steeringBindings.ts` holds only steering mode's single keys; a
+  steering action for the mic can come with step 9.)
 - i18n: `terminal.reader.voice.*` keys in English plus de/es/fr/it. Reuse the
   phone's wording where the text is identical.
 - `UntestedTag` + `src/lib/untested.ts` rows: `terminal.reader.voice.dictate`,
@@ -284,17 +347,34 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
 
 - **Read-aloud.** A toggle in the Chat's menu, as the phone's
   `focusReadAloud`.
-  - When the Reader's transcript shows the turn ended (`useActivityStore`
-    busy → idle, plus the new answer turn), it speaks `spokenText` of the new
-    answer in `speechChunks` through `voice_speak`.
+  - When the turn ends, it speaks `spokenText` of the new answer in
+    `speechChunks` through `voice_speak`. "Turn ended" is the agent's
+    hook-reported `AgentTurnState` (`noteAgentTurn` in `stores/activity.ts`:
+    `done` or `decision`) plus the new answer in the Reader's transcript.
+    Only for an agent without turn hooks does it fall back to `busyByTab`
+    going idle. That flag comes from terminal output, so a quiet long tool
+    call looks idle.
+  - Popout windows get no turn state (`noteAgentTurn` returns early when
+    `isDetachedWindow()`). A Chat tab in a popout either gets that state
+    forwarded or offers no read-aloud there; decide when implementing and
+    note it.
   - It follows the phone's rule that only a short new tail is news
     (`Terminal.tsx`, around line 2367), and never reads while the user is
     dictating.
   - The shortcut, the indicator or any send stops it.
 - **Hands-free** (`useExperimental`): mode `HandsFree` on the same session.
   - The end-of-speech pause sends the draft; the spoken send still works too.
+    The pause counts only once the last segment has settled (its `final`, or
+    its empty `final` when dropped, has arrived) and no new speech started.
+    A timer alone would race the transcription and send before the last words
+    reach the draft. An empty draft never sends.
+  - The pause opens the send guard (fixed decision 3): a chime, then a ~1.5 s
+    cancel window in which "stop", the stop key or the indicator cancels.
+    The mic stays open during the window, so the stop word can be heard.
   - Once the answer has been read, or right away if read-aloud is off, the mic
-    opens again.
+    opens again. "Answered" means the turn ended (above), not the first
+    answer entry: an agent that says something and then runs a tool is still
+    working.
   - A question card in the Reader (`terminal-reader-question`) is read out,
     and an answer like "one" or "option two" picks it.
   - In headset mode, speech heard while it speaks → `voice_speak_stop`, and
@@ -316,12 +396,19 @@ is silent while you dictate, and starting the mic stops any speech
   (step 1).
 - Pause-to-send: a silence timer on the `DictationSession` calls
   `submitDraftRef.current` when no new result has come for the hands-free
-  pause (same setting range as the desktop). "go on"/"los" still works.
+  pause (same setting range as the desktop), through the same send guard as
+  the desktop: chime, ~1.5 s cancel window, "stop" or a tap cancels.
+  "go on"/"los" still works and skips the window.
 - After the send, the session stops with `stop()`, not `abort()`, so the last
   words are kept.
-- When the agent's turn ends, the new answer is read through `speechOutput` as
-  today. When the last chunk's utterance ends, the mic opens again (a new
-  `startDictation`). With read-aloud off, it reopens as soon as the turn ends.
+- Today the phone reads each answer entry as soon as it lands in the
+  transcript (`Terminal.tsx`, the read-aloud effect), not at the end of the
+  turn. That stays for plain read-aloud. Hands-free also needs the end of the
+  turn before it reopens the mic. Take it from the per-tab `AgentStatus` the
+  phone bridge already serves (`mobile-web/src/api.ts`: `working` → `done`,
+  `question` or `interrupted`). When the turn has ended **and** the last
+  chunk's utterance has ended, the mic opens again (a new `startDictation`).
+  With read-aloud off, it reopens as soon as the turn ends.
 - A question card is read out and picked by voice (step 1's matcher).
 - Interrupting is a tap on the large listening/speaking surface, or the stop
   word. The mic stays closed while the phone speaks, because Chrome's
@@ -402,8 +489,11 @@ both are fine, phase 2 is dropped. If either is not, phase 2 starts.
 
 ### 9. Hands-free navigation
 
-It gets its own `docs/voice_navigation_plan.md`, with the user's decisions,
-once phase 1 has been tested live. The shape it starts from:
+Written up in `docs/voice_navigation_plan.md` (2026-10-22), with the user's
+decisions: push-to-talk, command word inside a dictating Chat, a short
+landing line, main window plus overlays. It starts once phase 1 has been
+tested live. That plan replaces the sketch below, which is kept for history.
+The shape it started from:
 
 - `src/lib/voice/voiceCommands.ts`: a pure matcher from an utterance to a
   `SteeringAction` plus an argument. It uses the i18n phrase table and fuzzy
@@ -449,11 +539,20 @@ once phase 1 has been tested live. The shape it starts from:
   - The session's single-owner rule; the mute gate and its tail.
   - The shared helpers' tests pass unchanged after the move; the stop-word
     and option matchers.
+  - The phantom-text filter: high no-speech probability and each listed
+    phantom line are dropped (as an empty `final`); real speech that merely
+    contains such words is kept.
+  - `OsTts` on Linux: `spd-say` gets its text on stdin, never as an argument
+    (a chunk starting with `-` stays text); `stop()` kills the child.
   - `ReaderComposer` with a mocked `voice://` stream: final → draft; "go on" →
-    `send` once without the words; hands-free pause → send; read-aloud only
-    at the end of a turn and never while listening.
+    `send` once without the words; hands-free pause → cancel window → send;
+    "stop" in the window → no send, draft kept; the pause never sends before
+    the last segment settled or with an empty draft; read-aloud only on the
+    hook's `done`/`decision` (busy → idle only without hooks), never while
+    listening, and the mic not reopened after a mid-turn answer entry.
   - The phone loop with mocked recognition and synthesis: send → mic closed →
-    answer spoken → mic reopened.
+    answer spoken → `AgentStatus` `done` → mic reopened; an answer entry
+    while still `working` does not reopen it.
 - **Gates:** `scripts/gates.sh` for the touched set, then `--all` and
   `scripts/ci-local.sh` before any push. Read its Windows/macOS cross-check
   and daemon `ldd` lines in particular (step 0's risk).
@@ -466,8 +565,11 @@ once phase 1 has been tested live. The shape it starts from:
   4. Read-aloud on: the OS voice speaks the answer once the turn ends, code
      blocks are announced rather than read out, and the mic hears nothing of
      it. **Judge the voice: good enough, or is Piper needed?**
-  5. Hands-free (Experimental): ask, pause, the answer is read, the mic
-     reopens. The key interrupts the voice and the agent keeps going. With a
+  5. Hands-free (Experimental): ask, pause, the chime plays, the prompt is
+     sent after the cancel window; once more, say "stop" in the window and
+     the draft stays unsent. The answer is read, the mic reopens; it stays
+     closed while the agent is still running tools. Sit silent in a noisy
+     room for a minute: nothing is sent. The key interrupts the voice and the agent keeps going. With a
      headset and headset mode on, talking over the voice stops it.
      **Judge: is interrupting like this enough?**
   6. Start the mic in a second tab: the first stops, and the header indicator
@@ -495,8 +597,15 @@ once phase 1 has been tested live. The shape it starts from:
 
 ## Risks
 
-- whisper.cpp's C++ build in the cross-checks and on all three CI runners
-  (step 0), plus added build time for the desktop binary.
+- whisper.cpp's C++ build, and the platform audio crates, in the cross-checks
+  and on all three CI runners (step 0), plus added build time for the
+  desktop binary. The cross-checks are expected to run without `voice`, so
+  Windows/macOS voice code is checked only by the real CI jobs.
+- New system packages (ALSA development files, maybe libclang) on the host,
+  in CI and in the deb's dependencies (step 0). The host's need the user,
+  outside the fence.
+- Whisper's phantom text on noise. The filter (step 2) and the send guard
+  (decision 3) cover it; the noisy-room live test confirms it.
 - CPU load: `small` takes several cores for about a second per sentence, and
   partials cost more. Partials are skipped while one is still running, and a
   setting turns them off.
@@ -505,9 +614,10 @@ once phase 1 has been tested live. The shape it starts from:
 - With the OS voice, hands-free without a headset depends entirely on the
   mute gate. The 300 ms tail covers audio still buffered in the output device
   after the `speaking` flag drops; the live test must confirm it.
-- If the `tts` crate's speech-dispatcher backend does not report the end of
-  an utterance (step 0), the loop needs another signal: estimate from text
-  length, or poll speech-dispatcher's state.
+- If `spd-say --wait` returns before the audio has drained (step 0), the mute
+  gate's tail grows to cover it. On Windows/macOS, if the `tts` crate does not
+  report the end of an utterance, the loop needs another signal: estimate
+  from text length, or poll the engine's state.
 - Phone hands-free needs the screen on and the page open, which is a hard
   limit of a web app on Android.
 - Phase 2 only: Piper's packaging is in flux (MIT binaries frozen, GPL line
