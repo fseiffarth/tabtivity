@@ -982,6 +982,16 @@
   background: none;
   border-color: transparent;
 }
+/* The shared underline is pinned 3px to the *item's* bottom edge — under the
+   label of a padded 34px row. This button's box was stripped to the bare text
+   above, so that same 3px lands inside the glyphs. Push it just below them
+   (the row's own padding is the room), and drop the 9px inset: here the label
+   IS the button, so the underline matches the text, not a padded box. */
+.local-model-check-row > .tab-new-menu-item::after {
+  bottom: -4px;
+  left: 0;
+  right: 0;
+}
 /* The installed Ollama version, beside "Check for updates" rather than inside
    it, and directly after it rather than pushed to the row's right edge — the
    version is what the row *reports*, so it belongs next to the label it answers
