@@ -962,6 +962,14 @@ pub async fn prepare(
         assistant_home = Some(home);
     }
 
+    // The first v2 launch needs its new flags too; do not defer this probe to
+    // the next tab. Remote/container binaries have their own release.
+    if opts.cmd == "opencode" && !remote_agent_run && !opts.sandbox
+        && crate::commands::agents::opencode_is_v2().await
+    {
+        crate::services::opencode_session::v2_launch_args(&mut opts.args);
+    }
+
     // The agent's hooks report its turn state under its tab uid; bind that uid
     // to this PTY so the report reaches the tab's own marks, and drop any
     // record a previous run of the same tab left behind (see agent_turn).

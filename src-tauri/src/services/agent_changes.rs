@@ -512,6 +512,35 @@ fn codex_changes(value: &Value, out: &mut Vec<FileChange>) {
 
 /// The changes one OpenCode tool part records, created at `created` (epoch
 /// ms) unless the part says when it ended.
+/// V2's public tool content carries FileDiff records directly. Reuse the
+/// renderer's bounded diff format without reconstructing V1 tool envelopes.
+pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileChange> {
+    if tool.pointer("/state/status").and_then(Value::as_str) != Some("completed") {
+        return Vec::new();
+    }
+    let ended = tool.pointer("/time/completed").and_then(Value::as_i64).unwrap_or(created);
+    let at = Some(crate::services::prompt_blame::epoch_ms_to_iso(ended));
+    let changes: Vec<_> = tool.pointer("/state/metadata/files").and_then(Value::as_array)
+        .into_iter().flatten().filter_map(|file| {
+            let path = file["file"].as_str()?;
+            let diff = hunks_only(file["patch"].as_str()?);
+            if diff.is_empty() { return None; }
+            let kind = match file["status"].as_str() {
+                Some("added") => "add",
+                Some("deleted") => "delete",
+                _ => "edit",
+            };
+            Some(change(path, kind, diff.to_string(), at.clone()))
+        }).collect();
+    if !changes.is_empty() { return changes; }
+    if tool["name"] == "write" {
+        if let (Some(path), Some(content)) = (tool.pointer("/state/input/path").and_then(Value::as_str), tool.pointer("/state/input/content").and_then(Value::as_str)) {
+            return vec![whole_file(path, "write", content, at)];
+        }
+    }
+    Vec::new()
+}
+
 pub(crate) fn opencode_part_changes(created: i64, part: &Value) -> Vec<FileChange> {
     let Some(state) = part.get("state") else {
         return Vec::new();

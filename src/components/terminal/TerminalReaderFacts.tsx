@@ -437,6 +437,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             {codex && <UntestedTag id="terminal.reader.permissionsPick" />}
           </button>
         )}
+        {tab.cmd === "opencode" && <UntestedTag id="agents.opencode.v2" />}
         <UntestedTag id="terminal.reader.facts" />
         <UntestedTag id="terminal.reader.factsMore" />
         {shownPath && <span className="terminal-reader-fact" title={shownPath}>{shortPath(shownPath)}</span>}

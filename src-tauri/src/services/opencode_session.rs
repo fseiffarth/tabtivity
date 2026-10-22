@@ -78,7 +78,7 @@ fn plugin_body(live_dir: &str) -> String {
          const TAB = /^[0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}$/;\n\
          const SESSION = /^ses_[A-Za-z0-9]{{1,64}}$/;\n\
          \n\
-         export const TabSession = async () => {{\n\
+         const TabSession = async () => {{\n\
          \x20 const uid = process.env[{uid}] ?? \"\";\n\
          \x20 // The tab's own OpenCode only: one nested under it inherits the claim,\n\
          \x20 // one under another CLI's tab carries that CLI's name.\n\
@@ -103,7 +103,26 @@ fn plugin_body(live_dir: &str) -> String {
          \x20     }} catch {{}}\n\
          \x20   }},\n\
          \x20 }};\n\
+         }};\n\
+         \n\
+         // V1 (1.18.29+) calls server; V2 calls setup. No runtime dependency:\n\
+         // Plugin.define is the identity function in @opencode/plugin.\n\
+         export default {{\n\
+         \x20 id: {plugin_id},\n\
+         \x20 server: TabSession,\n\
+         \x20 async setup(ctx) {{\n\
+         \x20   const hooks = await TabSession();\n\
+         \x20   if (!hooks[\"chat.message\"]) return;\n\
+         \x20   await ctx.session.hook(\"prompt\", async (input) => {{\n\
+         \x20     // Query the session itself: restored children need not emit a\n\
+         \x20     // session-created event after this plugin was loaded.\n\
+         \x20     const session = await ctx.session.get({{ sessionID: input.sessionID }});\n\
+         \x20     if (session.parentID) return;\n\
+         \x20     await hooks[\"chat.message\"](input);\n\
+         \x20   }});\n\
+         \x20 }},\n\
          }};\n",
+        plugin_id = lit(concat!(crate::app_slug!(), ".session")),
         dir = lit(live_dir),
         uid = lit(crate::app_env!("TAB_UID")),
         agent = lit(TAB_AGENT_ENV),
@@ -142,9 +161,13 @@ pub fn register_in_home(home: &Path) -> bool {
 }
 
 fn lists(root: &Value, url: &str) -> bool {
-    root.get("plugin")
+    root.get(plugin_key(root))
         .and_then(Value::as_array)
         .is_some_and(|list| list.iter().any(|p| p.as_str() == Some(url)))
+}
+
+fn plugin_key(root: &Value) -> &'static str {
+    if root.get("plugins").is_some() { "plugins" } else { "plugin" }
 }
 
 /// Add `url` to OpenCode's `plugin` list. False when it is there.
@@ -152,9 +175,33 @@ fn add_plugin(root: &mut Value, url: &str) -> bool {
     if lists(root, url) {
         return false;
     }
-    let list = crate::services::agent_hint::slot(root, "plugin", json!([]));
+    let key = plugin_key(root);
+    let list = crate::services::agent_hint::slot(root, key, json!([]));
     list.as_array_mut().expect("an array").push(json!(url));
     true
+}
+
+/// V2's private server keeps the tab's environment, MCP grants and plugin
+/// claim in its own process tree. Its model flag belongs to `mini`/`run`,
+/// whereas V1 also accepted it on the full TUI. Preserve those saved launches
+/// through the minimal interface, which accepts both the model and session.
+pub fn v2_launch_args(args: &mut Vec<String>) {
+    let first = args.first().map(String::as_str);
+    if first.is_some_and(|a| matches!(a, "debug" | "upgrade" | "update" | "uninstall" | "service" | "plugin" | "mcp" | "serve" | "pair" | "reload" | "models" | "stats" | "session" | "api")) {
+        return;
+    }
+    if args.iter().any(|a| a == "--mini") {
+        args.retain(|a| a != "--mini");
+        args.insert(0, "mini".into());
+    } else if first.is_none_or(|a| a.starts_with('-'))
+        && args.iter().any(|a| a == "--model" || a == "-m" || a.starts_with("--model=") || a == "--agent" || a.starts_with("--agent="))
+    {
+        args.insert(0, "mini".into());
+    }
+    // Explicit server connections are user-selected and keep their endpoint.
+    if !args.iter().any(|a| a == "--standalone" || a == "--server" || a.starts_with("--server=")) {
+        args.push("--standalone".into());
+    }
 }
 
 /// The session `uid`'s plugin last recorded: of the shared root and the
@@ -436,11 +483,93 @@ mod tests {
     }
 
     #[test]
+    fn native_v2_plugins_take_precedence_without_losing_the_users_entries() {
+        let mut root = json!({ "plugins": ["mine"], "plugin": ["legacy"] });
+        assert!(add_plugin(&mut root, "file:///x.js"));
+        assert!(!add_plugin(&mut root, "file:///x.js"));
+        assert_eq!(root["plugins"], json!(["mine", "file:///x.js"]));
+        assert_eq!(root["plugin"], json!(["legacy"]));
+    }
+
+    #[test]
+    fn v2_launches_keep_tab_environment_private_and_saved_model_launches_work() {
+        let convert = |args: &[&str]| {
+            let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            v2_launch_args(&mut args);
+            args
+        };
+        assert_eq!(convert(&[]), ["--standalone"]);
+        assert_eq!(convert(&["--model", "ollama/m", "--continue"]), ["mini", "--model", "ollama/m", "--continue", "--standalone"]);
+        assert_eq!(convert(&["--mini", "--session", "ses_a"]), ["mini", "--session", "ses_a", "--standalone"]);
+        assert_eq!(convert(&["run", "hello"]), ["run", "hello", "--standalone"]);
+        assert_eq!(convert(&["auth", "login"]), ["auth", "login", "--standalone"]);
+        for args in [&["debug", "paths"][..], &["--server=http://localhost:1"][..], &["mini", "--standalone"][..]] {
+            assert_eq!(convert(args), args);
+        }
+    }
+
+    #[test]
     fn the_plugin_names_the_apps_env_and_the_live_dir() {
         let body = plugin_body("/state/live_sessions");
         assert!(body.contains(&format!("process.env[\"{}\"]", crate::app_env!("TAB_UID"))));
         assert!(body.contains(&format!("process.env[\"{TAB_AGENT_ENV}\"] !== \"opencode\"")));
         assert!(body.contains("const DIR = \"/state/live_sessions\";"));
         assert!(body.contains("/^ses_[A-Za-z0-9]{1,64}$/"));
+    }
+
+    #[test]
+    fn plugin_entrypoints_record_only_the_tabs_top_level_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("records");
+        std::fs::write(dir.path().join("plugin.mjs"), plugin_body(&live.to_string_lossy())).unwrap();
+        std::fs::write(dir.path().join("check.mjs"), r#"
+            import assert from 'node:assert/strict';
+            import { existsSync, readFileSync } from 'node:fs';
+            import { join } from 'node:path';
+            import plugin from './plugin.mjs';
+            const [dir, uidKey, agentKey, claimKey, uid] = process.argv.slice(2);
+            const record = join(dir, uid);
+            process.env[uidKey] = uid;
+            process.env[agentKey] = 'opencode';
+            delete process.env[claimKey];
+            let prompt;
+            const ctx = { session: {
+                hook: async (name, callback) => { assert.equal(name, 'prompt'); prompt = callback; },
+                get: async ({sessionID}) => ({id: sessionID, parentID: sessionID === 'ses_child' ? 'ses_parent' : undefined}),
+            }};
+            await plugin.setup(ctx);
+            await prompt({sessionID: 'ses_child'});
+            assert.equal(existsSync(record), false);
+            await prompt({sessionID: '../invalid'});
+            assert.equal(existsSync(record), false);
+            await prompt({sessionID: 'ses_first'});
+            assert.equal(readFileSync(record, 'utf8'), 'ses_first');
+            await prompt({sessionID: 'ses_new'});
+            assert.equal(readFileSync(record, 'utf8'), 'ses_new');
+            let nested = false;
+            await plugin.setup({session: {hook: async () => { nested = true; }}});
+            assert.equal(nested, false);
+            delete process.env[claimKey];
+            process.env[agentKey] = 'codex';
+            await plugin.setup({session: {hook: async () => { nested = true; }}});
+            assert.equal(nested, false);
+            delete process.env[claimKey];
+            process.env[agentKey] = 'opencode';
+            const legacy = await plugin.server();
+            await legacy.event({event: {type: 'session.created', properties: {info: {id: 'ses_child', parentID: 'ses_parent'}}}});
+            await legacy['chat.message']({sessionID: 'ses_child'});
+            assert.equal(readFileSync(record, 'utf8'), 'ses_new');
+            await legacy['chat.message']({sessionID: 'ses_legacy'});
+            assert.equal(readFileSync(record, 'utf8'), 'ses_legacy');
+        "#).unwrap();
+        let output = std::process::Command::new("node")
+            .arg(dir.path().join("check.mjs")).arg(&live)
+            .args([crate::app_env!("TAB_UID"), TAB_AGENT_ENV, CLAIM_ENV, UID])
+            .output();
+        match output {
+            Ok(output) => assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => eprintln!("OpenCode plugin runtime check skipped: node unavailable"),
+            Err(error) => panic!("OpenCode plugin runtime check: {error}"),
+        }
     }
 }

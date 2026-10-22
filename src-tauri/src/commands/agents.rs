@@ -2275,6 +2275,21 @@ pub(crate) fn codex_takes_no_daemon() -> bool {
     host_agent_version_says("codex", &PROBING, crate::services::agent_versions::codex_takes_no_daemon)
 }
 
+/// V2 changes startup flags, so the first launch must wait for the bounded
+/// version probe rather than letting an unknown release join a shared server.
+pub(crate) async fn opencode_is_v2() -> bool {
+    use crate::services::agent_versions as versions;
+    let Some(spec) = find_spec("opencode") else { return false };
+    let Some(path) = resolve_spec_path(spec) else { return false };
+    let store = versions::load();
+    let seen = store.get(spec.id);
+    if seen.is_some_and(|s| versions::fresh_for_path(s, versions::PROBE_TTL, &path)) {
+        return versions::opencode_is_v2(seen);
+    }
+    let result = probe_agent_version(spec, &path).await;
+    versions::opencode_is_v2(Some(&versions::remember(spec.id, result, &path)))
+}
+
 /// Answer `check` from the version store's entry for `agent`, refreshing a
 /// missing or day-old entry in the background (one probe per agent at a time).
 fn host_agent_version_says(

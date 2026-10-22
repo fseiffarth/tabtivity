@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 
-use crate::services::agent_changes::{opencode_part_changes, AgentChanges};
+use crate::services::agent_changes::{opencode_part_changes, opencode_v2_tool_changes, AgentChanges};
 use crate::services::agent_transcript::{
     agent_entry, agents_unlisted, insert_by_time, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
 };
@@ -50,6 +50,46 @@ use crate::services::prompt_blame::epoch_ms_to_iso;
 const MESSAGE_TAIL: i64 = 2000;
 /// The most edit tool parts of one session read for its changes.
 const CHANGE_TAIL: i64 = 2000;
+
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(()))
+        .is_ok()
+}
+
+/// V2 keeps sessions in `session_v2` and complete messages in
+/// `session_message`. A connection-local view lets the session ownership and
+/// subagent queries serve both formats without changing the vendor database.
+fn open_store(db: &Path) -> Option<Connection> {
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    if table_exists(&conn, "session_v2") {
+        let mut sql = String::from(
+            "CREATE TEMP VIEW session AS SELECT id, parent_id, directory, time_created,
+             time_updated, time_archived, title, agent FROM main.session_v2",
+        );
+        if table_exists(&conn, "session") {
+            // Earlier V1 schemas have neither title nor agent. Those are
+            // optional Reader labels; keep their conversations readable too.
+            let has = |name: &str| conn.prepare("SELECT name FROM pragma_table_info('session')")
+                .ok().and_then(|mut stmt| stmt.query_map([], |r| r.get::<_, String>(0)).ok()
+                    .map(|rows| rows.filter_map(Result::ok).any(|column| column == name))).unwrap_or(false);
+            let title = if has("title") { "title" } else { "NULL" };
+            let agent = if has("agent") { "agent" } else { "NULL" };
+            sql.push_str(&format!(
+                " UNION ALL SELECT id, parent_id, directory, time_created, time_updated,
+                 time_archived, {title}, {agent} FROM main.session
+                 WHERE id NOT IN (SELECT id FROM main.session_v2)"
+            ));
+        }
+        conn.execute_batch(&sql).ok()?;
+    }
+    Some(conn)
+}
+
+fn v2_session(conn: &Connection, session: &str) -> bool {
+    table_exists(conn, "session_v2") && conn.query_row(
+        "SELECT 1 FROM session_v2 WHERE id = ?1", [session], |_| Ok(()),
+    ).is_ok()
+}
 
 /// The scope's OpenCode database: `.local/share/opencode/opencode.db` of its
 /// Tabtivity-owned agent home — where OpenCode's `xdg-basedir` puts it under the
@@ -86,7 +126,7 @@ pub fn session_transcript(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = open_store(db)?;
     let session = match tab_session(&conn, directory, since, own, subagent)? {
         TabSession::Id(id) => id,
         TabSession::NoSubagent => return Some(AgentTranscript::unavailable("no_subagent")),
@@ -169,8 +209,7 @@ fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, own: Opti
 /// tab can be restored into (`--session`) and read as its own. False when the
 /// store cannot be read.
 pub fn resumable_session(db: &Path, id: &str) -> bool {
-    Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .ok()
+    open_store(db)
         .and_then(|conn| top_level(&conn, id))
         .is_some()
 }
@@ -220,7 +259,7 @@ pub fn session_changes(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentChanges> {
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = open_store(db)?;
     let session = match tab_session(&conn, directory, since, own, subagent)? {
         TabSession::Id(id) => id,
         TabSession::NoSubagent => return Some(AgentChanges::unavailable("no_subagent")),
@@ -237,6 +276,15 @@ pub fn session_changes(
     }
     // Edit tool parts only, filtered in SQL: the others carry whole file
     // reads and command outputs.
+    if v2_session(&conn, &session) {
+        let (messages, truncated) = v2_messages(&conn, &session, CHANGE_TAIL)?;
+        let changes = messages.iter().flat_map(|(at, message)| {
+            message.get("content").and_then(Value::as_array).into_iter().flatten()
+                .filter(|part| part["type"] == "tool")
+                .flat_map(move |part| opencode_v2_tool_changes(*at, part))
+        }).collect();
+        return Some(AgentChanges::read(current, changes, truncated, limit));
+    }
     let mut stmt = conn
         .prepare(
             "SELECT time_created, data FROM part
@@ -322,6 +370,13 @@ fn descendants(conn: &Connection, session: &str) -> Vec<String> {
 /// Moves whenever the session gains a message or a part, or a part is updated
 /// (a streaming answer, a finished one) — two indexed aggregates, no bodies.
 fn fingerprint(conn: &Connection, session: &str) -> Option<String> {
+    if v2_session(conn, session) {
+        let (count, updated): (i64, Option<i64>) = conn.query_row(
+            "SELECT count(*), max(time_updated) FROM session_message WHERE session_id = ?1",
+            [session], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).ok()?;
+        return Some(format!("oc2:{session}:{count}:{}", updated.unwrap_or(0)));
+    }
     let (messages, message_at): (i64, Option<i64>) = conn
         .query_row(
             "SELECT count(*), max(time_updated) FROM message WHERE session_id = ?1",
@@ -346,6 +401,11 @@ fn fingerprint(conn: &Connection, session: &str) -> Option<String> {
 /// The session's newest [`MESSAGE_TAIL`] messages as turns, oldest first, and
 /// whether older messages exist beyond them.
 fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry>, bool)> {
+    if v2_session(conn, session) {
+        let (messages, truncated) = v2_messages(conn, session, MESSAGE_TAIL)?;
+        let entries = messages.iter().flat_map(|(created, message)| v2_message_entries(message, *created)).collect();
+        return Some((entries, truncated));
+    }
     let mut stmt = conn
         .prepare(
             "SELECT id, time_created, data FROM message WHERE session_id = ?1
@@ -395,6 +455,42 @@ fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry
         entries.extend(message_entries(&message, *created, parts.get(id).map(Vec::as_slice).unwrap_or(&[])));
     }
     Some((entries, truncated))
+}
+
+/// Public V2 message shapes: user text is direct, assistant content is typed.
+/// Synthetic/system/compaction records never become user turns. Query by seq
+/// (the durable admission order), not IDs that can precede queued prompts.
+fn v2_messages(conn: &Connection, session: &str, tail: i64) -> Option<(Vec<(i64, Value)>, bool)> {
+    let mut stmt = conn.prepare(
+        "SELECT time_created, data FROM session_message WHERE session_id = ?1
+         ORDER BY seq DESC LIMIT ?2",
+    ).ok()?;
+    let mut rows: Vec<(i64, String)> = stmt.query_map(rusqlite::params![session, tail + 1], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    }).ok()?.filter_map(Result::ok).collect();
+    let truncated = rows.len() as i64 > tail;
+    rows.truncate(tail as usize);
+    rows.reverse();
+    Some((rows.into_iter().filter_map(|(at, data)| Some((at, serde_json::from_str(&data).ok()?))).collect(), truncated))
+}
+
+fn v2_message_entries(message: &Value, created: i64) -> Vec<TranscriptEntry> {
+    match message["type"].as_str() {
+        Some("user") => transcript_entry("prompt", message["text"].as_str().unwrap_or_default(), Some(epoch_ms_to_iso(created)))
+            .into_iter().collect(),
+        Some("assistant") if message.pointer("/time/completed").is_some_and(|t| !t.is_null()) => {
+            let mut entries: Vec<_> = message["content"].as_array().into_iter().flatten()
+                .filter(|part| part["type"] == "text")
+                .filter_map(|part| transcript_entry("answer", part["text"].as_str()?, Some(epoch_ms_to_iso(created))))
+                .collect();
+            // V2 errors use a tagged public schema instead of V1's envelope.
+            if let Some(text) = message.pointer("/error/message").and_then(Value::as_str) {
+                entries.extend(transcript_entry("answer", text, Some(epoch_ms_to_iso(created))));
+            }
+            entries
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// A part the user or the model actually wrote — not one OpenCode generated
@@ -524,6 +620,49 @@ mod tests {
 
     fn kinds(t: &AgentTranscript) -> Vec<(&str, &str)> {
         t.entries.iter().map(|e| (e.kind.as_str(), e.text.as_str())).collect()
+    }
+
+    #[test]
+    fn v2_structured_messages_are_read_in_admission_order_beside_legacy_sessions() {
+        use serde_json::json;
+        let (db, conn) = store();
+        session(&conn, "ses_legacy", None, "legacy", 10, None);
+        message(&conn, "msg_old", "ses_legacy", 10, json!({"role":"user"}));
+        part(&conn, "prt_old", "msg_old", "ses_legacy", 10, json!({"type":"text","text":"old question"}));
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, seq INTEGER,
+               time_created INTEGER, time_updated INTEGER, data TEXT);
+             INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');
+             INSERT INTO session_v2 VALUES ('ses_child', 'ses_v2', 'v2', 21, 30, NULL, 'Explore', 'explore');",
+        ).unwrap();
+        for (seq, at, data) in [
+            (1, 30, json!({"type":"user","text":"question"})),
+            (2, 20, json!({"type":"assistant","content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"answer"}],"time":{"completed":40}})),
+            (3, 40, json!({"type":"synthetic","text":"hidden context"})),
+            (4, 50, json!({"type":"assistant","content":[{"type":"text","text":"still streaming"}],"time":{}})),
+            (5, 60, json!({"type":"assistant","content":[{"type":"tool","name":"edit","time":{"completed":61},"state":{"status":"completed","metadata":{"files":[{"file":"file.rs","patch":"@@ -1 +1 @@\n-old\n+new","status":"modified"}]}}}],"time":{"completed":62}})),
+        ] {
+            conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?3, ?4)",
+                rusqlite::params![format!("msg_{seq}"), seq, at, data.to_string()]).unwrap();
+        }
+        assert!(resumable_session(&db, "ses_v2"));
+        assert!(!resumable_session(&db, "ses_child"));
+        let transcript = session_transcript(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
+        let turns: Vec<_> = kinds(&transcript).into_iter().filter(|(kind, _)| *kind != "agent").collect();
+        assert_eq!(turns, [("prompt", "question"), ("answer", "answer")]);
+        assert!(transcript.entries.iter().any(|e| e.kind == "agent" && e.subagent.is_some()));
+        assert!(session_transcript(&db, "v2", None, Some("ses_v2"), None, transcript.version.as_deref(), 100).unwrap().unchanged);
+        let changes = session_changes(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].path, "file.rs");
+        assert_eq!(changes.changes[0].kind, "edit");
+        let legacy = session_transcript(&db, "legacy", None, Some("ses_legacy"), None, None, 100).unwrap();
+        assert_eq!(kinds(&legacy), [("prompt", "old question")]);
+        // Opening the read-only adapter creates no persistent views or tables.
+        let views: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'view'", [], |r| r.get(0)).unwrap();
+        assert_eq!(views, 0);
     }
 
     #[test]

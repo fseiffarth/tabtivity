@@ -800,7 +800,7 @@ release moves the token, fenced tabs go back to asking for a login each time
 `cargo test --manifest-path src-tauri/Cargo.toml copilot_auth`.
 
 **OpenCode's session plugin** (`services/opencode_session.rs`) assumes, of
-the plugin API (`@opencode-ai/plugin` 1.18.32 types, not run live): a
+the V1 plugin API (`@opencode-ai/plugin` 1.18.32 types, not run live): a
 `file://` entry in `opencode.json` `plugin` is imported as a module whose
 exported functions are plugins; the `chat.message` hook gets `{sessionID}`
 for every prompt, a `task` subagent's too; `session.*` events carry
@@ -808,6 +808,39 @@ for every prompt, a `task` subagent's too; `session.*` events carry
 session. If a release breaks one, tabs record nothing and fall back to
 `--continue` / a fresh start (no error). Check: prompt in two OpenCode tabs
 of one folder, then `cat <state_dir>/live_sessions/<project>/<uid>` per tab.
+
+**OpenCode 2 (2026-10-22).** The standalone binary installed in the fenced
+project home (not a verified host-wide installation) answers
+`opencode v2.1.2`; `--help`, `mini --help`, `auth export --help` and
+`debug paths` were run, without starting an agent or Tabtivity. The matching
+`agent_versions::VERIFIED` row covers those CLI checks only. The
+[V2 migration guide](https://opencode.ai/v2/docs/migrate-v1/) and
+[plugin migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1)
+were reviewed. V2 uses a shared background service by default: local host
+launches probe the version before spawning and add `--standalone` so each
+tab's environment, MCP grants and session claim belong to its own server.
+Saved `--mini` and root `--model`/`--agent` launches use `mini` (the full V2
+TUI no longer accepts those model/agent flags). Explicit `--server` is kept;
+remote/container binaries are not inferred from the host version.
+
+The session plugin now default-exports `{id, server, setup}`: V1 ≥1.18.29
+calls `server`, V2 calls `setup`, which registers `session.hook("prompt")`
+and checks `session.get({sessionID}).parentID` before recording. Native
+`plugins` arrays take precedence over legacy `plugin`, so registration uses
+the same active array. Reader queries support V2's `session_v2` and
+`session_message` (typed user text / assistant content, durable `seq` order)
+alongside V1 sessions, through a temporary view on a read-only connection.
+V2 completed tools carry `FileDiff` metadata (`file`, `patch`, `status`),
+read directly by Changes. Conversation exports keep V2 tables, blank session
+permissions and continue dropping credential/account tables. Integration is
+not live verified; the Reader carries `agents.opencode.v2`.
+
+The default install recipes and latest-version source remain on V1 until
+V2 credential sharing is ported: V2 migrates legacy `auth.json` once, then
+stores credentials in SQLite. Sharing the whole database would leak sessions
+between scopes. Existing credentials can migrate into a new scope database,
+but subsequent V2 sign-ins/refreshes are not yet shared by `agent_auth`.
+Track that migration and structured model/form APIs in `todo/group-s-agents.md`.
 
 **OpenCode's minimal interface** is read by the phone since 2026-09-18
 (`mobile-web/src/terminal/openCodeMini.ts`, verified against 1.18.31 by live

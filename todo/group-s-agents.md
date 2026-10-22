@@ -1,5 +1,29 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] OpenCode 2 credential sharing (2026-10-22): keep default install/latest
+  recipes on V1 until `agent_auth` can share V2's credential records without
+  sharing its conversation database. Legacy `auth.json` is imported once by
+  V2, not kept synchronized after sign-in/refresh. Preserve account/command
+  guards and use `home_io`; never write a live, attacker-controlled SQLite
+  path from the host. A bridge running inside the existing fence via the
+  public credential API needs a separate design. Then switch install recipes
+  (local + remote + supported Windows route) and the latest-release source.
+- [ ] OpenCode 2 structured model/form APIs: evaluate replacing picker scrolling
+  and question screen scraping with authenticated, per-tab server data. Keep
+  browser payloads opaque and preserve the CLI's own permission choices.
+- [ ] 🖐️ OpenCode 2 local tab/Reader QA (`agents.opencode.v2`): two tabs in one
+  folder, `/new`, child agents, restore, local Ollama model launch, Reader
+  text/Changes and project export/import. CLI flags and fixture tests do not
+  verify the live integration; Tabtivity was not restarted.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+
 - [ ] Live-check Codex resume after a deliberate backend restart (2026-09-15):
   tabs started together in one folder must retain distinct conversations.
   Old duplicate assignments now open Codex's session picker in the conflicting
