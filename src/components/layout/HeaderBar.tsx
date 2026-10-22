@@ -9,6 +9,7 @@ import { InboxIndicator } from "../header/InboxIndicator";
 import { SettingsMenu } from "../header/SettingsMenu";
 import { HelpAgentButton } from "../header/HelpAgentButton";
 import { WindowControls } from "../header/WindowControls";
+import { HeaderSlot } from "../header/HeaderSlot";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { LocalModelMenu } from "./LocalModelMenu";
 
@@ -71,19 +72,31 @@ export function HeaderBar() {
           live this close to the window edge because every menu in this cluster is
           right-anchored and grows inward (see `.header-status-menu-anchor`). */}
       <div className="header-right no-drag">
-        <MailIndicator />
-        <CalendarIndicator />
-        <TodoIndicator />
-        <InboxIndicator />
+        <HeaderSlot id="mail">
+          <MailIndicator />
+        </HeaderSlot>
+        <HeaderSlot id="calendar">
+          <CalendarIndicator />
+        </HeaderSlot>
+        <HeaderSlot id="todo">
+          <TodoIndicator />
+        </HeaderSlot>
+        <HeaderSlot id="inbox">
+          <InboxIndicator />
+        </HeaderSlot>
         <span className="header-right-gap" aria-hidden="true" />
-        <LocalModelMenu />
+        <HeaderSlot id="models">
+          <LocalModelMenu />
+        </HeaderSlot>
         {/* Settings belong to the machine, not to a project, so the gear stays
             with the other global buttons rather than at the head of the project
             strip, where it put the switcher's own controls on both sides of a
             scrolling row. */}
         {/* The ? opens an agent primed with the built-in help, beside the
             gear whose menu holds the help pages. */}
-        <HelpAgentButton />
+        <HeaderSlot id="help">
+          <HelpAgentButton />
+        </HeaderSlot>
         <SettingsMenu />
         <span className="header-right-gap" aria-hidden="true" />
         <StatusCluster />

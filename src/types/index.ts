@@ -215,6 +215,10 @@ export interface Settings {
    * Machines, CPU/RAM/GPU) expanded into the bar? Unset means collapsed to a
    * single summary lamp; anything non-nominal shows itself regardless. */
   header_status_expanded?: boolean;
+  /** Top-bar placement overrides by item id (`lib/headerPins`): `true` keeps the
+   * item in the bar while the chevron is collapsed, `false` folds it behind the
+   * chevron. An id that is absent follows the built-in default. */
+  header_pins?: Record<string, boolean>;
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */

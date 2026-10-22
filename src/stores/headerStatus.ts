@@ -93,8 +93,7 @@ export function useHeaderStatusReport(
   const label = report?.label ?? null;
   // Split from the unmount cleanup on purpose. One effect with a cleanup would
   // clear the key and re-add it on every tone change, and a member that blinks
-  // out of existence for an instant also blinks the fold decision (see
-  // `MIN_FOLDABLE` in StatusCluster).
+  // out of existence for an instant also blinks the chevron on and off.
   useEffect(() => {
     if (key === null) return;
     const { report: publish } = useHeaderStatusStore.getState();

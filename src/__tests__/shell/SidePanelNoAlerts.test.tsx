@@ -1,13 +1,8 @@
 /**
- * The Alerts group used to be rendered by `ProjectFilesPane`, which the shared
- * viewer mounts only for the *files* view — so a user who left the side panel on
- * Git (or Agents, or Windows) saw no alerts at all, and the header's 🔔 read as
- * on while nothing was showing. Mail, appointments and cards are global, so the
- * strip now belongs to `ProjectFilesView` and follows every view's body.
- *
- * A box's multi-root view was the last exception and is one no longer — see
- * `SidePanelBox.test.tsx`. Only the docked subwindow column (`compact`) still
- * withholds the group, on space grounds.
+ * The Alerts used to be a group stacked below the side panel's body. The rows
+ * are machine-wide, so they now open from the header bell's hover
+ * (`header/AlertsToggle`, see `HeaderAlertsMenu.test.tsx`) and no view of the
+ * panel — whatever `files_alerts` says — renders them any more.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
@@ -89,32 +84,20 @@ async function renderOnView(view: string) {
   return container;
 }
 
-describe("side panel alerts across views", () => {
+describe("side panel alerts", () => {
   it.each(["files", "git", "orange", "agents", "windows"])(
-    "renders the alerts group in the %s view",
+    "renders no alerts group in the %s view",
     async (view) => {
       const container = await renderOnView(view);
-      expect(container.querySelector(".alerts-section")).not.toBeNull();
+      expect(container.querySelector(".alerts-section")).toBeNull();
     },
   );
 
   it("is a view the panel really entered, not a silent fall back to Files", async () => {
-    // Guards the case above: a view that was unavailable would render Files —
-    // and its alerts — while claiming to prove nothing.
+    // Guards the case above: a view that was unavailable would render Files
+    // while claiming to prove nothing about the others.
     const container = await renderOnView("git");
     expect(screen.getByRole("button", { name: "Git" }).getAttribute("aria-pressed")).toBe("true");
-    expect(container.querySelector(".alerts-section")).not.toBeNull();
-  });
-
-  it("stays hidden while the machine-wide switch is off", async () => {
-    settingsState.settings = {
-      files_alerts: false,
-      side_panel_view_by_project: { "proj-1": "git" },
-    } as Settings;
-    let container!: HTMLElement;
-    await act(async () => {
-      container = render(<SidePanel open={true} />).container;
-    });
     expect(container.querySelector(".alerts-section")).toBeNull();
   });
 });

@@ -58,7 +58,7 @@ export function normalizeScanPath(rel: string): string {
  *  picker, mirroring the pill's `PYTHON_ENDINGS`. */
 const PYTHON_ENDINGS = new Set([".py", ".pyw", ".pyi"]);
 
-/** Bounds on the Alerts group's lookahead, mirroring `useAlertsFeed`'s clamp.
+/** Bounds on the Alerts list's lookahead, mirroring `useAlertsFeed`'s clamp.
  *  Below 1 day the group can only ever be empty; above 60 it has stopped being
  *  an alert strip and become an agenda. */
 const ALERT_DAYS_MIN = 1;
@@ -543,12 +543,10 @@ export function ProjectFilesSettingsDialog({
           })}
         </SettingsList>
 
-        {/* The side panel's opt-in Alerts group (global, not per-project).
-            Off by default on purpose — the file viewer is a work surface, and an
-            alert strip nobody asked for is an interruption in the one panel that
-            stays open all day. The per-source rows are greyed while the master
-            switch is off: they only ever take a source *away*, so they mean
-            nothing until there is a group to take it out of. */}
+        {/* The header bell's Alerts list (global, not per-project). The per-source
+            rows are greyed while the master switch is off: they only ever take
+            a source *away*, so they mean nothing until there is a list to take
+            it out of. */}
         <SettingsSection
           title={t("filesAlerts.enable")}
           help={t("filesAlerts.enableHint")}

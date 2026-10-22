@@ -997,6 +997,11 @@ pub struct Settings {
     /// itself either way (see `stores/headerStatus`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_status_expanded: Option<bool>,
+    /// Top-bar placement overrides by item id: `true` keeps the item in the bar
+    /// while the chevron is collapsed, `false` folds it behind the chevron. An
+    /// absent id follows the frontend's default (`lib/headerPins`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_pins: Option<HashMap<String, bool>>,
     /// Default printer per network, keyed by the network key the frontend
     /// derives (`wlan:<ssid>`, `lan:<hashed gateway mac>`, `lan`). When the machine
     /// joins a keyed network, the print manager's host makes that printer the

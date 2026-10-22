@@ -10,6 +10,9 @@ import { AppResourceDisplay } from "./AppResourceDisplay";
 import { DevBuildIndicator } from "./DevBuildIndicator";
 import { useQuiesce, saverInterval, usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
+import { useHeaderSlotsStore } from "../../stores/headerSlots";
+import { HEADER_ITEM_IDS, isHeaderPinned } from "../../lib/headerPins";
+import { HeaderSlot } from "./HeaderSlot";
 import {
   summaryLamp,
   useHeaderStatusStore,
@@ -39,6 +42,12 @@ const MachinesIndicator = lazy(() =>
  * straight out of the app's primary navigation, all day, to say "still fine"
  * six times over.
  *
+ * What folds is the user's choice per item (right-click an icon: `HeaderSlot`,
+ * `Settings.header_pins`). The defaults fold the readouts below and keep the
+ * global apps pinned, but a user can pin a readout into the bar or fold ✉ 🗓 ☑
+ * behind this same chevron — so the toggle belongs to the whole bar, and exists
+ * as soon as ONE present, unpinned item is folded.
+ *
  * Collapsed, the cluster is a single lamp: the worst thing any member is saying
  * (`summaryLamp`), with every member's line in its tooltip. Clicking expands the
  * whole row back, and that choice PERSISTS (`header_status_expanded`) — a user
@@ -63,10 +72,6 @@ const MachinesIndicator = lazy(() =>
  *    puts every widget back in the slot it always had.
  */
 
-/** Below this, folding is worse than the crowding: a one-item fold is a lamp
- *  hiding a lamp. (Two counts the toggle itself as the second thing on screen.) */
-const MIN_FOLDABLE = 2;
-
 export function StatusCluster() {
   const t = useT();
   const quiesce = useQuiesce();
@@ -84,6 +89,8 @@ export function StatusCluster() {
   const [machinesMounted, setMachinesMounted] = useState(machinesEnabled);
   if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
+  const pins = useSettingsStore((s) => s.settings?.header_pins);
+  const present = useHeaderSlotsStore((s) => s.present);
   const [resourcePeek, setResourcePeek] = useState(0);
 
   useEffect(() => {
@@ -150,8 +157,12 @@ export function StatusCluster() {
 
   const all: Partial<Record<HeaderStatusKey, HeaderStatusReport>> = { ...local, ...reports };
   const entries = Object.entries(all) as [HeaderStatusKey, HeaderStatusReport][];
-  const memberCount = entries.length;
-  const collapsed = !expanded && memberCount >= MIN_FOLDABLE;
+  // The chevron is offered for whatever the bar would fold right now: items
+  // that drew something and are not pinned. An item whose feature is off (empty
+  // slot) is not counted, or the toggle would unfold nothing.
+  const foldable = HEADER_ITEM_IDS.filter((id) => present[id] && !isHeaderPinned(pins, id)).length;
+  const hasToggle = foldable >= 1;
+  const collapsed = !expanded && hasToggle;
 
   const toggleTitle = collapsed
     ? [t("statusCluster.expandTitle"), ...entries.map(([, r]) => r.label)].join("\n")
@@ -163,42 +174,43 @@ export function StatusCluster() {
           than a readout, so it takes the row's head — the slot nearest the
           global-app buttons it used to live among — rather than being buried
           between the VPN lamp and the CPU meters. */}
-      <span className="status-cluster-item" data-folded={collapsed}>
+      <HeaderSlot id="alerts">
         <AlertsToggle />
-      </span>
-      <span className="status-cluster-item" data-folded={collapsed}>
+      </HeaderSlot>
+      <HeaderSlot id="conn">
         {showConn && <ConnTypeIcon type={connKind ?? "wlan"} online={online} ssid={ssid} />}
-      </span>
-      <span className="status-cluster-item" data-folded={collapsed}>
+      </HeaderSlot>
+      <HeaderSlot id="battery">
         {batterySupported && (
           <BatteryIndicator percentage={batteryPercentage} plugged={!onBattery} />
         )}
-      </span>
-      <span className="status-cluster-item" data-folded={collapsed}>
+      </HeaderSlot>
+      <HeaderSlot id="mobile">
         <MobileIndicator />
-      </span>
-      <span className="status-cluster-item" data-folded={collapsed}>
+      </HeaderSlot>
+      <HeaderSlot id="vpn">
         <VpnIndicator />
-      </span>
-      <span className="status-cluster-item" data-folded={collapsed}>
+      </HeaderSlot>
+      <HeaderSlot id="machines">
         {machinesMounted && (
           <Suspense fallback={null}>
             <MachinesIndicator />
           </Suspense>
         )}
-      </span>
-      <span className="status-cluster-item" data-folded={collapsed}>
-        <AppResourceDisplay folded={collapsed} peek={resourcePeek} />
-      </span>
+      </HeaderSlot>
+      <HeaderSlot id="resources">
+        <AppResourceDisplay
+          folded={collapsed && !isHeaderPinned(pins, "resources")}
+          peek={resourcePeek}
+        />
+      </HeaderSlot>
       {/* Dev checkouts only: a release build's backend answers no status and
           the chip renders nothing (see DevBuildIndicator). */}
-      <span className="status-cluster-item" data-folded={collapsed}>
+      <HeaderSlot id="devBuild">
         <DevBuildIndicator />
-      </span>
-      {/* The toggle only exists once there is something to fold: with a single
-          member (or none) the cluster is already as small as it gets, and a
-          chevron next to one lamp is pure noise. */}
-      {memberCount >= MIN_FOLDABLE && (
+      </HeaderSlot>
+      {/* The toggle only exists once there is something to fold. */}
+      {hasToggle && (
         <button
           type="button"
           className="global-apps-menu-btn status-cluster-toggle"

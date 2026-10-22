@@ -3,8 +3,7 @@ import { useMemo, useState } from "react";
 import type { AlertItem, AlertKind, AlertSeverity } from "../../lib/alerts";
 import { alertCounts, readsInHours } from "../../lib/alerts";
 import { finishAlert } from "../../lib/alertDone";
-import { useAlertsFeed } from "./useAlertsFeed";
-import { useResizableSection } from "./useResizableSection";
+import type { AlertsFeed } from "../files/useAlertsFeed";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useMailStore } from "../../stores/mail";
 import { useSettingsStore } from "../../stores/settings";
@@ -18,60 +17,34 @@ import { CalendarIcon, CheckboxIcon, MailIcon, VideoIcon, type IconProps } from 
 import { ErrorNote } from "../common/ErrorNote";
 
 /**
- * The side-panel **Alerts** group: urgent mail, the next appointments, and the
- * to-do cards whose due date is here or past — one time-ordered strip, rendered
- * BELOW the viewer's body, under the file tree in the files view (the same slot
- * `DownloadsSection` uses) and under Git, Orange, Sessions, Jobs, Remarks,
- * Agents or Windows in theirs. It belongs to `ProjectFilesView`, not to one of
- * its views: the rows are global, so which view the panel happens to be parked
- * on must not decide whether a due card is seen.
+ * The list behind the header bell's hover: urgent mail, the next appointments,
+ * and the to-do cards whose due date is here or past, as one time-ordered strip.
  *
- * It sits in the file viewer because that is the surface that is open all day.
- * The three sources already have homes (the mail overlay, the calendar overlay,
- * the board), and all three are things you have to *go and look at*: a deadline
- * only reaches the user there if the user thought to check. Beside the tree it
- * costs no window and no gesture, and a row is one click from the surface that
- * actually owns the thing.
+ * It used to be a group stacked under the side panel's file tree
+ * (`files/AlertsSection`). The rows are machine-wide — the same ones whichever
+ * project is open — so a per-project panel was the wrong home, and it cost the
+ * tree its height all day for a list that is empty on a good one. It now hangs
+ * off the switch that already governs it (`AlertsToggle`), the way the ☑ and 🗓
+ * buttons read their cards out on hover.
  *
- * **Switchable, and deliberately so.** The group is rendered only while
- * `files_alerts` is on, because the feature reads three unrelated stores and
- * puts deadlines in the corner of a pane whose job is files. That is a strong
- * opinion about how somebody works: a file viewer that starts telling you about
- * your mail is a change to the app nobody asked for. Its switch is the header's
- * 🔔 (`header/AlertsToggle`), beside the ☑ board — not a button in the project
- * file toolbar, where it once was: one machine-wide key belongs with the global
- * apps, not in a row that is redrawn per project and per open viewer.
- *
- * **It is chromed as the machine's, not the project's.** Every other group in
- * this panel is swapped out when the project is switched — the tree, the git
- * bar, the downloads — while these rows are the same ones whichever project is
- * open, so wearing the panel's own ground made a global strip read as one more
- * section of the project on screen. It carries its own **ground** instead — an
- * accent-tinted surface behind an accent-toned seal (`.alerts-section` in
- * `styles/file-tree.css`) — which is the whole of the distinction: no badge, no
- * label, nothing that costs a row of the twelve.
- *
- * Rows come from `useAlertsFeed`, whose selectors are `lib/alerts`' pure ones;
- * this component does not keep a second copy of alert state. Opening a row hands
- * off to the owning surface, while its Done button resolves each kind on its
- * own terms: a task is completed, priority mail is returned to normal, and a
- * calendar occurrence is removed from this alert strip without deleting the
- * appointment itself.
+ * The rows come from `useAlertsFeed` (called by the toggle, so the list is warm
+ * when the pointer arrives) whose selectors are `lib/alerts`' pure ones; this
+ * component keeps no second copy of alert state. Opening a row hands off to the
+ * owning surface, while its Done button resolves each kind on its own terms: a
+ * task is completed, priority mail is returned to normal, and a calendar
+ * occurrence is removed from this list without deleting the appointment.
  *
  * **Muting is the one exception, and it is not a dismissal.** A row's 🔕 hides
- * that row *in this group* and changes nothing about the thing behind it — the
+ * that row *in this list* and changes nothing about the thing behind it — the
  * mail stays marked urgent, the card stays due, the meeting still happens — so
- * there is no second source of truth to disagree with. It exists because the
- * group is a strip of twelve slots: one standing item you have already decided
- * about (a card with no real deadline, a series you are not going to) otherwise
- * costs a slot every day and pushes out the thing you needed to see. It is
- * deliberately reversible and visibly so: the header keeps a 🔕 count, the
- * reveal renders the muted rows, and each carries its own unmute — a silencer
- * with no way back would be the worse version of a delete.
+ * there is no second source of truth to disagree with. It is deliberately
+ * reversible and visibly so: the header keeps a 🔕 count, the reveal renders the
+ * muted rows, and each carries its own unmute.
  */
-interface AlertsSectionProps {
-  /** Hide the section (flips the toolbar toggle off). */
-  onClose: () => void;
+interface AlertsMenuProps {
+  feed: AlertsFeed;
+  /** The pointer has handed off to another surface; shut the menu. */
+  onNavigate: () => void;
 }
 
 /** Icon per source. The row's kind is also its `title`, so this is decoration. */
@@ -87,11 +60,11 @@ function KindIcon({ kind }: { kind: AlertKind }) {
 }
 
 /**
- * `dueDeltaKey`'s counterpart for this strip: the same *choice* of phrase off the
- * same measurement, pointed at this group's own wording rather than the board
- * chip's. Two families exist because the two surfaces read differently — a chip
- * on a card is squeezed ("2d 5h late"), a row here has a column for it ("2 d 5 h
- * overdue") — and only the wording differs, never which unit is printed.
+ * `dueDeltaKey`'s counterpart for this list: the same *choice* of phrase off the
+ * same measurement, pointed at this list's own wording rather than the board
+ * chip's. A chip on a card is squeezed ("2d 5h late"), a row here has a column
+ * for it ("2 d 5 h overdue") — only the wording differs, never which unit is
+ * printed.
  */
 const alertDeltaKey = (d: DueDelta): TranslationKey => {
   if (d.late) {
@@ -104,19 +77,14 @@ const alertDeltaKey = (d: DueDelta): TranslationKey => {
   return d.unit === "h" ? "filesAlerts.inHours" : "filesAlerts.inMinutes";
 };
 
-export function AlertsSection({ onClose }: AlertsSectionProps) {
+export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
   const t = useT();
-  const { enabled, items, loading, error, refresh, mutedItems, mute, unmute, unmuteAll } =
-    useAlertsFeed();
+  const { enabled, items, loading, error, refresh, mutedItems, mute, unmute, unmuteAll } = feed;
   // The reveal is local and transient on purpose: it is a way to look at what
   // you silenced, not a second visibility setting to keep in step with the first.
   const [showMuted, setShowMuted] = useState(false);
   const [finishingId, setFinishingId] = useState<string | null>(null);
   const [finishError, setFinishError] = useState<string | null>(null);
-
-  // Resizable height: the same drag-the-top-handle mechanism `DownloadsSection`
-  // uses, so the two sections that share this slot grow the same way.
-  const { sectionRef, heightPx, onResizePointerDown } = useResizableSection(240);
 
   // Which surfaces can actually be raised. Each of the three is behind its own
   // switch, and a row that opened nothing would be worse than one that says why
@@ -154,9 +122,8 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
    *
    * **The measurement is `lib/todoBoard`'s `awayDelta`, not a second one here.**
    * The board card and the header's to-do list already print "in 2d 5h" off it,
-   * and a strip beside them saying "in 3 d" about the same card is one app
-   * disagreeing with itself — which is what a local rounding to whole days did,
-   * and why a timed row now keeps both halves.
+   * and a list beside them saying "in 3 d" about the same card is one app
+   * disagreeing with itself.
    *
    * What it turns on is `readsInHours`, not `allDay` — the two part exactly at
    * the **date-only card**. A card with no time is still a deadline, and the one
@@ -167,8 +134,7 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
    * about the calendar rather than an hour to make.
    *
    * `null` from the measurement is the row that has arrived rather than an error:
-   * today for a whole-day stamp, this very minute for anything read in hours
-   * (for a date-only card that is its midnight, to the minute).
+   * today for a whole-day stamp, this very minute for anything read in hours.
    */
   const relativeLabel = (item: AlertItem): string => {
     if (item.minutesAway === null) return t("filesAlerts.noDate");
@@ -193,6 +159,7 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
    */
   const openItem = async (item: AlertItem) => {
     if (!canOpen(item.kind)) return;
+    onNavigate();
     if (item.kind === "mail") {
       const mail = useMailStore.getState();
       await mail.openPriority(item.source.mailPriority ?? "urgent").catch(() => {});
@@ -257,10 +224,10 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
    * silencer (or the door) part of the click target that opens the thing.
    *
    * The Join goes to the same place the calendar's own Join buttons do, through
-   * the same `lib/calendar/conference` verdict (`item.source.conferenceUrl`, computed in
-   * `lib/alerts`): a video meeting two minutes off is the one alert whose point
-   * is the door, not the surface behind it. It is shown even on a muted row —
-   * muting silenced the reminder, it did not cancel the meeting.
+   * the same `lib/calendar/conference` verdict (`item.source.conferenceUrl`,
+   * computed in `lib/alerts`): a video meeting two minutes off is the one alert
+   * whose point is the door, not the surface behind it. It is shown even on a
+   * muted row — muting silenced the reminder, it did not cancel the meeting.
    *
    * The same renderer draws a live row and a muted one, so the two can't drift
    * into looking like different kinds of object; `muted` only swaps the trailing
@@ -283,6 +250,7 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
         </button>
         <button
           type="button"
+          role="menuitem"
           className={`alerts-row ${item.severity}`}
           disabled={!openable}
           title={openable ? openLabel(item.kind) : closedReason(item.kind)}
@@ -303,12 +271,9 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
             {item.detail && <span className="alerts-detail">{item.detail}</span>}
           </span>
         </button>
-        {/* The Join sits **before** the time readout, inside the row: a meeting's
-            door belongs next to the meeting, and the countdown ("in 4 min") is
-            precisely the number that makes it worth clicking now. It is a sibling
-            of the open button, not nested in it, because a button inside a button
-            is invalid markup — so the `when` readout is lifted out too, and the
-            two ride the row-wrap's own hover highlight. */}
+        {/* The Join sits **before** the time readout: a meeting's door belongs
+            next to the meeting, and the countdown ("in 4 min") is precisely the
+            number that makes it worth clicking now. */}
         {conferenceUrl && (
           <button
             type="button"
@@ -340,14 +305,13 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
   };
 
   return (
-    <div className="alerts-section" ref={sectionRef} style={{ height: heightPx }}>
-      <div
-        className="alerts-resize"
-        onPointerDown={onResizePointerDown}
-        title={t("filesAlerts.resizeHint")}
-      />
-      <div className="alerts-header">
-        <span className="alerts-title"><BellIcon className="alerts-bell" /> {t("filesAlerts.title")}</span>
+    <>
+      {/* Pinned title + scrolling region: the unified menu shape (the accent
+          rail and the wash live on the menu itself, so it must not be what
+          scrolls). The count, its overdue emphasis, the muted reveal and the
+          refresh ride the title row. */}
+      <div className="tab-new-menu-group-label alerts-menu-head">
+        <span className="alerts-title">{t("filesAlerts.title")}</span>
         {items.length > 0 && (
           <span
             className={"alerts-count" + (counts.overdue > 0 ? " overdue" : "")}
@@ -366,6 +330,7 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
             control rather than standing there permanently as a dead button. */}
         {mutedItems.length > 0 && (
           <button
+            type="button"
             className={`alerts-muted-chip${showMuted ? " active" : ""}`}
             aria-pressed={showMuted}
             onClick={() => setShowMuted((v) => !v)}
@@ -375,32 +340,25 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
           </button>
         )}
         <button
-          className="toolbar-btn toolbar-btn--sm"
-          style={{ marginLeft: "auto" }}
+          type="button"
+          className="toolbar-btn toolbar-btn--sm alerts-menu-refresh"
           onClick={refresh}
           title={t("filesAlerts.refresh")}
         >
           ⟳
         </button>
-        <button
-          className="toolbar-btn toolbar-btn--sm"
-          onClick={onClose}
-          title={t("filesAlerts.hide")}
-        >
-          ×
-        </button>
       </div>
 
-      {error && <div className="alerts-error">{t("filesAlerts.failed")}</div>}
-      {finishError && <ErrorNote className="alerts-error" error={finishError} />}
+      <div className="menu-scroll-region">
+        {error && <div className="alerts-error">{t("filesAlerts.failed")}</div>}
+        {finishError && <ErrorNote className="alerts-error" error={finishError} />}
 
-      <div className="alerts-list">
         {!enabled ? (
-          <div className="file-tree-empty">{t("filesAlerts.disabled")}</div>
+          <div className="tab-new-menu-hint">{t("filesAlerts.disabled")}</div>
         ) : loading && items.length === 0 ? (
-          <div className="file-tree-empty">{t("filesAlerts.loading")}</div>
+          <div className="tab-new-menu-hint">{t("filesAlerts.loading")}</div>
         ) : items.length === 0 ? (
-          <div className="file-tree-empty">
+          <div className="tab-new-menu-hint">
             {error ? t("filesAlerts.emptyAfterError") : t("filesAlerts.empty")}
           </div>
         ) : (
@@ -415,6 +373,7 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
             <div className="alerts-muted-head">
               <span>{t("filesAlerts.mutedHeading", { count: mutedItems.length })}</span>
               <button
+                type="button"
                 className="alerts-muted-all"
                 onClick={() => {
                   unmuteAll();
@@ -429,6 +388,6 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }

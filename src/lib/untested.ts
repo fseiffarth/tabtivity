@@ -348,6 +348,7 @@ export const UNTESTED = {
   "settingsSubPanels.agentOrder": { area: "layout", what: "Manage CLIs · installed agents reorder with ↑/↓ and show their Ctrl+1–9 chord; the + menu's Agents rows and the chords follow that order (in popouts too)" },
   "settingsSubPanels.agentUpdates": { area: "layout", what: "Manage CLIs · each installed CLI's own Check for update asks npm/PyPI/GitHub for its newest release (GitHub via the release page's redirect, no API quota); a newer one turns the card's version chip into `current → latest`, which re-runs the installer" },
   "shortcutHelp.title": { area: "layout", what: "ShortcutHelpOverlay · Keyboard Shortcuts" },
+  "headerPins.menu": { area: "layout", what: "HeaderSlot · right-click a top-bar icon: always show it, or hide it behind the ‹ chevron" },
   "statusCluster.settingLabel": { area: "layout", what: "SettingsPanel · Collapse header status indicators" },
   "theme.presets": { area: "layout", what: "ThemeCustomizer · Saved themes" },
   "theme.title": { area: "layout", what: "ThemeCustomizer · Theme colors" },

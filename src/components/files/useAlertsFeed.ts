@@ -23,7 +23,7 @@ import {
 } from "../../stores/todo";
 
 /**
- * **The data feed behind the side panel's opt-in "Alerts" group.**
+ * **The data feed behind the header bell's "Alerts" list.**
  *
  * It owns the *reads*; `lib/alerts`' `selectAlerts` owns the merging, and the
  * two stores that already hold this data (`stores/calendar/calendar` for events and

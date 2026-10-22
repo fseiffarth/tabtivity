@@ -1931,7 +1931,7 @@
    Its members are ordinary header anchors, so the chain has to keep stretching
    all the way down: every hover menu inside positions itself at `top: 100%`,
    which only means "the bottom edge of the top bar" while each wrapper spans
-   the full 40px row. Two extra links (this and `.status-cluster-item`) would
+   the full 40px row. Two extra links (this and `.header-slot`) would
    otherwise collapse to their content height and hang the menus mid-header. */
 .header-status-cluster {
   display: flex;
@@ -1939,19 +1939,19 @@
   align-self: stretch;
   gap: 8px;
 }
-.status-cluster-item {
+.header-slot {
   display: flex;
   align-items: center;
   align-self: stretch;
 }
-/* A member whose own feature is switched off renders nothing at all; without
+/* An item whose own feature is switched off renders nothing at all; without
    this its wrapper would still spend a gap. */
-.status-cluster-item:empty {
+.header-slot:empty {
   display: none;
 }
-/* Folded — not unmounted. The widget keeps polling, which is what lets it
-   escalate itself back into the bar; see the component header. */
-.status-cluster-item[data-folded="true"] {
+/* Folded — not unmounted. The widget keeps polling, which is what keeps the
+   summary lamp honest; see `StatusCluster`. */
+.header-slot[data-folded="true"] {
   display: none;
 }
 

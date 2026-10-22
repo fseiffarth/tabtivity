@@ -7,7 +7,6 @@ import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktre
 import { GitHistory } from "./GitHistory";
 import { GitChangeTree, type ChangeScope } from "./GitChangeTree";
 import { GitPushProposals } from "../agents/GitPushMcp";
-import { AlertsSection } from "./AlertsSection";
 import {
   FileSourceSwitch,
   ProjectFilesPane,
@@ -327,7 +326,7 @@ export interface ProjectFilesViewProps {
   mountTree: boolean;
 
   /** Compact mode: strip the project-name/tags/source-switch/git-bar header row
-   *  and the Alerts group — the view-switcher toolbar (Files/Git/
+   *  — the view-switcher toolbar (Files/Git/
    *  Search/Apps/±/sessions/jobs/import/etc.) and every view it switches to
    *  render identically to the full chrome. The sync + sort rows
    *  (`ProjectFilesPane`) are still stripped, so the tree's find-files search
@@ -482,28 +481,7 @@ export function ProjectFilesView({
   // that row alive for one button. It reaches the tree as a bumped counter.
   const [searchOpen, setSearchOpen] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
-  // The Alerts group stacked below the viewer's body (urgent mail, the next
-  // appointments, due/overdue cards) — below the file tree in the files view,
-  // and below Git/Orange/Sessions/Jobs/Remarks/Agents/Windows in theirs: the
-  // rows are global, so which view the panel happens to be parked on must not
-  // decide whether a due card is seen. Unlike Downloads there is no local shown
-  // flag: `files_alerts` IS the visibility, which is what lets the × stick — the
-  // group is on by default, so a close that came back at the next remount (and
-  // this viewer is mounted many times over) would be a control that doesn't work.
-  // It is one machine-wide key, so the header's 🔔 (`header/AlertsToggle`), this
-  // group's ×, and the Project Settings checkbox are three faces of one switch
-  // and cannot disagree.
-  const alertsEnabled = useSettingsStore((s) => s.settings?.files_alerts ?? true);
   const mobileHostEnabled = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]?.enabled ?? false);
-  // ...but never in the docked subwindow column (`compact`), whatever the
-  // setting says: that viewer is a ~300px sidebar beside a terminal, where a
-  // strip of mail/appointment/card rows takes the space the tree is there for
-  // — and it is the surface mounted many times over at once, so one alert
-  // would be repeated once per open subwindow. The header's 🔔 still reads as
-  // on, correctly: it is the machine's switch, and the group it arms is showing
-  // in the side panel and every Files tab — this one column is the exception.
-  const alertsHere = alertsEnabled && !compact;
-  const updateSettings = useSettingsStore((s) => s.updateSettings);
   const setProjectMobileAccess = useProjectsStore((s) => s.setProjectMobileAccess);
   // Every project type may be shared with the phone: the Mobile switch is the
   // whole consent. What the phone then reaches differs by type (`mobileHost`).
@@ -1995,12 +1973,6 @@ export function ProjectFilesView({
             <InboxIcon />
           </button>
         )}
-        {/* The Alerts group's 🔔 used to sit here, between 📥 and ⚙. It is now the
-            header's (`header/AlertsToggle`), beside the ☑ board: `files_alerts`
-            is one machine-wide setting and the group draws the same rows in
-            every project, so a per-project toolbar rendered one switch once per
-            open file viewer and made a global thing look like this project's.
-            The group itself stays below the tree — only its switch moved. */}
         {projectId && (
           <button
             className="toolbar-btn toolbar-btn--sm"
@@ -2881,10 +2853,8 @@ export function ProjectFilesView({
           }}
           showDownloads={showDownloads}
           onCloseDownloads={() => setShowDownloads(false)}
-          // The host's frame footer belongs to the panel, not to the global
-          // Alerts group stacked below, so in the files view the pane places it
-          // ABOVE that group — every other view renders it at the bottom, and
-          // the group follows it there too.
+          // The host's frame footer belongs to the panel; the files view places
+          // it under the tree, every other view renders it at the bottom.
           frameFooter={footer}
           // Right-click → "Open in a new tab": the same file view, on that
           // folder, as a Files (Project) tab in this project's scope.
@@ -2941,18 +2911,6 @@ export function ProjectFilesView({
         </div>
       )}
       {view !== "files" && footer}
-      {/* The Alerts group belongs to the viewer, not to one of its views: mail,
-          appointments and cards are global, so a user who left the panel on Git
-          (or Sessions, or Jobs) must still see the row that is due. It sits
-          after every view's body — in the files view that is directly under the
-          tree and its frame footer, exactly where it always was. A box's
-          multi-root view is no exception any more: the rows are machine-wide,
-          so standing in a box scope is not a reason for a due card to vanish,
-          and the header's 🔔 reading as on while the panel showed nothing was
-          the same wrong answer the per-view exclusion used to give. */}
-      {alertsHere && (
-        <AlertsSection onClose={() => void updateSettings({ files_alerts: false })} />
-      )}
       {showSettings && project && localFile && (
         <ProjectFilesSettingsDialog
           localFile={localFile}
