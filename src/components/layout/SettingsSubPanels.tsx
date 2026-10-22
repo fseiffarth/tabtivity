@@ -967,6 +967,8 @@ interface AgentApiKeyStatus {
     budget?: "open" | "reached" | "noLimit";
     /** Models priced at the provider's highest rate (not in the table). */
     unknownModels?: string[];
+    /** The workspace a saved Anthropic key that is not scoped to one names. */
+    workspace?: string | null;
   }[];
   clis: {
     id: string;
@@ -988,6 +990,11 @@ interface AgentApiKeyStatus {
   /** When the price table was read off the vendors' pages. */
   pricesDate?: string;
 }
+
+/** `agent_api_key_set`'s answer: saved, or an Anthropic key that is not
+ *  scoped to a workspace — saved only once one of `workspaces` is picked (an
+ *  id typed in when the key could list none). */
+type ApiKeySave = { kind: "saved" } | { kind: "pickWorkspace"; workspaces: { id: string; name: string }[] };
 
 /** The monthly limit a new key's row proposes, in million billed tokens. */
 export const DEFAULT_API_LIMIT_MTOK = 5;
@@ -1043,6 +1050,11 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
   const [limitDrafts, setLimitDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A key waiting for its workspace: held here (never in the page) only
+  // until the user picks one or cancels.
+  const pendingKey = useRef<Record<string, string>>({});
+  const [picking, setPicking] = useState<{ provider: string; workspaces: { id: string; name: string }[] } | null>(null);
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
   const refresh = () => {
     invoke<AgentApiKeyStatus>("agent_api_keys_status")
       .then(setStatus)
@@ -1082,7 +1094,28 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
     setDrafts((d) => ({ ...d, [id]: "" }));
     act(id, async () => {
       await writeLimit(id, limit);
-      await invoke("agent_api_key_set", { provider: id, key });
+      const answer = await invoke<ApiKeySave | null>("agent_api_key_set", { provider: id, key });
+      if (answer?.kind === "pickWorkspace") {
+        pendingKey.current[id] = key;
+        setWorkspaceDraft(answer.workspaces[0]?.id ?? "");
+        setPicking({ provider: id, workspaces: answer.workspaces });
+      }
+    });
+  };
+  const endPicking = (id: string) => {
+    delete pendingKey.current[id];
+    setPicking(null);
+    setWorkspaceDraft("");
+  };
+  // Saved with the picked workspace; refused (one the key cannot use), the
+  // picker stays for another choice.
+  const saveWorkspace = (id: string) => {
+    const key = pendingKey.current[id];
+    const workspace = workspaceDraft.trim();
+    if (!key || !workspace) return;
+    act(id, async () => {
+      await invoke("agent_api_key_set", { provider: id, key, workspace });
+      endPicking(id);
     });
   };
   const setLimit = (id: string) => {
@@ -1189,6 +1222,9 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 {budget && status.readable && (
                   <span className={`agents-row-note${blocked ? " is-warn" : ""}`}>{budget}</span>
                 )}
+                {p.saved && p.workspace && (
+                  <span className="agents-row-note">{t("settings.agentApiWorkspace", { id: p.workspace })}</span>
+                )}
               </div>
               <div className="agents-key-form">
                 {status.readable && !p.saved && (
@@ -1242,6 +1278,54 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 )}
               </div>
             </div>
+            {picking?.provider === p.id && !p.saved && (
+              <div className="agents-row agents-key-row">
+                <p className="settings-help">
+                  {t(picking.workspaces.length > 0 ? "settings.agentApiWorkspacePick" : "settings.agentApiWorkspaceType")}{" "}
+                  <UntestedTag id="settings.agentApiKeys.workspace" />
+                </p>
+                <div className="agents-key-form">
+                  {picking.workspaces.length > 0 ? (
+                    <Dropdown
+                      title={t("settings.agentApiWorkspaceLabel")}
+                      ariaLabel={t("settings.agentApiWorkspaceLabel")}
+                      value={workspaceDraft}
+                      disabled={busy === p.id}
+                      options={picking.workspaces.map((w) => ({
+                        value: w.id,
+                        label: w.name === w.id ? w.id : `${w.name} (${w.id})`,
+                      }))}
+                      onChange={setWorkspaceDraft}
+                    />
+                  ) : (
+                    <input
+                      className="agents-input"
+                      value={workspaceDraft}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="wrkspc_…"
+                      aria-label={t("settings.agentApiWorkspaceLabel")}
+                      disabled={busy === p.id}
+                      onChange={(e) => setWorkspaceDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveWorkspace(p.id);
+                      }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="settings-btn sm primary"
+                    disabled={busy === p.id || !workspaceDraft.trim()}
+                    onClick={() => saveWorkspace(p.id)}
+                  >
+                    {t("settings.agentApiKeySave")}
+                  </button>
+                  <button type="button" className="settings-btn sm" disabled={busy === p.id} onClick={() => endPicking(p.id)}>
+                    {t("settings.agentApiWorkspaceCancel")}
+                  </button>
+                </div>
+              </div>
+            )}
             {p.saved && p.limitTokens == null && p.legacyLimitUsd != null && (
               <p className="settings-help pill-fence-live-note">
                 {t("settings.agentApiOldUsdLimit", { usd: usd(p.legacyLimitUsd) })}

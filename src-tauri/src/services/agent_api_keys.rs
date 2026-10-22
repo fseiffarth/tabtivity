@@ -2,8 +2,9 @@
 //!
 //! A user who pays per token rather than by subscription gives Tabtivity a
 //! provider key once (Manage CLIs → API keys). It lives in the OS keychain
-//! under `remote_credentials`' service, account `agent-key:<provider>`, and
-//! nowhere else: not in `settings.json`, a session dir, a launcher script, an
+//! under `remote_credentials`' service, account `agent-key:<provider>` (an
+//! Anthropic key that is not scoped to a workspace keeps the one its requests
+//! name beside it, `agent-key:anthropic:workspace`), and nowhere else: not in `settings.json`, a session dir, a launcher script, an
 //! argv, a log, the phone API — or an agent process (Part C, C2).
 //!
 //! A keyed spawn of a CLI the user switched on (`Settings::agent_api_key_clis`)
@@ -74,6 +75,13 @@ impl Provider {
     /// The keychain account under `remote_credentials`' service.
     pub fn account(self) -> String {
         format!("agent-key:{}", self.id())
+    }
+
+    /// The keychain account of the workspace an Anthropic key that is not
+    /// scoped to one names on every request (`anthropic-workspace-id`),
+    /// chosen when the key was saved. Kept and removed with the key.
+    pub fn workspace_account(self) -> String {
+        format!("agent-key:{}:workspace", self.id())
     }
 
     /// Every variable that already carries this provider's credential: set by
@@ -228,16 +236,30 @@ pub fn key_shape_ok(key: &str) -> bool {
         && !key.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-/// Store (`Some`) or remove (`None`) `provider`'s key. A locked or missing
-/// keyring refuses with `remote_credentials`' own message; there is no
-/// file fallback.
-pub fn set_key(provider: Provider, key: Option<&str>) -> Result<(), String> {
+/// Whether `id` looks like an Anthropic workspace id (`wrkspc_` and an
+/// alphanumeric tail): the only thing ever sent as `anthropic-workspace-id`.
+pub fn workspace_shape_ok(id: &str) -> bool {
+    id.strip_prefix("wrkspc_")
+        .is_some_and(|tail| !tail.is_empty() && tail.len() <= 64 && tail.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Store (`Some`) or remove (`None`) `provider`'s key, with the workspace it
+/// names on every request (`Some` only for a key that is not scoped to one;
+/// a stored workspace without one is removed). A locked or missing keyring
+/// refuses with `remote_credentials`' own message; there is no file
+/// fallback.
+pub fn set_key(provider: Provider, key: Option<&str>, workspace: Option<&str>) -> Result<(), String> {
     if let Some(key) = key {
         if !key_shape_ok(key) {
             return Err("not a usable API key (empty, too long, or contains spaces)".into());
         }
     }
-    let saved = crate::services::remote_credentials::set(&provider.account(), key);
+    if workspace.is_some_and(|w| !workspace_shape_ok(w)) {
+        return Err("not a workspace id (it starts with wrkspc_)".into());
+    }
+    let saved = crate::services::remote_credentials::set(&provider.account(), key).and_then(|()| {
+        crate::services::remote_credentials::set(&provider.workspace_account(), workspace.filter(|_| key.is_some()))
+    });
     // Saved or not, the proxy reads the keychain again at its next use: a
     // removed key stops running keyed tabs at their next request.
     crate::services::api_proxy::forget_key(provider);
@@ -253,6 +275,14 @@ pub fn has_key(provider: Provider) -> bool {
 /// The stored key, bounded at 4 s and never prompting (`remote_credentials::get`).
 pub fn get_key(provider: Provider) -> Option<String> {
     crate::services::remote_credentials::get(&provider.account()).filter(|k| key_shape_ok(k))
+}
+
+/// The workspace stored beside `provider`'s key ([`set_key`]), if any.
+pub fn get_workspace(provider: Provider) -> Option<String> {
+    if provider != Provider::Anthropic {
+        return None;
+    }
+    crate::services::remote_credentials::get(&provider.workspace_account()).filter(|w| workspace_shape_ok(w))
 }
 
 fn settings() -> crate::schema::Settings {
@@ -508,6 +538,8 @@ pub struct ProviderStatus {
     /// Models used this month that the price table does not know: priced at
     /// the provider's highest rate.
     pub unknown_models: Vec<String>,
+    /// The workspace a saved Anthropic key that is not scoped to one names.
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -580,6 +612,7 @@ fn status_with(
                 legacy_limit_usd: limit_tokens.is_none().then(|| legacy_usd.get(p.id()).copied()).flatten(),
                 budget: crate::services::api_usage::Verdict::of(billed, limit_tokens).id(),
                 unknown_models: ledger.unknown_models(p),
+                workspace: None,
             }
         })
         .collect();
@@ -653,6 +686,11 @@ pub fn status() -> ApiKeyStatus {
         &crate::services::api_usage::legacy_usd_limits_in(&settings),
         &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
     );
+    for p in &mut status.providers {
+        if p.saved {
+            p.workspace = Provider::from_id(p.id).and_then(get_workspace);
+        }
+    }
     // A hosted server's administrator's keys: the third choice per CLI.
     if crate::services::server::is_server() {
         use crate::services::server::agent_keys;
@@ -901,10 +939,20 @@ mod tests {
     }
 
     #[test]
+    fn only_a_workspace_id_is_a_workspace() {
+        assert!(workspace_shape_ok("wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ"));
+        for bad in ["", "wrkspc_", "01JwQvzr7rXLA5AGx3HKfFUJ", "wrkspc_01 J", "wrkspc_01\r\nx-api-key: y", "WRKSPC_01"] {
+            assert!(!workspace_shape_ok(bad), "{bad:?}");
+        }
+        assert!(!workspace_shape_ok(&format!("wrkspc_{}", "a".repeat(65))));
+    }
+
+    #[test]
     fn providers_round_trip_their_ids_and_accounts() {
         for p in Provider::ALL {
             assert_eq!(Provider::from_id(p.id()), Some(p));
             assert_eq!(p.account(), format!("agent-key:{}", p.id()));
+            assert_eq!(p.workspace_account(), format!("agent-key:{}:workspace", p.id()));
         }
         assert_eq!(Provider::from_id("copilot"), None);
         assert_eq!(Provider::from_id("openai"), Some(Provider::OpenAi));

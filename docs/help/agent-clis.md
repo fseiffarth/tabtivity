@@ -126,7 +126,12 @@ Saving a key asks the provider about it first: a key it refuses — or a
 Claude subscription token (`sk-ant-oat…`) in place of a Console API key
 (`sk-ant-api…`) — is not saved; offline, the key is saved untested. If a tab
 reports "… rejected the API key saved in Tabtivity", fix or remove it there —
-signing in again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
+signing in again does not help while the key is in use. An Anthropic key that
+is not tied to one workspace has to name one on every request: saving it lists
+its workspaces and uses the only one, or asks you to pick (or to paste the
+`wrkspc_…` ID from the Console's Workspaces page); the row then shows it. A
+tab that reports such a key "is not scoped to a workspace" ran on a key saved
+before that — remove it and save it again. Codex, Mistral Vibe and OpenCode
 are not offered: no environment variable points them at Tabtivity's proxy (use
 `codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
 instead; Codex's and OpenCode's login files are shared like any other, Vibe's

@@ -2433,25 +2433,47 @@ fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::P
         .ok_or_else(|| format!("unknown API key provider: {provider}"))
 }
 
-/// Save `provider`'s API key in the OS keychain. A locked or missing keyring
-/// refuses (its own message); there is no other place a key is kept. A key is
-/// only saved beside a monthly token limit (`Settings::agent_api_token_limits`,
-/// written first by Manage CLIs): refused without one. A key the provider
-/// refuses (`api_proxy::check_key`) is not saved.
+/// What saving a key came to: saved, or an Anthropic key that is not scoped
+/// to a workspace and could not be given one by itself — nothing is saved
+/// until the user picks one of `workspaces` (or types an id, when the key
+/// could list none) and saves again with it.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ApiKeySave {
+    Saved,
+    PickWorkspace { workspaces: Vec<crate::services::api_proxy::Workspace> },
+}
+
+/// Save `provider`'s API key in the OS keychain, with the workspace an
+/// Anthropic key that is not scoped to one names (`workspace`, or the only
+/// one it lists). A locked or missing keyring refuses (its own message);
+/// there is no other place a key is kept. A key is only saved beside a
+/// monthly token limit (`Settings::agent_api_token_limits`, written first by
+/// Manage CLIs): refused without one. A key the provider refuses
+/// (`api_proxy::check_key`) is not saved.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
+pub async fn agent_api_key_set(provider: String, key: String, workspace: Option<String>) -> Result<ApiKeySave, String> {
+    use crate::services::api_proxy::KeyCheck;
     let provider = api_key_provider(&provider)?;
     app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::require_limit(provider)).await?;
     let key = key.trim().to_string();
-    crate::services::api_proxy::check_key(provider, &key).await?;
-    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, Some(&key))).await
+    let workspace = workspace.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
+    let workspace = match crate::services::api_proxy::check_key(provider, &key, workspace.as_deref()).await? {
+        KeyCheck::Save { workspace } => workspace,
+        KeyCheck::PickWorkspace(workspaces) => return Ok(ApiKeySave::PickWorkspace { workspaces }),
+    };
+    app_core::rt::try_blocking("agent", move || {
+        crate::services::agent_api_keys::set_key(provider, Some(&key), workspace.as_deref())
+    })
+    .await?;
+    Ok(ApiKeySave::Saved)
 }
 
-/// Remove `provider`'s API key from the OS keychain.
+/// Remove `provider`'s API key (and its workspace) from the OS keychain.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
-    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, None))
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, None, None))
         .await
 }
 

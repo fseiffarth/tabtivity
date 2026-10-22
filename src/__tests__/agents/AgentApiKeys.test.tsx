@@ -136,6 +136,38 @@ describe("API keys for agent CLIs", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] }));
   });
 
+  it("asks which workspace an Anthropic key that names none runs in", async () => {
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "agent_api_key_set" && !(args as { workspace?: string }).workspace) {
+        return Promise.resolve({
+          kind: "pickWorkspace",
+          workspaces: [
+            { id: "wrkspc_01A", name: "Default" },
+            { id: "wrkspc_01B", name: "Research" },
+          ],
+        });
+      }
+      return base(cmd, args);
+    });
+    render(<AgentApiKeysRows />);
+    const input = await screen.findByLabelText<HTMLInputElement>("Paste the Anthropic API key");
+    fireEvent.change(input, { target: { value: FAKE_KEY } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    expect(input.value).toBe("");
+    // Nothing saved yet: the row asks for a workspace.
+    const picker = await screen.findByTitle("Anthropic workspace");
+    expect(saved).toEqual([]);
+    expect(document.body.innerHTML).not.toContain(FAKE_KEY);
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole("option", { name: "Research (wrkspc_01B)" }));
+    const pickRow = picker.closest(".agents-row")!;
+    fireEvent.click([...pickRow.querySelectorAll("button")].find((b) => b.textContent === "Save")!);
+    await waitFor(() => expect(calls("agent_api_key_set")).toHaveLength(2));
+    expect(calls("agent_api_key_set")[1][1]).toEqual({ provider: "anthropic", key: FAKE_KEY, workspace: "wrkspc_01B" });
+    await waitFor(() => expect(screen.queryByTitle("Anthropic workspace")).toBeNull());
+  });
+
   it("saves a key, clears the field and never reads it back", async () => {
     const onChange = vi.fn();
     render(<AgentApiKeysRows onChange={onChange} />);

@@ -302,8 +302,24 @@ fn revoke_all() {
 // ---------------------------------------------------------------------------
 // Keys (cached in memory; the keychain read is off the request path)
 
+/// The largest Anthropic 400 answer read whole to see whether it asks for a
+/// workspace ([`Refusal::NoWorkspace`]); a longer one is passed on as is.
+const MAX_PEEKED_ERROR: u64 = 64 * 1024;
+
+/// The request header naming the workspace an Anthropic key that is not
+/// scoped to one runs in.
+const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
+
+/// A user's own key and the workspace its requests name
+/// (`agent_api_keys::get_workspace`), if any.
+#[derive(Clone)]
+pub struct StoredKey {
+    pub key: String,
+    pub workspace: Option<String>,
+}
+
 enum Cached {
-    Key(String),
+    Key(StoredKey),
     Missing(Instant),
 }
 
@@ -320,13 +336,19 @@ static KEY_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// prompting), remembered. A miss is remembered for [`MISSING_KEY_RETRY`] so a
 /// locked keyring is not asked once per request.
 pub fn key_for(provider: Provider) -> Option<String> {
+    stored_for(provider).map(|stored| stored.key)
+}
+
+/// [`key_for`] with the workspace stored beside the key (read with it).
+pub fn stored_for(provider: Provider) -> Option<StoredKey> {
     match keys().lock_ok().get(&provider) {
         Some(Cached::Key(k)) => return Some(k.clone()),
         Some(Cached::Missing(at)) if at.elapsed() < MISSING_KEY_RETRY => return None,
         _ => {}
     }
     let generation = KEY_GENERATION.load(Ordering::Acquire);
-    let read = super::agent_api_keys::get_key(provider);
+    let read = super::agent_api_keys::get_key(provider)
+        .map(|key| StoredKey { key, workspace: super::agent_api_keys::get_workspace(provider) });
     let mut cache = keys().lock_ok();
     if KEY_GENERATION.load(Ordering::Acquire) == generation {
         cache.insert(
@@ -453,19 +475,28 @@ enum KeySource {
     /// user's own key for the rest.
     #[cfg(test)]
     FixedAdmin { own: Option<&'static str>, admin: Option<(&'static str, Option<String>)> },
+    /// A user's key stored with the workspace it names.
+    #[cfg(test)]
+    FixedInWorkspace(&'static str, &'static str),
 }
 
 impl KeySource {
-    async fn key(&self, provider: Provider) -> Option<String> {
+    async fn key(&self, provider: Provider) -> Option<StoredKey> {
+        #[cfg(test)]
+        let own = |k: &Option<&str>| k.map(|key| StoredKey { key: key.to_string(), workspace: None });
         match self {
-            KeySource::Keychain => app_core::rt::spawn_blocking(move || key_for(provider))
+            KeySource::Keychain => app_core::rt::spawn_blocking(move || stored_for(provider))
                 .await
                 .ok()
                 .flatten(),
             #[cfg(test)]
-            KeySource::Fixed(k) => k.map(str::to_string),
+            KeySource::Fixed(k) => own(k),
             #[cfg(test)]
-            KeySource::FixedAdmin { own, .. } => own.map(str::to_string),
+            KeySource::FixedAdmin { own: k, .. } => own(k),
+            #[cfg(test)]
+            KeySource::FixedInWorkspace(key, workspace) => {
+                Some(StoredKey { key: key.to_string(), workspace: Some(workspace.to_string()) })
+            }
         }
     }
 
@@ -477,7 +508,7 @@ impl KeySource {
                 .await
                 .unwrap_or(Err(Refusal::AdminUnavailable)),
             #[cfg(test)]
-            KeySource::Fixed(_) => Err(Refusal::AdminWithdrawn),
+            KeySource::Fixed(_) | KeySource::FixedInWorkspace(..) => Err(Refusal::AdminWithdrawn),
             #[cfg(test)]
             KeySource::FixedAdmin { admin, .. } => admin
                 .clone()
@@ -600,45 +631,66 @@ fn client(https_only: bool) -> Result<reqwest::Client, String> {
 /// How long [`check_key`] waits for the provider before saving untested.
 const KEY_CHECK_WAIT: Duration = Duration::from_secs(10);
 
-/// Ask the provider about `key` before Manage CLIs saves it: `Err` only when
-/// it definitely refused it — a Claude subscription token by its prefix, or a
-/// refused model listing (free, the key in the provider's own header). An
-/// unreachable provider (offline) lets the key be saved untested.
-pub async fn check_key(provider: Provider, key: &str) -> Result<(), String> {
-    check_key_at(&Upstream::Provider.base(provider), provider, key, true).await
+/// What [`check_key`] found out about a key the provider did not refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyCheck {
+    /// Save it, with the workspace its requests name (`Some` only for an
+    /// Anthropic key that is not scoped to one).
+    Save { workspace: Option<String> },
+    /// An Anthropic key that is not scoped to a workspace, and none was
+    /// chosen: every request has to name one (`anthropic-workspace-id`). The
+    /// workspaces the key listed, for the user to pick from — empty when it
+    /// could list none, and the user types the id instead.
+    PickWorkspace(Vec<Workspace>),
 }
 
-async fn check_key_at(base: &str, provider: Provider, key: &str, https_only: bool) -> Result<(), String> {
+/// An Anthropic workspace a key can name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+}
+
+/// Ask the provider about `key` before Manage CLIs saves it: `Err` only when
+/// it definitely refused it — a Claude subscription token by its prefix, a
+/// refused model listing (free, the key in the provider's own header), or a
+/// chosen workspace the key cannot use. An unreachable provider (offline)
+/// lets the key be saved untested. An Anthropic key that is not scoped to a
+/// workspace (Anthropic answers its listing with a 400 naming the
+/// `anthropic-workspace-id` header) is saved with `workspace` once that one
+/// answers, or with the only workspace it lists; otherwise the user picks.
+pub async fn check_key(provider: Provider, key: &str, workspace: Option<&str>) -> Result<KeyCheck, String> {
+    check_key_at(&Upstream::Provider.base(provider), provider, key, workspace, true).await
+}
+
+async fn check_key_at(
+    base: &str,
+    provider: Provider,
+    key: &str,
+    workspace: Option<&str>,
+    https_only: bool,
+) -> Result<KeyCheck, String> {
     if provider == Provider::Anthropic && key.starts_with("sk-ant-oat") {
         return Err("this is a Claude subscription token, not an API key — create an API key in the Anthropic Console (it starts with sk-ant-api)".into());
     }
-    let Ok(client) = client(https_only) else {
-        return Ok(());
-    };
-    let (path, value) = match provider {
-        Provider::Anthropic => ("/v1/models", key.to_string()),
-        Provider::Gemini => ("/v1beta/models", key.to_string()),
-        Provider::OpenAi => ("/v1/models", format!("Bearer {key}")),
-    };
-    let Ok(mut value) = HeaderValue::from_str(&value) else {
-        return Err("not a usable API key".into());
-    };
-    value.set_sensitive(true);
-    let mut request = client.get(format!("{base}{path}")).header(auth_header(provider), value);
-    if provider == Provider::Anthropic {
-        request = request.header("anthropic-version", "2023-06-01");
+    let workspace = workspace.filter(|_| provider == Provider::Anthropic);
+    if workspace.is_some_and(|w| !super::agent_api_keys::workspace_shape_ok(w)) {
+        return Err("not a workspace id (it starts with wrkspc_)".into());
     }
-    let Ok(Ok(response)) = tokio::time::timeout(KEY_CHECK_WAIT, request.send()).await else {
-        return Ok(());
+    let untested = KeyCheck::Save { workspace: workspace.map(str::to_string) };
+    let Ok(client) = client(https_only) else {
+        return Ok(untested);
     };
-    let status = response.status();
+    let path = match provider {
+        Provider::Anthropic | Provider::OpenAi => "/v1/models",
+        Provider::Gemini => "/v1beta/models",
+    };
+    let Some((status, body)) = ask_with_key(&client, base, path, provider, key, workspace).await? else {
+        return Ok(untested);
+    };
     // Gemini answers a bad key with a 400 naming the reason.
     let rejected = status == StatusCode::UNAUTHORIZED
-        || (provider == Provider::Gemini
-            && status == StatusCode::BAD_REQUEST
-            && tokio::time::timeout(KEY_CHECK_WAIT, response.text())
-                .await
-                .is_ok_and(|body| body.is_ok_and(|b| b.contains("API_KEY_INVALID"))));
+        || (provider == Provider::Gemini && status == StatusCode::BAD_REQUEST && body.contains("API_KEY_INVALID"));
     if rejected {
         let who = match provider {
             Provider::Anthropic => "Anthropic",
@@ -647,7 +699,94 @@ async fn check_key_at(base: &str, provider: Provider, key: &str, https_only: boo
         };
         return Err(format!("{who} rejected this API key (wrong, revoked, or not an API key) — it was not saved"));
     }
-    Ok(())
+    if provider != Provider::Anthropic {
+        return Ok(untested);
+    }
+    if let Some(id) = workspace {
+        return match status {
+            StatusCode::NOT_FOUND | StatusCode::FORBIDDEN => Err(format!(
+                "this key cannot use workspace {id}: it does not exist, or the key's account is not a member of it — it was not saved"
+            )),
+            StatusCode::BAD_REQUEST => Err(format!("Anthropic refused workspace {id} for this key — it was not saved")),
+            _ => Ok(untested),
+        };
+    }
+    if !(status == StatusCode::BAD_REQUEST && body.contains("anthropic-workspace-id")) {
+        return Ok(untested);
+    }
+    let listed = list_workspaces(&client, base, key).await;
+    if let [only] = listed.as_slice() {
+        if let Ok(Some((status, _))) = ask_with_key(&client, base, path, provider, key, Some(&only.id)).await {
+            if status.is_success() {
+                return Ok(KeyCheck::Save { workspace: Some(only.id.clone()) });
+            }
+        }
+    }
+    Ok(KeyCheck::PickWorkspace(listed))
+}
+
+/// A GET of `path` with `key` in the provider's own header (and, for
+/// Anthropic, the version and `workspace`): its status and body, `None` when
+/// the provider did not answer in [`KEY_CHECK_WAIT`].
+async fn ask_with_key(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    provider: Provider,
+    key: &str,
+    workspace: Option<&str>,
+) -> Result<Option<(StatusCode, String)>, String> {
+    let value = if provider == Provider::OpenAi { format!("Bearer {key}") } else { key.to_string() };
+    let Ok(mut value) = HeaderValue::from_str(&value) else {
+        return Err("not a usable API key".into());
+    };
+    value.set_sensitive(true);
+    let mut request = client.get(format!("{base}{path}")).header(auth_header(provider), value);
+    if provider == Provider::Anthropic {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    if let Some(id) = workspace {
+        request = request.header(WORKSPACE_HEADER, id);
+    }
+    let answer = async {
+        let response = request.send().await.ok()?;
+        let status = response.status();
+        Some((status, response.text().await.unwrap_or_default()))
+    };
+    Ok(tokio::time::timeout(KEY_CHECK_WAIT, answer).await.ok().flatten())
+}
+
+/// The workspaces an Anthropic key that is not scoped to one can name, Default
+/// included and archived ones left out — empty when it may not list them.
+async fn list_workspaces(client: &reqwest::Client, base: &str, key: &str) -> Vec<Workspace> {
+    #[derive(serde::Deserialize)]
+    struct Listed {
+        id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        archived_at: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Page {
+        data: Vec<Listed>,
+    }
+    let path = "/v1/organizations/workspaces?include_default=true&limit=100";
+    let Ok(Some((status, body))) = ask_with_key(client, base, path, Provider::Anthropic, key, None).await else {
+        return Vec::new();
+    };
+    if !status.is_success() {
+        return Vec::new();
+    }
+    serde_json::from_str::<Page>(&body)
+        .map(|page| {
+            page.data
+                .into_iter()
+                .filter(|w| w.archived_at.is_none() && super::agent_api_keys::workspace_shape_ok(&w.id))
+                .map(|w| Workspace { name: if w.name.is_empty() { w.id.clone() } else { w.name }, id: w.id })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Where the port of the last run is remembered (not a secret): binding it
@@ -906,6 +1045,9 @@ enum Refusal {
     /// The provider answered the user's own key with a 401: the stored key is
     /// wrong, revoked, or not an API key at all (a subscription token).
     KeyRejected,
+    /// Anthropic wants the user's own key to name a workspace (a key that is
+    /// not scoped to one, saved before a workspace was asked for).
+    NoWorkspace,
     /// The provider's host could not be reached.
     Upstream,
     /// Too many request bodies held at once ([`MAX_BUFFERED`]).
@@ -934,7 +1076,7 @@ impl Refusal {
             Refusal::NotFound => StatusCode::NOT_FOUND,
             Refusal::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Refusal::BodyTimeout => StatusCode::REQUEST_TIMEOUT,
-            Refusal::BadBody => StatusCode::BAD_REQUEST,
+            Refusal::BadBody | Refusal::NoWorkspace => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
             Refusal::Busy | Refusal::AdminUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
@@ -1003,6 +1145,10 @@ impl Refusal {
                     " (wrong, revoked, or a subscription token instead of a Console API key) — replace it in Manage CLIs → API keys"
                 ),
             },
+            Refusal::NoWorkspace => concat!(
+                "the Anthropic API key saved in ", crate::app_name!(),
+                " is not scoped to a workspace, and none is chosen for it — remove it in Manage CLIs → API keys and save it again to pick one"
+            ),
             Refusal::Upstream => concat!(crate::app_name!(), " API proxy: the provider's API could not be reached"),
             Refusal::Busy => concat!(crate::app_name!(), " API proxy: too many large requests at once; try again"),
             Refusal::AdminWithdrawn => concat!(
@@ -1034,7 +1180,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
                 Refusal::Forbidden => "PERMISSION_DENIED",
                 Refusal::NotFound => "NOT_FOUND",
-                Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
+                Refusal::TooLarge | Refusal::BadBody | Refusal::NoWorkspace => "INVALID_ARGUMENT",
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "UNAVAILABLE",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
@@ -1048,7 +1194,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::Forbidden => "permission_error",
                 Refusal::NotFound => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
-                Refusal::BodyTimeout | Refusal::BadBody => "invalid_request_error",
+                Refusal::BodyTimeout | Refusal::BadBody | Refusal::NoWorkspace => "invalid_request_error",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "api_error",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
@@ -1293,13 +1439,13 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     // The key and where it goes: the user's own to the provider; an
     // administrator's to the provider, or (brokered) this user's broker
     // token to the server's key broker.
-    let (key, broker) = match grant.admin {
+    let (key, broker, workspace) = match grant.admin {
         None => match state.keys.key(provider).await {
-            Some(key) => (zeroize::Zeroizing::new(key), None),
+            Some(stored) => (zeroize::Zeroizing::new(stored.key), None, stored.workspace),
             None => return refuse(Some(provider), Refusal::NoKey),
         },
         Some(cli) => match state.keys.admin(cli).await {
-            Ok(found) => found,
+            Ok((key, broker)) => (key, broker, None),
             Err(refusal) => return refuse(Some(provider), refusal),
         },
     };
@@ -1343,6 +1489,11 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let url = format!("{base}{rest}{}", forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
+    // A key that is not scoped to a workspace runs in the one chosen when it
+    // was saved, whatever the CLI named.
+    if let Some(value) = workspace.as_deref().and_then(|w| HeaderValue::from_str(w).ok()) {
+        headers.insert(WORKSPACE_HEADER, value);
+    }
     // Plain bytes, said outright: a request with no `accept-encoding` lets a
     // server pick any coding, and the meter reads usage from plain bytes (a
     // compressed answer would still be charged — as an estimate).
@@ -1387,6 +1538,30 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         }
         forget_key(provider);
         return refuse(Some(provider), Refusal::KeyRejected);
+    }
+    if grant.admin.is_none()
+        && workspace.is_none()
+        && provider == Provider::Anthropic
+        && upstream.status() == StatusCode::BAD_REQUEST
+        && upstream.content_length().is_some_and(|n| n <= MAX_PEEKED_ERROR)
+    {
+        // Anthropic's answer to a key that has to name a workspace: said in
+        // the proxy's words, with where to choose one. Any other 400 goes
+        // back as it came. An error answer costs nothing.
+        let status = upstream.status();
+        let headers = copy_headers(upstream.headers(), DROP_RESPONSE);
+        let body = tokio::time::timeout(BODY_WAIT, upstream.bytes()).await.ok().and_then(Result::ok).unwrap_or_default();
+        if let Some(mut metered) = metered.0.take() {
+            metered.meter.answer(status.as_u16(), None);
+            metered.settle(true);
+        }
+        if String::from_utf8_lossy(&body).contains(WORKSPACE_HEADER) {
+            return refuse(Some(provider), Refusal::NoWorkspace);
+        }
+        let mut response = Response::new(Body::from(body));
+        *response.status_mut() = status;
+        *response.headers_mut() = headers;
+        return response;
     }
     relay(upstream, Tap::new(grant, busy, metered.0.take()))
 }
@@ -2599,7 +2774,7 @@ mod tests {
     async fn a_key_is_checked_with_the_provider_before_it_is_saved() {
         let seen = Arc::new(Seen::default());
         let refusing = answering(StatusCode::UNAUTHORIZED, r#"{"type":"error"}"#, seen.clone()).await;
-        let err = check_key_at(&refusing, Provider::Anthropic, FAKE_KEY, false).await.unwrap_err();
+        let err = check_key_at(&refusing, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap_err();
         assert!(err.contains("Anthropic rejected"), "{err}");
         {
             let requests = seen.requests.lock_ok();
@@ -2607,28 +2782,144 @@ mod tests {
             assert_eq!((method.as_str(), uri.as_str()), ("GET", "/v1/models"));
             assert_eq!(headers["x-api-key"], FAKE_KEY);
         }
-        let err = check_key_at(&refusing, Provider::OpenAi, FAKE_KEY, false).await.unwrap_err();
+        let err = check_key_at(&refusing, Provider::OpenAi, FAKE_KEY, None, false).await.unwrap_err();
         assert!(err.contains("OpenAI rejected"), "{err}");
         assert_eq!(seen.requests.lock_ok()[1].2["authorization"], format!("Bearer {FAKE_KEY}"));
 
         let gemini_bad = answering(StatusCode::BAD_REQUEST, r#"{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}"#, seen.clone()).await;
-        assert!(check_key_at(&gemini_bad, Provider::Gemini, FAKE_KEY, false).await.is_err());
+        assert!(check_key_at(&gemini_bad, Provider::Gemini, FAKE_KEY, None, false).await.is_err());
         // Another 400 is not a verdict on the key.
         let gemini_other = answering(StatusCode::BAD_REQUEST, r#"{"error":{}}"#, seen.clone()).await;
-        assert!(check_key_at(&gemini_other, Provider::Gemini, FAKE_KEY, false).await.is_ok());
+        assert!(check_key_at(&gemini_other, Provider::Gemini, FAKE_KEY, None, false).await.is_ok());
 
         let accepting = answering(StatusCode::OK, r#"{"data":[]}"#, seen.clone()).await;
-        assert!(check_key_at(&accepting, Provider::Anthropic, FAKE_KEY, false).await.is_ok());
+        assert!(check_key_at(&accepting, Provider::Anthropic, FAKE_KEY, None, false).await.is_ok());
         // Offline: saved untested.
         let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
-        assert!(check_key_at(&format!("http://{gone}"), Provider::Anthropic, FAKE_KEY, false).await.is_ok());
+        assert!(check_key_at(&format!("http://{gone}"), Provider::Anthropic, FAKE_KEY, None, false).await.is_ok());
+    }
+
+    /// Anthropic for a key that is not scoped to a workspace: a listing
+    /// without `anthropic-workspace-id` is a 400 naming the header, with one
+    /// it answers for a workspace in `members` and is a 404 for another; the
+    /// key lists `listed` (a JSON `data` array).
+    async fn unscoped_anthropic(members: &'static [&'static str], listed: &'static str, seen: Arc<Seen>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(move |req: Request| {
+            let seen = seen.clone();
+            async move {
+                seen.requests.lock_ok().push((req.method().to_string(), req.uri().to_string(), req.headers().clone(), Vec::new()));
+                let (status, body) = if req.uri().path() == "/v1/organizations/workspaces" {
+                    (StatusCode::OK, format!(r#"{{"data":{listed},"has_more":false}}"#))
+                } else {
+                    match req.headers().get(WORKSPACE_HEADER).and_then(|v| v.to_str().ok()) {
+                        None => (StatusCode::BAD_REQUEST, r#"{"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header"}}"#.to_string()),
+                        Some(id) if members.contains(&id) => (StatusCode::OK, r#"{"data":[]}"#.to_string()),
+                        Some(_) => (StatusCode::NOT_FOUND, r#"{"type":"error","error":{"type":"not_found_error"}}"#.to_string()),
+                    }
+                };
+                let mut r = Response::new(Body::from(body));
+                *r.status_mut() = status;
+                r
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    const WS_A: &str = "wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA";
+    const WS_B: &str = "wrkspc_01BBBBBBBBBBBBBBBBBBBBBBBB";
+
+    #[tokio::test]
+    async fn an_unscoped_anthropic_key_gets_its_only_workspace() {
+        let seen = Arc::new(Seen::default());
+        let listed = r#"[{"id":"wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA","name":"Default","archived_at":null},
+            {"id":"wrkspc_01BBBBBBBBBBBBBBBBBBBBBBBB","name":"Old","archived_at":"2026-01-01T00:00:00Z"}]"#;
+        let base = unscoped_anthropic(&[WS_A], listed, seen.clone()).await;
+        let found = check_key_at(&base, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap();
+        assert_eq!(found, KeyCheck::Save { workspace: Some(WS_A.to_string()) });
+        let requests = seen.requests.lock_ok();
+        assert_eq!(requests[1].1, "/v1/organizations/workspaces?include_default=true&limit=100");
+        assert_eq!(requests[1].2["x-api-key"], FAKE_KEY);
+        assert_eq!(requests[2].2[WORKSPACE_HEADER], WS_A);
+    }
+
+    #[tokio::test]
+    async fn an_unscoped_anthropic_key_with_several_workspaces_asks_which() {
+        let seen = Arc::new(Seen::default());
+        let listed = r#"[{"id":"wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA","name":"Default"},{"id":"wrkspc_01BBBBBBBBBBBBBBBBBBBBBBBB","name":"Claude Code"}]"#;
+        let base = unscoped_anthropic(&[WS_A], listed, seen.clone()).await;
+        let found = check_key_at(&base, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap();
+        assert_eq!(
+            found,
+            KeyCheck::PickWorkspace(vec![
+                Workspace { id: WS_A.into(), name: "Default".into() },
+                Workspace { id: WS_B.into(), name: "Claude Code".into() },
+            ])
+        );
+        // The picked one is checked; one the key cannot use is refused.
+        let picked = check_key_at(&base, Provider::Anthropic, FAKE_KEY, Some(WS_A), false).await.unwrap();
+        assert_eq!(picked, KeyCheck::Save { workspace: Some(WS_A.to_string()) });
+        let err = check_key_at(&base, Provider::Anthropic, FAKE_KEY, Some(WS_B), false).await.unwrap_err();
+        assert!(err.contains(WS_B), "{err}");
+        let err = check_key_at(&base, Provider::Anthropic, FAKE_KEY, Some("wrkspc_x\r\ny: z"), false).await.unwrap_err();
+        assert!(err.contains("not a workspace id"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_unscoped_key_that_cannot_list_workspaces_asks_for_an_id() {
+        let seen = Arc::new(Seen::default());
+        let base = unscoped_anthropic(&[WS_A], "null", seen).await;
+        let found = check_key_at(&base, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap();
+        assert_eq!(found, KeyCheck::PickWorkspace(Vec::new()));
+    }
+
+    #[tokio::test]
+    async fn a_stored_workspace_is_named_on_every_request() {
+        let seen = Arc::new(Seen::default());
+        let base = unscoped_anthropic(&[WS_A], "[]", seen.clone()).await;
+        let (port, _) = proxy_with(base, None, |s| s.keys = KeySource::FixedInWorkspace(FAKE_KEY, WS_A)).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:workspace", None)).unwrap();
+        let url = format!("{}/v1/models", base_url_on(port, Provider::Anthropic));
+        let r = plain_client()
+            .get(&url)
+            .header("x-api-key", token)
+            .header(WORKSPACE_HEADER, WS_B)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let headers = &seen.requests.lock_ok()[0].2;
+        assert_eq!(headers["x-api-key"], FAKE_KEY);
+        assert_eq!(headers.get_all(WORKSPACE_HEADER).iter().collect::<Vec<_>>(), vec![WS_A]);
+        on_tab_gone("e2e:workspace");
+    }
+
+    #[tokio::test]
+    async fn a_key_without_its_workspace_is_answered_in_the_proxys_words() {
+        let seen = Arc::new(Seen::default());
+        let base = unscoped_anthropic(&[WS_A], "[]", seen).await;
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(base, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:no-workspace", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let r = plain_client().post(&url).header("x-api-key", token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 400);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let json: serde_json::Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["type"], "invalid_request_error");
+        assert!(json["error"]["message"].as_str().unwrap().contains("save it again to pick one"));
+        assert_eq!(book.snapshot(chrono::Utc::now()).billed(Provider::Anthropic), 0);
+        on_tab_gone("e2e:no-workspace");
     }
 
     #[tokio::test]
     async fn a_claude_subscription_token_is_refused_without_asking_anthropic() {
         let seen = Arc::new(Seen::default());
         let accepting = answering(StatusCode::OK, "{}", seen.clone()).await;
-        let err = check_key_at(&accepting, Provider::Anthropic, "sk-ant-oat01-xyz", false).await.unwrap_err();
+        let err = check_key_at(&accepting, Provider::Anthropic, "sk-ant-oat01-xyz", None, false).await.unwrap_err();
         assert!(err.contains("subscription token"), "{err}");
         assert!(seen.requests.lock_ok().is_empty());
     }
