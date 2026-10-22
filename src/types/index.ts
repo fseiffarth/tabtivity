@@ -832,6 +832,9 @@ export interface Settings {
   /** Minimum subwindow (split pane) height in px a divider drag may shrink to.
    *  Unset falls back to DEFAULT_MIN_SUBWINDOW_PX. */
   min_subwindow_height?: number;
+  /** When true, closing a subwindow's last tab closes the subwindow too. Default
+   *  OFF: the emptied subwindow stays, ready for a new tab. */
+  close_subwindow_on_last_tab?: boolean;
   /** When true, in-app editors debounce-save edits automatically (#47). Default OFF. */
   autosave?: boolean;
   /** When true (the default), the text/TeX editors tint recently typed runs with a

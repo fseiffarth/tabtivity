@@ -1618,6 +1618,8 @@ export const enSource = {
   "settings.windowZoom": "Window zoom",
   "settings.minSubWidth": "Min subwindow width (px)",
   "settings.minSubHeight": "Min subwindow height (px)",
+  "settings.closeSubwindowOnLastTab": "Close a subwindow with its last tab",
+  "settings.closeSubwindowOnLastTabHelp": "Off: closing a subwindow's last tab leaves the subwindow standing, empty, so its + opens the next tab in the same place; its × closes it. On: the subwindow closes with its last tab and its neighbours take the space.",
 
   // Settings — downloads.
   "settings.downloads": "Downloads",

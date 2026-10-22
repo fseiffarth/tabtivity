@@ -1634,6 +1634,8 @@ export const dict: Dict = {
   "settings.windowZoom": "Zoom finestra",
   "settings.minSubWidth": "Larghezza min. sottofinestra (px)",
   "settings.minSubHeight": "Altezza min. sottofinestra (px)",
+  "settings.closeSubwindowOnLastTab": "Chiudi una sottofinestra con la sua ultima scheda",
+  "settings.closeSubwindowOnLastTabHelp": "Disattivato: chiudendo l'ultima scheda di una sottofinestra, questa resta al suo posto, vuota, e il suo + apre la scheda successiva nello stesso punto; la sua × la chiude. Attivato: la sottofinestra si chiude con la sua ultima scheda e le vicine ne prendono lo spazio.",
 
   "settings.downloads": "Download",
   "settings.noDownloadFolders":

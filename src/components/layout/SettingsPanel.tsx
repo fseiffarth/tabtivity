@@ -1180,7 +1180,12 @@ const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "s
  *  label key here, or the search will not find it. */
 const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   general: ["settings.theme", "settings.themeVars", "settings.language", "settings.showUntestedTags", "settings.runScriptsBg", "settings.persistLocal"],
-  layout: ["settings.windowZoom", "settings.minSubWidth", "settings.minSubHeight"],
+  layout: [
+    "settings.windowZoom",
+    "settings.closeSubwindowOnLastTab",
+    "settings.minSubWidth",
+    "settings.minSubHeight",
+  ],
   clock: ["settings.showClockSeconds", "settings.clock24"],
   hintsOnboarding: ["settings.showHints", "settings.howToStart", "settings.lessons", "lessons.tour.title", "lessons.tourRemote.title", "settings.resetHints"],
   downloads: ["settings.addDownloadFolder"],
@@ -1453,6 +1458,14 @@ export function SettingsDialog({
                 onChange={(e) => void updateSettings({ side_panel_auto_hide: e.target.checked })}
               />
               <p className="settings-help">{t("settings.sidePanelAutoHideHelp")}</p>
+            </SettingsCard>
+            <SettingsCard>
+              <ToggleRow
+                label={<>{t("settings.closeSubwindowOnLastTab")} <UntestedTag id="settings.closeSubwindowOnLastTab" /></>}
+                checked={settings?.close_subwindow_on_last_tab ?? false}
+                onChange={(e) => void updateSettings({ close_subwindow_on_last_tab: e.target.checked })}
+              />
+              <p className="settings-help">{t("settings.closeSubwindowOnLastTabHelp")}</p>
             </SettingsCard>
             {/* Both minimums answer one question, so one card holds them and
                 the help line that explains the pair sits at its foot. */}

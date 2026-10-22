@@ -938,6 +938,10 @@ pub struct Settings {
     /// pane to. Unset falls back to the frontend's DEFAULT_MIN_SUBWINDOW_PX.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_subwindow_height: Option<u32>,
+    /// When true, closing a subwindow's last tab closes the subwindow too.
+    /// Defaults OFF: the emptied subwindow stays, ready for a new tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_subwindow_on_last_tab: Option<bool>,
     /// When true, the in-app text/TeX/markdown viewers debounce-save edits to
     /// disk automatically (#47). Defaults OFF; the #43 diff-aware reload is its
     /// counterpart for external changes.

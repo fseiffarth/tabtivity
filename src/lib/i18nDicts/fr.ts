@@ -1635,6 +1635,8 @@ export const dict: Dict = {
   "settings.windowZoom": "Zoom de la fenêtre",
   "settings.minSubWidth": "Largeur min. de la sous-fenêtre (px)",
   "settings.minSubHeight": "Hauteur min. de la sous-fenêtre (px)",
+  "settings.closeSubwindowOnLastTab": "Fermer une sous-fenêtre avec son dernier onglet",
+  "settings.closeSubwindowOnLastTabHelp": "Désactivé : fermer le dernier onglet d'une sous-fenêtre la laisse en place, vide, et son + ouvre l'onglet suivant au même endroit ; son × la ferme. Activé : la sous-fenêtre se ferme avec son dernier onglet et ses voisines prennent la place.",
 
   "settings.downloads": "Téléchargements",
   "settings.noDownloadFolders":

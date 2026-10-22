@@ -1634,6 +1634,8 @@ export const dict: Dict = {
   "settings.windowZoom": "Zoom de ventana",
   "settings.minSubWidth": "Ancho mín. de subventana (px)",
   "settings.minSubHeight": "Alto mín. de subventana (px)",
+  "settings.closeSubwindowOnLastTab": "Cerrar una subventana con su última pestaña",
+  "settings.closeSubwindowOnLastTabHelp": "Desactivado: al cerrar la última pestaña de una subventana, esta queda vacía en su sitio y su + abre la siguiente pestaña en el mismo lugar; su × la cierra. Activado: la subventana se cierra con su última pestaña y las vecinas ocupan el espacio.",
 
   "settings.downloads": "Descargas",
   "settings.noDownloadFolders":

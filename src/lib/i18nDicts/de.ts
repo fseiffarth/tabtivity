@@ -1636,6 +1636,8 @@ export const dict: Dict = {
   "settings.windowZoom": "Fenster-Zoom",
   "settings.minSubWidth": "Min. Breite des Unterfensters (px)",
   "settings.minSubHeight": "Min. Höhe des Unterfensters (px)",
+  "settings.closeSubwindowOnLastTab": "Unterfenster mit seinem letzten Tab schließen",
+  "settings.closeSubwindowOnLastTabHelp": "Aus: Wird der letzte Tab eines Unterfensters geschlossen, bleibt das Unterfenster leer stehen, und sein + öffnet den nächsten Tab an derselben Stelle; sein × schließt es. An: Das Unterfenster schließt mit seinem letzten Tab, und die Nachbarn übernehmen den Platz.",
 
   "settings.downloads": "Downloads",
   "settings.noDownloadFolders":
