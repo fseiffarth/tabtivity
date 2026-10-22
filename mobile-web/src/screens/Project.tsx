@@ -18,7 +18,7 @@ import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { FileTabCard, TAB_ACTION_LABEL, TabCard, tabActions, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
-import { finishedAt } from "../components/AgentModeMarks";
+import { lastWorkedAt } from "../components/AgentModeMarks";
 import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
 import { markDoneSeen, markInterruptedSeen, readSeenDone, readSeenInterrupted, showsStatusBadge, withoutResumed, writeSeenInterrupted } from "../seenDone";
 import { OutboxGallery } from "../components/OutboxGallery";
@@ -308,7 +308,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     decision: tab.agent_status === "question",
     working: tab.agent_status === "working",
     workingAt: tab.working_at,
-    doneAt: finishedAt(tab),
+    doneAt: lastWorkedAt(tab),
   })), [detail?.tabs, sort]);
   // A tab that ran again forgets it was seen interrupted: its next interruption
   // is news.

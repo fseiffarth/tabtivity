@@ -3,7 +3,7 @@ import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type Agent
 import { lastPrompt } from "../agentPrompts";
 import { getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
-import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass } from "../components/AgentModeMarks";
+import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass, lastWorkedAt } from "../components/AgentModeMarks";
 import { tabColorCss } from "../tabColors";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readChoice, writeChoice } from "../prefs";
@@ -89,7 +89,7 @@ export function Activity({ open, onConnection }: {
     decision: tab.agent_status === "question",
     working: tab.agent_status === "working",
     workingAt: tab.working_at,
-    doneAt: tab.done_at,
+    doneAt: lastWorkedAt(tab),
   })), [sort, tabs]);
   useEffect(() => {
     let disposed = false;

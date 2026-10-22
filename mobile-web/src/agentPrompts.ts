@@ -28,6 +28,14 @@ export function lastPrompt(tab: TabRow): TabPrompt | undefined {
   return tab.prompts?.[tab.prompts.length - 1];
 }
 
+/** The instant (ms epoch) of the last prompt a session was given, when the
+ *  transcript said one. */
+export function lastPromptAt(tab: Pick<TabRow, "prompts">): number | undefined {
+  const at = tab.prompts?.[tab.prompts.length - 1]?.at;
+  const stamp = at ? new Date(at).getTime() : NaN;
+  return Number.isFinite(stamp) ? stamp : undefined;
+}
+
 /**
  * When a scheduled prompt fires: the desktop-local `YYYY-MM-DDTHH:MM` key,
  * sliced rather than parsed — it is the workstation's wall clock, not an

@@ -2,6 +2,7 @@ import type { TabRow, TabWorktree } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ageLabel } from "../terminal/fileLabels";
+import { lastPromptAt } from "../agentPrompts";
 
 /** The desktop tab strip's PLAN and GOAL pills (`TabAgentModeMarks`): the
  *  session's own status line reads plan mode, or a `/goal` is running. The
@@ -62,6 +63,15 @@ export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at
 export function finishedAt(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">): number | undefined {
   const turn = turnDuration(tab);
   return turn && !turn.running ? turn.end : tab.done_at;
+}
+
+/** What a list sorted by "last worked" orders a tab by: its finish time, and
+ *  where the desktop has none (it keeps these in memory, so a restarted
+ *  desktop has none for any tab) the time of its last prompt — the one reading
+ *  the card still prints, so the order and the card's clock agree. A running
+ *  tab keeps none: it is placed by its tier, not by a time. */
+export function lastWorkedAt(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents" | "prompts">): number | undefined {
+  return finishedAt(tab) ?? (tab.agent_status === "working" ? undefined : lastPromptAt(tab));
 }
 
 /** "42s", "4m", "1h 12m" — a turn's length, as the card says it. */
