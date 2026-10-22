@@ -375,6 +375,42 @@ fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static st
         .map_err(|e| e.code())
 }
 
+/// The OS clipboard's image pasted into a local terminal tab — the terminal's
+/// paste chord, an agent pane's Ctrl+V or double-click, or the Reader's
+/// composer, whenever the clipboard holds no text. A fenced agent cannot read
+/// the clipboard itself (its `/tmp` and `/run` hide the display), so the image
+/// reaches it the way a dropped file does ([`pty_drop_files`]): as a PNG in
+/// its folder's inbox, typed as the `@` reference. A shell gets the path of a
+/// copy in the global inbox instead, outside the project, since nothing pasted
+/// into a shell files itself into the project. The `Err` is a wire code:
+/// `no_clipboard_image`, `remote_tab` or an inbox one.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Result<String, String> {
+    let dir = ctx
+        .get::<RegistryState>()
+        .lock_ok()
+        .drop_dir(&id)
+        .ok_or("no_terminal")?
+        .ok_or("remote_tab")?;
+    // On X11 a clipboard with no image waits out a selection transfer timeout.
+    let read = app_core::rt::spawn_blocking(crate::commands::mobile_control::clipboard_png);
+    let png = tokio::time::timeout(std::time::Duration::from_secs(3), read)
+        .await
+        .map_err(|_| "no_clipboard_image")?
+        .map_err(|_| "no_clipboard_image")??;
+    let state_dir = crate::storage::state_dir();
+    app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?
+}
+
+fn paste_image(dir: &Path, state_dir: &Path, png: &[u8], agent: bool) -> Result<String, String> {
+    const NAME: &str = "clipboard.png";
+    if agent {
+        return inbox::store(dir, NAME, png).map(|stored| stored.reference).map_err(|e| e.code().into());
+    }
+    let stored = inbox::store_global(state_dir, NAME, png).map_err(|e| e.code().to_string())?;
+    Ok(state_dir.join(inbox::GLOBAL_INBOX_DIR).join(&stored.name).to_string_lossy().into_owned())
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_write(
     ctx: Ctx,
@@ -647,6 +683,29 @@ mod tests {
         let dropped = drop_files(tab.path(), std::slice::from_ref(&path), &[], false);
         assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
         assert!(!tab.path().join(inbox::INBOX_DIR).exists());
+    }
+
+    #[test]
+    fn a_pasted_image_reaches_an_agent_through_its_inbox() {
+        let tab = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let reference = paste_image(tab.path(), state.path(), b"png bytes", true).unwrap();
+        assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+        assert!(reference.ends_with(".png"), "{reference}");
+        assert_eq!(fs::read(tab.path().join(&reference)).unwrap(), b"png bytes");
+        assert!(!state.path().join(inbox::GLOBAL_INBOX_DIR).exists());
+    }
+
+    #[test]
+    fn a_pasted_image_reaches_a_shell_as_a_path_outside_the_project() {
+        let tab = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let path = paste_image(tab.path(), state.path(), b"png bytes", false).unwrap();
+        let path = Path::new(&path);
+        assert!(path.starts_with(state.path().join(inbox::GLOBAL_INBOX_DIR)), "{}", path.display());
+        assert_eq!(fs::read(path).unwrap(), b"png bytes");
+        assert!(fs::read_dir(tab.path()).unwrap().next().is_none());
+        assert_eq!(paste_image(tab.path(), state.path(), b"", true).unwrap_err(), "empty_file");
     }
 
     #[test]

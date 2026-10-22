@@ -56,6 +56,8 @@
 //!   manager drop hands the window, which name files on the machine the user
 //!   sits at; a daemon would read its own disk outside the user's roots. A
 //!   browser client has no such paths and leaves the drop out.
+//! - **`pty_paste_clipboard_image` is `Client`**: it reads the OS clipboard
+//!   of the machine the user sits at; a daemon has none.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -954,6 +956,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pty_drop_files", Client),
     ("pty_kill", Core),
     ("pty_kill_scope", Core),
+    ("pty_paste_clipboard_image", Client),
     ("pty_remove_view", Core),
     ("pty_resize", Core),
     ("pty_scrollback", Core),

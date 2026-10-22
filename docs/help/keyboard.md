@@ -135,8 +135,13 @@ in the settings page's *Terminal* list.
 - **Right-click** on selected text copies it and clears the highlight; with
   nothing selected, right-click goes to the program (Claude Code pastes).
 - **Ctrl+Shift+C** copies the selection, **Ctrl+Shift+V** pastes (in agent
-  tabs a double-click off a link pastes too). Plain Ctrl+C still interrupts
-  the program.
+  tabs plain Ctrl+V and a double-click off a link paste too). Plain Ctrl+C
+  still interrupts the program.
+- **Pasting an image** (a screenshot on the clipboard, no text): an agent tab
+  gets it as a PNG in the project's `.tabtivity/inbox/` folder and the prompt
+  gets `@<file>`, just like a file dragged onto the tab; in the Chat view
+  Ctrl+V in the text box does the same. A shell tab gets the path of a copy
+  kept outside the project. Remote tabs can't take a pasted image.
 - **Ctrl+Shift+X — keyboard select.** A cursor appears on the terminal cursor
   (or on an existing mouse selection) with a legend at the bottom of the pane:
   arrows or h/j/k/l move, Ctrl+←/→ jump by word, Home/End go to the line's

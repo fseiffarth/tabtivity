@@ -32,7 +32,7 @@ import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
-import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFiles } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
@@ -1228,14 +1228,22 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // multi-line paste then lands in the composer as one block instead of a burst
     // of Enters that submits the first line and types the rest into what it
     // opened. The text leaves through xterm's own `onData` handler above, so it
-    // counts as user input exactly like a keystroke does.
+    // counts as user input exactly like a keystroke does. A clipboard with no
+    // text may hold an image (a screenshot): that is typed the way a dropped
+    // file is (`pasteClipboardImage`).
     const pasteClipboard = () => {
-      navigator.clipboard
-        ?.readText()
+      (navigator.clipboard?.readText() ?? Promise.resolve(""))
+        .catch(() => "")
         .then((text) => {
-          if (text) term?.paste(text);
-        })
-        .catch(() => {});
+          if (text) {
+            term?.paste(text);
+            return;
+          }
+          void pasteClipboardImage(id, zoomable).then(({ text: typed, error }) => {
+            if (typed) term?.paste(typed);
+            if (error) useProjectsStore.setState({ switchToast: tRef.current(error) });
+          });
+        });
     };
 
     // Agent CLIs set the terminal title (OSC 0/2) to a short summary of what
@@ -1337,6 +1345,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         } else {
           enterKeySelect();
         }
+        return false;
+      }
+      // Plain Ctrl+V in an agent pane pastes too, as in a chat box. The agent
+      // CLIs read it as "paste the clipboard's image", which a fenced one
+      // cannot do itself (its private /tmp and /run hide the display), so the
+      // image comes through `pasteClipboard` instead.
+      if (zoomable && e.key.toLowerCase() === "v" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        pasteClipboard();
         return false;
       }
       // Alt+arrow keeps the word-jump encoding xterm 5 gave it (xterm 6 sends

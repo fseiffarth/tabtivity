@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -57,7 +57,7 @@ import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, 
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
-import { onReaderInsert } from "../../lib/terminal/terminalDrop";
+import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
@@ -579,6 +579,20 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     box?.focus();
   }), [ptyId]);
 
+  // A paste that finds no text on the clipboard may be an image (a
+  // screenshot): it lands like a dropped file, an inbox `@` reference typed at
+  // the caret through the insert above. `pastedImage` is that reference, for
+  // the pill while the draft still holds it.
+  const [pastedImage, setPastedImage] = useState("");
+  const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (event.clipboardData.getData("text/plain")) return;
+    event.preventDefault();
+    void pasteClipboardImage(ptyId, true).then(({ text, error }) => {
+      if (text && insertIntoReader(ptyId, text)) setPastedImage(text.trim());
+      if (error) setSendError(t(error));
+    });
+  };
+
   /** The pane's screen and keyboard, for the walks that read Claude's own. */
   const paneRows = () => {
     const term = terminalFor(ptyId);
@@ -804,7 +818,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
         onChange={(e) => editDraft(e.target.value, true)}
         onKeyDown={onComposerKey}
+        onPaste={onComposerPaste}
       />
+      {pastedImage && draft.includes(pastedImage) && <UntestedTag id="terminal.paste.image" />}
       {historyAt.current !== null && <UntestedTag id="terminal.reader.history" />}
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}

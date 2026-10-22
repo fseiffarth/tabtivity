@@ -712,6 +712,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["pty_drop_files", "client"],
   ["pty_kill", "core"],
   ["pty_kill_scope", "core"],
+  ["pty_paste_clipboard_image", "client"],
   ["pty_remove_view", "core"],
   ["pty_resize", "core"],
   ["pty_scrollback", "core"],

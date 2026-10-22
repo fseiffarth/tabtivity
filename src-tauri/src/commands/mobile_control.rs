@@ -112,8 +112,10 @@ fn clipboard_image_size() -> Option<(u32, u32)> {
     }
 }
 
-/// The clipboard image as PNG, or the wire code `no_clipboard_image`.
-fn clipboard_png() -> Result<Vec<u8>, String> {
+/// The clipboard image as PNG, or the wire code `no_clipboard_image`. Also
+/// what an image pasted into a terminal tab is read with
+/// (`commands::terminal::pty_paste_clipboard_image`).
+pub(crate) fn clipboard_png() -> Result<Vec<u8>, String> {
     #[cfg(feature = "desktop")]
     {
         let mut clipboard = arboard::Clipboard::new().map_err(|_| "no_clipboard_image".to_string())?;

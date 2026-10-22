@@ -14,6 +14,9 @@ import type { DroppedFile } from "../../components/files/importDrop";
  *
  * With the Reader open, the text goes into its composer instead of the
  * terminal (`onReaderInsert`), so a drop lands where the user is typing.
+ *
+ * An image pasted from the clipboard (`pasteClipboardImage`) arrives the same
+ * way, written as a PNG by the backend.
  */
 
 interface PtyDropped {
@@ -62,6 +65,33 @@ export async function deliverDrop(
     };
   } catch (err) {
     return { text: "", error: dropErrorKey(String(err)) };
+  }
+}
+
+/** What an image paste says when the clipboard's image could not be handed
+ *  over. `no_clipboard_image` says nothing: the clipboard held no image. */
+const PASTE_ERRORS: Record<string, TranslationKey> = {
+  remote_tab: "terminal.paste.imageRemote",
+  inbox_full: "terminal.paste.imageInboxFull",
+};
+
+/** Paste the OS clipboard's image into tab `ptyId`, for a paste that found no
+ *  text on the clipboard (`pty_paste_clipboard_image`): an agent gets it as a
+ *  PNG in its folder's inbox, typed as `@<reference>` like a dropped file, a
+ *  shell the quoted path of a copy outside the project. `text` is empty when
+ *  there was no image or it could not be stored, `error` the translation key
+ *  of why in the latter case. */
+export async function pasteClipboardImage(
+  ptyId: string,
+  agent: boolean,
+): Promise<{ text: string; error: TranslationKey | null }> {
+  try {
+    const item = await invoke<string>("pty_paste_clipboard_image", { id: ptyId, agent });
+    return { text: dropText([item], agent), error: null };
+  } catch (err) {
+    const code = String(err);
+    if (code === "no_clipboard_image") return { text: "", error: null };
+    return { text: "", error: PASTE_ERRORS[code] ?? "terminal.paste.imageFailed" };
   }
 }
 
