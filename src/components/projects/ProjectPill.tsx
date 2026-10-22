@@ -1494,6 +1494,14 @@ export function ProjectPill({
     return () => window.removeEventListener("pointerdown", dismiss);
   }, [contextMenu]);
 
+  // The Remote machines manager can open without a pointer press on this menu
+  // (a lamp, a header machine drop, the keyboard): the menu would then stay
+  // above the dialog's backdrop with its hover hint, so any open closes it.
+  const machinesDialogOpen = useRemoteMachinesStore((s) => s.projectId !== null);
+  useEffect(() => {
+    if (machinesDialogOpen) setContextMenu(null);
+  }, [machinesDialogOpen]);
+
   const handleMouseEnter = () => {
     if (contextMenu) return;
     // Fast mode skips the hover card: it polls `project_cpu_percent` every
