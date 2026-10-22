@@ -40,7 +40,7 @@ use crate::storage;
 
 /// What every CLI is told.
 pub const HINT: &str =
-    concat!("To put a file in front of the user on their phone, run `", crate::app_slug!(), "-send <file>` (local and container tabs).");
+    concat!("To show the user a file, name its path in your reply: the desktop chat shows the pictures and PDFs a reply names. To put a file in front of the user on their phone, run `", crate::app_slug!(), "-send <file>` (local and container tabs).");
 
 #[cfg(not(windows))]
 const SCRIPT_NAME: &str = crate::brand::AGENT_HINT_SH;

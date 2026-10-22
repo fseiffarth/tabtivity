@@ -46,6 +46,55 @@ function inboxEntry(projectDir: string, file: OutboxFile): FileEntry {
   };
 }
 
+/** A picture to show: where its bytes are read and what they are. */
+export interface PictureRef {
+  path: string;
+  kind: string;
+}
+
+/**
+ * Object URLs of the pictures `wanted` names, by key: one read per key from
+ * the folder like any viewer's, a key whose bytes cannot be read in `failed`.
+ * `landed` counts the pictures in, for a source to be rebuilt on. All are
+ * revoked when `reset` changes or the Chat goes (and the epoch drops reads
+ * that were still on their way).
+ */
+export function usePictureUrls(wanted: ReadonlyMap<string, PictureRef>, projectId: string | null, reset: string) {
+  const urls = useRef(new Map<string, string>());
+  const asked = useRef(new Set<string>());
+  const epoch = useRef(0);
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const [landed, bump] = useState(0);
+  useEffect(() => {
+    const own = urls.current;
+    const seen = asked.current;
+    return () => {
+      epoch.current += 1;
+      for (const url of own.values()) URL.revokeObjectURL(url);
+      own.clear();
+      seen.clear();
+    };
+  }, [reset]);
+  useEffect(() => {
+    const mine = epoch.current;
+    for (const [key, picture] of wanted) {
+      if (asked.current.has(key)) continue;
+      asked.current.add(key);
+      void readFileBytes(picture.path, projectId)
+        .then((bytes) => {
+          if (epoch.current !== mine) return;
+          urls.current.set(key, URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: picture.kind })));
+          bump((n) => n + 1);
+        })
+        .catch(() => {
+          if (epoch.current === mine) setFailed((current) => new Set(current).add(key));
+        });
+    }
+  }, [wanted, projectId]);
+  const url = useCallback((key: string) => urls.current.get(key) ?? null, []);
+  return { url, failed, landed };
+}
+
 /**
  * The previews of every prompt in `texts`, or `null` when this Chat has none
  * to draw (no local project folder, or hidden). `openEntry` opens a file's
@@ -72,41 +121,15 @@ export function useReaderInbox({ projectId, projectDir, disabled, texts, enabled
   );
   const described = useInboxFiles(`project:${projectId ?? ""}`, leaves, describe);
 
-  // Picture bytes → object URLs, one read per leaf; a leaf that cannot be read
-  // is shown as gone. Revoked with the Chat (and the epoch drops reads that
-  // were still on their way).
-  const urls = useRef(new Map<string, string>());
-  const asked = useRef(new Set<string>());
-  const epoch = useRef(0);
-  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
-  const [landed, bump] = useState(0);
-  useEffect(() => {
-    const own = urls.current;
-    const seen = asked.current;
-    return () => {
-      epoch.current += 1;
-      for (const url of own.values()) URL.revokeObjectURL(url);
-      own.clear();
-      seen.clear();
-    };
-  }, [projectId, projectDir]);
-  useEffect(() => {
-    if (!active) return;
-    const mine = epoch.current;
+  const wanted = useMemo(() => {
+    const out = new Map<string, PictureRef>();
+    if (!active) return out;
     for (const [leaf, file] of described) {
-      if (!file || !file.kind.startsWith("image/") || asked.current.has(leaf)) continue;
-      asked.current.add(leaf);
-      void readFileBytes(inboxEntry(projectDir, file).path, projectId)
-        .then((bytes) => {
-          if (epoch.current !== mine) return;
-          urls.current.set(leaf, URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: file.kind })));
-          bump((n) => n + 1);
-        })
-        .catch(() => {
-          if (epoch.current === mine) setFailed((current) => new Set(current).add(leaf));
-        });
+      if (file?.kind.startsWith("image/")) out.set(leaf, { path: inboxEntry(projectDir, file).path, kind: file.kind });
     }
-  }, [active, described, projectDir, projectId]);
+    return out;
+  }, [active, described, projectDir]);
+  const { url, failed, landed } = usePictureUrls(wanted, projectId, `${projectId ?? ""}\0${projectDir}`);
 
   const files = useMemo(() => {
     if (failed.size === 0) return described;
@@ -116,9 +139,9 @@ export function useReaderInbox({ projectId, projectDir, disabled, texts, enabled
   }, [described, failed]);
   // A new source each time a picture lands: the bubbles read `picture` again.
   const source = useMemo<InboxSource>(() => ({
-    picture: (file) => (landed >= 0 ? urls.current.get(file.name) ?? null : null),
+    picture: (file) => (landed >= 0 ? url(file.name) : null),
     openable: (file) => internalViewerFor(inboxEntry(projectDir, file), disabled) !== null,
-  }), [projectDir, disabled, landed]);
+  }), [projectDir, disabled, landed, url]);
   const open = useCallback((file: OutboxFile) => {
     const entry = inboxEntry(projectDir, file);
     if (internalViewerFor(entry, disabled) !== null) openEntry(entry);

@@ -42,6 +42,7 @@ import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChange
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
+import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
 import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
@@ -373,13 +374,19 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
 const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
 
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
- * nothing in it opens or loads), its file paths made links. Memoized on the
+ * nothing in it opens or loads), its file paths made links and the pictures
+ * and PDFs among them drawn under it (`ReaderAnswerFiles`). Memoized on the
  * text, so a read that brings a new turn does not re-render every answer
  * above it. */
 const AnswerText = memo(function AnswerText({ text }: { text: string }) {
   const links = useContext(PathLinksContext);
   const html = useMemo(() => linkPathsInHtml(answerHtml(text), links), [text, links]);
-  return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <>
+      <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />
+      <ReaderAnswerAlbum text={text} />
+    </>
+  );
 });
 
 /** A prompt, formatted the same way (`promptHtml`: an answer's formatting,
@@ -1256,6 +1263,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     projectId, projectDir: pathContext.projectDir, disabled: pathContext.disabled,
     texts: promptTexts, enabled: visible, openEntry: openInboxEntry, settle: settleInbox,
   });
+  // The pictures and PDFs the answers name, drawn under them (`ReaderAnswerFiles`).
+  const answerTexts = useMemo(() => turns.filter((turn) => turn.kind === "answer" && !turn.questions).map((turn) => turn.text), [turns]);
+  const answerFiles = useReaderAnswerFiles({
+    projectId, disabled: pathContext.disabled, texts: answerTexts, links: pathLinks,
+    enabled: visible, openEntry: openInboxEntry, settle: settleInbox,
+  });
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
   /** What ↑ in the composer can take back out of Claude's queue: the prompts
@@ -1563,6 +1576,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       <div className="terminal-reader-stream">
         <PathLinksContext.Provider value={pathLinks}>
         <ReaderInboxContext.Provider value={readerInbox}>
+        <ReaderAnswerFilesContext.Provider value={answerFiles}>
         <div
           ref={listRef}
           className="terminal-reader-list"
@@ -1677,6 +1691,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
         </div>
+        </ReaderAnswerFilesContext.Provider>
         </ReaderInboxContext.Provider>
         </PathLinksContext.Provider>
         <PathLinkHint hover={visible ? pathHover : null} />

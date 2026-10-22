@@ -2268,6 +2268,10 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 .terminal-reader-turn .inbox-album:last-child {
   margin-bottom: 0;
 }
+/* An answer's pictures and PDFs (`ReaderAnswerFiles`) sit under its words. */
+.terminal-reader-turn.agent .inbox-album {
+  margin: 6px 0 0;
+}
 .terminal-reader-turn .outbox-post-album {
   display: grid;
   gap: 2px;
