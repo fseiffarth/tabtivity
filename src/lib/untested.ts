@@ -755,6 +755,7 @@ export const UNTESTED = {
   "projectDialog.2": { area: "projects", what: "ProjectDialog · Filled in from the repository you are cloning: {provider}. It could not be told whether t…" },
   "projectDialog.3": { area: "projects", what: "ProjectDialog · The repository is created on {provider} and the first commit pushed as soon as the projec…" },
   "projectDialog.4": { area: "projects", what: "ProjectDialog · Inside a virtual machine (strongest isolation)" },
+  "projectDialog.5": { area: "projects", what: "ProjectDialog · Import a folder that already has a git origin: Git hosting filled in from it (provider + visibility), no create-time publish" },
   "projectDialog.remoteToggleTitle": { area: "projects", what: "ProjectDialog · Remote (SSH) project: after Create the new project connects at once, with the typed password or, signed in in a terminal, riding that login (no key auth recorded on a password host); the HPC pipeline wizard does the same (screen 2026-10-15 #11)" },
   "projectPill.1": { area: "projects", what: "ProjectPill · Move project…" },
   "projectPill.10": { area: "projects", what: "ProjectPill · Unpublish (keep repo)…" },

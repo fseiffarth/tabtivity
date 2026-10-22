@@ -475,6 +475,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("git_file_at_rev", Core),
     ("git_file_log", Core),
     ("git_file_statuses", Core),
+    ("git_folder_origin", Core),
     ("git_generate_commit_message", Core),
     ("git_log", Core),
     ("git_log_search", Core),

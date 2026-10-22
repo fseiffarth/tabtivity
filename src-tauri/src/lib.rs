@@ -2314,6 +2314,7 @@ pub fn run() {
             commands::git_pull::git_merge_sides,
             commands::git::git_clone,
             commands::git::git_remote_visibility,
+            commands::git::git_folder_origin,
             commands::git::git_file_statuses,
             commands::git::git_unpushed_commits,
             commands::git::git_change_stats,

@@ -22,6 +22,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   message: vi.fn().mockResolvedValue(null),
 }));
 
+import { open } from "@tauri-apps/plugin-dialog";
 import { ProjectDialog } from "../../components/projects/ProjectDialog";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
@@ -60,6 +61,8 @@ function stubBackend(overrides: Record<string, unknown> = {}) {
         return Promise.resolve("/tmp/projects/repo");
       case "import_project":
         return Promise.resolve(IMPORTED);
+      case "preview_project_scaffold":
+        return Promise.resolve([]);
       default:
         return Promise.resolve(null);
     }
@@ -187,6 +190,70 @@ describe("clone import fills the Git hosting field", () => {
       vi.advanceTimersByTime(1000);
     });
     expect(invoke.mock.calls.some((c) => c[0] === "git_remote_visibility")).toBe(false);
+  });
+});
+
+/** Render the dialog on its folder-import source, pick a folder through the
+ *  (mocked) folder picker, then let the debounced visibility probe run. */
+async function renderWithFolder(overrides: Record<string, unknown> = {}) {
+  stubBackend(overrides);
+  vi.mocked(open).mockResolvedValueOnce("/tmp/src/repo");
+  await act(async () => {
+    render(<ProjectDialog kind="import" onClose={() => {}} onProject={() => {}} />);
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Source folder/ }));
+  });
+  await act(async () => {
+    vi.advanceTimersByTime(1000);
+  });
+  await act(async () => {});
+}
+
+describe("folder import with an existing origin fills the Git hosting field", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    invoke.mockReset();
+    useSettingsStore.setState({ settings: { git_token: "", git_profile_url: "" } } as never);
+    useProjectsStore.setState({ projects: [], activeId: null, loaded: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads the origin's provider and visibility, and publishes nothing new", async () => {
+    await renderWithFolder({
+      git_folder_origin: "git@github.com:owner/repo.git",
+      git_remote_visibility: "public",
+    });
+
+    const read = invoke.mock.calls.find((c) => c[0] === "git_folder_origin");
+    expect(read![1]).toEqual({ sourceDir: "/tmp/src/repo" });
+    const probe = invoke.mock.calls.find((c) => c[0] === "git_remote_visibility");
+    expect(probe![1]).toEqual({ url: "git@github.com:owner/repo.git" });
+    expect(gitHostingValue()).toContain("public");
+    expect(screen.getByText(/Filled in from this folder's git origin: GitHub · public/)).toBeTruthy();
+    // No token is set, yet no "set up the connection" gate: there is nothing to publish.
+    expect(screen.queryByRole("button", { name: /Set up/ })).toBe(null);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    });
+    const imported = invoke.mock.calls.find((c) => c[0] === "import_project");
+    expect(imported![1]).toMatchObject({
+      req: { gitType: "remote-public", gitProvider: "github" },
+    });
+    expect(invoke.mock.calls.some((c) => c[0] === "publish_project")).toBe(false);
+  });
+
+  it("keeps a local repository for a folder without an origin", async () => {
+    await renderWithFolder({ git_folder_origin: null });
+    expect(invoke.mock.calls.some((c) => c[0] === "git_remote_visibility")).toBe(false);
+    expect(
+      [...document.querySelectorAll(".dropdown-trigger")].some((el) =>
+        el.textContent?.includes("Local repo only"),
+      ),
+    ).toBe(true);
   });
 });
 

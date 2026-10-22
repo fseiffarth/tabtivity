@@ -277,6 +277,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["git_file_at_rev", "core"],
   ["git_file_log", "core"],
   ["git_file_statuses", "core"],
+  ["git_folder_origin", "core"],
   ["git_generate_commit_message", "core"],
   ["git_log", "core"],
   ["git_log_search", "core"],

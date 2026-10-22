@@ -2312,6 +2312,33 @@ fn git_remote_visibility_blocking(url: String) -> Result<String, String> {
     Ok(if refused { "private" } else { "unknown" }.to_string())
 }
 
+/// The `origin` URL of a folder about to be imported, or `None` when the folder
+/// is not itself a repository or has no `origin`. Lets the import dialog fill
+/// its Git hosting field from a repository that is already hosted, the way a
+/// clone import fills it from the URL being cloned.
+///
+/// Only the folder's own `.git` counts: without that check `git` would walk up
+/// and answer with an enclosing repository's `origin`. Read-only and offline
+/// (`remote get-url` reads config, contacts nothing), hookless and bounded,
+/// since the folder is not trusted yet.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn git_folder_origin(source_dir: String) -> Result<Option<String>, String> {
+    app_core::rt::try_blocking("git", move || Ok(git_folder_origin_blocking(Path::new(&source_dir)))).await
+}
+
+fn git_folder_origin_blocking(dir: &Path) -> Option<String> {
+    if !dir.join(".git").exists() {
+        return None;
+    }
+    let cmd = hookless_git_command_in(dir, &["remote", "get-url", "origin"]);
+    let output = crate::services::git_bounded::output_within(cmd, std::time::Duration::from_secs(15)).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!url.is_empty()).then_some(url)
+}
+
 // ── Git history & branches ──────────────────────────────────────────────────
 
 #[derive(Clone, serde::Serialize)]
@@ -3721,6 +3748,34 @@ mod tests {
     /// Tests skip gracefully when `git` isn't on PATH.
     fn git_available() -> bool {
         super::git_available()
+    }
+
+    /// The import dialog's origin read answers for the folder's own repository
+    /// only — a plain folder inside a hosted checkout must not borrow its origin.
+    #[test]
+    fn a_folder_origin_is_read_only_from_the_folders_own_repo() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping a_folder_origin_is_read_only_from_the_folders_own_repo");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        let inner = repo.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        init_repo(&repo);
+        assert_eq!(git_folder_origin_blocking(&repo), None, "a repo without origin");
+
+        let url = "git@github.com:owner/repo.git";
+        let ok = crate::paths::command_no_window("git")
+            .args(["remote", "add", "origin", url])
+            .current_dir(&repo)
+            .status()
+            .expect("git runs")
+            .success();
+        assert!(ok);
+        assert_eq!(git_folder_origin_blocking(&repo).as_deref(), Some(url));
+        assert_eq!(git_folder_origin_blocking(&inner), None, "an enclosing repo's origin");
+        assert_eq!(git_folder_origin_blocking(&tmp.path().join("missing")), None);
     }
 
     fn init_repo(dir: &std::path::Path) {

@@ -288,6 +288,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("exec_trust_approve", "dir", UserPath),
     ("export_project", "req.destPath", UserPath),
     ("git_clone", "dest", UserPath),
+    ("git_folder_origin", "sourceDir", UserPath),
     ("git_fork_clone", "dest", UserPath),
     ("git_merge_sides", "path", UserPath),
     ("import_external_file", "sourcePath", UserPath),
