@@ -36,7 +36,7 @@ import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
-import { noteSentPrompt } from "../../lib/agents/sentPrompts";
+import { clearSentPrompts, noteSentPrompt } from "../../lib/agents/sentPrompts";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import type { Terminal } from "@xterm/xterm";
 import { NAMES, envName, storageKey } from "../../lib/brand";
@@ -78,6 +78,9 @@ function reader(host: HTMLElement, cwd = "/p") {
     <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd={cwd} visible focused />,
   );
 }
+
+// A sent prompt is kept outside the Reader until one lets it go.
+beforeEach(() => clearSentPrompts());
 
 describe("the agent pane's Reader", () => {
   let host: HTMLElement;
@@ -150,6 +153,49 @@ describe("the agent pane's Reader", () => {
       expect(host.textContent).not.toContain("another tab's prompt");
     } finally {
       clearInterval(repaint);
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
+    }
+  });
+
+  it("still shows a queued prompt after the pane went to its terminal and back", async () => {
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      const first = reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "queued before the switch"));
+      first.unmount();
+      // Sent from steering's box while the terminal shows: no Reader mounted.
+      noteSentPrompt("st-1", "queued while on the terminal");
+      reader(host);
+      await screen.findByText("fix the parser");
+      const shown = [...host.querySelectorAll(".terminal-reader-turn.pending")].map((turn) => turn.textContent);
+      expect(shown[0]).toContain("queued before the switch");
+      expect(shown[1]).toContain("queued while on the terminal");
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
+  it("lets no sent prompt go while its pane is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      const view = reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "queued behind a long turn"));
+      view.rerender(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible={false} focused={false} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+      view.rerender(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(host.querySelector(".terminal-reader-turn.pending")?.textContent).toContain("queued behind a long turn");
+    } finally {
       unregisterTerminal("p:agent-1", term);
       vi.useRealTimers();
     }

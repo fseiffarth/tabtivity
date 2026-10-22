@@ -13,7 +13,7 @@ import {
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
-import { onSentPrompt } from "../../lib/agents/sentPrompts";
+import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
 import { actionMatches } from "../../lib/shortcuts/shortcuts";
@@ -365,8 +365,6 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
   );
 }
 
-interface PendingPrompt { id: number; text: string; sentAt: number }
-
 /** The chat's path links (`lib/terminal/pathLinks`): every path-shaped word
  * the shown conversation holds, looked up once — the file it opens, or null.
  * A turn is drawn only once its words are in here (see the reads), and a word
@@ -491,7 +489,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   subagent?: { task: string; role?: string };
   history: readonly string[];
   /** Prompts sent to the session while Claude works, still drawn as sending. */
-  queued: readonly PendingPrompt[];
+  queued: readonly SentPrompt[];
   focused: boolean;
   visible: boolean;
   steering: boolean;
@@ -878,13 +876,18 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const tab = useMemo(() => withAssistantPromptTarget(scope, paneTab), [scope, paneTab]);
   const [transcript, setTranscript] = useState<SessionTranscript | null>(null);
   const [limit, setLimit] = useState(READER_STEP);
-  const [pending, setPending] = useState<PendingPrompt[]>([]);
+  // Every prompt sent to this tab — this composer's or steering's prompt box —
+  // shows as sending at once, the agent idle or at work (the CLI queues it).
+  // Kept outside the Reader, which is unmounted while the pane shows its
+  // terminal: a prompt still queued shows again when the chat comes back.
+  const sendTarget = tab?.scheduleTargetId;
+  const pending = useSentPrompts(sendTarget);
+  const [pendingTick, setPendingTick] = useState(0);
   const [readTick, setReadTick] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const keepFromBottom = useRef<number | null>(null);
   const version = useRef<string | undefined>();
-  const pendingId = useRef(0);
   /** The subagents walked into from the session, outermost first; empty
    * while the session itself is shown. */
   const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>([]);
@@ -1262,20 +1265,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     [live.working, tab?.cmd, pending],
   );
   const dropPending = useCallback((ids: number[]) => {
-    setPending((items) => items.filter((item) => !ids.includes(item.id)));
-  }, []);
+    if (sendTarget) forgetSentPrompts(sendTarget, ids);
+  }, [sendTarget]);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
 
-  // Every prompt sent to this tab — this composer's or steering's prompt box —
-  // shows as sending at once, the agent idle or at work (the CLI queues it).
-  const sendTarget = tab?.scheduleTargetId;
+  // A prompt sent while the chat shows scrolls it to the bottom.
   useEffect(() => {
     if (!sendTarget) return;
-    return onSentPrompt(sendTarget, ({ text, sentAt }) => {
-      pendingId.current += 1;
-      const id = pendingId.current;
-      setPending((items) => [...items, { id, text, sentAt }]);
+    return onSentPrompt(sendTarget, () => {
       stuck.current = true;
       setReadTick((tick) => tick + 1);
       // It went to the session, never to a subagent or an earlier chat: back
@@ -1287,14 +1285,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
 
   // A sent prompt shows until the transcript records it (by its words — a
   // long one's opening, the record cut at its bound — at or after the moment
-  // it went) or it has waited long enough to be let go.
+  // it went) or it has waited long enough to be let go. Only while shown: a
+  // hidden pane's screen is not read, so the agent may be at work unseen.
   useEffect(() => {
-    if (pending.length === 0) return;
+    if (pending.length === 0 || !visible || !sendTarget) return;
     const now = Date.now();
-    const waitingSince = (item: PendingPrompt) => Math.max(item.sentAt, workingSeenAt.current);
+    const waitingSince = (item: SentPrompt) => Math.max(item.sentAt, workingSeenAt.current);
     // A bare `/prefix` is recorded as the command the CLI's popup completed
     // it to (`/clea` → `/clear`).
-    const recorded = (item: PendingPrompt) => {
+    const recorded = (item: SentPrompt) => {
       const sent = item.text.trim();
       const prefix = /^\/[\w-]+$/u.test(sent) ? sent : null;
       return entries.some((entry) =>
@@ -1304,14 +1303,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
     if (left.length !== pending.length) {
-      setPending(left);
+      forgetSentPrompts(sendTarget, pending.filter((item) => !left.includes(item)).map((item) => item.id));
       return;
     }
     // Nothing new may come in to look again: let the first one go on time.
     const due = Math.min(...left.map(waitingSince)) + PENDING_MS - now;
-    const timer = setTimeout(() => setPending((items) => [...items]), due);
+    const timer = setTimeout(() => setPendingTick((tick) => tick + 1), due);
     return () => clearTimeout(timer);
-  }, [entries, pending]);
+  }, [entries, pending, visible, sendTarget, pendingTick]);
 
   /** The prompt the answer at the top of the chat belongs to — the last one
    * that starts above the scroll position — while its bubble is scrolled off
