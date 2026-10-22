@@ -296,6 +296,21 @@ Claude's `/fast` — different thing.
   opening `user@host:path (branch*)` is read for its path and branch
   (`statusLine.ts` `PATH`). 2.1.304–306 otherwise touch mods, sandbox, Remote
   Control and `-p` login in cloud sessions — nothing Tabtivity reads.
+  Re-checked against 2.1.308 (2026-10-22, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.306 run of the same dump: keys
+  identical on all 12 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on every one, the
+  resume start's four cost fields included; transcript record types and
+  counts identical; `-p --resume` of a `plan` session still reports the
+  default; `/usage` three meters, every reset resolved; `--help` identical;
+  notification-type, mode-label and cold-resume dialog strings count the
+  same). 2.1.307 writes real `usage` and `stop_reason` into subagent
+  transcripts (it wrote placeholders for streamed responses): checked live,
+  `<session>/subagents/agent-<id>.jsonl` still, repeated lines share
+  `message.id` + `requestId`, so `token_stats`' largest-value dedupe counts
+  each message once — subagent token counts just get truer. 2.1.308 is
+  "bug fixes" only; 2.1.307 otherwise touches OTel, MCP retries, cloud and
+  self-hosted runners, VS Code — nothing Tabtivity reads.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
