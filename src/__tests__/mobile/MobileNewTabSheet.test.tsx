@@ -275,3 +275,36 @@ describe("Mobile ＋ sheet — cloud sessions", () => {
     expect(document.querySelector(".new-tab-cloud")).toBeNull();
   });
 });
+
+describe("Mobile ＋ sheet — API key", () => {
+  const agents = [
+    { id: "a1", label: "Claude", modes: [] },
+    { id: "a2", label: "Gemini", modes: [] },
+  ];
+
+  it("offers an (API) start per keyed agent, in the picked worktree, and holds a spent budget", async () => {
+    const keyed = [{ agent_id: "a1" }, { agent_id: "a2", budget_reached: true }];
+    serve({
+      worktrees: [{ id: "w0", label: "", main: true }, { id: "w1", label: "fix", branch: "fix-build", main: false }],
+      cloud: [],
+      sign_in: [],
+      api_key: keyed,
+    });
+    const onPick = vi.fn();
+    render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={onPick} onSendFile={() => undefined} onClose={() => undefined} />);
+    const group = await screen.findByRole("group", { name: "API key" });
+    fireEvent.click(within(group).getByText("Claude (API)"));
+    expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { api_key: true });
+    expect((within(group).getByText("Gemini (API) — budget reached") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText("fix-build"));
+    fireEvent.click(within(group).getByText("Claude (API)"));
+    expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { worktree: "w1", api_key: true });
+  });
+
+  it("shows no API group when no key is saved", async () => {
+    serve({ worktrees: [], cloud: [], sign_in: [] });
+    render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.queryByRole("group", { name: "API key" })).toBeNull();
+  });
+});

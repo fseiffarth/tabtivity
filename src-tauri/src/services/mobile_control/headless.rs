@@ -957,7 +957,7 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
 /// meanwhile merges it in rather than overwriting it), then started
 /// detached through `launch`; a launch that fails takes the record back out.
 /// Everything that needs the window — a sign-in, a cloud session, a
-/// worktree, a local model, a mode, the root console — is refused with
+/// worktree, a local model, a mode, an API key, the root console — is refused with
 /// `desktop_unavailable`, as before this existed. Idempotent on the
 /// request's key, like the desktop's create.
 pub async fn create_tab(
@@ -984,6 +984,7 @@ pub async fn create_tab(
         || request.local.is_some()
         || request.like_tab.is_some()
         || request.mode.is_some()
+        || request.api_key
         || project.public.kind == ScopeKind::Root
     {
         return Err(CreateRefusal::DesktopUnavailable);

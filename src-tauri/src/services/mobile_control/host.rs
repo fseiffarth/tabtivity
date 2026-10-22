@@ -1854,8 +1854,8 @@ async fn launch_options(
     if desktop_down(&response) {
         // No window: the ＋ sheet offers what the owner can start — the
         // project folder, a shell or a plain agent (headless owner plan,
-        // H3). Worktrees, cloud sessions, sign-ins and local models wait for
-        // the window, so none is listed.
+        // H3). Worktrees, cloud sessions, sign-ins, local models and API-key
+        // agents wait for the window, so none is listed.
         return (
             StatusCode::OK,
             Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false })),
@@ -1867,9 +1867,10 @@ async fn launch_options(
             cloud,
             sign_in,
             local,
+            api_key,
         }) => (
             StatusCode::OK,
-            Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local })),
+            Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key })),
         ),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "desktop_unavailable" {
@@ -3587,6 +3588,7 @@ async fn sign_in_tab(
         like_tab: Some(tab.tmux_name.clone()),
         local: None,
         assistant: None,
+        api_key: false,
         idempotency_key: body.idempotency_key,
     };
     let project_id = project.public.id.clone();

@@ -130,18 +130,24 @@ interface CreateRequest {
   /** A chat of the assistant scope: the opaque launch id `launch_options`
    *  listed under `assistant.launches`, alone. */
   assistant?: string;
+  /** Start the agent on the stored provider API key (`TabEntry.apiKey`), as
+   *  the desktop "+"'s "<agent> (API)" row does. */
+  api_key?: boolean;
   idempotency_key: string;
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
 interface MobileCloudLaunch { agent_id: string; action: string; task: boolean }
 interface MobileSignInOption { agent_id: string; signed_in?: boolean; account?: string; alternate?: string; api_key?: boolean; api_budget_reached?: boolean }
+/** An agent the ＋ can start on a stored API key (`api_key_saved`); a flag
+ * only — no key, provider or amount crosses. */
+interface MobileApiKeyLaunch { agent_id: string; budget_reached?: boolean }
 /** The ＋ sheet's local-model group: the model the desktop's "+" drives and
  * the agents it offers for it. `ready` is false until the model sits on the
  * GPU (`probeLocalModelPlacement`) — a start then loads it first. */
 interface MobileLocalAgent { id: string; label: string; caution: boolean }
 interface MobileLocalLaunch { model: string; ready: boolean; agents: MobileLocalAgent[] }
 /** One row of `agent_logins` (`services::agent_auth::LoginStatus`). */
-interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean; api_budget_reached?: boolean }
+interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean; api_budget_reached?: boolean; api_key_saved?: boolean }
 interface TodoColumn { id: string; name: string; position: number; done: boolean; archived: boolean; overdue?: boolean; due_today?: boolean; color?: string }
 interface TodoSubtask { id: string; title: string; done: boolean }
 interface TodoTaskInput {
@@ -302,7 +308,7 @@ type DesktopResponse =
   | { status: "git_states"; states: MobileGitStateRow[] }
   | { status: "activated" }
   | { status: "created"; tmux_session: string }
-  | { status: "launch_options"; worktrees: MobileWorktree[]; cloud: MobileCloudLaunch[]; sign_in: MobileSignInOption[]; local?: MobileLocalLaunch }
+  | { status: "launch_options"; worktrees: MobileWorktree[]; cloud: MobileCloudLaunch[]; sign_in: MobileSignInOption[]; local?: MobileLocalLaunch; api_key?: MobileApiKeyLaunch[] }
   | { status: "todo"; board: TodoBoard }
   | { status: "alerts"; alerts: MobileAlerts }
   | { status: "calendar"; calendar: MobileCalendar }
@@ -935,6 +941,20 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
     if (request.mode && !choice.public.modes.includes(request.mode)) {
       return { status: "error", code: "unsupported_mode", message: "Agent mode is unavailable" };
     }
+    // The desktop "+"'s "<agent> (API)" row: a built-in a stored key can run,
+    // pinned to the key; a plain request leaves the pick to Manage CLIs.
+    let item = choice.item;
+    if (request.api_key) {
+      if (request.mode || request.cloud) {
+        return { status: "error", code: "invalid_request", message: "An API-key agent names no mode or cloud session" };
+      }
+      const login = AGENT_ITEMS.includes(choice.item)
+        ? (await agentLoginRows()).get(loginIdForCmd(choice.item.cmd))
+        : undefined;
+      if (!login?.api_key_saved) return { status: "error", code: "api_key_unavailable", message: "No API key is stored for this agent" };
+      if (login.api_budget_reached) return { status: "error", code: "api_budget_reached", message: "The API key's monthly budget is spent" };
+      item = { ...choice.item, label: t("newTabMenu.apiKeyEntry", { label: choice.item.label }), apiKey: true };
+    }
     if (request.cloud) {
       // Built-ins only: a custom agent's own args are not ours to extend.
       const launch = scope.project && AGENT_ITEMS.includes(choice.item)
@@ -948,10 +968,10 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
       const wt = (await worktreesOf(scope)).find((entry) => entry.id === request.worktree)?.worktree;
       if (!wt) return { status: "error", code: "worktree_not_found", message: "Worktree is unavailable" };
       spec = wt.is_main
-        ? buildStaticTabSpec(choice.item, cwd, scope.name, t)
-        : worktreeAgentSpec(choice.item, wt, scope.name, t);
+        ? buildStaticTabSpec(item, cwd, scope.name, t)
+        : worktreeAgentSpec(item, wt, scope.name, t);
     } else {
-      spec = buildStaticTabSpec(choice.item, cwd, scope.name, t);
+      spec = buildStaticTabSpec(item, cwd, scope.name, t);
     }
   }
   // A remote project's agent runs in the mirror (`cwd`), as the window runs
@@ -1096,15 +1116,37 @@ async function launchOptions(projectId: string): Promise<DesktopResponse> {
         })))
     : [];
   const local = await localChoices(scope);
+  const logins = await agentLoginRows();
+  const keyable = await apiKeyOptions(logins);
   return {
     status: "launch_options",
     worktrees,
     cloud,
-    sign_in: await signInOptions(),
+    sign_in: await signInOptions(logins),
     ...(local && local.choices.length > 0
       ? { local: { model: local.model, ready: local.ready, agents: local.choices.map((choice) => choice.public) } }
       : {}),
+    ...(keyable.length > 0 ? { api_key: keyable } : {}),
   };
+}
+
+/** `agent_logins` by login id. A login store that cannot be read leaves the
+ * states unknown, never the lists — or the ＋ sheet's whole answer — empty. */
+async function agentLoginRows(): Promise<Map<string, AgentLoginRow>> {
+  const logins = await invoke<AgentLoginRow[] | null>("agent_logins").catch(() => null);
+  return new Map((Array.isArray(logins) ? logins : []).map((row) => [row.id, row]));
+}
+
+/** The desktop "+"'s API section for the phone (`apiKeyMenuGroups`): every
+ * built-in a stored provider key can run, switched on in Manage CLIs or not. */
+async function apiKeyOptions(byId: Map<string, AgentLoginRow>): Promise<MobileApiKeyLaunch[]> {
+  return (await agentChoices())
+    .filter((choice) => AGENT_ITEMS.includes(choice.item))
+    .flatMap((choice) => {
+      const login = byId.get(loginIdForCmd(choice.item.cmd));
+      if (!login?.api_key_saved) return [];
+      return [{ agent_id: choice.public.id, ...(login.api_budget_reached ? { budget_reached: true } : {}) }];
+    });
 }
 
 /** One local-model agent under its opaque id; `driver` is the
@@ -1152,11 +1194,7 @@ async function localChoices(scope: MobileScope): Promise<{ model: string; ready:
 /** The agents the phone can open a sign-in tab for, each with the state of
  * its shared login where Tabtivity keeps one (`services::agent_auth`). Every
  * built-in qualifies: one without a login command signs in as it starts. */
-async function signInOptions(): Promise<MobileSignInOption[]> {
-  // A login store that cannot be read leaves the states unknown, never the
-  // list — or the ＋ sheet's whole answer — empty.
-  const logins = await invoke<AgentLoginRow[] | null>("agent_logins").catch(() => null);
-  const byId = new Map((Array.isArray(logins) ? logins : []).map((row) => [row.id, row]));
+async function signInOptions(byId: Map<string, AgentLoginRow>): Promise<MobileSignInOption[]> {
   return (await agentChoices())
     .filter((choice) => AGENT_ITEMS.includes(choice.item))
     .map((choice) => {

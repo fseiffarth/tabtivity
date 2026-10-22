@@ -205,6 +205,8 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   launch_failed: "mobile.failure.launchFailed",
   unknown_agent: "mobile.failure.unknownAgent",
   unsupported_sign_in: "mobile.failure.unsupportedSignIn",
+  api_key_unavailable: "mobile.failure.apiKeyUnavailable",
+  api_budget_reached: "mobile.failure.apiBudgetReached",
   // A project type whose tabs the phone cannot attach to yet (`create` in the
   // detail payload: `agents` or `none`).
   not_attachable: "mobile.failure.notAttachable",

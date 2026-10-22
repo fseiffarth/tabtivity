@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getLaunchOptions, type AgentRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
+import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
@@ -14,6 +14,8 @@ export interface NewTabLaunch {
   sign_in?: "default" | "alternate";
   /** A local-model agent: the opaque id `launch-options` listed. */
   local?: string;
+  /** On the API key the desktop keeps, whatever Manage CLIs says. */
+  api_key?: true;
 }
 
 /**
@@ -36,6 +38,8 @@ export interface NewTabLaunch {
  *
  * A desktop with a local (Ollama) model set for tabs adds the desktop "+"'s
  * local-model group under the agents: the same agents, driving that model.
+ * One with a provider API key saved adds its API section the same way: the
+ * agents that key can run, each started on the key.
  *
  * "Sign in to an agent" lists every agent with the state of its shared login
  * and opens a sign-in tab for the one picked (`src/lib/agents/signInLaunch.ts`)
@@ -142,6 +146,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
             than leaving the sheet looking half-loaded. */}
         {agents.length === 0 && <p className="sheet-note">{t("mobile.newTab.noAgents")}</p>}
         {options.local && !headless && <LocalModelGroup local={options.local} busy={busy} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
+        {options.api_key && !headless && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
         {!headless && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {options.sign_in.length > 0 && !headless && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && <NeedsWindow agents={agents} options={options} linked={linked} />}
@@ -216,6 +221,29 @@ function LocalModelGroup({ local, busy, onPick }: { local: LocalLaunchRow; busy:
     </div>)}</div>
     {!local.ready && <p className="sheet-note">{t("mobile.newTab.localLoads", { model: local.model })}</p>}
     {cautioned.length > 0 && <p className="sheet-note">{t("mobile.newTab.localCaution", { agents: cautioned.join(", ") })}</p>}
+  </div>;
+}
+
+/** The desktop "+"'s API section: one "<agent> (API)" button per agent a
+ * stored provider key can run, started on the key while the grid's plain
+ * buttons keep to what Manage CLIs says. A spent budget leaves its button
+ * disabled, as the desktop row is. */
+function ApiKeyGroup({ agents, rows, busy, onPick }: { agents: AgentRow[]; rows: ApiKeyLaunchRow[]; busy: boolean; onPick: (agent: AgentRow) => void }) {
+  const t = useT();
+  const listed = rows.flatMap((row) => {
+    const agent = agents.find((entry) => entry.id === row.agent_id);
+    return agent ? [{ agent, row }] : [];
+  });
+  if (!listed.length) return null;
+  return <div className="new-tab-local" role="group" aria-label={t("newTabMenu.groupApiKey")}>
+    <small>{t("newTabMenu.groupApiKey")}{isUntested("mobile.newTab.apiKey") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
+    <div className="new-tab-agents">{listed.map(({ agent, row }) => {
+      const label = t("newTabMenu.apiKeyEntry", { label: agent.label });
+      return <div className="agent-create" key={agent.id}>
+        <button disabled={busy || row.budget_reached} onClick={() => onPick(agent)}>{row.budget_reached ? t("newTabMenu.apiKeyEntryBudgetReached", { label }) : label}</button>
+      </div>;
+    })}</div>
+    <p className="sheet-note">{t("mobile.newTab.apiKeyNote")}</p>
   </div>;
 }
 

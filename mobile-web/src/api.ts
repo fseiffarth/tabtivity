@@ -66,7 +66,11 @@ export interface LocalLaunchRow { model: string; ready: boolean; agents: LocalAg
  * is a CLI that is not signed in; `default` the desktop's own preselection. */
 export interface AssistantLaunchRow { id: string; label: string; local: boolean; model?: string; ready: boolean; default: boolean }
 export interface AssistantLaunchOptions { ollama_reachable: boolean; launches: AssistantLaunchRow[] }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions }
+/** One agent the ＋ can start on an API key the desktop keeps — the desktop
+ * "+"'s "<agent> (API)" row. `budget_reached`: the key's monthly budget is
+ * spent or unset, so a new tab would be refused. Flags only. */
+export interface ApiKeyLaunchRow { agent_id: string; budget_reached?: boolean }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[] }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -74,7 +78,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;

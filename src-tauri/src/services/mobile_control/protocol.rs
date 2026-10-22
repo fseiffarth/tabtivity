@@ -120,6 +120,12 @@ pub struct CreateTabRequest {
     /// with it — and no other scope takes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant: Option<String>,
+    /// The agent starts on the provider API key the desktop keeps
+    /// (`agent_api_keys`, the desktop "+"'s "<agent> (API)" row): a flag
+    /// only — no key or provider crosses. With `agent_id`, and a worktree at
+    /// most; never with a mode, cloud, sign-in, local model or chat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub api_key: bool,
     pub idempotency_key: String,
 }
 
@@ -152,6 +158,19 @@ impl CreateTabRequest {
             }
         }
         if self.like_tab.is_some() && (self.sign_in.is_none() || self.agent_id.is_some()) {
+            return false;
+        }
+        if self.api_key
+            && (!agent
+                || self.agent_id.is_none()
+                || self.mode.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.like_tab.is_some()
+                || self.local.is_some()
+                || self.assistant.is_some())
+        {
             return false;
         }
         if let Some(id) = &self.local {
@@ -321,6 +340,18 @@ pub struct MobileSignInOption {
     pub api_key: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_budget_reached: Option<bool>,
+}
+
+/// One agent the phone's ＋ can start on a provider API key the desktop keeps
+/// (`agent_api_keys::keyable_clis`), switched on in Manage CLIs or not — the
+/// desktop "+"'s "<agent> (API)" row. `budget_reached` says that key's monthly
+/// budget is spent (or unset), so a new tab would be refused. Flags only: no
+/// key, provider or amount crosses.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MobileApiKeyLaunch {
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub budget_reached: bool,
 }
 
 /// Phone-editable schedule fields. Receipts and prefix commands are desktop-owned
@@ -1776,6 +1807,8 @@ pub enum DesktopResponse {
         sign_in: Vec<MobileSignInOption>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         local: Option<MobileLocalLaunch>,
+        #[serde(default)]
+        api_key: Vec<MobileApiKeyLaunch>,
     },
     Todo {
         board: TodoBoardSnapshot,
@@ -2910,6 +2943,23 @@ mod tests {
             body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             assert!(!ok(body), "{extra}");
         }
+        // An API-key agent: a named agent, in a worktree at most.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": true, "idempotency_key": key})));
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "worktree": "w1", "api_key": true, "idempotency_key": key})));
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": false, "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "api_key": true, "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "api_key": true, "idempotency_key": key})));
+        for extra in [
+            json!({"mode": "plan"}),
+            json!({"cloud": "open"}),
+            json!({"sign_in": "default"}),
+            json!({"local": "l1"}),
+            json!({"assistant": "c1"}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": true, "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
         // An assistant chat: agent kind, a bounded id, and nothing else.
         assert!(ok(json!({"project_id": "p", "kind": "agent", "assistant": "c1", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "shell", "assistant": "c1", "idempotency_key": key})));
@@ -2935,10 +2985,10 @@ mod tests {
     fn launch_options_round_trip_and_default() {
         let response: DesktopResponse = serde_json::from_value(json!({"status": "launch_options"}))
             .expect("empty launch options");
-        let DesktopResponse::LaunchOptions { worktrees, cloud, sign_in, local } = response else {
+        let DesktopResponse::LaunchOptions { worktrees, cloud, sign_in, local, api_key } = response else {
             panic!("launch options");
         };
-        assert!(worktrees.is_empty() && cloud.is_empty() && sign_in.is_empty() && local.is_none());
+        assert!(worktrees.is_empty() && cloud.is_empty() && sign_in.is_empty() && local.is_none() && api_key.is_empty());
         let request = DesktopRequest::LaunchOptions {
             request_id: "r".into(),
             project_id: "p".into(),
@@ -2973,6 +3023,23 @@ mod tests {
                 {"agent_id": "a2", "signed_in": false},
                 {"agent_id": "a3", "signed_in": true, "api_key": true, "api_budget_reached": true}
             ])
+        );
+    }
+
+    #[test]
+    fn an_api_key_row_carries_its_budget_flag_and_nothing_more() {
+        let response: DesktopResponse = serde_json::from_value(json!({
+            "status": "launch_options",
+            "api_key": [{"agent_id": "a1"}, {"agent_id": "a2", "budget_reached": true}]
+        }))
+        .expect("launch options");
+        let DesktopResponse::LaunchOptions { api_key, .. } = response else {
+            panic!("launch options");
+        };
+        assert!(!api_key[0].budget_reached && api_key[1].budget_reached);
+        assert_eq!(
+            serde_json::to_value(&api_key).expect("serialize"),
+            json!([{"agent_id": "a1"}, {"agent_id": "a2", "budget_reached": true}])
         );
     }
 }
