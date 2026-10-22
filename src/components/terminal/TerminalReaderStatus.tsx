@@ -6,9 +6,9 @@ import { codexRemaining, codexReset, readClaudeStatus, readCodexStatus, type Cod
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { noteUserInput } from "../../stores/activity";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
-import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
 import type { SessionUsage } from "../../../mobile-web/src/api";
+import type { LimitMeters } from "../../../shared/usageReport";
 import type { TabEntry } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
 import type { UntestedId } from "../../lib/untested";
@@ -31,9 +31,12 @@ const FIELD_KEYS: Record<string, TranslationKey> = {
   "Token usage": "terminal.reader.status.tokens", "Context window": "terminal.reader.status.context",
 };
 
-export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefresh, request, model, effort, path, contextLeft, usage, onClose, onRefresh }: {
+export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefresh, request, model, effort, path, contextLeft, usage, limits, limitsReadAt, onClose, onRefresh }: {
   tab: TabEntry; ptyId: string; agentLabel: string; visible: boolean; canRefresh: boolean; request: number;
-  model?: string; effort?: string; path?: string; contextLeft?: string; usage?: SessionUsage; onClose: () => void; onRefresh: () => void;
+  model?: string; effort?: string; path?: string; contextLeft?: string; usage?: SessionUsage;
+  /** The account limits the facts row shows (Claude's usage panel, or the
+   * stored session's), for an agent whose /status card leaves them out. */
+  limits: LimitMeters; limitsReadAt: number; onClose: () => void; onRefresh: () => void;
 }) {
   const t = useT();
   const [snapshot, setSnapshot] = useState<{ card: CodexStatusCard; readAt: number } | null>(null);
@@ -86,11 +89,11 @@ export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefre
   const fields = card?.fields ?? [];
   const field = (label: string) => fields.find((entry) => entry.label === label)?.value;
   const clock = new Date(now);
-  const limits = sessionLimits(usage, clock);
-  const meters: { label: string; remaining: number; resets?: string; detail?: string }[] = [];
+  const cardReadAt = snapshot ? snapshot.readAt : now;
+  const meters: { label: string; remaining: number; resets?: string; readAt: number; detail?: string }[] = [];
   const context = codexRemaining(field("Context window")) ?? usage?.contextLeft ?? codexRemaining(contextLeft ? `${contextLeft} left` : undefined);
   if (context != null && Number.isFinite(context) && context >= 0 && context <= 100) {
-    meters.push({ label: t("terminal.reader.status.context"), remaining: context, detail: field("Context window")?.match(/\(([^)]+)\)/u)?.[1] });
+    meters.push({ label: t("terminal.reader.status.context"), remaining: context, readAt: cardReadAt, detail: field("Context window")?.match(/\(([^)]+)\)/u)?.[1] });
   }
   for (const [label, native, fallback] of [
     [t("terminal.reader.status.sessionLimit"), "5h limit", limits.session],
@@ -99,7 +102,9 @@ export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefre
     const value = field(native);
     const remaining = codexRemaining(value) ?? (fallback ? 100 - fallback.percent : undefined);
     if (remaining != null && Number.isFinite(remaining) && remaining >= 0 && remaining <= 100) {
-      meters.push({ label, remaining, resets: value ? codexReset(value) : fallback?.resets });
+      meters.push(value
+        ? { label, remaining, resets: codexReset(value), readAt: cardReadAt }
+        : { label, remaining, resets: fallback?.resets, readAt: limitsReadAt });
     }
   }
   const details = fields.filter((entry) => entry.label !== "Model" && entry.label !== "Session name" && !(codexRemaining(entry.value) != null && ["Context window", "5h limit", "Weekly limit"].includes(entry.label)));
@@ -120,7 +125,7 @@ export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefre
     <div className="terminal-reader-status-meters">
       {meters.map((meter) => {
         const remaining = Math.round(meter.remaining);
-        const readAt = snapshot ? new Date(snapshot.readAt) : clock;
+        const readAt = new Date(meter.readAt);
         const countdown = meter.resets ? resetCountdown(meter.resets, clock, readAt) : "";
         return <div key={meter.label} className={`terminal-reader-status-meter${remaining <= 10 ? " low" : ""}`}>
           <div className="terminal-reader-status-meter-head"><span>{meter.label}</span><strong>{t("terminal.reader.status.remaining", { percent: remaining })}</strong></div>

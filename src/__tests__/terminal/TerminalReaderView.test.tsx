@@ -1003,6 +1003,27 @@ describe("the Reader's live rows", () => {
     expect(screen.queryByRole("dialog", { name: "Codex status" })).toBeNull();
   });
 
+  it("shows Claude's account limits from its usage panel on the /status card", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    invoke.mockImplementation((command: string) => Promise.resolve(
+      command === "agent_tab_transcript" ? { ...transcript, truncated: false }
+        : command === "agent_usage" ? {
+          agent: "claude", label: "Claude", supported: true, cached: false,
+          raw: "Current session: 2% used\nCurrent week (all models): 99% used",
+        }
+          : []));
+    term = fakeTerminal([">", "~/p (develop) · Opus 5.5 · 85% context left"]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const facts = host.querySelector(".terminal-reader-facts")!;
+    await waitFor(() => expect(facts.textContent).toContain("5h 98%"));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Status/ })); });
+    const panel = screen.getByRole("dialog", { name: "Claude status" });
+    expect(within(panel).getByRole("meter", { name: "5-hour limit" }).getAttribute("aria-valuenow")).toBe("98");
+    expect(within(panel).getByRole("meter", { name: "Weekly limit" }).getAttribute("aria-valuenow")).toBe("1");
+    expect(panel.querySelector(".terminal-reader-status-meter.low")?.textContent).toContain("1% left");
+  });
+
   it("opens /status from Codex's chat composer without sending an agent prompt or replacing busy input", async () => {
     submitCommand.mockClear();
     sendSteeringPrompt.mockClear();

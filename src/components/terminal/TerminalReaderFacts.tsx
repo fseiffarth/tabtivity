@@ -345,6 +345,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         model={modelLabel} effort={effortLabel} path={shownPath} contextLeft={contextLeft} usage={usage}
+        limits={shown} limitsReadAt={readTime.getTime()}
         onClose={onStatusClose} onRefresh={onStatusRequest}
       />}
       {picking && (
