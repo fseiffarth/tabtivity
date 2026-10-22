@@ -4973,6 +4973,7 @@ export const dict: Dict = {
   "terminal.pathLink.open": "Ouvrir dans un onglet",
   "terminal.pathLink.openLine": "Ouvrir dans un onglet à la ligne {line}",
   "terminal.pathLink.openFolder": "Ouvrir dans un onglet Fichiers",
+  "terminal.pathLink.newSubwindow": "Ctrl+clic : dans une nouvelle sous-fenêtre",
   "terminal.copyFailed": "Copie impossible : le presse-papiers a refusé le texte",
   "terminal.keySelect.title": "Sélection au clavier",
   "terminal.keySelect.move": "déplacer",

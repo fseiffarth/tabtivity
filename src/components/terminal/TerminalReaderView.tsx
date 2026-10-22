@@ -1102,7 +1102,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   }, []);
   const pathLinkAt = (target: EventTarget | null) =>
     target instanceof Element ? target.closest<HTMLElement>(`[${PATH_LINK_ATTR}]`) : null;
-  const openPathAt = (el: HTMLElement) => {
+  // Ctrl (⌘) + click or Enter opens the file in a new subwindow.
+  const openPathAt = (el: HTMLElement, newSubwindow: boolean) => {
     const entry = pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "");
     if (!entry) return;
     const ctx = pathContextRef.current;
@@ -1110,20 +1111,20 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     openPathLink(
       entry,
       { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
-      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t },
+      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow },
     );
   };
   const onPathClick = (event: ReactMouseEvent) => {
     const el = pathLinkAt(event.target);
     if (!el) return;
     event.preventDefault();
-    openPathAt(el);
+    openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathKey = (event: KeyboardEvent) => {
     const el = event.key === "Enter" ? pathLinkAt(event.target) : null;
     if (!el) return;
     event.preventDefault();
-    openPathAt(el);
+    openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathOver = (event: ReactMouseEvent) => {
     const el = pathLinkAt(event.target);

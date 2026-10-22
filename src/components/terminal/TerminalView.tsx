@@ -594,17 +594,21 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // A file path the program printed opens the file's tab, on the same click
       // (after the double-click window) — no question first, since it only ever
       // opens an in-app viewer of a file inside the tab's folder or project; a
-      // double-click copies it, like a URL.
+      // double-click copies it, like a URL. Ctrl (⌘) + click opens it in a new
+      // subwindow.
       termDisposables.push(registerPathLinkProvider(term, () => pathLinkContextRef.current, {
         activate: (event, entry, at) => {
           if (event.detail > 1) return;
           cancelLinkOpen();
           setPathHover(null);
+          const newSubwindow = event.ctrlKey || event.metaKey;
           linkOpenTimer = setTimeout(() => {
             linkOpenTimer = null;
             const ctx = pathLinkContextRef.current;
             const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
-            openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current });
+            openPathLink(entry, at, {
+              scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current, newSubwindow,
+            });
           }, LINK_OPEN_DELAY_MS);
         },
         hover: (event, entry, at, text) => {

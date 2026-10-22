@@ -4989,6 +4989,7 @@ export const dict: Dict = {
   "terminal.pathLink.open": "In einem Tab öffnen",
   "terminal.pathLink.openLine": "In einem Tab bei Zeile {line} öffnen",
   "terminal.pathLink.openFolder": "In einem Dateien-Tab öffnen",
+  "terminal.pathLink.newSubwindow": "Strg+Klick: in einem neuen Unterfenster",
   "terminal.copyFailed": "Kopieren fehlgeschlagen: die Zwischenablage hat den Text abgelehnt",
   "terminal.keySelect.title": "Tastaturauswahl",
   "terminal.keySelect.move": "bewegen",

@@ -107,7 +107,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
   fresh: boolean;
   base: string | undefined;
   use24h: boolean;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, newSubwindow: boolean) => void;
   onOpenDiff: (path: string) => void;
   onUnfold: (cardKey: string) => void;
 }) {
@@ -158,9 +158,9 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
           <button
             type="button"
             className="terminal-changes-open"
-            title={t("terminal.changes.open")}
+            title={`${t("terminal.changes.open")} · ${t("terminal.pathLink.newSubwindow")}`}
             aria-label={t("terminal.changes.open")}
-            onClick={() => onOpenFile(change.path)}
+            onClick={(event) => onOpenFile(change.path, event.ctrlKey || event.metaKey)}
           >
             <ArrowUpRightIcon />
           </button>
@@ -283,7 +283,8 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     });
   }, []);
 
-  const openFile = (path: string) => {
+  // Ctrl (⌘) + click opens the file in a new subwindow.
+  const openFile = (path: string, newSubwindow: boolean) => {
     const name = basename(path);
     const dot = name.lastIndexOf(".");
     const entry: FileEntry = {
@@ -302,6 +303,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
       external: false,
       disabled,
       scope,
+      newSubwindow,
     });
   };
 

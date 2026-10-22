@@ -14,7 +14,7 @@ export interface PathLinkHover {
 
 /**
  * The hint over a hovered path link, terminal and chat alike: what it names and
- * that a click opens it in a tab. The editor's file-link hint (#49,
+ * that a click opens it in a tab (Ctrl+click: a new subwindow). The editor's file-link hint (#49,
  * `.link-open-hint`), portaled to the body above every pane overlay so neither
  * the xterm canvas nor the chat's scroller clips it.
  */
@@ -34,6 +34,13 @@ export function PathLinkHint({ hover }: { hover: PathLinkHover | null }) {
     >
       {hover.name} · {action}
       <UntestedTag id="terminal.pathLink.open" />
+      {!hover.isDir && (
+        <>
+          <br />
+          {t("terminal.pathLink.newSubwindow")}
+          <UntestedTag id="terminal.pathLink.newSubwindow" />
+        </>
+      )}
     </div>,
     document.body,
   );

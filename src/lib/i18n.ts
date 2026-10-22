@@ -5165,6 +5165,7 @@ export const enSource = {
   "terminal.pathLink.open": "Open in a tab",
   "terminal.pathLink.openLine": "Open in a tab at line {line}",
   "terminal.pathLink.openFolder": "Open in a Files tab",
+  "terminal.pathLink.newSubwindow": "Ctrl+click: in a new subwindow",
   "terminal.copyFailed": "Couldn't copy: the clipboard refused the text",
   "terminal.keySelect.title": "Keyboard select",
   "terminal.keySelect.move": "move",

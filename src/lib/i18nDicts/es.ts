@@ -4971,6 +4971,7 @@ export const dict: Dict = {
   "terminal.pathLink.open": "Abrir en una pestaña",
   "terminal.pathLink.openLine": "Abrir en una pestaña en la línea {line}",
   "terminal.pathLink.openFolder": "Abrir en una pestaña de archivos",
+  "terminal.pathLink.newSubwindow": "Ctrl+clic: en una nueva subventana",
   "terminal.copyFailed": "No se pudo copiar: el portapapeles rechazó el texto",
   "terminal.keySelect.title": "Selección con teclado",
   "terminal.keySelect.move": "mover",

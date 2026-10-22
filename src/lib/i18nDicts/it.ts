@@ -4971,6 +4971,7 @@ export const dict: Dict = {
   "terminal.pathLink.open": "Apri in una scheda",
   "terminal.pathLink.openLine": "Apri in una scheda alla riga {line}",
   "terminal.pathLink.openFolder": "Apri in una scheda File",
+  "terminal.pathLink.newSubwindow": "Ctrl+clic: in una nuova sottofinestra",
   "terminal.copyFailed": "Copia non riuscita: gli appunti hanno rifiutato il testo",
   "terminal.keySelect.title": "Selezione da tastiera",
   "terminal.keySelect.move": "sposta",
