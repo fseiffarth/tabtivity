@@ -2092,6 +2092,15 @@ button.tab-todo-link {
      so the auto margin is what claims the free space instead. */
   margin-left: auto;
 }
+/* The cluster right-aligns its buttons itself (`justify-content: flex-end`).
+   Their own `margin-left: auto` would split the free space a docked viewer's
+   reserved width adds — with no hide button between ◫ and close (an empty
+   subwindow) the ◫ drifted to the middle of the band when the viewer opened. */
+.tab-controls > .subwindow-files-toggle,
+.tab-controls > .subwindow-hide,
+.tab-controls > .subwindow-close {
+  margin-left: 0;
+}
 
 /* #42: detached ("pop out") window title-bar controls — the native
    min/max/close cluster. Pinned to the right of the tab bar (sticky) so they
