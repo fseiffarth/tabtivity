@@ -15,9 +15,11 @@
 //!   Sonnet 5.5 cache reads): cache hits are 0.1× input except 0.05× on
 //!   Opus 5.5 and Sonnet 5.5 and 0.025× on Fable/Mythos 5.1, and the page now
 //!   lists Haiku 5.5 ($0.10/$0.50, $0.50/$2.50 for prompts over 100K) with the
-//!   cache rates this table already had.
+//!   cache rates this table already had. Re-read on 2026-10-22: unchanged.
 //! - Gemini: <https://ai.google.dev/gemini-api/docs/pricing> ("Last updated
-//!   2026-10-01 UTC"; paid tier, Standard — not batch, flex or priority).
+//!   2026-10-19 UTC", read 2026-10-22; paid tier, Standard — not batch, flex
+//!   or priority). That page no longer lists Gemini 3.5 and 3.7 Flash; their
+//!   rows keep the last listed rates, so a key still using them is priced.
 //!   Grounding with Google Search, read off the same page on 2026-10-04:
 //!   Gemini 3.x "$14 per 1,000 [search] requests", Gemini 2.5 "$35 / 1,000
 //!   grounded prompts"; Google Maps grounding the same or less ($14 per 1,000
@@ -209,8 +211,10 @@ pub struct GeminiRates {
     pub audio_input: Option<f64>,
     /// Rates for prompts past [`LONG_CONTEXT`] tokens: input, output, cache.
     pub long: Option<(f64, f64, f64)>,
-    /// From this UTC month on (`YYYY-MM`), every rate doubles (Gemini
-    /// 3.6–3.8 Flash: "through December 31, 2026 … starting January 1, 2027").
+    /// From this UTC month on (`YYYY-MM`), every rate doubles (Gemini 4
+    /// Argon: "through November 30, 2026 … starting December 1, 2026";
+    /// 3.6–3.8 Flash and Robotics-ER 2: "through December 31, 2026 …
+    /// starting January 1, 2027").
     pub doubles_from: Option<&'static str>,
     /// Image, speech or embedding model: priced, but not a chat model, so it
     /// stays out of the unknown-model fallback. Image models are priced at
@@ -245,12 +249,14 @@ const fn gemini_media(input: f64, output: f64) -> GeminiRates {
 }
 
 const FLASH_PROMO: GeminiRates = GeminiRates { doubles_from: Some("2027-01"), ..gemini(0.75, 3.75, 0.075) };
+const ARGON_PROMO: GeminiRates = GeminiRates { doubles_from: Some("2026-12"), ..gemini(2.0, 10.0, 0.10) };
 const PRO_3_1: GeminiRates = GeminiRates { long: Some((4.0, 18.0, 0.40)), ..gemini(2.0, 12.0, 0.20) };
 
-/// Gemini API prices (page updated 2026-10-01, read 2026-10-04), by model id.
-/// Live, transcription and video models are absent: their APIs are not
-/// forwarded.
+/// Gemini API prices (page updated 2026-10-19, read 2026-10-22), by model id.
+/// Live, streaming, transcription, video and music models are absent: their
+/// APIs are not forwarded.
 const GEMINI: &[(&str, GeminiRates)] = &[
+    ("gemini-4-argon", ARGON_PROMO),
     ("gemini-3.8-flash", FLASH_PROMO),
     ("gemini-3.7-flash", FLASH_PROMO),
     ("gemini-3.6-flash", FLASH_PROMO),
@@ -259,10 +265,14 @@ const GEMINI: &[(&str, GeminiRates)] = &[
     ("gemini-3.1-flash-lite", GeminiRates { audio_input: Some(0.50), ..gemini(0.25, 1.50, 0.025) }),
     ("gemini-3.1-pro-preview", PRO_3_1),
     ("gemini-3.1-pro-preview-customtools", PRO_3_1),
+    ("gemini-robotics-er-2-preview", GeminiRates { doubles_from: Some("2027-01"), ..gemini(1.0, 5.0, 0.10) }),
     ("gemini-3-flash-preview", GeminiRates { audio_input: Some(1.0), ..gemini(0.50, 3.0, 0.05) }),
     ("gemini-2.5-pro", gemini_2_5(GeminiRates { long: Some((2.50, 15.0, 0.25)), ..gemini(1.25, 10.0, 0.125) })),
     ("gemini-2.5-flash", gemini_2_5(GeminiRates { audio_input: Some(1.0), ..gemini(0.30, 2.50, 0.03) })),
     ("gemini-2.5-flash-lite", gemini_2_5(GeminiRates { audio_input: Some(0.30), ..gemini(0.10, 0.40, 0.01) })),
+    // Text and video out ($9 / $17.50), priced at the video rate; no cache.
+    ("gemini-omni-1.1-flash", gemini_media(1.50, 17.50)),
+    ("gemini-nano-banana-2.1", gemini_media(1.50, 30.0)),
     ("gemini-3.1-flash-image", gemini_media(0.50, 60.0)),
     ("gemini-3.1-flash-lite-image", gemini_media(0.25, 30.0)),
     ("gemini-3-pro-image", gemini_media(2.0, 120.0)),
@@ -808,6 +818,11 @@ mod tests {
     #[test]
     fn gemini_promotional_rates_end_on_schedule() {
         let u = GeminiUsage { prompt_token_count: 1_000_000, candidates_token_count: 1_000_000, ..Default::default() };
+        assert!(close(price_gemini("gemini-4-argon", &u, "2026-11").usd, 2.0 + 10.0));
+        assert!(close(price_gemini("gemini-4-argon", &u, "2026-12").usd, 4.0 + 20.0));
+        assert!(close(price_gemini("gemini-robotics-er-2-preview", &u, "2027-01").usd, 2.0 + 10.0));
+        // Argon's raise lifts the unknown-model ceiling with it.
+        assert_eq!(gemini_rates("gemini-9-ultra", "2026-12").0.output, 20.0);
         assert!(close(price_gemini("gemini-3.8-flash", &u, "2026-12").usd, 0.75 + 3.75));
         assert!(close(price_gemini("gemini-3.8-flash", &u, "2027-01").usd, 1.50 + 7.50));
         assert!(close(price_gemini("gemini-3.5-flash", &u, "2027-01").usd, 1.50 + 9.0));
