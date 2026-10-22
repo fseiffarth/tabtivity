@@ -11,6 +11,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { formatTokens } from "../../lib/tokenStats";
 import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
+import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
@@ -121,6 +122,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
   const modelPickable = modelPickOffered(tab);
+  const groupModels = modelPicking && isOpenCodeTab(agentLabel) && shownStep?.title === "Select model";
+  const modelGroups = shownStep
+    ? groupModels ? groupOpenCodeModels(shownStep.options) : [{ key: "all", options: shownStep.options }]
+    : [];
   useEffect(() => { onPicking(picking); }, [picking, onPicking]);
 
   const openPicker = (command: "/model" | "/permissions" = "/model") => {
@@ -300,7 +305,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           </div>
           {shownStep ? (
             <div className="terminal-reader-options">
-              {shownStep.options.map((option) => (
+              {modelGroups.map((group) => <div className="terminal-reader-option-group" key={group.key}>
+                {groupModels && <div className="terminal-reader-option-group-title">{openCodeModelGroupTitle(group, t)}</div>}
+                {group.options.map((option) => (
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
@@ -314,7 +321,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
                     {option.description && <small>{option.description}</small>}
                   </span>
                 </button>
-              ))}
+                ))}
+              </div>)}
             </div>
           ) : (
             <small className="terminal-reader-question-more">{t(permissionPicking ? "terminal.reader.permissionsWaiting" : "terminal.reader.modelWaiting")}</small>

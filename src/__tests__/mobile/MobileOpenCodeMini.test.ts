@@ -15,6 +15,7 @@ import {
   type OpenCodePickerRow,
 } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readableScreen, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { groupOpenCodeModels } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../../lib/agents/readerLive";
 import { BRAND } from "../../lib/brand";
 
@@ -305,6 +306,20 @@ describe(`${BRAND.display} Mobile OpenCode mode chip`, () => {
 });
 
 describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
+  it("shows free models first, then model families and remaining providers without changing picks", () => {
+    const options = [
+      { label: "GPT-5.4", description: "OpenCode Zen", keys: ["gpt"] },
+      { label: "Claude Sonnet 4.5", description: "Anthropic", keys: ["claude"] },
+      { label: "Big Pickle", description: "OpenCode Zen · Free", keys: ["free"] },
+      { label: "MAI-Code", description: "GitHub Copilot", keys: ["mai"] },
+      { label: "Gemini 3.8 Flash", description: "Google", keys: ["gemini"] },
+    ];
+    const groups = groupOpenCodeModels(options);
+    expect(groups.map((group) => group.key)).toEqual(["free", "claude", "openai", "gemini", "provider:GitHub Copilot"]);
+    expect(groups.flatMap((group) => group.options)).toEqual([options[2], options[1], options[0], options[4], options[3]]);
+    expect(groups[0].options[0]).toBe(options[2]);
+  });
+
   const picker = [
     ...lines(
       "  Select model 25                                                          esc",

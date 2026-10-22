@@ -20,6 +20,8 @@ import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { selectMoveKeys } from "../../../mobile-web/src/terminal/selectPrompt";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
+import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
+import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
@@ -383,7 +385,11 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           </div>
           {picking ? (
             shownStep ? (
-              shownStep.options.map((option) => (
+              (isOpenCodeTab(agent) && shownStep.title === "Select model"
+                ? groupOpenCodeModels(shownStep.options)
+                : [{ key: "all", options: shownStep.options }]).map((group) => <div className="steering-prompt-option-group" role="group" aria-label={group.key !== "all" ? openCodeModelGroupTitle(group, t) : undefined} key={group.key}>
+                {group.key !== "all" && <div className="terminal-reader-option-group-title" role="presentation">{openCodeModelGroupTitle(group, t)}</div>}
+                {group.options.map((option) => (
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
@@ -399,7 +405,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
                     {option.description && <small>{option.description}</small>}
                   </span>
                 </button>
-              ))
+                ))}
+              </div>)
             ) : (
               <small className="terminal-reader-question-more">{t("terminal.reader.modelWaiting")}</small>
             )

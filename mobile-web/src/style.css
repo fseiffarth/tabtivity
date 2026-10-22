@@ -1307,6 +1307,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .attach-label { text-align:center; line-height:1.2; overflow-wrap:anywhere; }
 .attach-tile .untested { margin-left:0; }
 .option-list { display:grid; gap:3px; margin:0; padding:0; list-style:none; }
+.option-list-group { margin:10px 5px 3px; color:#98a0b4; font-size:.76rem; font-weight:700; letter-spacing:.04em; }
+.option-list-group:first-child { margin-top:2px; }
 .option-list button { display:flex; align-items:center; gap:12px; width:100%; padding:13px 14px; border:0; border-radius:13px; background:#1e2230; text-align:left; }
 .option-list button.current { color:#8fb6ff; background:#1c2336; }
 .option-list button > span { display:grid; flex:1; gap:3px; min-width:0; }

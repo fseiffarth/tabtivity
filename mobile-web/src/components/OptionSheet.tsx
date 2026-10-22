@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
 
@@ -6,6 +6,8 @@ export interface SheetOption {
   key: string;
   label: string;
   description?: string;
+  /** Optional visual section heading; the key and selection stay the same. */
+  group?: string;
   /** The option the session is in right now. */
   current: boolean;
   /** The option a switch is being applied to. */
@@ -48,14 +50,17 @@ export function OptionSheet({ title, note, children, options, waiting, busy, onP
       {children}
       {options.length === 0
         ? <p className="sheet-note">{waiting}</p>
-        : <ul className="option-list">{options.map((option) => <li key={option.key}>
+        : <ul className="option-list">{options.map((option, index) => <Fragment key={option.key}>
+            {option.group && option.group !== options[index - 1]?.group && <li className="option-list-group">{option.group}</li>}
+            <li>
             <button className={option.current ? "current" : ""} aria-current={option.current || undefined} disabled={busy} onClick={() => onPick(option.key)}>
               <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
               {option.pending
                 ? <span className="sheet-pending" role="status">{t("mobile.optionSheet.switching")}</span>
                 : option.current && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
             </button>
-          </li>)}</ul>}
+            </li>
+          </Fragment>)}</ul>}
     </section>
   </div>;
 }

@@ -113,6 +113,7 @@ import {
   readOpenCodePickerPage,
   OPENCODE_MODEL_KEYS,
 } from "../terminal/openCodeMini";
+import { groupOpenCodeModels, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
 import {
   antigravityEffortKeys,
   isAntigravityTab,
@@ -4100,12 +4101,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const shownStep = listedStep ?? (answered && picker ? answered : null);
   /** The highlighted row — where it was before a reveal walk moved it. */
   const shownAt = reveal?.origin ?? picker?.options[picker.current]?.number;
-  const pickerOptions: SheetOption[] = (shownStep?.options ?? []).map((option) => ({
+  const pickerOptionsRaw: SheetOption[] = (shownStep?.options ?? []).map((option) => ({
     key: String(option.number),
     label: option.label,
     description: option.description,
     current: option.number === shownAt,
   }));
+  const pickerOptions = openCode && shownStep?.title === "Select model"
+    ? groupOpenCodeModels(pickerOptionsRaw).flatMap((group) => group.options.map((option) => ({
+      ...option, group: openCodeModelGroupTitle(group, t),
+    })))
+    : pickerOptionsRaw;
   /** Antigravity's effort step: the stops its slider is drawing for the model
    * the sheet just walked to, in its own words. */
   const effortOptions: SheetOption[] = (effortStep && effortSlider ? effortSlider.stops : []).map((stop, index) => ({
