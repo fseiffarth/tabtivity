@@ -597,6 +597,59 @@ fn client(https_only: bool) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("API proxy: {e}"))
 }
 
+/// How long [`check_key`] waits for the provider before saving untested.
+const KEY_CHECK_WAIT: Duration = Duration::from_secs(10);
+
+/// Ask the provider about `key` before Manage CLIs saves it: `Err` only when
+/// it definitely refused it — a Claude subscription token by its prefix, or a
+/// refused model listing (free, the key in the provider's own header). An
+/// unreachable provider (offline) lets the key be saved untested.
+pub async fn check_key(provider: Provider, key: &str) -> Result<(), String> {
+    check_key_at(&Upstream::Provider.base(provider), provider, key, true).await
+}
+
+async fn check_key_at(base: &str, provider: Provider, key: &str, https_only: bool) -> Result<(), String> {
+    if provider == Provider::Anthropic && key.starts_with("sk-ant-oat") {
+        return Err("this is a Claude subscription token, not an API key — create an API key in the Anthropic Console (it starts with sk-ant-api)".into());
+    }
+    let Ok(client) = client(https_only) else {
+        return Ok(());
+    };
+    let (path, value) = match provider {
+        Provider::Anthropic => ("/v1/models", key.to_string()),
+        Provider::Gemini => ("/v1beta/models", key.to_string()),
+        Provider::OpenAi => ("/v1/models", format!("Bearer {key}")),
+    };
+    let Ok(mut value) = HeaderValue::from_str(&value) else {
+        return Err("not a usable API key".into());
+    };
+    value.set_sensitive(true);
+    let mut request = client.get(format!("{base}{path}")).header(auth_header(provider), value);
+    if provider == Provider::Anthropic {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    let Ok(Ok(response)) = tokio::time::timeout(KEY_CHECK_WAIT, request.send()).await else {
+        return Ok(());
+    };
+    let status = response.status();
+    // Gemini answers a bad key with a 400 naming the reason.
+    let rejected = status == StatusCode::UNAUTHORIZED
+        || (provider == Provider::Gemini
+            && status == StatusCode::BAD_REQUEST
+            && tokio::time::timeout(KEY_CHECK_WAIT, response.text())
+                .await
+                .is_ok_and(|body| body.is_ok_and(|b| b.contains("API_KEY_INVALID"))));
+    if rejected {
+        let who = match provider {
+            Provider::Anthropic => "Anthropic",
+            Provider::Gemini => "Google",
+            Provider::OpenAi => "OpenAI",
+        };
+        return Err(format!("{who} rejected this API key (wrong, revoked, or not an API key) — it was not saved"));
+    }
+    Ok(())
+}
+
 /// Where the port of the last run is remembered (not a secret): binding it
 /// again keeps a tmux-held agent that outlived a crash talking to this proxy
 /// (which refuses its dead token with a readable error) rather than to
@@ -850,6 +903,9 @@ enum Refusal {
     /// The token is good, but no key is saved (removed, or the keyring is
     /// locked).
     NoKey,
+    /// The provider answered the user's own key with a 401: the stored key is
+    /// wrong, revoked, or not an API key at all (a subscription token).
+    KeyRejected,
     /// The provider's host could not be reached.
     Upstream,
     /// Too many request bodies held at once ([`MAX_BUFFERED`]).
@@ -873,7 +929,7 @@ enum Refusal {
 impl Refusal {
     fn status(self) -> StatusCode {
         match self {
-            Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => StatusCode::UNAUTHORIZED,
+            Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => StatusCode::UNAUTHORIZED,
             Refusal::Forbidden => StatusCode::FORBIDDEN,
             Refusal::NotFound => StatusCode::NOT_FOUND,
             Refusal::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -937,6 +993,16 @@ impl Refusal {
                 crate::app_name!(),
                 " has no API key saved for this provider (or its key store is locked): add one in Manage CLIs → API keys"
             ),
+            // Never naming the header: Claude turns an error that mentions
+            // it into "Not logged in · Please run /login".
+            Refusal::KeyRejected => match provider {
+                Some(Provider::OpenAi) => concat!("OpenAI rejected the API key saved in ", crate::app_name!(), " (wrong, revoked, or not an API key) — replace it in Manage CLIs → API keys"),
+                Some(Provider::Gemini) => concat!("Google rejected the Gemini API key saved in ", crate::app_name!(), " (wrong, revoked, or not an API key) — replace it in Manage CLIs → API keys"),
+                _ => concat!(
+                    "Anthropic rejected the API key saved in ", crate::app_name!(),
+                    " (wrong, revoked, or a subscription token instead of a Console API key) — replace it in Manage CLIs → API keys"
+                ),
+            },
             Refusal::Upstream => concat!(crate::app_name!(), " API proxy: the provider's API could not be reached"),
             Refusal::Busy => concat!(crate::app_name!(), " API proxy: too many large requests at once; try again"),
             Refusal::AdminWithdrawn => concat!(
@@ -965,7 +1031,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
         }),
         Some(Provider::Gemini) => serde_json::json!({
             "error": { "code": status.as_u16(), "message": message, "status": match refusal {
-                Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
+                Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
                 Refusal::Forbidden => "PERMISSION_DENIED",
                 Refusal::NotFound => "NOT_FOUND",
                 Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
@@ -978,7 +1044,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
         _ => serde_json::json!({
             "type": "error",
             "error": { "type": match refusal {
-                Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "authentication_error",
+                Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "authentication_error",
                 Refusal::Forbidden => "permission_error",
                 Refusal::NotFound => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
@@ -1309,6 +1375,18 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         // A rotated key or a renewed broker token: the next request asks the
         // keeper anew.
         forget_admin_key(cli);
+    }
+    if grant.admin.is_none() && upstream.status() == StatusCode::UNAUTHORIZED {
+        // The user's own key was refused. Said in the proxy's words: the
+        // provider's (Anthropic's "invalid x-api-key") reads in Claude as
+        // "Not logged in". An error answer costs nothing; the next request
+        // reads the keychain again, in case the key was replaced there.
+        if let Some(mut metered) = metered.0.take() {
+            metered.meter.answer(StatusCode::UNAUTHORIZED.as_u16(), None);
+            metered.settle(true);
+        }
+        forget_key(provider);
+        return refuse(Some(provider), Refusal::KeyRejected);
     }
     relay(upstream, Tap::new(grant, busy, metered.0.take()))
 }
@@ -2466,6 +2544,93 @@ mod tests {
         ended("e2e:metered").await;
         assert_eq!(book.snapshot(chrono::Utc::now()).providers["anthropic"].models["claude-stub"].requests, 1);
         on_tab_gone("e2e:metered");
+    }
+
+    #[tokio::test]
+    async fn a_refused_own_key_is_answered_in_the_proxys_words_and_costs_nothing() {
+        // Anthropic's answer to a bad key. Passed on, its "x-api-key" made
+        // Claude show "Not logged in · Please run /login".
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(|| async {
+            let body = r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+            let mut r = Response::new(Body::from(body));
+            *r.status_mut() = StatusCode::UNAUTHORIZED;
+            r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            r
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(format!("http://{addr}"), Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:key-rejected", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let r = plain_client().post(&url).header("x-api-key", token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 401);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let text = r.text().await.unwrap();
+        assert!(!text.to_lowercase().contains("x-api-key"), "{text}");
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["error"]["type"], "authentication_error");
+        assert!(json["error"]["message"].as_str().unwrap().contains("Anthropic rejected the API key"));
+        assert_eq!(book.snapshot(chrono::Utc::now()).billed(Provider::Anthropic), 0);
+        on_tab_gone("e2e:key-rejected");
+    }
+
+    /// A provider that answers every request with `status` and `body`, and
+    /// records the credential header it was sent.
+    async fn answering(status: StatusCode, body: &'static str, seen: Arc<Seen>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(move |req: Request| {
+            let seen = seen.clone();
+            async move {
+                seen.requests.lock_ok().push((req.method().to_string(), req.uri().to_string(), req.headers().clone(), Vec::new()));
+                let mut r = Response::new(Body::from(body));
+                *r.status_mut() = status;
+                r
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_key_is_checked_with_the_provider_before_it_is_saved() {
+        let seen = Arc::new(Seen::default());
+        let refusing = answering(StatusCode::UNAUTHORIZED, r#"{"type":"error"}"#, seen.clone()).await;
+        let err = check_key_at(&refusing, Provider::Anthropic, FAKE_KEY, false).await.unwrap_err();
+        assert!(err.contains("Anthropic rejected"), "{err}");
+        {
+            let requests = seen.requests.lock_ok();
+            let (method, uri, headers, _) = &requests[0];
+            assert_eq!((method.as_str(), uri.as_str()), ("GET", "/v1/models"));
+            assert_eq!(headers["x-api-key"], FAKE_KEY);
+        }
+        let err = check_key_at(&refusing, Provider::OpenAi, FAKE_KEY, false).await.unwrap_err();
+        assert!(err.contains("OpenAI rejected"), "{err}");
+        assert_eq!(seen.requests.lock_ok()[1].2["authorization"], format!("Bearer {FAKE_KEY}"));
+
+        let gemini_bad = answering(StatusCode::BAD_REQUEST, r#"{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}"#, seen.clone()).await;
+        assert!(check_key_at(&gemini_bad, Provider::Gemini, FAKE_KEY, false).await.is_err());
+        // Another 400 is not a verdict on the key.
+        let gemini_other = answering(StatusCode::BAD_REQUEST, r#"{"error":{}}"#, seen.clone()).await;
+        assert!(check_key_at(&gemini_other, Provider::Gemini, FAKE_KEY, false).await.is_ok());
+
+        let accepting = answering(StatusCode::OK, r#"{"data":[]}"#, seen.clone()).await;
+        assert!(check_key_at(&accepting, Provider::Anthropic, FAKE_KEY, false).await.is_ok());
+        // Offline: saved untested.
+        let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
+        assert!(check_key_at(&format!("http://{gone}"), Provider::Anthropic, FAKE_KEY, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_claude_subscription_token_is_refused_without_asking_anthropic() {
+        let seen = Arc::new(Seen::default());
+        let accepting = answering(StatusCode::OK, "{}", seen.clone()).await;
+        let err = check_key_at(&accepting, Provider::Anthropic, "sk-ant-oat01-xyz", false).await.unwrap_err();
+        assert!(err.contains("subscription token"), "{err}");
+        assert!(seen.requests.lock_ok().is_empty());
     }
 
     #[tokio::test]

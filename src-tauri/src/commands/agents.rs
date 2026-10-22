@@ -2436,15 +2436,15 @@ fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::P
 /// Save `provider`'s API key in the OS keychain. A locked or missing keyring
 /// refuses (its own message); there is no other place a key is kept. A key is
 /// only saved beside a monthly token limit (`Settings::agent_api_token_limits`,
-/// written first by Manage CLIs): refused without one.
+/// written first by Manage CLIs): refused without one. A key the provider
+/// refuses (`api_proxy::check_key`) is not saved.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
-    app_core::rt::try_blocking("agent", move || {
-        crate::services::agent_api_keys::require_limit(provider)?;
-        crate::services::agent_api_keys::set_key(provider, Some(key.trim()))
-    })
-    .await
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::require_limit(provider)).await?;
+    let key = key.trim().to_string();
+    crate::services::api_proxy::check_key(provider, &key).await?;
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, Some(&key))).await
 }
 
 /// Remove `provider`'s API key from the OS keychain.

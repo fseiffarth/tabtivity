@@ -122,8 +122,11 @@ run next to each other. The pick stays with the tab across a restart and a
 resume. **runs on** then only decides for tabs opened without the menu: from
 the phone, by a scheduled agent, from the mail/calendar dock. A row whose
 budget is spent is greyed out.
-If a tab reports an invalid key, fix or remove it there — signing in
-again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
+Saving a key asks the provider about it first: a key it refuses — or a
+Claude subscription token (`sk-ant-oat…`) in place of a Console API key
+(`sk-ant-api…`) — is not saved; offline, the key is saved untested. If a tab
+reports "… rejected the API key saved in Tabtivity", fix or remove it there —
+signing in again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
 are not offered: no environment variable points them at Tabtivity's proxy (use
 `codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
 instead; Codex's and OpenCode's login files are shared like any other, Vibe's
