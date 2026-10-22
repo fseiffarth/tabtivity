@@ -2730,7 +2730,10 @@ button:has(> .menu-shortcut) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 240px;
+  /* A fixed width, never wider than the window: a long argument line scrolls
+     inside its field instead of pushing the popover off-screen. */
+  width: min(420px, calc(100vw - 16px));
+  box-sizing: border-box;
   padding: 8px;
   color: var(--text-primary);
 }
@@ -2752,7 +2755,18 @@ button:has(> .menu-shortcut) {
 }
 /* The interpreter picker: a long venv path must not stretch the popover. */
 select.file-run-args-input {
-  max-width: 360px;
+  max-width: 100%;
+}
+/* The arguments as a list — one option per line (`runArgsFormat.ts`), shared
+   by the file tree's and the editor's Run popovers. */
+.file-run-args-list {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
 }
 .file-run-args-input:focus {
   outline: none;

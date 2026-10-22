@@ -63,6 +63,7 @@ import {
   needsMainCheck,
 } from "../../lib/terminal/pythonMainCache";
 import { runPythonFile, pythonRunPlan, placeForFocused } from "../../lib/terminal/pythonRun";
+import { argsFromLines, argsToLines } from "../../lib/terminal/runArgsFormat";
 import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import {
   shellRunnerFor,
@@ -986,7 +987,7 @@ export function FileTree({
     draft: string;
   } | null>(null);
   const argsPopoverRef = useRef<HTMLDivElement | null>(null);
-  const argsInputRef = useRef<HTMLInputElement | null>(null);
+  const argsInputRef = useRef<HTMLTextAreaElement | null>(null);
   useClampToViewport(argsPopoverRef, argsPopover, setArgsPopover);
   useEffect(() => {
     if (!argsPopover) return;
@@ -2777,7 +2778,7 @@ export function FileTree({
           entry,
           x: ev.clientX,
           y: ev.clientY,
-          draft: runArgsByPath[entry.path] ?? "",
+          draft: argsToLines(runArgsByPath[entry.path] ?? ""),
         }),
     };
   });
@@ -4611,19 +4612,23 @@ export function FileTree({
                   </>
                 )}
               </label>
-              <input
+              {/* One option per line (`runArgsFormat`); Enter runs, Shift+Enter
+                  breaks a line, and the lines are joined back on save. */}
+              <textarea
                 ref={argsInputRef}
-                className="file-run-args-input"
+                className="file-run-args-input file-run-args-list"
                 value={argsPopover.draft}
                 spellCheck={false}
-                placeholder={isPythonPath(argsPopover.entry.path) ? "--epochs 5 data.csv" : "--verbose out/"}
+                wrap="off"
+                rows={Math.min(8, Math.max(2, argsPopover.draft.split("\n").length))}
+                placeholder={isPythonPath(argsPopover.entry.path) ? "--epochs 5\ndata.csv" : "--verbose\nout/"}
                 onChange={(ev) =>
                   setArgsPopover((p) => (p ? { ...p, draft: ev.target.value } : p))
                 }
                 onKeyDown={(ev) => {
-                  if (ev.key === "Enter") {
+                  if (ev.key === "Enter" && !ev.shiftKey) {
                     ev.preventDefault();
-                    const a = argsPopover.draft.trim();
+                    const a = argsFromLines(argsPopover.draft);
                     setRunArgs(argsPopover.entry.path, a);
                     launchWithArgs(argsPopover.entry, a);
                     setArgsPopover(null);
@@ -4645,7 +4650,7 @@ export function FileTree({
                   type="button"
                   className="file-run-args-btn"
                   onClick={() => {
-                    const a = argsPopover.draft.trim();
+                    const a = argsFromLines(argsPopover.draft);
                     setRunArgs(argsPopover.entry.path, a);
                     launchWithArgs(argsPopover.entry, a);
                     setArgsPopover(null);
@@ -4657,7 +4662,7 @@ export function FileTree({
                   type="button"
                   className="file-run-args-btn"
                   onClick={() => {
-                    const a = argsPopover.draft.trim();
+                    const a = argsFromLines(argsPopover.draft);
                     setRunArgs(argsPopover.entry.path, a);
                     setArgsPopover(null);
                   }}

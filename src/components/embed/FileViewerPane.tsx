@@ -119,6 +119,7 @@ import {
   fileSideLocation,
   placeForFocused,
 } from "../../lib/terminal/pythonRun";
+import { argsFromLines, argsToLines } from "../../lib/terminal/runArgsFormat";
 import { RunHostPicker } from "../tabs/TabLocalityBadges";
 import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
@@ -7068,16 +7069,18 @@ function RunDebugButtons({
   const [hovering, setHovering] = useState(false);
   // Local draft so typing doesn't rebuild the run command on every keystroke; it
   // is committed to the shared `args` on Run or when the popover closes.
-  const [draft, setDraft] = useState(args);
+  // Edited as a list, one option per line (`runArgsFormat`), and joined back
+  // into the one-line string on commit.
+  const [draft, setDraft] = useState(() => argsToLines(args));
   const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const open = useCallback(() => {
-    setDraft(args);
+    setDraft(argsToLines(args));
     setArgsOpen(true);
   }, [args]);
   const commit = useCallback(() => {
-    setArgs(draft.trim());
+    setArgs(argsFromLines(draft));
     setArgsOpen(false);
   }, [draft, setArgs]);
 
@@ -7147,23 +7150,25 @@ function RunDebugButtons({
       {hovering && args && !argsOpen && (
         <div className="file-viewer-run-argshint" role="tooltip">
           <span className="file-viewer-run-argshint-label">{t("fileViewer.argsHintLabel")}</span>
-          <span className="file-viewer-run-argshint-val">{args}</span>
+          <span className="file-viewer-run-argshint-val">{argsToLines(args)}</span>
         </div>
       )}
       {argsOpen && (
         <div className="file-viewer-run-args" role="dialog" aria-label={t("fileViewer.runArgumentsDialog")}>
           <label className="file-viewer-run-args-label">{t("fileViewer.argsFieldLabel")}</label>
-          <input
+          <textarea
             ref={inputRef}
-            className="file-viewer-run-args-input"
+            className="file-viewer-run-args-input file-run-args-list"
             value={draft}
             spellCheck={false}
-            placeholder="--epochs 5 data.csv"
+            wrap="off"
+            rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+            placeholder={"--epochs 5\ndata.csv"}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                setArgs(draft.trim());
+                setArgs(argsFromLines(draft));
                 setArgsOpen(false);
                 onRun();
               } else if (e.key === "Escape") {
@@ -7185,7 +7190,7 @@ function RunDebugButtons({
               className="file-viewer-format-btn"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                setArgs(draft.trim());
+                setArgs(argsFromLines(draft));
                 setArgsOpen(false);
                 onRun();
               }}
