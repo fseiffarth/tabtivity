@@ -40,6 +40,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { NewTabMenu } from "../tabs/NewTabMenu";
+import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { TabScopeContext } from "../tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
 import { TabAgentModeMarks, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
@@ -984,8 +985,14 @@ function GroupStrip({
   // which of the console's tabs is running what they just asked for.
   const installTabs = useRootOverlayStore((s) => s.installTabs);
   const clearInstallTab = useRootOverlayStore((s) => s.clearInstallTab);
+  // The shared strip, so an overflowing console bar scrolls with the same
+  // chevrons as every other tab bar.
   return (
-    <div className="tab-strip" ref={stripRef}>
+    <ScrollingTabStrip
+      revision={tabs.map((tab) => tab.key).join(",")}
+      activeKey={activeKey ?? undefined}
+      stripRef={stripRef}
+    >
       {tabs.map((tab) => {
         const isActive = tab.key === activeKey;
         const ptyId = `${ROOT_SCOPE}:${tab.key}`;
@@ -1032,7 +1039,7 @@ function GroupStrip({
           </div>
         );
       })}
-    </div>
+    </ScrollingTabStrip>
   );
 }
 

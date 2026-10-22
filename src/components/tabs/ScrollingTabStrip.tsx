@@ -17,6 +17,7 @@ export function ScrollingTabStrip({
   className,
   role,
   activeKey,
+  stripRef: externalRef,
 }: {
   children: React.ReactNode;
   /** Changes whenever the group's tab set (or its drop placeholder) changes, so
@@ -29,9 +30,19 @@ export function ScrollingTabStrip({
   /** Identity of the current tab, for a bar whose new tabs open active: each
    *  change scrolls the strip's `.tab.active` into view. */
   activeKey?: string;
+  /** The caller's own handle on the `.tab-strip` element (the root console
+   *  measures it for its tab drag). */
+  stripRef?: (el: HTMLDivElement | null) => void;
 }) {
   const t = useT();
-  const stripRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const setStripRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      stripRef.current = el;
+      externalRef?.(el);
+    },
+    [externalRef],
+  );
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -138,7 +149,7 @@ export function ScrollingTabStrip({
       <div
         className={className ? `tab-strip ${className}` : "tab-strip"}
         role={role}
-        ref={stripRef}
+        ref={setStripRef}
         onWheel={onStripWheel}
       >
         {children}
