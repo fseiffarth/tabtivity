@@ -1901,9 +1901,12 @@ fn clean_text(raw: &str) -> Option<String> {
 /// reading), or an `assistant` record's text blocks, the plan its
 /// `ExitPlanMode` call put up, the subagents its `Agent` calls spawned and
 /// the questions its `AskUserQuestion` calls asked. Thinking and other tool-use blocks are stepped over, as is a sidechain (a
-/// subagent's) record.
+/// subagent's) record, and a `<synthetic>` one Claude writes for itself
+/// ("No response requested." on a resume) unless it reports an API error.
 fn claude_records(value: &Value) -> Vec<Record> {
     let sidechain = value.get("isSidechain").and_then(Value::as_bool) == Some(true);
+    let placeholder = value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
+        && value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true);
     match value.get("type").and_then(Value::as_str) {
         Some("user") => agent_session::claude_prompt_in_record(value)
             .map(|text| Record::Turn("prompt", text))
@@ -1914,7 +1917,7 @@ fn claude_records(value: &Value) -> Vec<Record> {
             .map(|text| Record::Turn("prompt", text))
             .into_iter()
             .collect(),
-        Some("assistant") if !sidechain => {
+        Some("assistant") if !sidechain && !placeholder => {
             let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
                 return Vec::new();
             };
@@ -2251,6 +2254,8 @@ mod tests {
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"a.tsx\"}}]}}\n",
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"Updated a.tsx with 3 additions\"}]}}\n",
                 "{\"type\":\"assistant\",\"isSidechain\":true,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"subagent chatter\"}]}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"model\":\"<synthetic>\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"No response requested.\"}]}}\n",
+                "{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"message\":{\"model\":\"<synthetic>\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"API Error: overloaded\"}]}}\n",
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Done: the button\\u001b[0m clears the draft.\"}]}}\n",
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<system-reminder>x</system-reminder>\"}}\n",
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/model</command-name><command-args>opus</command-args>\"}}\n",
@@ -2269,6 +2274,8 @@ mod tests {
                 // tool call and its result between them left out, the escape
                 // byte dropped.
                 ("answer", "Looking at the composer."),
+                // Claude's own placeholder is not a bubble; an API error is.
+                ("answer", "API Error: overloaded"),
                 ("answer", "Done: the button[0m clears the draft."),
                 ("prompt", "/model opus"),
             ]
@@ -2281,7 +2288,7 @@ mod tests {
         assert!(again.unchanged && again.entries.is_empty());
         assert_eq!(again.version, Some(version.clone()));
         let stale = read_transcript(&path, TranscriptKind::Claude, Some("0:0"), DEFAULT_LIMIT).unwrap();
-        assert!(!stale.unchanged && stale.entries.len() == 4);
+        assert!(!stale.unchanged && stale.entries.len() == 5);
 
         // The limit keeps the newest turns and says that older ones exist.
         let last = read_transcript(&path, TranscriptKind::Claude, None, 2).unwrap();
