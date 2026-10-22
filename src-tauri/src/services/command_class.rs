@@ -249,6 +249,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_undo_clear", Core),
     ("agent_tab_chats", Core),
     ("agent_tab_resume_chat", Core),
+    ("agent_tab_move_session", Core),
     ("agent_usage", Core),
     ("agent_versions", Core),
     ("agent_warmup", Core),

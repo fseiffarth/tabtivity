@@ -670,12 +670,12 @@ fn pi_folder_name(path: &str) -> String {
     format!("--{body}--")
 }
 
-fn sha256_hex(text: &str) -> String {
+pub(crate) fn sha256_hex(text: &str) -> String {
     use sha2::Digest;
     hex(&sha2::Sha256::digest(text.as_bytes()))
 }
 
-fn md5_hex(text: &str) -> String {
+pub(crate) fn md5_hex(text: &str) -> String {
     use md5::Digest;
     hex(&md5::Md5::digest(text.as_bytes()))
 }

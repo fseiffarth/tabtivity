@@ -1934,6 +1934,26 @@ pub async fn agent_tab_resume_chat(
     .flatten()
 }
 
+/// Take the conversation of the tab launched as `agent` with launch id
+/// `session_id` from the folder `from` to `to`, another worktree of the
+/// project (`services::agent_relocate`), before the window respawns the tab
+/// there. The window has stopped the tab's CLI. `fresh` when the CLI cannot
+/// take it along and starts a new one there.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_move_session(
+    agent: String,
+    project_id: String,
+    session_id: String,
+    from: String,
+    to: String,
+) -> Result<crate::services::agent_relocate::Moved, String> {
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_relocate::move_session(&agent, &project_id, &session_id, &from, &to)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Read `agent`'s own usage panel by running its CLI's print mode once.
 ///
 /// Free in every sense that matters: the run is client-side (Claude's envelope

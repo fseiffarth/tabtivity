@@ -11,6 +11,9 @@ pub mod proc_table;
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
 pub mod agent_chats;
+// An agent tab's conversation taken along to another worktree (the Reader's
+// branch chip).
+pub mod agent_relocate;
 pub mod google_chat;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.

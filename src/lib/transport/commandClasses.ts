@@ -78,6 +78,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_tab_undo_clear", "core"],
   ["agent_tab_chats", "core"],
   ["agent_tab_resume_chat", "core"],
+  ["agent_tab_move_session", "core"],
   ["agent_usage", "core"],
   ["agent_versions", "core"],
   ["agent_warmup", "core"],

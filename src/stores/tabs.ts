@@ -1580,8 +1580,9 @@ interface TabsStore {
   // The caller ends a tmux session the tab owns first, or the respawn would
   // just reattach to it ("Undo clear", `stores/agents/agentClearUndo`).
   // `patch` changes the tab's label and Tabby launch on the way (a chat's model
-  // switch, `switchAssistantModel`).
-  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Pick<TabEntry, "label" | "assistant">) => void;
+  // switch, `switchAssistantModel`), or its folder (an agent moved to another
+  // worktree, `switchAgentWorktree`).
+  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Partial<Pick<TabEntry, "label" | "assistant" | "cwd">>) => void;
   // Swap the built-in viewer an embed tab renders its file with, in place — same
   // tab, same key, same position in the layout. `viewer` is persisted, so a tab
   // saved under a viewer choice the app has since revised comes back under the

@@ -170,9 +170,16 @@ API keys section says so.
 - The **Default** chip picks the agent Tabtivity uses when it must choose one
   itself (e.g. filling scaffold files).
 - Root console: agents are off there until you turn on their **Root** chip.
-- A project with linked git worktrees asks **Where should … start?**: the
-  main worktree or a worktree's branch. The agent's session belongs to the
-  folder it starts in, so pick the branch it should work on.
+- In a project with linked git worktrees, a new agent starts in the worktree
+  selected in the Git view (none selected: the project folder), and its tab
+  is named after the branch.
+- To move a running agent to another worktree, click the **⎇ branch** chip in
+  its Chat view's facts row and pick the project folder or a worktree. The
+  agent's CLI restarts there. Claude, Codex, Mistral Vibe, OpenCode, Gemini,
+  Qwen, Cursor and Droid carry on with the same conversation. Antigravity,
+  Copilot and Grok start a new one, and the list says so before you pick. The
+  tab stays in the new folder after a restart. Local projects only, and not
+  while the agent is working or asking a question.
 - Choose where a tab runs (this computer, the project's host or a worker) from
   its tab's location chip on a remote project; see `remote-projects`.
 

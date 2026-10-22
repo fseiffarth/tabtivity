@@ -64,7 +64,7 @@ export function worktreeOfPath(path: string | undefined): string | undefined {
 }
 
 /** Same directory, modulo a trailing separator and separator style. */
-function sameDir(a: string, b: string): boolean {
+export function sameDir(a: string, b: string): boolean {
   const norm = (s: string) => stripTrailingSep(s).replace(/\\/g, "/");
   return norm(a).length > 0 && norm(a) === norm(b);
 }
@@ -103,6 +103,25 @@ export function agentWorktreeChoices(list: GitWorktree[]): GitWorktree[] {
   const usable = list.filter((w) => !w.is_bare && !w.is_prunable);
   return usable.some((w) => !w.is_main) ? usable : [];
 }
+
+/**
+ * The folders an agent tab of the project at `projectDir` can be moved to
+ * (the Reader's branch chip): the project folder and its linked worktrees
+ * under `.tabtivity/worktrees/` — the folders a restored agent tab keeps
+ * (`restoredAgentCwd`), so the move survives a restart. Main first, as git
+ * lists it. Empty when there is no linked one to move between.
+ */
+export function agentSwitchChoices(list: GitWorktree[], projectDir: string): GitWorktree[] {
+  const usable = list.filter((w) => !w.is_bare && !w.is_prunable
+    && (w.is_main ? sameDir(w.path, projectDir) : isProjectWorktreeCwd(w.path, projectDir)));
+  return usable.some((w) => !w.is_main) ? usable : [];
+}
+
+/** The CLIs whose conversation comes along to the new worktree; the rest
+ * start a new one there. Mirrors `services::agent_relocate::carries`. */
+export const CARRIES_CONVERSATION: ReadonlySet<string> = new Set([
+  "claude", "codex", "vibe", "opencode", "gemini", "qwen", "cursor-agent", "droid",
+]);
 
 /** The tab kinds the question applies to. */
 export function isAgentMenuKind(kind: TabKind): boolean {

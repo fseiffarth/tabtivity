@@ -1,10 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { readAgentUsage } from "../../lib/agents/agentUsage";
 import type { ReaderLive } from "../../lib/agents/readerLive";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { shortPath } from "../../lib/agents/agentReader";
-import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
+import {
+  agentSwitchChoices,
+  CARRIES_CONVERSATION,
+  sameDir,
+  worktreeName,
+  worktreeOfPath,
+  type GitWorktree,
+} from "../../lib/agents/agentWorktrees";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
+import { splitPtyId } from "../../lib/terminal/ptyId";
+import { useProjectsStore } from "../../stores/projects";
+import { resolveProjectDirectory } from "../../types";
+import { switchAgentWorktree } from "../../stores/agents/agentWorktreeSwitch";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
@@ -26,6 +39,17 @@ import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import { assistantModelChoices, assistantOptions } from "../../lib/assistant";
 import { switchAssistantModel } from "../../stores/assistantScope";
+
+/** The tab's label for its move from the worktree `from` to `to`: the "+"
+ * menu's `<agent> · <branch>` names the new branch (none in the project
+ * folder); a label the user gave stays as it is. */
+function movedTabLabel(label: string, from: GitWorktree | undefined, to: GitWorktree, t: ReturnType<typeof useT>): string {
+  const branchOf = (w: GitWorktree) => w.branch || worktreeName(w.path);
+  const oldTail = from && !from.is_main ? t("newTabMenu.agentWorktreeLabel", { agent: "", branch: branchOf(from) }) : "";
+  if (from && !from.is_main && !label.endsWith(oldTail)) return label;
+  const base = oldTail ? label.slice(0, -oldTail.length) : label;
+  return to.is_main ? base : t("newTabMenu.agentWorktreeLabel", { agent: base, branch: branchOf(to) });
+}
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
@@ -56,7 +80,9 @@ const MODE_CYCLE_LIMIT = 6;
  * phone's chips, the permission mode (a list walked with Shift+Tab, or one
  * press where the session's modes are unknown) and the reasoning effort (a
  * list sent as Claude's `/effort`; elsewhere the `/model` picker, whose next
- * step it is), and the folder the agent works in with the worktree it is. The status facts
+ * step it is), and the folder the agent works in with the worktree it is —
+ * the branch chip moves the agent to another worktree of the project
+ * (`switchAgentWorktree`), its conversation along where its CLI allows. The status facts
  * come off the pane's live screen (`ReaderLive.status`); the limits from the
  * CLI's usage panel (`agent_usage`, which spends no quota), or — Codex, which
  * has none — from the figures its rollout stores.
@@ -157,6 +183,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     onStatusClose();
     closeModes();
     closeEffort();
+    closeWorktrees();
     session.open(command);
   };
 
@@ -185,6 +212,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   };
   const openModes = () => {
     closeAssistantModels();
+    closeWorktrees();
     if (codex) {
       if (permissionPicking) close();
       else openPicker("/permissions");
@@ -255,6 +283,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     }
     onStatusClose();
     closeAssistantModels();
+    closeWorktrees();
     if (effortOpen) {
       closeEffort();
       return;
@@ -307,6 +336,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     onStatusClose();
     closeModes();
     closeEffort();
+    closeWorktrees();
     setAssistantFailed(false);
     setAssistantModels(null);
     setAssistantOpen(true);
@@ -333,6 +363,60 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       }
       setAssistantSwitching("");
       setAssistantFailed(true);
+    });
+  };
+
+  // --- The worktree the agent works in --------------------------------------
+  // Local projects only, and only an agent whose conversation a restart
+  // resumes: the move is a respawn in the new folder.
+  const scope = splitPtyId(ptyId)?.scope ?? "";
+  const project = useProjectsStore((state) => state.projects.find((p) => p.id === scope));
+  const projectDir = project && !project.remote && !project.vm?.enabled ? resolveProjectDirectory(project) : "";
+  const worktreeMovable = tab.kind === "agent" && !assistantLaunch && !!tab.sessionId
+    && (tab.cmd in RESUMABLE_AGENTS || !!tab.resumeArgs?.length) && !!projectDir;
+  const [worktreesOpen, setWorktreesOpen] = useState(false);
+  /** `null` while the worktrees are read. */
+  const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
+  const [worktreeSwitching, setWorktreeSwitching] = useState("");
+  const [worktreeFailed, setWorktreeFailed] = useState(false);
+  const closeWorktrees = () => {
+    setWorktreesOpen(false);
+    setWorktreeSwitching("");
+  };
+  const openWorktrees = () => {
+    if (worktreesOpen) {
+      closeWorktrees();
+      return;
+    }
+    onStatusClose();
+    close();
+    closeModes();
+    closeEffort();
+    closeAssistantModels();
+    setWorktreeFailed(false);
+    setWorktrees(null);
+    setWorktreesOpen(true);
+    void invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" }).then(
+      (list) => setWorktrees(agentSwitchChoices(list ?? [], projectDir)),
+      () => setWorktrees([]),
+    );
+  };
+  const chooseWorktree = (wt: GitWorktree) => {
+    if (worktreeSwitching) return;
+    if (sameDir(wt.path, tab.cwd)) {
+      closeWorktrees();
+      return;
+    }
+    const from = worktrees?.find((w) => sameDir(w.path, tab.cwd));
+    setWorktreeFailed(false);
+    setWorktreeSwitching(wt.path);
+    void switchAgentWorktree(scope, tab, wt.path, movedTabLabel(tab.label, from, wt, t)).then((result) => {
+      if (result !== "failed") {
+        closeWorktrees();
+        return;
+      }
+      setWorktreeSwitching("");
+      setWorktreeFailed(true);
     });
   };
 
@@ -488,6 +572,48 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <small className="terminal-reader-question-more">{t("terminal.reader.effortNote")}</small>
         </div>
       )}
+      {worktreesOpen && (
+        <div
+          className="terminal-reader-picker"
+          role="dialog"
+          aria-label={t("terminal.reader.worktreeTitle")}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeWorktrees(); } }}
+        >
+          <div className="terminal-reader-picker-head">
+            <strong>{t("terminal.reader.worktreeTitle")}</strong>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeWorktrees} aria-label={t("terminal.reader.worktreeClose")} title={t("terminal.reader.worktreeClose")}>✕</button>
+          </div>
+          {worktrees === null ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.worktreeLoading")}</small>
+          ) : worktrees.length === 0 ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.worktreeNone")}</small>
+          ) : (
+            <div className="terminal-reader-options">
+              {worktrees.map((wt, index) => (
+                <button
+                  key={wt.path}
+                  type="button"
+                  className={sameDir(wt.path, tab.cwd) ? "terminal-reader-option current" : "terminal-reader-option"}
+                  disabled={!!worktreeSwitching}
+                  aria-busy={wt.path === worktreeSwitching}
+                  title={wt.path}
+                  onClick={() => chooseWorktree(wt)}
+                >
+                  <span className="terminal-reader-option-number">{wt.path === worktreeSwitching ? "…" : index + 1}</span>
+                  <span className="terminal-reader-option-label">
+                    <span>{wt.branch || worktreeName(wt.path)}</span>
+                    <small>{wt.is_main ? t("terminal.reader.worktreeMain") : t("terminal.reader.worktree", { name: worktreeName(wt.path) })}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {worktreeFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.worktreeFailed")}</small>}
+          <small className="terminal-reader-question-more">
+            {t(CARRIES_CONVERSATION.has(tab.cmd) ? "terminal.reader.worktreeCarries" : "terminal.reader.worktreeFresh", { agent: agentLabel })}
+          </small>
+        </div>
+      )}
       {modeOpen && (
         <div
           className="terminal-reader-picker"
@@ -520,7 +646,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       )}
       <div className="terminal-reader-facts">
         {STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <button type="button" className="terminal-reader-fact-model"
-          onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); onStatusRequest(); }}
+          onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); closeWorktrees(); onStatusRequest(); }}
           aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
           {t("terminal.reader.status.button")} {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
         </button>}
@@ -587,7 +713,20 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         <UntestedTag id="terminal.reader.factsMore" />
         {shownPath && <span className="terminal-reader-fact" title={shownPath}>{shortPath(shownPath)}</span>}
         {worktree && <span className="terminal-reader-fact worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: worktree })}</span>}
-        {status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}
+        {worktreeMovable ? (
+          <button
+            type="button"
+            className="terminal-reader-fact-model"
+            onClick={openWorktrees}
+            disabled={!worktreesOpen && (!!live.working || !!live.question || picking)}
+            aria-haspopup="dialog"
+            aria-expanded={worktreesOpen}
+            title={t("terminal.reader.worktreeSwitchHint")}
+          >
+            ⎇ {status?.branch ?? t("terminal.reader.worktreeButton")}
+            <UntestedTag id="terminal.reader.worktreeSwitch" />
+          </button>
+        ) : status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}
         {contextLeft && <span className="terminal-reader-fact">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {resumeCost && (
           <span
