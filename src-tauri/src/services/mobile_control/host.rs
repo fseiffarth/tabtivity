@@ -4692,6 +4692,112 @@ async fn undo_clear_headless(state: &HostState, phone: &Phone, tab_id: &str) -> 
     }
 }
 
+/// The phone's answer to a worktree request the desktop refused, or that no
+/// window was there to answer: the move is the window's (it stops and
+/// respawns the tab's pane), so with none open there is nothing to do.
+fn worktree_desktop_error(response: Result<DesktopResponse, String>) -> (StatusCode, Json<serde_json::Value>) {
+    match response {
+        Ok(DesktopResponse::Error { code, .. }) => api_error(
+            match code.as_str() {
+                "desktop_unavailable" | "tab_not_ready" => StatusCode::SERVICE_UNAVAILABLE,
+                "tab_not_found" | "worktree_not_found" => StatusCode::NOT_FOUND,
+                "not_movable" | "tab_busy" | "move_failed" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            },
+            &code,
+        ),
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
+/// `GET /api/v1/tabs/{id}/worktrees` — the folders the facts row's ⎇ branch
+/// chip can move this agent tab to (`DesktopRequest::TabWorktrees`): the
+/// project folder and its linked worktrees by opaque id, which one the tab is
+/// in, and whether its CLI takes the conversation along. No path crosses.
+async fn tab_worktrees(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::TabWorktrees {
+            request_id: new_request_id(),
+            project_id,
+            tmux_session,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::TabWorktrees { worktrees, current, carries }) => (
+            StatusCode::OK,
+            Json(json!({ "worktrees": worktrees, "current": current, "carries": carries })),
+        ),
+        other => worktree_desktop_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveWorktreeBody {
+    worktree: String,
+}
+
+/// `POST /api/v1/tabs/{id}/worktree` with `{ "worktree": "<id>" }` — move
+/// the agent tab to that worktree (`DesktopRequest::MoveWorktree`): the
+/// desktop stops its CLI, takes the conversation along where the CLI allows
+/// and respawns the tab there. Answers `{ "moved": "carried" | "fresh" }`; a
+/// failed move (`409 move_failed`) left the tab in its old folder.
+async fn move_tab_worktree(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The move respawns the agent's CLI.
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
+    let Ok(MoveWorktreeBody { worktree }) = serde_json::from_slice::<MoveWorktreeBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if worktree.is_empty() || worktree.len() > 128 {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::MoveWorktree {
+            request_id: new_request_id(),
+            project_id,
+            tmux_session,
+            worktree,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::WorktreeMoved { moved }) => (StatusCode::OK, Json(json!({ "moved": moved }))),
+        other => worktree_desktop_error(other),
+    }
+}
+
 /// Tell the desktop a phone had this agent tab on screen, so its activity
 /// store marks the tab's output read (see `clearAttention`). Fire-and-forget:
 /// nothing in the terminal path may wait on the desktop, which is why this
@@ -6613,6 +6719,8 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/held", post(hold_prompt))
         .route("/api/v1/tabs/{tab_id}/held/{held_id}", put(edit_held_prompt))
         .route("/api/v1/tabs/{tab_id}/undo-clear", post(undo_clear))
+        .route("/api/v1/tabs/{tab_id}/worktrees", get(tab_worktrees))
+        .route("/api/v1/tabs/{tab_id}/worktree", post(move_tab_worktree))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
         .route("/api/v1/tabs/{tab_id}/sign-in-callback", post(sign_in_callback))
         .route(

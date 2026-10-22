@@ -72,7 +72,8 @@ import { probeLocalModelPlacement } from "../tabs/localModelGroup";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import { readerAgent } from "../../lib/agents/agentReader";
-import { agentWorktreeChoices, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
+import { agentWorktreeChoices, CARRIES_CONVERSATION, sameDir, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
+import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
 import { cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
 import { loginIdForCmd, signInLaunch } from "../../lib/agents/signInLaunch";
 import { useI18nStore, useT } from "../../lib/i18n";
@@ -294,6 +295,8 @@ type DesktopRequest =
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "tab_worktrees"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "move_worktree"; request_id: string; project_id: string; tmux_session: string; worktree: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
   | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
   | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
@@ -324,6 +327,8 @@ type DesktopResponse =
   | { status: "seen" }
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
+  | { status: "tab_worktrees"; worktrees: MobileWorktree[]; current?: string; carries: boolean }
+  | { status: "worktree_moved"; moved: "carried" | "fresh" }
   | { status: "attached"; attachment: InboxAttachment }
   | { status: "markup_questions"; asks: MobileMarkupAsk[]; ticks: MarkupTick[] }
   | ({ status: "local_models" } & MobileLocalModelList)
@@ -1079,6 +1084,12 @@ async function worktreesOf(scope: MobileScope): Promise<{ id: string; worktree: 
   } catch {
     return [];
   }
+  return withWorktreeIds(list);
+}
+
+/** `list` under the phone's opaque worktree ids — the ＋ sheet's and the ⎇
+ * chip's, one id per folder. */
+async function withWorktreeIds(list: GitWorktree[]): Promise<{ id: string; worktree: GitWorktree }[]> {
   const named = await Promise.all(list.map(async (worktree) => {
     try {
       return { id: await invoke<string>("mobile_opaque_id", { domain: "worktree", value: worktree.path }), worktree };
@@ -2578,6 +2589,70 @@ async function undoTabClear(projectId: string, tmuxSession: string): Promise<Des
   }
 }
 
+/** An agent tab the phone's ⎇ chip may move between worktrees, with the
+ * folders it can go to under their opaque ids (`worktreeMoveDir`,
+ * `agentSwitchChoices` — the desktop Reader's chip asks the same), or the
+ * refusal to answer with. */
+async function movableTab(projectId: string, tmuxSession: string): Promise<
+  | { scope: MobileScope; tab: TabEntry; choices: { id: string; worktree: GitWorktree }[] }
+  | DesktopResponse
+> {
+  const scope = mobileScope(projectId);
+  if (!scope) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  const tab = scheduleTargetTab(scope.id, tmuxSession);
+  if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
+  const dir = worktreeMoveDir(tab, scope.project, false);
+  if (!dir) return { status: "error", code: "not_movable", message: "This agent cannot move to another worktree" };
+  return { scope, tab, choices: await withWorktreeIds(await agentSwitchChoicesIn(dir)) };
+}
+
+/** The phone's ⎇ chip opened: where this agent tab can move, which of those
+ * it is in, and whether its CLI takes the conversation along. */
+async function tabWorktrees(projectId: string, tmuxSession: string): Promise<DesktopResponse> {
+  const found = await movableTab(projectId, tmuxSession);
+  if ("status" in found) return found;
+  const current = found.choices.find(({ worktree }) => sameDir(worktree.path, found.tab.cwd))?.id;
+  return {
+    status: "tab_worktrees",
+    worktrees: found.choices.map(({ id, worktree }) => ({
+      id,
+      label: worktree.is_main ? "" : worktreeName(worktree.path),
+      ...(worktree.branch ? { branch: worktree.branch } : {}),
+      main: worktree.is_main,
+    })),
+    ...(current ? { current } : {}),
+    carries: CARRIES_CONVERSATION.has(found.tab.cmd),
+  };
+}
+
+/** The phone picked a worktree on the ⎇ chip's sheet: the same move as the
+ * desktop Reader's (`switchAgentWorktree`). Refused while the agent works or
+ * waits on a question, as the desktop chip is disabled then — the restart
+ * would end the turn. */
+async function moveTabWorktree(
+  projectId: string,
+  tmuxSession: string,
+  worktreeId: string,
+  t: ReturnType<typeof useT>,
+): Promise<DesktopResponse> {
+  const found = await movableTab(projectId, tmuxSession);
+  if ("status" in found) return found;
+  const { scope, tab, choices } = found;
+  const to = choices.find(({ id }) => id === worktreeId)?.worktree;
+  if (!to) return { status: "error", code: "worktree_not_found", message: "That worktree is not there any more" };
+  if (!sameDir(to.path, tab.cwd) && agentTabState(`${scope.id}:${tab.key}`) !== "idle") {
+    return { status: "error", code: "tab_busy", message: "The agent is at work or waiting for an answer" };
+  }
+  const result = await moveAgentToWorktree(scope.id, tab, choices.map(({ worktree }) => worktree), to, t);
+  if (result === "unchanged") return { status: "worktree_moved", moved: "carried" };
+  if (result === "failed") {
+    return { status: "error", code: "move_failed", message: "The conversation could not be moved; the agent restarted in its old folder" };
+  }
+  return { status: "worktree_moved", moved: result };
+}
+
 /** The phone typed into this agent tab. It types into a tmux client of its own,
  * so not one byte of it passes through this window — and the classifier only
  * ever calls output "working" or "done" when the session was COMMANDED this
@@ -2779,6 +2854,8 @@ async function handleRequest(
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
+    case "tab_worktrees": return tabWorktrees(request.project_id, request.tmux_session);
+    case "move_worktree": return moveTabWorktree(request.project_id, request.tmux_session, request.worktree, t);
     case "desktop_images": return desktopImagesFor(request.project_id);
     case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);
     case "markup_questions": return markupQuestionsFor(request.project_id, request.tmux_session, request.path ?? undefined);
@@ -2815,7 +2892,7 @@ const mutationQueues = new Map<string, Promise<unknown>>();
  * `MobileMutationList.test.ts` holds the two in step (exported for it). */
 export function mutationDomain(type: DesktopRequest["type"]): string | null {
   switch (type) {
-    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": return "tabs";
+    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": return "tabs";
     case "todo_mutate": case "alert_resolve": case "calendar_mutate": return "board";
     case "mail_mark": case "mail_reply": return "mail";
     // A markup answer queues its prompt as a phone hold does.

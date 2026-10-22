@@ -49,6 +49,8 @@ import {
   reportSentPrompt,
   sentName,
   undoClear,
+  getTabWorktrees,
+  moveTabWorktree,
   uploadToInbox,
   type DesktopImage,
   type OutboxFile,
@@ -58,6 +60,7 @@ import {
   type SessionTranscript,
   type AskedQuestion,
   type TabRow,
+  type TabWorktrees,
   type TranscriptEntry,
 } from "../api";
 import { describeFailure } from "../connection";
@@ -81,6 +84,7 @@ import { installTerminalTouchScroll } from "../terminal/touchScroll";
 import { installWideOutputHint, type WideOutputHint } from "../terminal/wideOutput";
 import { inputFrameStart, sessionStatus, statusFrameLines, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
+import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
 import { sessionLimits } from "../terminal/sessionUsage";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { BackNest } from "../backStack";
@@ -1118,6 +1122,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The model the sheet is asking the effort for, once the walk has landed. */
   const [effortStep, setEffortStep] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
+  /** The ⎇ chip's sheet: where the agent can move (`null` while asked), the
+   * id a move is under way to, and what the last ask or move ran into. */
+  const [worktreeSheet, setWorktreeSheet] = useState(false);
+  const [worktreeChoices, setWorktreeChoices] = useState<TabWorktrees | null>(null);
+  const [worktreeMoving, setWorktreeMoving] = useState("");
+  const [worktreeNote, setWorktreeNote] = useState<TranslationKey | "">("");
   /** The status chip's sheet: the session's state and the CLI's own usage
    * panel. Opening it asks the desktop, which may run the CLI once. */
   const [statusSheet, setStatusSheet] = useState(false);
@@ -3570,6 +3580,50 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * The sheet lists its modes as a readout: nothing is pressed, and the chip
    * never cycles into a session that ignores the key. */
   const fixedMode = modeFixed(agentLabel);
+  /** The ⎇ chip: the desktop Reader's worktree move, as a sheet. The list
+   * is the desktop's (`TabWorktrees`); a pick has the desktop stop the CLI,
+   * take the conversation along where it can and restart it there. */
+  const openWorktreeSheet = () => {
+    setWorktreeNote("");
+    setWorktreeChoices(null);
+    setWorktreeSheet(true);
+    getTabWorktrees(tab.id).then(setWorktreeChoices, (error) => {
+      const code = error instanceof ApiError ? error.code : "";
+      setWorktreeChoices({ worktrees: [], carries: false });
+      setWorktreeNote(code === "desktop_unavailable" ? "mobile.worktree.offline" : "mobile.worktree.unreadable");
+    });
+  };
+  const chooseWorktree = (id: string) => {
+    if (worktreeMoving) return;
+    if (id === worktreeChoices?.current) {
+      setWorktreeSheet(false);
+      return;
+    }
+    setWorktreeNote("");
+    setWorktreeMoving(id);
+    moveTabWorktree(tab.id, id)
+      .then(() => {
+        setWorktreeMoving("");
+        setWorktreeSheet(false);
+        // The agent restarted elsewhere: read its conversation afresh while
+        // it comes up, as after an Undo of a Clear.
+        commandSentAt.current = Date.now();
+        for (const delay of [0, ...UNDO_RELOADS]) {
+          window.setTimeout(() => {
+            transcriptVersion.current = undefined;
+            setTranscriptReload((count) => count + 1);
+          }, delay);
+        }
+      })
+      .catch((error) => {
+        const code = error instanceof ApiError ? error.code : "";
+        setWorktreeMoving("");
+        setWorktreeNote(code === "move_failed" ? "terminal.reader.worktreeFailed"
+          : code === "tab_busy" ? "mobile.worktree.busy"
+          : code === "desktop_unavailable" ? "mobile.worktree.offline"
+          : "mobile.worktree.unreadable");
+      });
+  };
   const openModeSheet = () => {
     if (modes.length === 0 && !fixedMode) {
       cycleMode();
@@ -3613,7 +3667,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setSwitching("");
     setSwitchFailed(value);
   };
-  const sheetUp = modelSheet || modeSheet || statusSheet || desktopSheet || gallery
+  const sheetUp = modelSheet || modeSheet || worktreeSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -4171,6 +4225,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     pending: choice.value === switching,
   }));
   const failedMode = modes.find((choice) => choice.value === switchFailed);
+  const worktreeOptions: SheetOption[] = (worktreeChoices?.worktrees ?? []).map((row) => ({
+    key: row.id,
+    ...worktreeChoiceText({ branch: row.branch, name: row.label, main: row.main }, t),
+    current: row.id === worktreeChoices?.current,
+    pending: row.id === worktreeMoving,
+  }));
   const attachTiles: AttachTile[] = [
     { key: "camera", tone: "camera", label: t("mobile.add.camera"), hint: t("mobile.add.cameraHint"), untested: "mobile.add.camera",
       icon: <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.5" /></svg> },
@@ -4562,7 +4622,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         </>}
-        {status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
+        {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}
+        {/* As on the desktop Reader: the branch moves the agent to another
+            worktree of the project, where the move applies. */}
+        {tab.worktree_movable
+          ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {status?.branch ?? t("terminal.reader.worktreeButton")}</span></button>
+          : status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
+        {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
         {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
@@ -4718,6 +4784,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       busy={switching !== "" || fixedMode}
       onPick={(key) => void applyMode(key)}
       onClose={() => { if (!switching) setModeSheet(false); }}
+    />}
+    {worktreeSheet && <OptionSheet
+      title={t("terminal.reader.worktreeTitle")}
+      note={worktreeNote
+        ? { text: t(worktreeNote), error: true }
+        : worktreeChoices && worktreeChoices.worktrees.length > 0
+          ? { text: worktreeMoveNote(worktreeChoices.carries, agentLabel, t) }
+          : undefined}
+      options={worktreeOptions}
+      waiting={t(worktreeChoices === null ? "terminal.reader.worktreeLoading" : worktreeNote ? "mobile.worktree.retry" : "terminal.reader.worktreeNone")}
+      busy={worktreeMoving !== ""}
+      onPick={chooseWorktree}
+      onClose={() => { if (!worktreeMoving) setWorktreeSheet(false); }}
     />}
     {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} />}
     {signInSheet && <SignInSheet

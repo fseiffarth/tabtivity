@@ -179,7 +179,8 @@ API keys section says so.
   Qwen, Cursor and Droid carry on with the same conversation. Antigravity,
   Copilot and Grok start a new one, and the list says so before you pick. The
   tab stays in the new folder after a restart. Local projects only, and not
-  while the agent is working or asking a question.
+  while the agent is working or asking a question. The phone's chat has the
+  same chip (with desktop Tabtivity open).
 - Choose where a tab runs (this computer, the project's host or a worker) from
   its tab's location chip on a remote project; see `remote-projects`.
 

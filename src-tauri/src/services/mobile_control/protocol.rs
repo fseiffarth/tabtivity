@@ -1235,6 +1235,25 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
     },
+    /// The folders this agent tab can be moved to — the facts row's ⎇ branch
+    /// chip, as on the desktop Reader: the project folder and its linked
+    /// worktrees, by the ＋ sheet's opaque worktree ids. Answered with
+    /// `TabWorktrees`; `not_movable` for a tab the move does not apply to.
+    TabWorktrees {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+    },
+    /// Move this agent tab to the worktree `worktree` (an id `TabWorktrees`
+    /// listed): the desktop stops its CLI, takes the conversation along where
+    /// the CLI allows (`services::agent_relocate`) and respawns the tab there.
+    /// Answered with `WorktreeMoved`.
+    MoveWorktree {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        worktree: String,
+    },
     /// What one agent tab is doing, and what its CLI says about its own quota.
     /// Addressed by the same `project_id` + `tmux_session` pair the schedule and
     /// rename requests use, so no key, path or command crosses the boundary.
@@ -1385,6 +1404,8 @@ impl DesktopRequest {
             | Self::HoldPrompt { request_id, .. }
             | Self::EditHeldPrompt { request_id, .. }
             | Self::UndoClear { request_id, .. }
+            | Self::TabWorktrees { request_id, .. }
+            | Self::MoveWorktree { request_id, .. }
             | Self::AgentStatus { request_id, .. }
             | Self::AgentTranscript { request_id, .. }
             | Self::DesktopImages { request_id, .. }
@@ -1411,6 +1432,9 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 35,
             Self::MailReply { .. } => 65,
             Self::AgentStatus { .. } => 25,
+            // Waits for the old CLI to exit (`switchAgentWorktree`, up to
+            // 3 s) before the move and the respawn.
+            Self::MoveWorktree { .. } => 20,
             // Rides on the project list, which answers without the desktop:
             // a wedged window must not hold that list up for long.
             Self::GitStates { .. } => 3,
@@ -1429,6 +1453,7 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } => 20,
+            Self::MoveWorktree { .. } => 15,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
         })
@@ -1461,6 +1486,7 @@ impl DesktopRequest {
             | Self::EditHeldPrompt { .. }
             | Self::MarkupAnswer { .. }
             | Self::MarkupDismiss { .. }
+            | Self::MoveWorktree { .. }
             | Self::LocalModelMutate { .. } => true,
             Self::Catalog { .. }
             | Self::Activity { .. }
@@ -1478,6 +1504,7 @@ impl DesktopRequest {
             | Self::TabInput { .. }
             | Self::TabPrompt { .. }
             | Self::UndoClear { .. }
+            | Self::TabWorktrees { .. }
             | Self::AgentStatus { .. }
             | Self::AgentTranscript { .. }
             | Self::DesktopImages { .. }
@@ -1870,6 +1897,25 @@ pub enum DesktopResponse {
     },
     DesktopImages {
         images: Vec<crate::services::desktop_images::DesktopImage>,
+    },
+    /// Answers [`DesktopRequest::TabWorktrees`]: the folders the tab can move
+    /// to (empty when the project has no linked worktree), the id of the one
+    /// it runs in, and whether its CLI takes the conversation along
+    /// (`agent_relocate::carries`) or starts a new one there.
+    TabWorktrees {
+        #[serde(default)]
+        worktrees: Vec<MobileWorktree>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
+        #[serde(default)]
+        carries: bool,
+    },
+    /// Answers [`DesktopRequest::MoveWorktree`]: `carried` (the conversation
+    /// goes on there) or `fresh` (the CLI started a new one there). A move
+    /// that failed — the tab came back in its old folder — is the error
+    /// `move_failed`.
+    WorktreeMoved {
+        moved: String,
     },
     /// A desktop image copied into the project inbox: the same three fields
     /// the phone's own upload gets back.
@@ -2296,6 +2342,43 @@ mod tests {
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize prompt report");
         assert!(matches!(restored, DesktopRequest::TabPrompt { .. }));
+    }
+
+    #[test]
+    fn worktree_moves_name_the_tab_pair_and_an_opaque_worktree_only() {
+        let request = DesktopRequest::MoveWorktree {
+            request_id: "request-move".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            worktree: "w-1".into(),
+        };
+        assert_eq!(request.request_id(), "request-move");
+        assert!(request.is_mutation());
+        assert!(request.desktop_timeout() < request.response_timeout());
+        let json = serde_json::to_value(&request).expect("serialize move");
+        assert_eq!(json["type"], "move_worktree");
+        let mut hostile = json.clone();
+        hostile["path"] = "/must/not/cross".into();
+        assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+        let list = DesktopRequest::TabWorktrees {
+            request_id: "request-list".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+        };
+        assert!(!list.is_mutation());
+        assert_eq!(serde_json::to_value(&list).expect("serialize list")["type"], "tab_worktrees");
+
+        let listed: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "tab_worktrees",
+            "worktrees": [{ "id": "w-0", "label": "", "branch": "main", "main": true }],
+            "current": "w-0",
+            "carries": true,
+        }))
+        .expect("parse list answer");
+        assert!(matches!(listed, DesktopResponse::TabWorktrees { ref worktrees, current: Some(_), carries: true } if worktrees.len() == 1));
+        let moved: DesktopResponse = serde_json::from_value(serde_json::json!({ "status": "worktree_moved", "moved": "fresh" }))
+            .expect("parse move answer");
+        assert!(matches!(moved, DesktopResponse::WorktreeMoved { ref moved } if moved == "fresh"));
     }
 
     #[test]

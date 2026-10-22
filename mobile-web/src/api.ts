@@ -38,7 +38,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean }
 export interface TabWorktree { label: string; branch?: string }
 export interface SubagentWorktree extends TabWorktree { count: number }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
@@ -603,6 +603,30 @@ export async function holdPrompt(tabId: string, message: string): Promise<string
 export function editHeldPrompt(tabId: string, heldId: string, message: string): Promise<unknown> {
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/held/${encodeURIComponent(heldId)}`, { method: "PUT", body: JSON.stringify({ message }) });
 }
+
+/** Where the ⎇ chip can move an agent tab: the project folder (`main`, empty
+ * label) and its linked worktrees by opaque id, the one it runs in
+ * (`current`), and whether its CLI takes the conversation along (`carries`)
+ * or starts a new one there. No path crosses. */
+export interface TabWorktrees { worktrees: WorktreeRow[]; current?: string; carries: boolean }
+
+/** `GET /api/v1/tabs/{id}/worktrees` — asked when the ⎇ chip's sheet opens. */
+export async function getTabWorktrees(tabId: string): Promise<TabWorktrees> {
+  const body = await api<Partial<TabWorktrees>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktrees`);
+  return { worktrees: body.worktrees ?? [], ...(body.current ? { current: body.current } : {}), carries: body.carries === true };
+}
+
+/** `POST /api/v1/tabs/{id}/worktree` — move the agent tab to that worktree,
+ * as the desktop Reader's ⎇ chip does: the desktop stops its CLI, takes the
+ * conversation along where the CLI allows and restarts it there. `409
+ * move_failed` means it restarted in its old folder. */
+export function moveTabWorktree(tabId: string, worktree: string): Promise<{ moved: "carried" | "fresh" }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
+}
+
+/** Past the sidecar's own 20 s wait on the desktop's move
+ * (`DesktopRequest::response_timeout`), which stops the old CLI first. */
+const WORKTREE_MOVE_TIMEOUT = 25_000;
 
 /** `POST /api/v1/tabs/{id}/undo-clear` — take back this agent tab's last
  * `/clear`: the desktop types the resume of the conversation it ended (the

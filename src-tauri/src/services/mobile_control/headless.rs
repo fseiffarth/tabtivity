@@ -2031,6 +2031,7 @@ mod tests {
                 worktree: None,
                 subagent_worktrees: Vec::new(),
                 assistant_launch: None,
+                worktree_movable: false,
             },
             tmux_name: concat!(crate::app_slug!(), "-x").into(),
             session_id: session_id.map(str::to_string),

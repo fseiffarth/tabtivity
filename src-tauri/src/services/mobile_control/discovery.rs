@@ -368,6 +368,12 @@ pub struct PublicTab {
     /// phone's CLI picker can show which one is on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_launch: Option<String>,
+    /// The facts row's ⎇ branch chip can move this agent tab to another
+    /// worktree of its project (`TabWorktrees`/`MoveWorktree`), as the desktop
+    /// Reader's can: a resumable agent of a project on this machine (not
+    /// remote, not a VM) — the window's own test in `agentWorktreeSwitch.ts`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub worktree_movable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1451,6 +1457,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         worktree: None,
         subagent_worktrees: Vec::new(),
         assistant_launch: None,
+        worktree_movable: false,
     };
     ResolvedProject {
         public: PublicProject {
@@ -1663,6 +1670,11 @@ fn resolve_scope(
             assistant_launch: chat
                 .as_ref()
                 .map(|launch| super::assistant::launch_handle(host_key, launch.cli, launch.model.as_deref())),
+            worktree_movable: tab.kind == "agent"
+                && chat.is_none()
+                && resumable(&tab)
+                && source.kind == ScopeKind::Project
+                && matches!(source.host, ProjectHost::Local | ProjectHost::Container),
         };
         tabs.push(ResolvedTab {
             public,
@@ -2571,11 +2583,64 @@ mod tests {
             listed,
             vec![("Local 1", "agent", Some("Mistral")), ("Local 2", "agent", Some("Claude"))]
         );
-        // Flagged as local, so the phone shows the model and offers no list.
+        // Flagged as local, so the phone shows the model and offers no list —
+        // and no worktree move, which the desktop offers none of either.
         for listed in tabs {
             let row = serde_json::to_value(&listed.public).expect("row");
             assert_eq!(row["local_model"], serde_json::json!(true));
+            assert!(row.get("worktree_movable").is_none(), "{row}");
         }
+    }
+
+    /// The phone's ⎇ chip moves exactly the tabs the desktop Reader's does: a
+    /// resumable agent of a local project (`worktreeMoveDir`) — never a
+    /// shell, nor a remote project's agent.
+    #[test]
+    fn a_local_resumable_agent_is_flagged_movable_between_worktrees() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let (local, remote) = (state.join("p"), state.join("r"));
+        fs::create_dir_all(&local).expect("local dir");
+        fs::create_dir_all(&remote).expect("remote dir");
+        let access = concat!(crate::app_slug!(), "_mobile_access");
+        fs::write(
+            state.join("projects.json"),
+            serde_json::to_vec(&serde_json::json!([
+                { "id": "p-1", "name": "P", "status": "active", "directory": local.to_string_lossy(), access: true },
+                { "id": "r-1", "name": "R", "status": "active", "directory": state.join("r-state").to_string_lossy(), access: true,
+                  "remote": { "host": "h" }, "mirror": remote.to_string_lossy() },
+            ]))
+            .expect("projects"),
+        )
+        .expect("write projects");
+        let session = |id: &str, root: &Path, tabs: serde_json::Value| {
+            let dir = state.join("sessions").join(id);
+            fs::create_dir_all(&dir).expect("session dir");
+            let rows: Vec<serde_json::Value> = tabs.as_array().unwrap().iter().map(|t| {
+                let mut row = t.clone();
+                row["cwd"] = serde_json::json!(root.to_string_lossy());
+                row
+            }).collect();
+            fs::write(dir.join("terminals.json"), serde_json::to_vec(&serde_json::json!({ "tabLayout": rows })).expect("json"))
+                .expect("write session");
+        };
+        session("p-1", &local, serde_json::json!([
+            { "label": "Claude", "cmd": "claude", "kind": "agent", "sessionId": "s1", "tmuxSession": format!("{SLUG}-p-1--agent-100000001") },
+        ]));
+        session("r-1", &remote, serde_json::json!([
+            { "label": "Claude", "cmd": "claude", "kind": "agent", "sessionId": "s2", "tmuxSession": format!("{SLUG}-r-1--agent-100000002") },
+        ]));
+
+        let catalog = Catalog::load(state, &[7; 32]).expect("catalog");
+        let movable = |raw: &str| {
+            catalog
+                .projects
+                .iter()
+                .find(|p| p.raw_id == raw)
+                .map(|p| p.tabs.iter().map(|t| t.public.worktree_movable).collect::<Vec<_>>())
+        };
+        assert_eq!(movable("p-1"), Some(vec![true]));
+        assert_eq!(movable("r-1"), Some(vec![false]));
     }
 
     /// A sign-in tab and a cloud session have no session to resume, yet the

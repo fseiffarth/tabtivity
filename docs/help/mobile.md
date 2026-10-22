@@ -356,6 +356,11 @@ It works with the desktop closed, refreshes when you come back to the app or
 tap **↻ Refresh**, and covers projects only, not boxes or the root console.
 The ＋ sheet's **Agents start in** row lists the same worktrees.
 
+To move a running agent to another of these worktrees, tap the **⎇ branch**
+chip in its chat's facts row, as on the desktop (see `agent-clis`). The row
+also names the worktree the agent is in. The move needs desktop Tabtivity
+open, and is off while the agent works or asks a question.
+
 ### What this chat has not committed
 
 In an agent tab's chat, the **Commit** chip next to **Clear** carries a
