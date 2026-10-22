@@ -1700,7 +1700,11 @@ const SYSMON_CSS = `
 }
 .sysmon-table {
   width: 100%;
-  border-collapse: collapse;
+  /* \`separate\`, not \`collapse\`: WebKitGTK leaves a collapsed table's sticky
+     header cells painted at their old screen position while the scroller moves
+     (a gray ghost over the vitals). The row rules are per-cell borders anyway. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 .sysmon-table thead th {
