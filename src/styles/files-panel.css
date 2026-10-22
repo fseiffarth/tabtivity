@@ -862,6 +862,19 @@
   height: 20px;
 }
 
+/* A view tab: the rail's glyph beside its label, so the panel's switcher and the
+   edge rail read as one set. */
+.toolbar-btn--tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.toolbar-btn--tab svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
 /* The Git button carries the colour of its next available action: red for Add,
    amber for Commit, green for Push. This keeps pending work visible while the
    actions themselves live in the Git view. */

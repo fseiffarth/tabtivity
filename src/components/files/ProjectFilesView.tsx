@@ -85,7 +85,8 @@ import { useExperimental } from "../../lib/experimental";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
-import { ArrowDownIcon, ArrowUpIcon, AssistantIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TerminalIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { RailAgentsIcon, RailAppsIcon, RailAssistantIcon, RailFilesIcon, RailGitIcon } from "../common/EdgeRailIcons";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TerminalIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -1772,11 +1773,13 @@ export function ProjectFilesView({
         {(["files", "git", "windows", "agents"] as View[]).map((v) => (
           <button
             key={v}
-            className={`toolbar-btn toolbar-btn--sm${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
+            className={`toolbar-btn toolbar-btn--sm toolbar-btn--tab${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
             style={{ marginLeft: v === "files" ? 0 : 2 }}
             aria-pressed={view === v}
             onClick={() => setView(v)}
           >
+            {/* The rail's own glyph for this view (`EdgeRailIcons`). */}
+            {v === "files" ? <RailFilesIcon /> : v === "git" ? <RailGitIcon /> : v === "agents" ? <RailAgentsIcon /> : <RailAppsIcon />}
             {t(
               v === "files"
                 ? "projectFilesView.tabFiles"
@@ -1880,7 +1883,7 @@ export function ProjectFilesView({
             title={t("assistant.title")}
             aria-label={t("assistant.title")}
           >
-            <AssistantIcon />
+            <RailAssistantIcon />
           </button>
         )}
         {/* The tree's search + refresh, hoisted out of the tree itself. Files
