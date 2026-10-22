@@ -1118,6 +1118,12 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .session-facts::-webkit-scrollbar { display:none; }
 .session-facts .fact-branch,.session-facts .fact-context,.session-facts .fact-limit,.session-facts .fact-model { flex:0 0 auto; }
 .session-facts .fact-limit.high { color:#f0a35e; }
+/* A limit taps between its percentage and a bar of what is left. */
+.session-facts .fact-limit { display:flex; align-items:center; gap:5px; margin:0 -4px; padding:5px 4px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; }
+.session-facts .fact-limit:active { background:rgba(255,255,255,.08); }
+.fact-limit-bar { width:40px; height:5px; overflow:hidden; border-radius:3px; background:#2c3040; }
+.fact-limit-bar > span { display:block; height:100%; border-radius:inherit; background:#8c7df4; }
+.fact-limit.high .fact-limit-bar > span { background:#f0a35e; }
 /* A fact you can tap: the row's own type and colour, a shade brighter, with a
    hit area padded out past the glyphs. The row's own padding and trimmed
    margin absorb it, so plain facts sit where they did; a negative margin

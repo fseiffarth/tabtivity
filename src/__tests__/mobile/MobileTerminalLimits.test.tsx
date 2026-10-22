@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@xterm/xterm", () => ({
@@ -88,6 +88,26 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     expect(limits[1].textContent).toMatch(/^week 6% · in \d+d \d+[hm]$/u);
     // Nearly spent is called out; the session window is not there yet.
     expect(limits.map((node) => node.classList.contains("high"))).toEqual([false, true]);
+  });
+
+  it("taps between percentages and bars, and keeps the choice", async () => {
+    localStorage.clear();
+    vi.stubGlobal("fetch", statusFetch({ label: "Claude Code", supported: true, raw: PANEL, cached: false }));
+    const first = render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+
+    fireEvent.click(first.container.querySelector(".session-facts .fact-limit")!);
+    const bars = [...first.container.querySelectorAll<HTMLElement>(".session-facts .fact-limit-bar > span")];
+    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%"]);
+    expect(first.container.querySelector(".session-facts .fact-limit")?.textContent).toMatch(/^5h · in /u);
+    first.unmount();
+
+    const again = render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    expect(again.container.querySelectorAll(".session-facts .fact-limit-bar")).toHaveLength(2);
+    fireEvent.click(again.container.querySelectorAll(".session-facts .fact-limit")[1]);
+    expect(again.container.querySelector(".session-facts .fact-limit-bar")).toBeNull();
+    localStorage.clear();
   });
 
   it("shows nothing for a CLI without a usage readout", async () => {

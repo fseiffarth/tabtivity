@@ -1125,6 +1125,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * panel the status sheet shows — the facts row prints them beside the
    * context figure. Empty until a read answers or for a CLI without one. */
   const [limits, setLimits] = useState<LimitMeters>({});
+  const [limitBars, setLimitBars] = useState(() => readFlag("limitBars"));
+  const toggleLimitBars = () => {
+    setLimitBars(!limitBars);
+    writeFlag("limitBars", !limitBars);
+  };
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const [limitsReadAt, setLimitsReadAt] = useState(() => Date.now());
   const rememberLimits = useCallback((next: LimitMeters) => {
@@ -3204,6 +3209,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const readTime = limits.session || limits.week ? new Date(limitsReadAt) : limitTime;
   const sessionReset = shownLimits.session?.resets ? resetCountdown(shownLimits.session.resets, limitTime, readTime) : "";
   const weekReset = shownLimits.week?.resets ? resetCountdown(shownLimits.week.resets, limitTime, readTime) : "";
+  // A tap on either limit flips both between the percentage and a bar of
+  // what is left; the phone keeps the choice.
+  const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel") => {
+    if (!meter) return null;
+    const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
+    const percentText = t(key, { percent: Math.round(remaining) });
+    return <button type="button" className={`fact-limit${meter.percent >= 90 ? " high" : ""}`} onClick={toggleLimitBars} aria-pressed={limitBars} aria-label={limitBars ? percentText : undefined} title={meter.resets ? resetText(meter.resets, limitTime, readTime) : undefined}>
+      {limitBars ? <>{t(label)}<span className="fact-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span></> : percentText}
+      {reset && <> · {t("mobile.facts.resetIn", { time: reset })}</>}
+    </button>;
+  };
   /** The picker the model chip opened, read off the screen while the sheet is
    * up — a list of the session's own rows, not a list of models Tabtivity
    * believes in. None of OpenCode's, Antigravity's or Cursor's is the numbered
@@ -4547,8 +4563,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         </>}
         {status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
-        {shownLimits.session && <span className={`fact-limit${shownLimits.session.percent >= 90 ? " high" : ""}`} title={shownLimits.session.resets ? resetText(shownLimits.session.resets, limitTime, readTime) : undefined}>{t("mobile.facts.session", { percent: Math.round(100 - shownLimits.session.percent) })}{sessionReset && <> · {t("mobile.facts.resetIn", { time: sessionReset })}</>}</span>}
-        {shownLimits.week && <span className={`fact-limit${shownLimits.week.percent >= 90 ? " high" : ""}`} title={shownLimits.week.resets ? resetText(shownLimits.week.resets, limitTime, readTime) : undefined}>{t("mobile.facts.week", { percent: Math.round(100 - shownLimits.week.percent) })}{weekReset && <> · {t("mobile.facts.resetIn", { time: weekReset })}</>}</span>}
+        {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
+        {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
+        {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
       </div>}
       <div className={`prompt-composer${penWriting ? " pen-writing" : ""}`}>

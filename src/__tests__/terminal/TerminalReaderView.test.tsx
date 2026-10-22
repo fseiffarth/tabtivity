@@ -798,6 +798,16 @@ describe("the Reader's live rows", () => {
     await waitFor(() => expect(facts.textContent).toContain("5h 29%"));
     expect(facts.textContent).toContain("week 6%");
     expect(host.querySelector(".terminal-reader-fact.high")?.textContent).toBe("week 6%");
+
+    // A click on either limit flips both to bars of what is left, and back.
+    fireEvent.click(screen.getByRole("button", { name: "5h 29%" }));
+    const bars = [...facts.querySelectorAll<HTMLElement>(".terminal-reader-limit-bar > span")];
+    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%"]);
+    expect(facts.textContent).not.toContain("5h 29%");
+    expect(screen.getByRole("button", { name: "week 6%" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "week 6%" }));
+    expect(facts.querySelector(".terminal-reader-limit-bar")).toBeNull();
+    expect(facts.textContent).toContain("5h 29%");
   });
 
   it("shows the mode, the effort the busy row named, the folder and its worktree", async () => {

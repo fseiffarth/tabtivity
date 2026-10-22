@@ -8,6 +8,7 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
+import { storageKey } from "../../lib/brand";
 import { formatTokens } from "../../lib/tokenStats";
 import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
@@ -29,6 +30,17 @@ import { switchAssistantModel } from "../../stores/assistantScope";
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
 const LIMITS_POLL_MS = 120_000;
+/** Whether the limit facts show as bars rather than percentages: a click on
+ * either one flips both, and the choice outlives the pane. */
+const LIMIT_BARS_KEY = storageKey("readerLimitBars");
+
+function readLimitBars(): boolean {
+  try {
+    return localStorage.getItem(LIMIT_BARS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const CLOCK_MS = 30_000;
 /** The phone's mode walk (`mobile-web` `Terminal.tsx` `applyMode`): how long a
  * Shift+Tab is given to redraw the mode line, and how many presses a lap may
@@ -84,6 +96,16 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const [limits, setLimits] = useState<LimitMeters>({});
   const [readAt, setReadAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
+  const [limitBars, setLimitBars] = useState(readLimitBars);
+  const toggleLimitBars = () => {
+    const next = !limitBars;
+    setLimitBars(next);
+    try {
+      localStorage.setItem(LIMIT_BARS_KEY, next ? "1" : "0");
+    } catch {
+      // Storage unavailable: the view still flips for this pane.
+    }
+  };
 
   // An agent without a usage recipe answers unsupported once: no more asking
   // until the view is shown again or the tab's command changes. (Declared
@@ -322,14 +344,23 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const limitFact = (meter: LimitMeters["session"], key: "mobile.facts.session" | "mobile.facts.week") => {
     if (!meter) return null;
     const left = meter.resets ? resetCountdown(meter.resets, clock, readTime) : "";
+    const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
+    const percentText = t(key, { percent: Math.round(remaining) });
     return (
-      <span
-        className={meter.percent >= 90 ? "terminal-reader-fact high" : "terminal-reader-fact"}
-        title={meter.resets ? resetText(meter.resets, clock, readTime) : undefined}
+      <button
+        type="button"
+        className={`terminal-reader-fact terminal-reader-limit${meter.percent >= 90 ? " high" : ""}`}
+        onClick={toggleLimitBars}
+        aria-pressed={limitBars}
+        aria-label={limitBars ? percentText : undefined}
+        title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle")].filter(Boolean).join("\n")}
       >
-        {t(key, { percent: Math.round(100 - meter.percent) })}
+        {limitBars ? <>
+          {t(key === "mobile.facts.session" ? "mobile.facts.sessionLabel" : "mobile.facts.weekLabel")}
+          <span className="terminal-reader-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span>
+        </> : percentText}
         {left && <> · {t("mobile.facts.resetIn", { time: left })}</>}
-      </span>
+      </button>
     );
   };
   const modelLabel = status?.model ?? modelTag;
@@ -572,6 +603,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         )}
         {limitFact(shown.session, "mobile.facts.session")}
         {limitFact(shown.week, "mobile.facts.week")}
+        {(shown.session || shown.week) && <UntestedTag id="terminal.reader.limitBars" />}
       </div>
       <div className="terminal-reader-facts-chips" ref={chipSlot} />
     </div>
