@@ -1976,7 +1976,7 @@
    is a pseudo-element so no layout moves while the pointer travels. */
 .header-slot[data-dragging] {
   opacity: 0.45;
-  cursor: grabbing;
+  cursor: var(--cur-grabbing, grabbing);
 }
 .header-slot[data-drop] {
   position: relative;
