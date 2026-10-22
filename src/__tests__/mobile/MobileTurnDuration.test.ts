@@ -13,7 +13,7 @@ import {
   useActivityStore,
 } from "../../stores/activity";
 import { useTabsStore } from "../../stores/tabs";
-import { formatTurnDuration, turnDuration } from "../../../mobile-web/src/components/AgentModeMarks";
+import { finishedAt, formatTurnDuration, turnDuration } from "../../../mobile-web/src/components/AgentModeMarks";
 import { translate } from "../../lib/i18n";
 
 const PTY = "proj-a:agent-1";
@@ -128,6 +128,15 @@ describe("turnDuration", () => {
     // Interrupted after an earlier turn finished: the finish predates the start.
     expect(turnDuration({ agent_status: "interrupted", turn_started_at: 100_000, done_at: 50_000 })).toBeUndefined();
     expect(turnDuration({ agent_status: "done", done_at: 50_000 })).toBeUndefined();
+  });
+
+  it("dates the finish the way the card does, so a list sorted by it matches the times shown", () => {
+    // No `done_at` seen, but a working stamp: the card shows a time, so the sort has one.
+    expect(finishedAt({ agent_status: undefined, turn_started_at: 100_000, working_at: 160_000 })).toBe(160_000);
+    expect(finishedAt({ agent_status: "done", turn_started_at: 100_000, working_at: 160_000, done_at: 170_000 })).toBe(170_000);
+    // Running: no finish yet. No start reading: `done_at` as sent.
+    expect(finishedAt({ agent_status: "working", turn_started_at: 100_000, working_at: 160_000 })).toBeUndefined();
+    expect(finishedAt({ agent_status: "done", done_at: 50_000 })).toBe(50_000);
   });
 
   it("formats seconds, minutes and hours", () => {

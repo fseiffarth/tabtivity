@@ -54,6 +54,16 @@ export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at
   return { ms: end - start, running, end };
 }
 
+/** When the tab's last turn ended, as its card says it ("finished 3 h ago"):
+ *  the turn's own end where the desktop gave a start, else `done_at`. A list
+ *  sorted by finish time orders by this, so the order and the time on the
+ *  cards cannot disagree — a tab with no `done_at` but a working stamp shows
+ *  a time and is placed by it. Undefined while the turn runs or is unknown. */
+export function finishedAt(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">): number | undefined {
+  const turn = turnDuration(tab);
+  return turn && !turn.running ? turn.end : tab.done_at;
+}
+
 /** "42s", "4m", "1h 12m" — a turn's length, as the card says it. */
 export function formatTurnDuration(ms: number, t: ReturnType<typeof useT>): string {
   const seconds = Math.floor(ms / 1000);
