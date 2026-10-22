@@ -1,10 +1,10 @@
 /**
- * The Alerts list hangs off the header bell's hover (it used to be a group in
- * the side panel). Hover reads the rows out; the click keeps its one job, the
- * machine-wide `files_alerts` switch; switched off, the bell hangs no list.
+ * The Alerts list hangs off the header bell (it used to be a group in the side
+ * panel). Hover reads the rows out; a click pins the list open; the bell is no
+ * longer a show/hide switch, so it never writes `files_alerts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import type { AlertItem } from "../../lib/alerts";
 
@@ -75,16 +75,39 @@ describe("header Alerts bell", () => {
     expect(screen.getByText("Nothing needs you right now.")).toBeTruthy();
   });
 
-  it("hangs no list while the alerts are switched off", () => {
+  it("says the alerts are off in settings instead of listing rows", () => {
     setFiles(false);
+    feed.value = { ...feed.value, enabled: false, items: [] };
     render(<AlertsToggle />);
     fireEvent.mouseEnter(screen.getByRole("button").parentElement!);
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByText("Alerts are switched off in the file settings.")).toBeTruthy();
   });
 
-  it("keeps the click as the machine-wide switch", () => {
+  it("pins the list on click, so leaving the bell does not close it", () => {
+    vi.useFakeTimers();
+    try {
+      render(<AlertsToggle />);
+      const bell = screen.getByRole("button");
+      const wrap = bell.parentElement!;
+      fireEvent.mouseEnter(wrap);
+      fireEvent.click(bell);
+      fireEvent.mouseLeave(wrap);
+      act(() => void vi.advanceTimersByTime(500));
+      expect(screen.getByRole("menu")).toBeTruthy();
+      // A second click on the bell, or a click elsewhere, ends it.
+      fireEvent.click(bell);
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(updateSettings).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes a pinned list on a click outside it", () => {
     render(<AlertsToggle />);
     fireEvent.click(screen.getByRole("button"));
-    expect(updateSettings).toHaveBeenCalledWith({ files_alerts: false });
+    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
