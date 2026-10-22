@@ -137,10 +137,12 @@ describe("settings category navigation", () => {
     const search = screen.getByRole("textbox", { name: "Search settings…" });
     fireEvent.change(search, { target: { value: "zoom" } });
     const buttons = within(links()).getAllByRole("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["LayoutWindow zoom"]);
-    // Enter opens the first match.
-    fireEvent.keyDown(search, { key: "Enter" });
+    expect(buttons.map((b) => b.textContent)).toEqual(["Window zoomLayout"]);
+    // Enter opens the first match, at the setting itself.
+    await act(async () => { fireEvent.keyDown(search, { key: "Enter" }); });
     expect(document.getElementById("settings-anchor-layout")).toBeTruthy();
+    const card = within(mainScroll()).getByText("Window zoom").closest(".settings-card");
+    expect(card?.classList.contains("settings-search-flash")).toBe(true);
     // Escape clears the query before it could close the dialog.
     fireEvent.keyDown(search, { key: "Escape" });
     expect((search as HTMLInputElement).value).toBe("");
@@ -149,5 +151,17 @@ describe("settings category navigation", () => {
     fireEvent.change(search, { target: { value: "no such setting anywhere" } });
     expect(within(links()).queryAllByRole("button")).toEqual([]);
     expect(within(nav()).getByText("No setting matches")).toBeTruthy();
+  });
+
+  it("finds a setting by what it is for, and ranks the closest first", async () => {
+    await act(async () => { render(<SettingsDialog onClose={() => {}} />); });
+    const search = screen.getByRole("textbox", { name: "Search settings…" });
+    // "claude api": the key Claude runs on, in its fold on Manage CLIs.
+    fireEvent.change(search, { target: { value: "claude api" } });
+    const first = within(links()).getAllByRole("button")[0];
+    expect(first.textContent).toBe("Anthropic API keyManage CLIs › Accounts & keys");
+    // A page's synonyms find it.
+    fireEvent.change(search, { target: { value: "hotkeys" } });
+    expect(within(links()).getAllByRole("button")[0].textContent).toBe("Keyboard ShortcutsGeneral");
   });
 });
