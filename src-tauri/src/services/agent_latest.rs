@@ -45,8 +45,9 @@ pub const SOURCES: &[(&str, Source)] = &[
     ("cline", Source::Npm("cline")),
     ("vibe", Source::PyPi("mistral-vibe")),
     ("aider", Source::PyPi("aider-chat")),
-    // Its Windows installer is this package.
-    ("opencode", Source::Npm("opencode-ai")),
+    // OpenCode 2, which the V2 installer fetches (`opencode.ai/update/api/latest`
+    // names this package) and its Windows installer is; `opencode-ai` is V1 only.
+    ("opencode", Source::Npm("@opencode/cli")),
     ("copilot", Source::Npm("@github/copilot")),
     ("droid", Source::Npm("@factory/cli")),
     ("qwen", Source::Npm("@qwen-code/qwen-code")),

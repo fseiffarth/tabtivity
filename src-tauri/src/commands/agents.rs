@@ -247,8 +247,12 @@ const AGENTS: &[AgentSpec] = &[
         label: "OpenCode",
         bin: "opencode",
         resume: Resume::Args(&["--continue"]),
-        install_cmd: "curl -fsSL https://opencode.ai/install | bash",
-        install_cmd_windows: Some("npm install -g opencode-ai"),
+        // OpenCode 2: `opencode.ai/install` and npm `opencode-ai` only ever
+        // serve OpenCode 1. The V2 script replaces a V1 binary in place
+        // (same `~/.opencode/bin`); on Windows the V1 package goes first, as
+        // both packages link an `opencode` launcher.
+        install_cmd: "curl -fsSL https://opencode.ai/v2/install | bash",
+        install_cmd_windows: Some("npm uninstall -g opencode-ai && npm install -g @opencode/cli"),
         extra_paths: &[".opencode/bin/opencode", ".local/bin/opencode"],
         docs: "https://opencode.ai/docs/",
         auth_paths: &[auth_file(".local/share/opencode/auth.json")],
@@ -1172,9 +1176,12 @@ fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, Strin
 /// The npm package spec an `npm install -g <pkg>` command installs, or `None`
 /// for a curl/irm script installer (which has no npm package to remove — its
 /// binary is deleted directly instead). Used so uninstall targets the exact
-/// package the installer added rather than guessing from the agent id.
+/// package the installer added rather than guessing from the agent id. Of a
+/// `&&` chain, the install that ends it.
 fn npm_package_from_cmd(cmd: &str) -> Option<&str> {
-    cmd.trim()
+    cmd.rsplit("&&")
+        .next()?
+        .trim()
         .strip_prefix("npm install -g ")?
         .split_whitespace()
         .next()
@@ -2671,6 +2678,10 @@ mod tests {
         assert_eq!(
             npm_package_from_cmd("npm install -g opencode-ai"),
             Some("opencode-ai")
+        );
+        assert_eq!(
+            npm_package_from_cmd("npm uninstall -g opencode-ai && npm install -g @opencode/cli"),
+            Some("@opencode/cli")
         );
         // curl/irm script installers have no npm package to uninstall.
         assert_eq!(

@@ -1,13 +1,14 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
-- [ ] OpenCode 2 credential sharing (2026-10-22): keep default install/latest
-  recipes on V1 until `agent_auth` can share V2's credential records without
-  sharing its conversation database. Legacy `auth.json` is imported once by
-  V2, not kept synchronized after sign-in/refresh. Preserve account/command
-  guards and use `home_io`; never write a live, attacker-controlled SQLite
-  path from the host. A bridge running inside the existing fence via the
-  public credential API needs a separate design. Then switch install recipes
-  (local + remote + supported Windows route) and the latest-release source.
+- [ ] OpenCode 2 credential sharing (2026-10-22): install/Update/remote and
+  the latest-release source already moved to V2 (the user's call, same day),
+  so until `agent_auth` can share V2's credential records without sharing its
+  conversation database, a V2 sign-in/refresh may have to be repeated per
+  scope. Legacy `auth.json` is imported once by V2, not kept synchronized
+  after sign-in/refresh. Preserve account/command guards and use `home_io`;
+  never write a live, attacker-controlled SQLite path from the host. A bridge
+  running inside the existing fence via the public credential API needs a
+  separate design.
 - [ ] OpenCode 2 structured model/form APIs: evaluate replacing picker scrolling
   and question screen scraping with authenticated, per-tab server data. Keep
   browser payloads opaque and preserve the CLI's own permission choices.

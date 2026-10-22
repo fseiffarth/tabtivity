@@ -57,7 +57,7 @@ Click **Run in terminal**, wait for it to finish, then **Re-check**.
 | Google Gemini | `gemini` | `npm install -g @google/gemini-cli` | same |
 | Google Antigravity | `agy` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | `irm https://antigravity.google/cli/install.ps1 \| iex` |
 | Mistral (Vibe) | `vibe` | `curl -LsSf https://mistral.ai/vibe/install.sh \| bash` | Install Vibe in the Ollama Models panel (installs uv, then `uv tool install mistral-vibe`) |
-| OpenCode | `opencode` | `curl -fsSL https://opencode.ai/install \| bash` | `npm install -g opencode-ai` |
+| OpenCode | `opencode` | `curl -fsSL https://opencode.ai/v2/install \| bash` (OpenCode 2) | `npm install -g @opencode/cli` (removes the OpenCode 1 package `opencode-ai` first) |
 | Copilot | `copilot` | `npm install -g @github/copilot` | same |
 | Aider | `aider` | `curl -LsSf https://aider.chat/install.sh \| sh` | `irm https://aider.chat/install.ps1 \| iex` |
 

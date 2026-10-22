@@ -751,7 +751,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Agent | Resume flag | Warm-up | Install |
 |-------|-------------|---------|---------|
 | Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh` |
-| OpenCode | `--continue` | `run` | `curl … opencode.ai/install` / `npm i -g opencode-ai` |
+| OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` / `npm i -g @opencode/cli` |
 | Copilot | `--continue` | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
@@ -848,12 +848,19 @@ read directly by Changes. Conversation exports keep V2 tables, blank session
 permissions and continue dropping credential/account tables. Integration is
 not live verified; the Reader carries `agents.opencode.v2`.
 
-The default install recipes and latest-version source remain on V1 until
-V2 credential sharing is ported: V2 migrates legacy `auth.json` once, then
-stores credentials in SQLite. Sharing the whole database would leak sessions
-between scopes. Existing credentials can migrate into a new scope database,
-but subsequent V2 sign-ins/refreshes are not yet shared by `agent_auth`.
-Track that migration and structured model/form APIs in `todo/group-s-agents.md`.
+Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
+run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
+install -g @opencode/cli`, as both link `opencode`), and the update check
+reads npm `@opencode/cli`: `opencode.ai/install` refuses 2.x and npm
+`opencode-ai` is V1 only. Before that a V1 install offered "upgrade major"
+inside the fence, whose installer wrote 2.x into the scope's agent home,
+behind the install home on PATH, so a restart ran V1 again; fenced spawns
+now set `OPENCODE_DISABLE_AUTOUPDATE=1` (honoured by 1.19 and 2.1, also for
+that offer). Still open: V2 migrates legacy `auth.json` once, then stores
+credentials in SQLite. Sharing the whole database would leak sessions
+between scopes, so later V2 sign-ins/refreshes are not shared by
+`agent_auth` and may have to be repeated per scope. Track that and the
+structured model/form APIs in `todo/group-s-agents.md`.
 
 **OpenCode's minimal interface** is read by the phone since 2026-09-18
 (`mobile-web/src/terminal/openCodeMini.ts`, verified against 1.18.31 by live

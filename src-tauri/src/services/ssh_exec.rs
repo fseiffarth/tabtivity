@@ -1385,7 +1385,7 @@ mod tests {
                 "vibe",
                 "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
             ),
-            ("opencode", "curl -fsSL https://opencode.ai/install | bash"),
+            ("opencode", "curl -fsSL https://opencode.ai/v2/install | bash"),
         ] {
             let cmd = remote_command(bin, &[], &HashMap::new(), "/srv/p", None);
             assert!(
