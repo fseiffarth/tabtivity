@@ -484,6 +484,8 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     // client's environment, never a `-e` value on the world-readable argv.
     // (`WEB_URL_ENV` is a loopback URL, not a secret.)
     crate::services::root_mcp::WEB_TOKEN_ENV,
+    // Append to preserve every existing update-environment slot (8639).
+    crate::services::agent_api_keys::OPENAI_CARRIER,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1229,10 +1231,10 @@ mod tests {
     fn key_carriers_hold_the_slots_after_the_mcp_tokens() {
         for (i, carrier) in crate::services::agent_api_keys::CARRIERS.iter().enumerate() {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
-            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, 8636 + i, "{carrier}");
+            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 9);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8638);
+        assert_eq!(SECRET_ENV.len(), 10);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8639);
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }

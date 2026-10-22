@@ -2917,6 +2917,8 @@
 
 /* Settings groups: closed rows with a one-line summary, in one frame. */
 .agents-groups {
+  /* Keep the rows scrollable in dialog-scroll instead of shrinking and clipping. */
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

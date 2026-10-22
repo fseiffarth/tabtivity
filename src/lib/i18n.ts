@@ -2085,6 +2085,7 @@ export const enSource = {
   "settings.agentLoginAdminKeyGone": "set to the administrator's API key, which is no longer offered to you (withdrawn, or you were taken off its list) — switch back to your own login",
   "settings.agentLoginAdminKeyHelp": "Run this CLI's agents on the administrator's API key instead of your login. The key never enters an agent, and your login stays saved for when you switch back. Choosing this turns off your own API key for this CLI.",
   "settings.agentApiKeys": "API keys",
+  "settings.agentApiKeysCodexHelp": "Codex uses your OpenAI API key in new local tabs, including resumed conversations. Your saved ChatGPT login stays available when you switch back to its own login. API usage is billed separately from your ChatGPT subscription.",
   "settings.agentApiKeysHelp": "Pay per token instead of a subscription: save a provider's API key and switch on the CLIs that should use it. The key stays in the OS keyring; new local tabs reach the provider through {app} with a token of their own.",
   "settings.agentApiKeysWarning": "Agents never see the key, only a per-tab token that works through {app}. Still use a spend-limited key: an open tab can spend through its token.",
   "settings.agentApiKeysDialogs": "Claude uses the key at once (without Remote Control); Gemini only after you pick \"Use Gemini API key\" in its /auth. Switching a CLI reaches new tabs only; removing a key stops running tabs too. If a tab reports an invalid key, fix or remove it here — signing in again won't help.",

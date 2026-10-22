@@ -1442,8 +1442,6 @@ pub fn wrap_pty_options_bwrap(
     // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
-    let subcommand = runs_subcommand(&opts.args);
-    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env, &opts.cwd)?;
     let support_mounts = mounts.clone();
     // The user's toolchain allowlist, except in the assistant's fence.
@@ -1464,6 +1462,15 @@ pub fn wrap_pty_options_bwrap(
         &paths::home_dir(),
         &visible,
     ));
+    // Inject before the fence copies argv: Codex needs provider overrides.
+    // A hosted server's administrator's key, for a CLI this user runs on it
+    // (plan §5.4): checked against the keeper's offer here (a withdrawn key
+    // fails the spawn), delivered below as a proxy grant like the user's own
+    // key (#2389); a no-op everywhere else.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
     let mut args = bwrap_args(
         &paths::home_dir_string(),
         Some(&scope_home.to_string_lossy()),
@@ -1486,11 +1493,6 @@ pub fn wrap_pty_options_bwrap(
     // A hosted server's shared hubs: all hidden but this scope's own
     // project's, read-only (plan §6.3); a no-op everywhere else.
     crate::services::server::share::apply_fence(&mut args, roots);
-    // A hosted server's administrator's key, for a CLI this user runs on it
-    // (plan §5.4): checked against the keeper's offer here (a withdrawn key
-    // fails the spawn), delivered below as a proxy grant like the user's own
-    // key (#2389); a no-op everywhere else.
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     let filter = write_keyring_filter()?;
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
@@ -1508,9 +1510,6 @@ pub fn wrap_pty_options_bwrap(
     // bwrap keeps the environment and the launcher `exec`s, so it reaches the
     // CLI. Hence the launcher last: the step is needed whenever the
     // environment carries something.
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     let step = launcher_step(
         crate::services::fence_scope::helper_for(&bwrap),
         crate::services::agent_exec::has_carriers(&opts.env),
@@ -1839,9 +1838,6 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
-    // Before `opts.args` becomes sandbox-exec's below.
-    let subcommand = runs_subcommand(&opts.args);
-    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1856,13 +1852,17 @@ pub fn wrap_pty_options_sandbox_exec(
     // Last before the argv: the local model's control paths still hold the
     // inodes set up above (gap 30).
     verify_control_pins(&control_pins)?;
+    let agent_cmd = opts.cmd.clone();
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),
         resolved.to_string_lossy().into_owned(),
     ];
     args.extend(opts.args.iter().cloned());
-    let agent_cmd = opts.cmd.clone();
     opts.cmd = "/usr/bin/sandbox-exec".to_string();
     opts.args = args;
     opts.env
@@ -1874,17 +1874,11 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
-    // A hosted server's administrator's key (plan §5.4) — a server is
-    // Linux, so this is a no-op; kept for the one spawn path.
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     // A proxy token and base URL for a CLI the user switched on for a key
     // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
     // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
     // sandbox-exec passes the environment through. The step runs outside the
     // Seatbelt profile, which need not grant Tabtivity's binary.
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }

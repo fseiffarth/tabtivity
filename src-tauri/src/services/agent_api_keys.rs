@@ -21,7 +21,8 @@
 //!
 //! - **Only proxyable CLIs.** A CLI is in [`CLI_ROUTES`] only if an environment
 //!   variable points it at the proxy (decision 2 of Part C): Claude
-//!   (`ANTHROPIC_BASE_URL`) and Gemini (`GOOGLE_GEMINI_BASE_URL`). Mistral
+//!   (`ANTHROPIC_BASE_URL`), Gemini (`GOOGLE_GEMINI_BASE_URL`) and Codex
+//!   (launch-only custom provider, `OPENAI_BASE_URL`). Mistral
 //!   Vibe documents no such variable; OpenCode's only one is a whole inline
 //!   config (`OPENCODE_CONFIG_CONTENT`, which Tabtivity already fills with its
 //!   Ollama model list). Neither gets a key.
@@ -52,15 +53,17 @@ use serde::Serialize;
 pub enum Provider {
     Anthropic,
     Gemini,
+    OpenAi,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 2] = [Provider::Anthropic, Provider::Gemini];
+    pub const ALL: [Provider; 3] = [Provider::Anthropic, Provider::Gemini, Provider::OpenAi];
 
     pub fn id(self) -> &'static str {
         match self {
             Provider::Anthropic => "anthropic",
             Provider::Gemini => "gemini",
+            Provider::OpenAi => "openai",
         }
     }
 
@@ -79,6 +82,7 @@ impl Provider {
         match self {
             Provider::Anthropic => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
             Provider::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
+            Provider::OpenAi => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         }
     }
 }
@@ -93,24 +97,27 @@ pub const GEMINI_TOKEN_ENV: &str = "GEMINI_API_KEY";
 /// geminicli.com configuration reference: "Overrides the default base URL for
 /// Gemini API requests (when using `gemini-api-key` authentication)".
 pub const GEMINI_BASE_ENV: &str = "GOOGLE_GEMINI_BASE_URL";
+pub const OPENAI_TOKEN_ENV: &str = "OPENAI_API_KEY";
+pub const OPENAI_BASE_ENV: &str = "OPENAI_BASE_URL";
 
 /// Every variable a token ends up in: [`inject_env`] sets it directly on
 /// Windows, `agent_exec` from its carrier elsewhere (these are
 /// `agent_exec::targets`). Never in `tmux_local::SECRET_ENV` — those slots
 /// stay set on the user's own tmux server, where a common name would cost
 /// their own sessions the variable.
-pub const ENV_VARS: &[&str] = &[ANTHROPIC_TOKEN_ENV, GEMINI_TOKEN_ENV];
+pub const ENV_VARS: &[&str] = &[ANTHROPIC_TOKEN_ENV, GEMINI_TOKEN_ENV, OPENAI_TOKEN_ENV];
 
 // The carriers of [`ENV_VARS`], index for index: `agent_exec::CARRIER_PREFIX`
 // and the variable's name (a test holds them to it). `SECRET` in the name
 // keeps `brand::Pair::export_both` from twinning one under the old prefix.
 pub const ANTHROPIC_CARRIER: &str = crate::app_env!("AGENT_SECRET_ANTHROPIC_AUTH_TOKEN");
 pub const GEMINI_CARRIER: &str = crate::app_env!("AGENT_SECRET_GEMINI_API_KEY");
+pub const OPENAI_CARRIER: &str = crate::app_env!("AGENT_SECRET_OPENAI_API_KEY");
 
 /// Every variable [`inject_env`] can set a secret under on Linux and macOS.
 /// `tmux_local::SECRET_ENV` lists the same consts (a test holds the two
 /// together), so none rides a tmux argv.
-pub const CARRIERS: &[&str] = &[ANTHROPIC_CARRIER, GEMINI_CARRIER];
+pub const CARRIERS: &[&str] = &[ANTHROPIC_CARRIER, GEMINI_CARRIER, OPENAI_CARRIER];
 
 /// Whether a token travels under its carrier: everywhere but Windows.
 const CARRY: bool = cfg!(unix);
@@ -142,10 +149,8 @@ impl Route {
     }
 }
 
-/// The CLIs (by registry id) that take a key through the proxy. Codex is
-/// absent (its TUI documents only `codex login --with-api-key`), and so are
-/// Mistral Vibe and OpenCode (no environment variable points them at the
-/// proxy; see the module docs).
+/// The CLIs (by registry id) that take a key through the proxy. Codex also
+/// gets a launch-only custom provider so a stored ChatGPT login cannot win.
 const CLI_ROUTES: &[(&str, &[Route])] = &[
     (
         "claude",
@@ -154,6 +159,10 @@ const CLI_ROUTES: &[(&str, &[Route])] = &[
     (
         "gemini",
         &[Route { provider: Provider::Gemini, token_var: GEMINI_TOKEN_ENV, base_var: GEMINI_BASE_ENV }],
+    ),
+    (
+        "codex",
+        &[Route { provider: Provider::OpenAi, token_var: OPENAI_TOKEN_ENV, base_var: OPENAI_BASE_ENV }],
     ),
 ];
 
@@ -378,6 +387,44 @@ pub fn inject_env(
         |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()),
         |provider| crate::services::api_proxy::issue(provider, admin, binding.scope, binding.tab, binding.tmux),
     )
+}
+
+/// A launch-only provider selects API authentication even when Codex has a
+/// saved ChatGPT login. Only the public URL and variable name ride argv;
+/// the token stays in the environment and no Codex config/auth file changes.
+pub(crate) fn codex_proxy_args(base: &str) -> Vec<String> {
+    let settings = [
+        "model_provider=\"api_key\"".to_string(),
+        "model_providers.api_key.name=\"OpenAI\"".to_string(),
+        format!("model_providers.api_key.base_url={}", serde_json::to_string(&format!("{base}/v1")).expect("URL string")),
+        format!("model_providers.api_key.env_key=\"{OPENAI_TOKEN_ENV}\""),
+        "model_providers.api_key.wire_api=\"responses\"".to_string(),
+        "model_providers.api_key.requires_openai_auth=false".to_string(),
+        // The proxy relays HTTP SSE and meters each response, never upgrades.
+        "model_providers.api_key.supports_websockets=false".to_string(),
+    ];
+    settings.into_iter().flat_map(|s| ["-c".to_string(), s]).collect()
+}
+
+/// Must run while opts still names the CLI, before a fence copies its argv.
+pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'static str>, binding: Binding<'_>) {
+    let subcommand = keyless_subcommand(&opts.cmd, &opts.args);
+    let local_model = is_local_model(opts);
+    let injected = inject_env(&opts.cmd, subcommand, local_model, admin, binding, &mut opts.env);
+    if injected.contains(&OPENAI_BASE_ENV) {
+        // Put global overrides before `resume`/`fork` and their positional id.
+        let mut args = codex_proxy_args(&opts.env[OPENAI_BASE_ENV]);
+        args.append(&mut opts.args);
+        opts.args = args;
+    }
+}
+
+pub(crate) fn keyless_subcommand(cmd: &str, args: &[String]) -> bool {
+    if cli_of(cmd) == Some("codex") {
+        !crate::services::agent_versions::codex_runs_tui(args)
+    } else {
+        crate::services::agent_fence::runs_subcommand(args)
+    }
 }
 
 /// A project-container spawn of `cmd` (`sandbox`): refused when the CLI runs
@@ -646,12 +693,12 @@ mod tests {
         inject_env_with(cmd, false, false, &on(enabled), None, env, false, |_| false, proxied)
     }
 
-    /// #2389: the keeper offers administrator's keys for exactly the CLIs
-    /// this proxy serves.
+    /// Administrator-key CLIs must have proxy routes; Codex currently supports
+    /// the user's own key only (the keeper does not offer OpenAI keys).
     #[test]
-    fn the_keepers_key_clis_are_the_proxys_clis() {
+    fn the_keepers_key_clis_all_have_proxy_routes() {
         let ours: Vec<&str> = CLI_ROUTES.iter().map(|(id, _)| *id).collect();
-        assert_eq!(crate::services::server::keys_wire::KEY_CLIS, ours.as_slice());
+        assert!(crate::services::server::keys_wire::KEY_CLIS.iter().all(|cli| ours.contains(cli)));
     }
 
     /// #2389: a CLI a server user runs on the administrator's key gets a
@@ -667,7 +714,7 @@ mod tests {
         assert!(inject_env_with("claude", true, false, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
         assert!(inject_env_with("claude", false, true, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
         assert!(env.is_empty());
-        assert!(proxies("claude") && proxies("gemini") && !proxies("vibe") && !proxies("codex"));
+        assert!(proxies("claude") && proxies("gemini") && !proxies("vibe") && proxies("codex"));
     }
 
     #[test]
@@ -724,7 +771,7 @@ mod tests {
         assert!(inject("ollama", &["claude", "gemini"], &mut env).is_empty());
         // Not in the table, switched on or not: no variable points them at
         // the proxy.
-        for cli in ["codex", "vibe", "opencode"] {
+        for cli in ["vibe", "opencode"] {
             assert!(inject(cli, &[cli], &mut env).is_empty(), "{cli}");
         }
         assert!(env.is_empty());
@@ -830,8 +877,39 @@ mod tests {
             assert_eq!(p.account(), format!("agent-key:{}", p.id()));
         }
         assert_eq!(Provider::from_id("copilot"), None);
-        assert_eq!(Provider::from_id("openai"), None);
+        assert_eq!(Provider::from_id("openai"), Some(Provider::OpenAi));
         assert_eq!(Provider::from_id("mistral"), None);
+    }
+
+    #[test]
+    fn codex_gets_only_a_token_and_launch_only_provider_settings() {
+        for carry in [false, true] {
+            let mut env = HashMap::new();
+            let set = inject_env_with("codex", false, false, &on(&["codex"]), None, &mut env, carry, |_| false, proxied);
+            let token_var = if carry { OPENAI_CARRIER } else { OPENAI_TOKEN_ENV };
+            assert_eq!(set, [token_var, OPENAI_BASE_ENV]);
+            assert_eq!(env[token_var], format!("{FAKE_TOKEN}-openai"));
+            let args = codex_proxy_args(&env[OPENAI_BASE_ENV]);
+            assert!(args.iter().any(|s| s == "model_provider=\"api_key\""));
+            assert!(args.iter().any(|s| s == "model_providers.api_key.env_key=\"OPENAI_API_KEY\""));
+            assert!(args.iter().any(|s| s.contains("/openai/v1")));
+            assert!(!args.join(" ").contains(FAKE_TOKEN));
+        }
+        for name in [OPENAI_TOKEN_ENV, OPENAI_BASE_ENV, "CODEX_API_KEY"] {
+            let mut env = HashMap::from([(name.to_string(), "user-value".to_string())]);
+            assert!(inject("codex", &["codex"], &mut env).is_empty(), "{name}");
+            assert_eq!(env.len(), 1, "user settings win");
+        }
+    }
+
+    #[test]
+    fn codex_resumed_and_forked_conversations_take_keys_but_sign_in_does_not() {
+        for args in [vec![], on(&["resume", "session-id"]), on(&["fork", "session-id"]), on(&["--no-daemon", "resume", "session-id"])] {
+            assert!(!keyless_subcommand("codex", &args), "{args:?}");
+        }
+        for args in [on(&["login", "--with-api-key"]), on(&["logout"]), on(&["exec", "prompt"])] {
+            assert!(keyless_subcommand("codex", &args), "{args:?}");
+        }
     }
 
     #[test]
@@ -843,10 +921,10 @@ mod tests {
         assert!(!cli("gemini").ready, "on, but no Gemini key");
         assert_eq!(cli("claude").providers, vec!["anthropic"]);
         assert!(s.providers.iter().any(|p| p.id == "anthropic" && p.saved));
-        for gone in ["codex", "vibe", "opencode"] {
+        for gone in ["vibe", "opencode"] {
             assert!(!s.clis.iter().any(|c| c.id == gone), "{gone}");
         }
-        assert_eq!(s.providers.len(), 2);
+        assert_eq!(s.providers.len(), 3);
         let json = serde_json::to_value(&s).unwrap();
         assert!(json.get("readable").is_some() && json["clis"][0].get("ready").is_some());
         assert_eq!(json["resetsOn"], "2026-11-01");
@@ -921,7 +999,7 @@ mod tests {
         settings.agent_api_key_clis = Some(on(&["claude", "codex", "vibe"]));
         assert!(applies_to("claude", &settings));
         assert!(applies_to("/opt/bin/claude", &settings));
-        assert!(!applies_to("codex", &settings), "not in the table");
+        assert!(applies_to("codex", &settings));
         assert!(!applies_to("vibe", &settings), "dropped: no proxy route");
         assert!(!applies_to("gemini", &settings));
     }

@@ -284,13 +284,14 @@ struct BookState {
     flush_scheduled: bool,
     /// Billed tokens held by requests in flight, per provider
     /// ([`Provider::ALL`] order).
-    reserved: [u64; 2],
+    reserved: [u64; Provider::ALL.len()],
 }
 
 fn slot(provider: Provider) -> usize {
     match provider {
         Provider::Anthropic => 0,
         Provider::Gemini => 1,
+        Provider::OpenAi => 2,
     }
 }
 
@@ -339,7 +340,7 @@ impl Book {
                 loaded: false,
                 dirty: false,
                 flush_scheduled: false,
-                reserved: [0; 2],
+                reserved: [0; Provider::ALL.len()],
             }),
             writing: Mutex::new(()),
             closing: std::sync::atomic::AtomicBool::new(false),
@@ -776,11 +777,12 @@ mod tests {
     #[test]
     fn limits_come_from_settings_and_only_valid_ones_count() {
         let s: crate::schema::Settings = serde_json::from_str(
-            r#"{"agent_api_limits":{"anthropic":20,"gemini":-1},"agent_api_token_limits":{"anthropic":5000000,"gemini":0,"openai":5}}"#,
+            r#"{"agent_api_limits":{"anthropic":20,"gemini":-1},"agent_api_token_limits":{"anthropic":5000000,"gemini":0,"openai":5,"unknown-provider":5}}"#,
         )
         .unwrap();
         let limits = limits_in(&s);
-        assert_eq!(limits.len(), 1);
+        assert_eq!(limits.len(), 2);
+        assert_eq!(limits["openai"], 5);
         assert_eq!(limits["anthropic"], 5_000_000);
         // The older dollar limits are a hint only, the valid ones of them.
         let usd = legacy_usd_limits_in(&s);

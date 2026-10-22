@@ -46,9 +46,52 @@
 
 use super::agent_api_keys::Provider;
 
-/// The day the tables below were read off the vendors' pricing pages
+/// The most recent update to the tables below (individual source dates above),
 /// (shown in Manage CLIs).
-pub const PRICES_DATE: &str = "2026-10-04";
+pub const PRICES_DATE: &str = "2026-10-22";
+
+/// OpenAI standard text rates, fetched 2026-10-22:
+/// https://developers.openai.com/api/docs/pricing . USD remains an estimate;
+/// monthly enforcement uses billed tokens, independent of these rates.
+/// Cache-write surcharges, service tiers, long-context surcharges and hosted
+/// tool fees are not included in this initial OpenAI dollar estimate.
+/// (model, input, cached input, output), USD per million tokens.
+const OPENAI: &[(&str, f64, f64, f64)] = &[
+    ("gpt-6-astra", 10.0, 1.0, 50.0),
+    ("gpt-6.1-sol", 2.0, 0.10, 10.0),
+    ("gpt-6-luna", 0.10, 0.01, 0.50),
+    ("gpt-5.6-sol", 4.0, 0.40, 20.0),
+    ("gpt-5.6-cyber", 12.50, 1.25, 75.0),
+    ("gpt-5.3-codex", 1.75, 0.175, 14.0),
+];
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenAiUsage {
+    /// Total input includes cached input; total output includes reasoning.
+    pub input: u64,
+    pub cached: u64,
+    pub output: u64,
+}
+
+fn openai_rates(model: &str) -> (f64, f64, f64, bool) {
+    let id = normalize(Provider::OpenAi, model);
+    OPENAI.iter().find(|(m, ..)| *m == id)
+        .map(|(_, i, c, o)| (*i, *c, *o, true))
+        .unwrap_or_else(|| OPENAI.iter().fold((0.0_f64, 0.0_f64, 0.0_f64, false), |(i, c, o, _), (_, ri, rc, ro)| {
+            (i.max(*ri), c.max(*rc), o.max(*ro), false)
+        }))
+}
+
+pub fn price_openai(model: &str, u: &OpenAiUsage) -> Charge {
+    let (input_rate, cache_rate, output_rate, known) = openai_rates(model);
+    let cache_read = u.cached.min(u.input);
+    let input = u.input.saturating_sub(cache_read);
+    Charge {
+        model: model.to_string(), known, input, cache_read, output: u.output,
+        usd: (input as f64 * input_rate + cache_read as f64 * cache_rate + u.output as f64 * output_rate) / 1e6,
+        ..Charge::default()
+    }
+}
 
 /// Prompt size past which a long-context rate applies (Gemini Pro tiers,
 /// Anthropic Sonnet 4 / 4.5).
@@ -238,6 +281,15 @@ const GEMINI: &[(&str, GeminiRates)] = &[
 pub fn normalize(provider: Provider, raw: &str) -> String {
     let mut id = raw.trim().to_ascii_lowercase();
     match provider {
+        Provider::OpenAi => {
+            // Snapshot ids end in YYYY-MM-DD.
+            if id.len() > 11 {
+                let suffix = id.get(id.len() - 11..).unwrap_or("");
+                if suffix.starts_with('-') && suffix[1..].bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() }) {
+                    id.truncate(id.len() - 11);
+                }
+            }
+        }
         Provider::Anthropic => {
             if let Some(rest) = id.strip_prefix("anthropic.") {
                 id = rest.to_string();
@@ -374,6 +426,7 @@ fn gemini_fallback(month: &str) -> GeminiRates {
 /// model at the fallback), to tell the dearer of two models apart.
 pub fn output_rate(provider: Provider, model: &str) -> f64 {
     match provider {
+        Provider::OpenAi => openai_rates(model).2,
         Provider::Anthropic => anthropic_rates(model).0.output,
         // No month: the scheduled raises double a whole entry, so they do
         // not change which of two models is dearer by much.
@@ -409,6 +462,7 @@ const GEMINI_WINDOW: u64 = 1_048_576;
 /// at its provider's largest known window.
 pub fn context_window(provider: Provider, model: &str) -> u64 {
     match provider {
+        Provider::OpenAi => 1_050_000,
         Provider::Anthropic => {
             let id = normalize(Provider::Anthropic, model);
             let known = ANTHROPIC.iter().any(|(m, _)| *m == id);
@@ -563,6 +617,17 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_cache_is_part_of_input_and_reasoning_is_part_of_output() {
+        let charge = price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1_000, cached: 800, output: 300 });
+        assert_eq!((charge.input, charge.cache_read, charge.output, charge.billed()), (200, 800, 300, 580));
+        assert!(charge.known);
+        assert!((charge.usd - 0.00348).abs() < 1e-12);
+        assert_eq!(normalize(Provider::OpenAi, "gpt-6.1-sol-2026-10-01"), "gpt-6.1-sol");
+        assert!(!price_openai("unknown", &OpenAiUsage::default()).known);
+        let _ = normalize(Provider::OpenAi, "abcdef💡abcdef");
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

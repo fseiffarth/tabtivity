@@ -758,9 +758,8 @@ pub struct LoginStatus {
     /// This CLI keeps its login somewhere Tabtivity cannot share (a keyring, a
     /// database mixed with other state): one login per scope.
     pub shared: bool,
-    /// The CLI can run on an API key at all — the API proxy serves it
-    /// (`agent_api_keys::proxies`): what a server's administrator can offer
-    /// a key for.
+    /// The key keeper offers this CLI and the API proxy serves it. Own-key
+    /// support alone (Codex) does not enable administrator key management.
     pub admin_key_capable: bool,
     /// A hosted server's administrator offers an API key for this CLI.
     pub admin_key_offered: bool,
@@ -814,7 +813,8 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 importable,
                 blocked,
                 shared: !paths.is_empty(),
-                admin_key_capable: crate::services::agent_api_keys::proxies(cli),
+                admin_key_capable: crate::services::server::keys_wire::KEY_CLIS.contains(&cli)
+                    && crate::services::agent_api_keys::proxies(cli),
                 admin_key_offered: offered.contains(cli),
                 uses_admin_key: on_admin_key.contains(cli),
                 api_key: false,

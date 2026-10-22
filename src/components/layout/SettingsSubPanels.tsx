@@ -1015,6 +1015,7 @@ const tokenCount = (n: number) =>
 const API_KEY_PROVIDERS: Record<string, string> = {
   anthropic: "Anthropic",
   gemini: "Google Gemini",
+  openai: "OpenAI",
 };
 
 /** What a CLI's agents run on: its own login, the user's own API key, or a
@@ -1027,6 +1028,7 @@ type Credential = "login" | "key" | "admin";
 const API_KEY_CLIS: { cli: string; untested: UntestedId }[] = [
   { cli: "claude", untested: "settings.agentApiKeys.claude" },
   { cli: "gemini", untested: "settings.agentApiKeys.gemini" },
+  { cli: "codex", untested: "settings.agentApiKeys.codex" },
 ];
 
 /** Provider API keys for the agent CLIs: one key per provider, kept in the OS
@@ -1122,6 +1124,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         <p className="settings-help">{t("settings.agentApiKeysHelp")}</p>
         <p className="settings-help">{t("settings.agentApiKeysWarning")}</p>
         <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
+        <p className="settings-help">{t("settings.agentApiKeysCodexHelp")}</p>
       </AgentsFold>
       {status.ledgerRestarted && (
         <p className="settings-help pill-fence-live-note">

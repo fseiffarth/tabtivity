@@ -803,7 +803,7 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     crate::services::agent_api_keys::refuse_in_container(
         &opts.cmd,
         crate::services::agent_api_keys::is_local_model(opts)
-            || crate::services::agent_fence::runs_subcommand(&opts.args),
+            || crate::services::agent_api_keys::keyless_subcommand(&opts.cmd, &opts.args),
     )?;
     let spec = sandbox_spec_for(&project_id);
     // The container mounts the project ROOT; a subdir tab keeps its cwd via -w.

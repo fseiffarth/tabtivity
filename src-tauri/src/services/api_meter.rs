@@ -17,6 +17,9 @@
 //!   and the Google Search queries a candidate's `groundingMetadata` lists in
 //!   `webSearchQueries` (grounding is billed per query or per grounded
 //!   prompt, never in `usageMetadata`; `api_prices` prices it).
+//! - **OpenAI:** Responses `usage` and `model` at the root (JSON/compaction)
+//!   or in an SSE event's `response`; input includes cached input and output
+//!   includes reasoning. A stream without final usage is estimated as above.
 //!
 //! A key of that name anywhere else — inside a tool call's arguments, in the
 //! text of an answer (escaped in a string) — is not read. Usage counts are
@@ -70,7 +73,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 
 use super::agent_api_keys::Provider;
-use super::api_prices::{AnthropicUsage, Charge, GeminiUsage};
+use super::api_prices::{AnthropicUsage, Charge, GeminiUsage, OpenAiUsage};
 
 /// Nesting tracked frame by frame; deeper levels are only counted.
 const MAX_DEPTH: usize = 64;
@@ -109,6 +112,7 @@ const GROUNDING_TOOLS: &[&str] = &["googlesearch", "googlesearchretrieval", "goo
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Key {
     Usage,
+    Response,
     UsageMetadata,
     Message,
     Model,
@@ -122,6 +126,7 @@ enum Key {
 fn classify(s: &[u8]) -> Key {
     match s {
         b"usage" => Key::Usage,
+        b"response" => Key::Response,
         b"usageMetadata" => Key::UsageMetadata,
         b"message" => Key::Message,
         b"model" => Key::Model,
@@ -245,6 +250,8 @@ impl Scanner {
     fn wanted(&self, provider: Provider, key: Key) -> bool {
         let Some(rest) = self.below_root() else { return false };
         match provider {
+            Provider::OpenAi => matches!(key, Key::Usage | Key::Model)
+                && (rest.is_empty() || matches!(rest, [Frame { object: true, key: Key::Response, .. }])),
             Provider::Anthropic => {
                 matches!(key, Key::Usage | Key::Model)
                     && (rest.is_empty() || (rest.len() == 1 && rest[0].object && rest[0].key == Key::Message))
@@ -445,6 +452,7 @@ pub fn billing(provider: Provider, method: &str, path: &str) -> Option<Billing> 
         return None;
     }
     match provider {
+        Provider::OpenAi => matches!(path, "/v1/responses" | "/v1/responses/compact").then_some(Billing::Usage { model: None }),
         Provider::Anthropic => (path == "/v1/messages").then_some(Billing::Usage { model: None }),
         Provider::Gemini => {
             // `/v1beta/models/<model>:<method>`
@@ -576,6 +584,11 @@ impl<'de> serde::de::Visitor<'de> for RefScan<'_> {
         if self.type_value && self.provider == Provider::Anthropic && anthropic_reference_type(value) {
             *self.found = true;
         }
+        if self.type_value && self.provider == Provider::OpenAi
+            && (value.starts_with("web_search") || matches!(value, "file_search" | "mcp" | "code_interpreter" | "image_generation" | "item_reference"))
+        {
+            *self.found = true;
+        }
         Ok(())
     }
     fn visit_unit<E>(self) -> Result<(), E> {
@@ -591,6 +604,7 @@ impl<'de> serde::de::Visitor<'de> for RefScan<'_> {
         while let Some(key) = map.next_key::<String>()? {
             let key: String = key.chars().filter(|c| *c != '_').map(|c| c.to_ascii_lowercase()).collect();
             let hit = match provider {
+                Provider::OpenAi => matches!(key.as_str(), "previousresponseid" | "fileid" | "fileurl" | "imageurl" | "encryptedcontent" | "conversation"),
                 Provider::Anthropic => key == "fileid",
                 Provider::Gemini => GEMINI_REFERENCE_KEYS.contains(&key.as_str()),
             };
@@ -665,6 +679,12 @@ struct AnthropicRequest {
     inference_geo: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct OpenAiRequest {
+    model: Option<String>,
+    max_output_tokens: Option<u64>,
+}
+
 /// One relayed answer's meter.
 #[derive(Debug)]
 pub struct Meter {
@@ -675,6 +695,7 @@ pub struct Meter {
     model: Option<String>,
     anthropic: AnthropicUsage,
     gemini: GeminiUsage,
+    openai: OpenAiUsage,
     saw_usage: bool,
     /// Anthropic: a usage object at the answer's root arrived (the final
     /// count of a `message_delta` or a whole message).
@@ -705,6 +726,7 @@ impl Meter {
             model: None,
             anthropic: AnthropicUsage::default(),
             gemini: GeminiUsage::default(),
+            openai: OpenAiUsage::default(),
             saw_usage: false,
             final_usage: false,
             lost: false,
@@ -734,6 +756,12 @@ impl Meter {
     /// (Gemini answers) whether it may ground.
     pub fn request(&mut self, body: &[u8]) {
         self.request = RequestFacts { body_bytes: body.len(), ..RequestFacts::default() };
+        if self.provider == Provider::OpenAi {
+            if let Ok(r) = serde_json::from_slice::<OpenAiRequest>(body) {
+                self.request.model = r.model.filter(|m| !m.is_empty() && m.len() <= MAX_STRING);
+                self.request.max_output = r.max_output_tokens;
+            }
+        }
         if self.provider == Provider::Gemini && matches!(self.billing, Billing::Usage { .. }) {
             self.request.may_ground = may_ground(body);
         }
@@ -769,7 +797,9 @@ impl Meter {
                 Found::Usage(bytes, root) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
                     Ok(v) => {
                         self.merge(&v);
-                        self.final_usage |= root;
+                        if self.provider != Provider::OpenAi {
+                            self.final_usage |= root;
+                        }
                     }
                     Err(_) => self.lost = true,
                 },
@@ -815,6 +845,17 @@ impl Meter {
         };
         self.saw_usage = true;
         match self.provider {
+            Provider::OpenAi => {
+                let u = &mut self.openai;
+                max(&mut u.input, n(v, "input_tokens"));
+                max(&mut u.output, n(v, "output_tokens"));
+                if let Some(details) = v.get("input_tokens_details") {
+                    max(&mut u.cached, n(details, "cached_tokens"));
+                }
+                // Null usage in response.created/in_progress is not captured;
+                // a final Responses usage object reports both totals.
+                self.final_usage = n(v, "input_tokens").is_some() && n(v, "output_tokens").is_some();
+            }
             Provider::Anthropic => {
                 let u = &mut self.anthropic;
                 max(&mut u.input_tokens, n(v, "input_tokens"));
@@ -904,10 +945,12 @@ impl Meter {
         // chunk's, known only from a clean end.
         let settled = !self.lost
             && match self.provider {
+                Provider::OpenAi => self.final_usage,
                 Provider::Anthropic => self.final_usage,
                 Provider::Gemini => self.saw_usage && end.complete,
             };
         let (max_input, max_output, per_sec) = match self.provider {
+            Provider::OpenAi => (1_050_000, self.request.max_output.unwrap_or(128_000), 1_000),
             Provider::Anthropic => {
                 (ANTHROPIC_MAX_INPUT, self.request.max_output.unwrap_or(ANTHROPIC_MAX_OUTPUT), ANTHROPIC_TOKENS_PER_SEC)
             }
@@ -924,6 +967,14 @@ impl Meter {
             Billing::Usage { .. } => ((end.elapsed.as_secs_f64() * per_sec as f64).ceil() as u64).min(max_output),
         };
         let charge = match self.provider {
+            Provider::OpenAi => {
+                let mut u = self.openai.clone();
+                if !settled {
+                    if u.input == 0 { u.input = input_estimate; }
+                    u.output = u.output.max(output_estimate);
+                }
+                super::api_prices::price_openai(model, &u)
+            }
             Provider::Anthropic => {
                 let mut u = self.anthropic.clone();
                 if !settled {
@@ -972,6 +1023,36 @@ mod tests {
     use std::time::Duration;
 
     const MONTH: &str = "2026-10";
+
+    #[test]
+    fn openai_responses_usage_survives_every_stream_split_without_double_counting() {
+        let usage = r#"{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},"output_tokens":300,"output_tokens_details":{"reasoning_tokens":200}}"#;
+        let response = format!(r#"{{"model":"gpt-6.1-sol","output":[{{"usage":{{"input_tokens":999999}},"model":"fake"}}],"usage":{usage}}}"#);
+        let expected = super::super::api_prices::price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1000, cached: 800, output: 300 });
+        every_split(Provider::OpenAi, Billing::Usage { model: None }, "application/json", response.as_bytes(), &expected);
+        let sse = format!("event: response.created\ndata: {{\"response\":{{\"usage\":null}}}}\n\nevent: response.completed\ndata: {{\"response\":{response}}}\n\n");
+        every_split(Provider::OpenAi, Billing::Usage { model: None }, "text/event-stream", sse.as_bytes(), &expected);
+    }
+
+    #[test]
+    fn openai_compaction_and_interrupted_responses_are_budgeted() {
+        assert!(billing(Provider::OpenAi, "POST", "/v1/responses/compact").is_some());
+        assert!(billing(Provider::OpenAi, "GET", "/v1/models").is_none());
+        let mut meter = Meter::new(Provider::OpenAi, Billing::Usage { model: None });
+        meter.request(br#"{"model":"gpt-6.1-sol","max_output_tokens":2000,"previous_response_id":"resp_example"}"#);
+        assert!(meter.worst_case_billed(MONTH) >= 1_050_000 + 2000);
+        meter.answer(200, Some("text/event-stream"));
+        meter.feed(b"data: {\"response\":{\"usage\":null}}\n\n");
+        let charge = meter.charge(MONTH, cut(1)).unwrap();
+        assert_eq!(charge.output, 1000);
+        assert!(charge.input > 0);
+        meter.answer(401, Some("application/json"));
+        assert!(meter.charge(MONTH, cut(1)).is_none());
+        // Local function definitions cannot fetch extra input from OpenAI;
+        // charging a whole context window for these would block small limits.
+        assert!(!names_input_by_reference(Provider::OpenAi, br#"{"tools":[{"type":"function","name":"shell"}]}"#));
+        assert!(names_input_by_reference(Provider::OpenAi, br#"{"tools":[{"type":"web_search"}]}"#));
+    }
     /// A clean end.
     const DONE: End = End { complete: true, elapsed: Duration::ZERO };
 

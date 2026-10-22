@@ -425,6 +425,19 @@ aliases, and anything about where or how credentials are stored.
 
 ### 1.2 Codex
 
+API keys: `services/agent_api_keys.rs` selects a launch-only custom Codex
+provider with `env_key=OPENAI_API_KEY`, `wire_api="responses"`,
+`requires_openai_auth=false`, `supports_websockets=false` and a loopback base
+URL. The proxy forwards `/v1/responses` and `/v1/responses/compact` to
+`api.openai.com`, never a raw key to Codex. Verify against a fake upstream:
+`C2_PROBE_CODEX=<executable> cargo test -p tabtivity --no-default-features --lib codex_cli_talks_to_the_proxy -- --ignored`.
+Verified 2026-10-22 against Codex 0.163.0 with a fake loopback Responses
+endpoint: the temporary provider authenticates with the supplied token and
+displays the streamed answer, including with an existing saved API login
+(the saved file is unchanged); `exec resume` switches an existing conversation
+from the built-in OpenAI provider to the proxy token. The in-app interactive
+tab and resume/fork remain tagged for live verification.
+
 **Where** `services/agent_session.rs` (`resolve_codex_session`,
 `register_codex_hook`, `codex_hook_state`), `services/codex_bind.rs`,
 `src/lib/agents/codexHooks.ts`, `commands/ollama.rs` (`non_thinking_args`,

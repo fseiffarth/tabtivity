@@ -108,14 +108,12 @@ fn settings_agent_remote_control() -> bool {
 /// carrier, and `agent_exec` in front of the CLI maps it (the Host session is
 /// tmux-wrapped like any agent tab); on Windows under the CLI's own name.
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
-    let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
-    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     // A hosted server's administrator's key (the Host session), checked
     // against the keeper's offer: a withdrawn key fails the spawn.
     let admin = crate::services::server::agent_keys::admin_for_spawn(&opts.cmd)?;
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, admin, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -140,6 +138,9 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
         || crate::services::tmux_local::tmux_supports_session_env()
     {
         return Ok(());
+    }
+    if opts.env.contains_key(crate::services::agent_api_keys::OPENAI_CARRIER) {
+        return Err("Codex API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
     }
     let dropped = drop_carriers(&mut opts.env);
     if dropped.is_empty() {

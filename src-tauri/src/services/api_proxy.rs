@@ -113,6 +113,7 @@ pub fn upstream_host(provider: Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "api.anthropic.com",
         Provider::Gemini => "generativelanguage.googleapis.com",
+        Provider::OpenAi => "api.openai.com",
     }
 }
 
@@ -887,6 +888,7 @@ impl Refusal {
     fn message(self, provider: Option<Provider>) -> &'static str {
         match self {
             Refusal::BudgetReached => match provider {
+                Some(Provider::OpenAi) => concat!(crate::app_name!(), " monthly API budget for OpenAI reached — raise it in Manage CLIs → API keys, or wait for next month"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
                     " monthly API budget for Google Gemini reached — raise it in Manage CLIs → API keys, or wait for next month"
@@ -897,6 +899,7 @@ impl Refusal {
                 ),
             },
             Refusal::WouldPass => match provider {
+                Some(Provider::OpenAi) => concat!(crate::app_name!(), " monthly API budget for OpenAI: this request could cost more than is left of it (requests still in flight count until they end) — wait for them, raise it in Manage CLIs → API keys, or wait for next month"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
                     " monthly API budget for Google Gemini: this request could cost more than is left of it",
@@ -911,6 +914,7 @@ impl Refusal {
                 ),
             },
             Refusal::NoBudget => match provider {
+                Some(Provider::OpenAi) => concat!(crate::app_name!(), " has no monthly API budget set for OpenAI — set one in Manage CLIs → API keys"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
                     " has no monthly API budget set for Google Gemini — set one in Manage CLIs → API keys"
@@ -955,6 +959,10 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
     let status = refusal.status();
     let message = refusal.message(provider);
     let body = match provider {
+        Some(Provider::OpenAi) => serde_json::json!({
+            "error": { "message": message, "type": if status == StatusCode::TOO_MANY_REQUESTS { "insufficient_quota" } else { "invalid_request_error" },
+                "code": if status == StatusCode::TOO_MANY_REQUESTS { "insufficient_quota" } else { "api_proxy_error" }, "param": null }
+        }),
         Some(Provider::Gemini) => serde_json::json!({
             "error": { "code": status.as_u16(), "message": message, "status": match refusal {
                 Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
@@ -1020,6 +1028,13 @@ fn path_allowed(provider: Provider, method: &Method, path: &str) -> bool {
     let post = *method == Method::POST;
     let get = *method == Method::GET;
     match provider {
+        // Responses inference and compaction; no files, batches or stored
+        // responses can be read through a tab's token.
+        Provider::OpenAi => match segs.as_slice() {
+            ["v1", "responses"] | ["v1", "responses", "compact"] => post,
+            ["v1", "models"] => get,
+            _ => false,
+        },
         // Claude Code: `POST /v1/messages?beta=true`, optional token counting,
         // model discovery when switched on (code.claude.com gateway guide).
         Provider::Anthropic => match segs.as_slice() {
@@ -1087,6 +1102,7 @@ fn query_allowed(provider: Provider, name: &str) -> bool {
     match provider {
         Provider::Anthropic => matches!(name, "beta" | "limit" | "after_id" | "before_id"),
         Provider::Gemini => matches!(name, "alt" | "pageSize" | "pageToken"),
+        Provider::OpenAi => false,
     }
 }
 
@@ -1172,6 +1188,7 @@ fn auth_header(provider: Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "x-api-key",
         Provider::Gemini => "x-goog-api-key",
+        Provider::OpenAi => "authorization",
     }
 }
 
@@ -1220,7 +1237,8 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
             Err(refusal) => return refuse(Some(provider), refusal),
         },
     };
-    let Ok(mut key_value) = HeaderValue::from_str(&key) else {
+    let credential = zeroize::Zeroizing::new(if provider == Provider::OpenAi { format!("Bearer {}", key.as_str()) } else { key.to_string() });
+    let Ok(mut key_value) = HeaderValue::from_str(&credential) else {
         return refuse(Some(provider), Refusal::NoKey);
     };
     key_value.set_sensitive(true);
@@ -1500,7 +1518,7 @@ mod tests {
         assert_eq!(split_route("/anthropic/v1/messages"), Some((Provider::Anthropic, "/v1/messages")));
         assert_eq!(split_route("/gemini/v1beta/models"), Some((Provider::Gemini, "/v1beta/models")));
         assert_eq!(split_route("/anthropic"), Some((Provider::Anthropic, "")));
-        assert_eq!(split_route("/openai/v1/chat/completions"), None);
+        assert_eq!(split_route("/openai/v1/responses"), Some((Provider::OpenAi, "/v1/responses")));
         assert_eq!(split_route("/"), None);
     }
 
@@ -2144,6 +2162,100 @@ mod tests {
         let other = bind_listener(Some(port)).unwrap();
         assert_ne!(other.local_addr().unwrap().port(), port);
         assert_ne!(bind_listener(None).unwrap().local_addr().unwrap().port(), 0);
+    }
+
+    const OPENAI_SSE: &str = concat!(
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stub\",\"object\":\"response\",\"status\":\"in_progress\",\"output\":[],\"usage\":null}}\n\n",
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_stub\",\"output_index\":0,\"content_index\":0,\"delta\":\"STUB-REPLY-OK\"}\n\n",
+        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_stub\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"STUB-REPLY-OK\",\"annotations\":[]}]}}\n\n",
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stub\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"gpt-6.1-sol\",\"output\":[],\"usage\":{\"total_tokens\":1300,\"input_tokens\":1000,\"input_tokens_details\":{\"cached_tokens\":800},\"output_tokens\":300,\"output_tokens_details\":{\"reasoning_tokens\":200}}}}\n\n",
+    );
+
+    async fn openai_stub(seen: Arc<Seen>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(move |req: Request| {
+            let seen = seen.clone();
+            async move {
+                let (parts, body) = req.into_parts();
+                let body = axum::body::to_bytes(body, MAX_BODY).await.unwrap();
+                seen.hits.fetch_add(1, Ordering::SeqCst);
+                seen.requests.lock_ok().push((parts.method.to_string(), parts.uri.to_string(), parts.headers, body.to_vec()));
+                let mut response = Response::new(Body::from(OPENAI_SSE));
+                response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+                response
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn openai_swaps_bearer_auth_meters_responses_and_enforces_the_budget() {
+        let seen = Arc::new(Seen::default());
+        let upstream = openai_stub(seen.clone()).await;
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::OpenAi, "e2e:openai", None)).unwrap();
+        let url = format!("{}/v1/responses", base_url_on(port, Provider::OpenAi));
+        let client = plain_client();
+        let response = client.post(&url).bearer_auth(&token).body(r#"{"model":"gpt-6.1-sol","stream":true}"#).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.unwrap(), OPENAI_SSE);
+        let models = charged(&book, Provider::OpenAi).await;
+        assert_eq!(models["gpt-6.1-sol"].billed, 580);
+        {
+            let requests = seen.requests.lock_ok();
+            let (method, path, headers, _) = &requests[0];
+            assert_eq!((method.as_str(), path.as_str()), ("POST", "/v1/responses"));
+            assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+            assert!(!headers.values().any(|v| v.as_bytes().windows(token.len()).any(|w| w == token.as_bytes())));
+        }
+        book.record(Provider::OpenAi, &spent_charge(20_000_000), chrono::Utc::now());
+        let response = client.post(&url).bearer_auth(&token).body("{}").send().await.unwrap();
+        assert_eq!(response.status(), 429);
+        let json: serde_json::Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["code"], "insufficient_quota");
+        assert!(json["error"]["message"].as_str().unwrap().contains("OpenAI"));
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 1);
+        for path in ["/v1/files", "/v1/chat/completions", "/v1/responses/resp_other", "/v1/batches"] {
+            assert!(!path_allowed(Provider::OpenAi, &Method::POST, path), "{path}");
+        }
+        assert!(path_allowed(Provider::OpenAi, &Method::POST, "/v1/responses/compact"));
+        on_tab_gone("e2e:openai");
+        assert_eq!(client.post(&url).bearer_auth(&token).body("{}").send().await.unwrap().status(), 401);
+    }
+
+    /// Isolated real-CLI check, with a scratch home and a loopback fake
+    /// provider only. C2_PROBE_CODEX names the installed executable.
+    #[tokio::test]
+    #[ignore]
+    async fn codex_cli_talks_to_the_proxy() {
+        let codex = std::env::var_os("C2_PROBE_CODEX").expect("C2_PROBE_CODEX executable");
+        let seen = Arc::new(Seen::default());
+        let upstream = openai_stub(seen.clone()).await;
+        let port = proxy(upstream, Some(FAKE_KEY), MAX_BODY).await;
+        let token = issue_grant(grant(Provider::OpenAi, "e2e:codex-cli", None)).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".codex")).unwrap();
+        let mut command = tokio::process::Command::new(codex);
+        command.env_clear().env("HOME", home.path()).env("CODEX_HOME", home.path().join(".codex"))
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("OPENAI_API_KEY", &token)
+            .args(super::super::agent_api_keys::codex_proxy_args(&base_url_on(port, Provider::OpenAi)))
+            .args(["exec", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "Reply hi without tools."])
+            .current_dir(home.path()).kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(45), command.output()).await.unwrap().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("STUB-REPLY-OK"));
+        let requests = seen.requests.lock_ok();
+        assert!(requests.iter().any(|(m, path, _, _)| m == "POST" && path == "/v1/responses"));
+        for (_, _, headers, _) in requests.iter() {
+            assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+        }
+        assert!(!home.path().join(".codex").join("auth.json").exists(), "no login file was written");
+        on_tab_gone("e2e:codex-cli");
     }
 
     /// A0-style check of the real Claude CLI against this proxy and a stub

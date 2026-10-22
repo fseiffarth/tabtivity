@@ -68,10 +68,11 @@ function status(saved: string[], readable = true) {
     resetsOn: "2026-11-01",
     pricesDate: "2026-10-04",
     ledgerRestarted: null,
-    providers: ["anthropic", "gemini"].map((id) => ({ id, saved: saved.includes(id), ...extra[id] })),
+    providers: ["anthropic", "gemini", "openai"].map((id) => ({ id, saved: saved.includes(id), ...extra[id] })),
     clis: [
       { id: "claude", enabled: false, providers: ["anthropic"], ready: false },
       { id: "gemini", enabled: false, providers: ["gemini"], ready: false },
+      { id: "codex", enabled: false, providers: ["openai"], ready: false },
     ],
   };
 }
@@ -118,6 +119,23 @@ const pick = (cli: string, option: RegExp) => {
 };
 
 describe("API keys for agent CLIs", () => {
+  it("saves an OpenAI key with a limit and switches Codex to that key", async () => {
+    render(<AgentApiKeysRows />);
+    const input = await screen.findByLabelText<HTMLInputElement>("Paste the OpenAI API key");
+    fireEvent.change(input, { target: { value: FAKE_KEY } });
+    const row = input.closest(".agents-row")!;
+    const save = [...row.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+    fireEvent.click(save);
+    await waitFor(() => expect(calls("agent_api_key_set")[0]?.[1]).toEqual({ provider: "openai", key: FAKE_KEY }));
+    expect(order.indexOf("settings:agent_api_token_limits")).toBeLessThan(order.indexOf("key"));
+    expect(input.value).toBe("");
+    await waitFor(() => expect(runsOn("Codex")).toBeTruthy());
+    pick("Codex", /my API key \(OpenAI\)/);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: ["codex"] }));
+    pick("Codex", /its own login/);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] }));
+  });
+
   it("saves a key, clears the field and never reads it back", async () => {
     const onChange = vi.fn();
     render(<AgentApiKeysRows onChange={onChange} />);
@@ -220,7 +238,7 @@ describe("API keys for agent CLIs", () => {
   it("says the keyring is locked and offers the unlock instead of a key field", async () => {
     readable = false;
     render(<AgentApiKeysRows />);
-    expect((await screen.findAllByText(/keyring locked/)).length).toBe(2);
+    expect((await screen.findAllByText(/keyring locked/)).length).toBe(3);
     expect(screen.queryByText(/not saved/)).toBeNull();
     expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Unlock keyring" }));
@@ -231,7 +249,7 @@ describe("API keys for agent CLIs", () => {
     readable = false;
     store = "vault";
     render(<AgentApiKeysRows />);
-    expect((await screen.findAllByText(/sign in on a paired device to unlock the key/)).length).toBe(2);
+    expect((await screen.findAllByText(/sign in on a paired device to unlock the key/)).length).toBe(3);
     expect(screen.queryByText(/keyring locked/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlock keyring" })).toBeNull();
     expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
