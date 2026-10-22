@@ -5246,6 +5246,7 @@ export const dict: Dict = {
   "statusCluster.collapseTitle": "Statusanzeigen einklappen",
   "headerPins.pin": "Immer in der Kopfleiste anzeigen",
   "headerPins.fold": "Hinter dem ‹ einklappen",
+  "headerPins.resetOrder": "Reihenfolge dieser Symbole zurücksetzen",
   "headerPins.item.mail": "E-Mail",
   "headerPins.item.calendar": "Kalender",
   "headerPins.item.todo": "Aufgaben",

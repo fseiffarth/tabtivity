@@ -5230,6 +5230,7 @@ export const dict: Dict = {
   "statusCluster.collapseTitle": "Replier les indicateurs d'état",
   "headerPins.pin": "Toujours afficher dans la barre du haut",
   "headerPins.fold": "Masquer derrière le chevron ‹",
+  "headerPins.resetOrder": "Réinitialiser l'ordre de ces icônes",
   "headerPins.item.mail": "Courrier",
   "headerPins.item.calendar": "Agenda",
   "headerPins.item.todo": "Tâches",

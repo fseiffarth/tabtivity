@@ -1905,15 +1905,15 @@
   /* Unlike the other .global-apps-menu-btn siblings, this one reads as a
      quiet status readout (lamp + label), not a button — so its inherited
      button box (background/border) is stripped back to plain text/icon.
-     Height stays the shared 32px .global-apps-menu-btn box (the 🔔 beside
-     it keeps it too; only the six icon launchers fill the 40px bar).
+     Height is the bar's 40px, the same box as the icon launchers beside it:
+     every top-bar icon shares one size, pinned or folded behind the chevron.
      The dropdowns line up regardless — they hang off the header's bottom edge
      (`.global-apps-menu .tab-new-menu`), not off each button. */
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
-  height: 32px;
+  height: 40px;
   padding: 2px 4px;
   border: none;
   border-radius: var(--radius-sm);
@@ -1971,8 +1971,41 @@
 .header-slot[data-folded="true"] {
   display: none;
 }
+/* Dragging an icon to reorder it (HeaderSlot): the icon dims and a bar marks the
+   slot it would land in front of (or after, at the end of its group). The bar
+   is a pseudo-element so no layout moves while the pointer travels. */
+.header-slot[data-dragging] {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+.header-slot[data-drop] {
+  position: relative;
+}
+.header-slot[data-drop]::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.header-slot[data-drop="before"]::before { left: -4px; }
+.header-slot[data-drop="after"]::before { right: -4px; }
+
+/* Divides the pinned icons from the ones unfolded from behind the chevron. */
+.header-fold-separator {
+  align-self: center;
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin-inline: 2px;
+  background: var(--border-subtle);
+}
 
 .status-cluster-toggle {
+  height: 40px;
   gap: 4px;
   min-width: 0;
   padding-inline: 5px;
@@ -2041,8 +2074,8 @@
 /* VPN and Machines carry a drawn glyph after their lamps instead of a word;
    it dims and lights like the label it replaced. */
 .header-status-glyph {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex: none;
   color: var(--text-secondary);
   transition: color var(--transition);
@@ -2064,13 +2097,13 @@
 .mobile-indicator-btn,
 .vpn-indicator-btn {
   justify-content: center;
-  width: 25px;
+  width: 40px;
   padding-inline: 3px;
 }
 .mobile-indicator-icon,
 .dev-build-icon {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex: none;
   color: var(--text-secondary);
 }

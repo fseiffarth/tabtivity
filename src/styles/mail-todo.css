@@ -71,12 +71,14 @@
 /* The header's icon buttons — ✉ 🗓 ☑, the Models & agents chip and ⚙
    — fill the bar: a 40px square (the `.app-header` height), with the icons
    grown to match. The ⚙ is matched by the icon span it holds, having
-   no class of its own. The 🔔 stays at the shared 32px/15px: it stands with
-   the status cluster, whose readouts are sized to each other. */
+   no class of its own. The 🔔 and the status readouts take the same 40px/20px
+   (see `header-menus.css`, `shell.css`): an icon may be pinned or folded
+   anywhere in the bar, so they all share one size. */
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
 .inbox-indicator-btn,
+.alerts-toggle-btn,
 .local-model-btn,
 .help-agent-btn,
 .global-apps-menu-btn:has(> .settings-menu-icon) {
@@ -95,7 +97,8 @@
 .todo-indicator-icon,
 .inbox-indicator-icon,
 .help-agent-icon,
-.settings-menu-icon {
+.settings-menu-icon,
+svg.alerts-toggle-icon {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
@@ -111,11 +114,8 @@ svg.local-model-icon {
 }
 
 /* The bell is drawn, not typed (see `AlertsToggle`), so it takes a box rather
-   than a font size — the same 15px square `ConnTypeIcon` and `BatteryIndicator`
-   use, since it now stands in the same cluster as those two. */
+   than a font size — the same 20px square as every other top-bar icon. */
 svg.alerts-toggle-icon {
-  width: 15px;
-  height: 15px;
   color: currentColor;
   flex-shrink: 0;
 }

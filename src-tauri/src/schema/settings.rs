@@ -1002,6 +1002,10 @@ pub struct Settings {
     /// absent id follows the frontend's default (`lib/headerPins`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_pins: Option<HashMap<String, bool>>,
+    /// Top-bar item ids in the order the user dragged them; an id that is absent
+    /// keeps its built-in place after the listed ones (`lib/headerPins`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_order: Option<Vec<String>>,
     /// Default printer per network, keyed by the network key the frontend
     /// derives (`wlan:<ssid>`, `lan:<hashed gateway mac>`, `lan`). When the machine
     /// joins a keyed network, the print manager's host makes that printer the

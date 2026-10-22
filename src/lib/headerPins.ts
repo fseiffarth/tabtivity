@@ -55,3 +55,52 @@ export function toggleHeaderPin(pins: HeaderPins | undefined, id: HeaderItemId):
   else next[id] = pinned;
   return next;
 }
+
+/** The places an item may be dragged within. Items never cross groups: the apps
+ *  and menus live in `HeaderBar`, the readouts in `StatusCluster`, and the gaps
+ *  and the gear between them are what keep the three groups readable. */
+export const HEADER_GROUPS = {
+  apps: ["mail", "calendar", "todo", "inbox"],
+  menus: ["models", "help"],
+  status: ["alerts", "conn", "battery", "mobile", "vpn", "machines", "resources", "devBuild"],
+} as const satisfies Record<string, readonly HeaderItemId[]>;
+
+export type HeaderGroup = keyof typeof HEADER_GROUPS;
+
+export function headerGroupOf(id: HeaderItemId): HeaderGroup {
+  return (Object.keys(HEADER_GROUPS) as HeaderGroup[]).find((g) =>
+    (HEADER_GROUPS[g] as readonly HeaderItemId[]).includes(id),
+  )!;
+}
+
+/** `group`'s ids in the user's saved order. `order` (`Settings.header_order`)
+ *  lists ids the user has placed; an id it does not name (a newer build's item)
+ *  follows the placed ones in its built-in position. */
+export function orderedHeaderIds(group: HeaderGroup, order: readonly string[] | undefined): HeaderItemId[] {
+  const ids: readonly HeaderItemId[] = HEADER_GROUPS[group];
+  const placed = (order ?? []).filter((id, i, all): id is HeaderItemId =>
+    (ids as readonly string[]).includes(id) && all.indexOf(id) === i,
+  );
+  return [...placed, ...ids.filter((id) => !placed.includes(id))];
+}
+
+/** The saved order after moving `id` in front of `beforeId` (`null` → the end of
+ *  its group). Other groups' entries are kept as they were. */
+export function moveHeaderItem(
+  order: readonly string[] | undefined,
+  id: HeaderItemId,
+  beforeId: HeaderItemId | null,
+): string[] {
+  const group = headerGroupOf(id);
+  const ids = orderedHeaderIds(group, order).filter((x) => x !== id);
+  const at = beforeId === null ? ids.length : ids.indexOf(beforeId);
+  ids.splice(at < 0 ? ids.length : at, 0, id);
+  const members = HEADER_GROUPS[group] as readonly string[];
+  return [...(order ?? []).filter((x) => !members.includes(x)), ...ids];
+}
+
+/** The saved order with `group`'s entries dropped (back to the built-in order). */
+export function resetHeaderGroup(order: readonly string[] | undefined, group: HeaderGroup): string[] {
+  const members = HEADER_GROUPS[group] as readonly string[];
+  return (order ?? []).filter((x) => !members.includes(x));
+}

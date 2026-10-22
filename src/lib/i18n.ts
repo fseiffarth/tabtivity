@@ -5422,6 +5422,7 @@ export const enSource = {
   "statusCluster.collapseTitle": "Collapse status indicators",
   "headerPins.pin": "Always show in the top bar",
   "headerPins.fold": "Hide behind the ‹ chevron",
+  "headerPins.resetOrder": "Reset the order of these icons",
   "headerPins.item.mail": "Mail",
   "headerPins.item.calendar": "Calendar",
   "headerPins.item.todo": "To-do",

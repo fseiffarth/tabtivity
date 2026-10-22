@@ -11,10 +11,19 @@ import type { HeaderItemId } from "../lib/headerPins";
 interface HeaderSlotsState {
   present: Partial<Record<HeaderItemId, true>>;
   setPresent: (id: HeaderItemId, present: boolean) => void;
+  /** The icon being dragged and where it would land: in front of `beforeId`
+   *  (`null` → the end of its group). */
+  drag: { id: HeaderItemId; beforeId: HeaderItemId | null } | null;
+  setDrag: (drag: HeaderSlotsState["drag"]) => void;
 }
 
 export const useHeaderSlotsStore = create<HeaderSlotsState>((set) => ({
   present: {},
+  drag: null,
+  setDrag: (drag) =>
+    set((s) =>
+      s.drag?.id === drag?.id && s.drag?.beforeId === drag?.beforeId ? s : { drag },
+    ),
   setPresent: (id, present) =>
     set((s) => {
       if (!!s.present[id] === present) return s;

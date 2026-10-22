@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ConnLamp } from "../common/ConnLamp";
 import { ConnTypeIcon, connLabel } from "./ConnTypeIcon";
@@ -11,8 +11,9 @@ import { DevBuildIndicator } from "./DevBuildIndicator";
 import { useQuiesce, saverInterval, usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderSlotsStore } from "../../stores/headerSlots";
-import { HEADER_ITEM_IDS, isHeaderPinned } from "../../lib/headerPins";
+import { HEADER_ITEM_IDS, isHeaderPinned, orderedHeaderIds, type HeaderItemId } from "../../lib/headerPins";
 import { HeaderSlot } from "./HeaderSlot";
+import { APP_ICONS } from "./appIcons";
 import {
   summaryLamp,
   useHeaderStatusStore,
@@ -90,6 +91,7 @@ export function StatusCluster() {
   if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
   const pins = useSettingsStore((s) => s.settings?.header_pins);
+  const order = useSettingsStore((s) => s.settings?.header_order);
   const present = useHeaderSlotsStore((s) => s.present);
   const [resourcePeek, setResourcePeek] = useState(0);
 
@@ -164,51 +166,61 @@ export function StatusCluster() {
   const hasToggle = foldable >= 1;
   const collapsed = !expanded && hasToggle;
 
+  // Alerts leads the row by default: it is the one member that is a *control*
+  // rather than a readout, so it takes the row's head — the slot nearest the
+  // global-app buttons it used to live among — rather than being buried between
+  // the VPN lamp and the CPU meters. The user can drag any member elsewhere.
+  const members: Partial<Record<HeaderItemId, ReactNode>> = {
+    alerts: <AlertsToggle />,
+    conn: showConn && <ConnTypeIcon type={connKind ?? "wlan"} online={online} ssid={ssid} />,
+    battery: batterySupported && (
+      <BatteryIndicator percentage={batteryPercentage} plugged={!onBattery} />
+    ),
+    mobile: <MobileIndicator />,
+    vpn: <VpnIndicator />,
+    machines: machinesMounted && (
+      <Suspense fallback={null}>
+        <MachinesIndicator />
+      </Suspense>
+    ),
+    resources: (
+      <AppResourceDisplay
+        folded={collapsed && !isHeaderPinned(pins, "resources")}
+        peek={resourcePeek}
+      />
+    ),
+    // Dev checkouts only: a release build's backend answers no status and the
+    // chip renders nothing (see DevBuildIndicator).
+    devBuild: <DevBuildIndicator />,
+  };
+
+  const readouts = orderedHeaderIds("status", order);
+  const pinnedReadouts = readouts.filter((id) => isHeaderPinned(pins, id));
+  const pinnedCount = pinnedReadouts.length;
+  const slotIds: HeaderItemId[] = [
+    ...pinnedReadouts,
+    ...(["apps", "menus", "status"] as const)
+      .flatMap((g) => orderedHeaderIds(g, order))
+      .filter((id) => !isHeaderPinned(pins, id)),
+  ];
+
   const toggleTitle = collapsed
     ? [t("statusCluster.expandTitle"), ...entries.map(([, r]) => r.label)].join("\n")
     : t("statusCluster.collapseTitle");
 
   return (
     <div className="header-status-cluster">
-      {/* Alerts leads the row: it is the one member that is a *control* rather
-          than a readout, so it takes the row's head — the slot nearest the
-          global-app buttons it used to live among — rather than being buried
-          between the VPN lamp and the CPU meters. */}
-      <HeaderSlot id="alerts">
-        <AlertsToggle />
-      </HeaderSlot>
-      <HeaderSlot id="conn">
-        {showConn && <ConnTypeIcon type={connKind ?? "wlan"} online={online} ssid={ssid} />}
-      </HeaderSlot>
-      <HeaderSlot id="battery">
-        {batterySupported && (
-          <BatteryIndicator percentage={batteryPercentage} plugged={!onBattery} />
-        )}
-      </HeaderSlot>
-      <HeaderSlot id="mobile">
-        <MobileIndicator />
-      </HeaderSlot>
-      <HeaderSlot id="vpn">
-        <VpnIndicator />
-      </HeaderSlot>
-      <HeaderSlot id="machines">
-        {machinesMounted && (
-          <Suspense fallback={null}>
-            <MachinesIndicator />
-          </Suspense>
-        )}
-      </HeaderSlot>
-      <HeaderSlot id="resources">
-        <AppResourceDisplay
-          folded={collapsed && !isHeaderPinned(pins, "resources")}
-          peek={resourcePeek}
-        />
-      </HeaderSlot>
-      {/* Dev checkouts only: a release build's backend answers no status and
-          the chip renders nothing (see DevBuildIndicator). */}
-      <HeaderSlot id="devBuild">
-        <DevBuildIndicator />
-      </HeaderSlot>
+      {/* Pinned readouts first, then everything folded — apps and menus too — so
+          an icon behind the chevron always opens to the right of the rest. */}
+      {slotIds.map((id, i) => (
+        <Fragment key={id}>
+          {/* A hairline where the folded icons start, only while they are shown. */}
+          {i === pinnedCount && !collapsed && hasToggle && (
+            <span className="header-fold-separator" aria-hidden="true" />
+          )}
+          <HeaderSlot id={id}>{members[id] ?? APP_ICONS[id]}</HeaderSlot>
+        </Fragment>
+      ))}
       {/* The toggle only exists once there is something to fold. */}
       {hasToggle && (
         <button

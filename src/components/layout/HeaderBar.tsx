@@ -2,16 +2,13 @@ import { IS_MAC } from "../../lib/platform";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
 import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
-import { MailIndicator } from "../header/MailIndicator";
-import { CalendarIndicator } from "../header/CalendarIndicator";
-import { TodoIndicator } from "../header/TodoIndicator";
-import { InboxIndicator } from "../header/InboxIndicator";
 import { SettingsMenu } from "../header/SettingsMenu";
-import { HelpAgentButton } from "../header/HelpAgentButton";
 import { WindowControls } from "../header/WindowControls";
 import { HeaderSlot } from "../header/HeaderSlot";
+import { isHeaderPinned, orderedHeaderIds } from "../../lib/headerPins";
+import { APP_ICONS } from "../header/appIcons";
+import { useSettingsStore } from "../../stores/settings";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { LocalModelMenu } from "./LocalModelMenu";
 
 const NON_DRAG_SELECTOR = [
   "button",
@@ -37,6 +34,8 @@ function handleDrag(e: React.MouseEvent) {
 }
 
 export function HeaderBar() {
+  const order = useSettingsStore((s) => s.settings?.header_order);
+  const pins = useSettingsStore((s) => s.settings?.header_pins);
   // (A `workspace_info` fetch whose answer was discarded, and a
   // `workspace-changed` listener unsubscribed the moment it resolved, used to
   // sit here. What the workspace backend can do is now said in Settings →
@@ -72,31 +71,26 @@ export function HeaderBar() {
           live this close to the window edge because every menu in this cluster is
           right-anchored and grows inward (see `.header-status-menu-anchor`). */}
       <div className="header-right no-drag">
-        <HeaderSlot id="mail">
-          <MailIndicator />
-        </HeaderSlot>
-        <HeaderSlot id="calendar">
-          <CalendarIndicator />
-        </HeaderSlot>
-        <HeaderSlot id="todo">
-          <TodoIndicator />
-        </HeaderSlot>
-        <HeaderSlot id="inbox">
-          <InboxIndicator />
-        </HeaderSlot>
+        {orderedHeaderIds("apps", order)
+          .filter((id) => isHeaderPinned(pins, id))
+          .map((id) => (
+          <HeaderSlot key={id} id={id}>
+            {APP_ICONS[id]}
+          </HeaderSlot>
+        ))}
         <span className="header-right-gap" aria-hidden="true" />
-        <HeaderSlot id="models">
-          <LocalModelMenu />
-        </HeaderSlot>
         {/* Settings belong to the machine, not to a project, so the gear stays
             with the other global buttons rather than at the head of the project
             strip, where it put the switcher's own controls on both sides of a
-            scrolling row. */}
-        {/* The ? opens an agent primed with the built-in help, beside the
-            gear whose menu holds the help pages. */}
-        <HeaderSlot id="help">
-          <HelpAgentButton />
-        </HeaderSlot>
+            scrolling row. The ? opens an agent primed with the built-in help,
+            beside the gear whose menu holds the help pages. */}
+        {orderedHeaderIds("menus", order)
+          .filter((id) => isHeaderPinned(pins, id))
+          .map((id) => (
+          <HeaderSlot key={id} id={id}>
+            {APP_ICONS[id]}
+          </HeaderSlot>
+        ))}
         <SettingsMenu />
         <span className="header-right-gap" aria-hidden="true" />
         <StatusCluster />

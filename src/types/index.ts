@@ -219,6 +219,9 @@ export interface Settings {
    * item in the bar while the chevron is collapsed, `false` folds it behind the
    * chevron. An id that is absent follows the built-in default. */
   header_pins?: Record<string, boolean>;
+  /** Top-bar item ids in the order the user dragged them (`lib/headerPins`).
+   * An id that is absent keeps its built-in place after the listed ones. */
+  header_order?: string[];
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */

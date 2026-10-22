@@ -5228,6 +5228,7 @@ export const dict: Dict = {
   "statusCluster.collapseTitle": "Plegar los indicadores de estado",
   "headerPins.pin": "Mostrar siempre en la barra superior",
   "headerPins.fold": "Ocultar tras el chevrón ‹",
+  "headerPins.resetOrder": "Restablecer el orden de estos iconos",
   "headerPins.item.mail": "Correo",
   "headerPins.item.calendar": "Calendario",
   "headerPins.item.todo": "Tareas",
