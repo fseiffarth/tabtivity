@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { CheckboxIcon, ClockIcon } from "../../../src/components/common/icons/Icon";
 import { api, normalizeTodoBoard, reloadIfApplied, wasApplied, type TodoBoard, type TodoCard, type TodoColumn, type TodoTaskInput } from "../api";
 import { describeFailure, failureCode } from "../connection";
@@ -266,7 +266,7 @@ function TodoColumnView({ column, index, columns, tasks, cardCount, busy, folded
     {/* An empty column says which kind of empty it is: a column with cards the
         filters are holding back reads as a broken board otherwise. */}
     {!folded && tasks.length === 0 && <p className="todo-column-empty">{t(cardCount > 0 ? "mobile.todo.hiddenByFilters" : "mobile.todo.noCards")}</p>}
-    {!folded && tasks.map((task, index) => <article className={task.done ? "todo-mobile-card done" : "todo-mobile-card"} key={task.id}>
+    {!folded && tasks.map((task, index) => <article className={task.done ? "todo-mobile-card done" : "todo-mobile-card"} key={task.id} style={{ "--todo-accent": accent } as CSSProperties}>
       <div className="todo-mobile-card-title"><button className="todo-check" onClick={() => toggle(task)} disabled={busy} aria-label={t(task.done ? "mobile.todo.markNotDone" : "mobile.todo.markDone", { name: task.title })}>{task.done ? "✓" : ""}</button><strong>{task.title}</strong></div>
       {task.notes.trim() && <p className="todo-mobile-notes">{task.notes.trim()}</p>}
       <TodoMeta task={task} />
