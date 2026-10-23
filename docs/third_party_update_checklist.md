@@ -311,6 +311,20 @@ Claude's `/fast` — different thing.
   each message once — subagent token counts just get truer. 2.1.308 is
   "bug fixes" only; 2.1.307 otherwise touches OTel, MCP retries, cloud and
   self-hosted runners, VS Code — nothing Tabtivity reads.
+  Re-checked against 2.1.309 (2026-10-23, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.308 run of the same dump: keys
+  identical on all 19 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on every one, the
+  resume start's four cost fields included; transcript record types
+  identical; `-p --resume` of a `plan` session still reports the default;
+  `/usage` three meters, every reset resolved; `--help` identical;
+  notification-type, mode-label and cold-resume dialog strings count the
+  same). 2.1.309 gives `sed -i` the standard Bash prompt instead of a
+  simulated edit preview, which the decision lamp reads like any Bash
+  prompt; its ctrl+enter, `/rename`-after-`--resume` and emoji-cut
+  transcript fixes touch nothing Tabtivity sends (it never sends
+  ctrl+enter) and only make such transcript lines parse; the rest is
+  sandbox, MCP, IDE, cloud and Slack — nothing Tabtivity reads.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
