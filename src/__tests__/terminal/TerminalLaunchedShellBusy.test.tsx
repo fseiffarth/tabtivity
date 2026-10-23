@@ -109,7 +109,7 @@ async function printsFor(tab: TabEntry) {
   return { busy: !!busyByTab[id], kind: busyKindByTab[id] };
 }
 
-describe("TerminalView — a shell tab Tabtivity launched is running from its spawn", () => {
+describe("TerminalView — a shell tab the app launched is running from its spawn", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     invoke.mockReset();
