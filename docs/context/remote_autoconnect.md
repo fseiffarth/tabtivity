@@ -97,6 +97,25 @@ which of the two happened (`remote_saved_password_state` returns
 `{ saved, keyring }`, not a boolean), and the keyring case offers the same
 **Unlock keyring** action the VPN side has had all along.
 
+## Unreachable is re-tried; rejected is not
+
+Every unattended path tries **once**, and for a long time an unreachable host
+ended there, at a red lamp only a tunnel coming up (`retryAutoConnectAfterVpn`)
+cleared. That made reconnecting a matter of timing: the dead-host reconciler
+notices a dropped master within 15 s, and after a wake or a Wi-Fi hop the network
+is often not back yet; a launch that beats the network fails the same way. So a
+host whose probe says `unreachable` (nothing answered, no credential presented) is
+re-tried on a backoff to a five-minute cadence (`scheduleUnreachableRetry` in
+`stores/projects`), and the webview's `online` event runs pending re-tries at once
+(`lib/remote/remoteAutoReconnect`). Each re-try re-checks the gates and that the
+lamp is still the red one it left, so the user connecting, disconnecting or
+switching away ends it. A host that answered and said no is **never** re-tried —
+that would replay a rejected login. Non-headless, an unreachable host opens no login
+tab (ssh in it could only fail); the login opens on the re-try that finds the host
+answering, and a re-try never re-opens the tunnel's login. The dead-host path no
+longer gives up outright non-headless either: the probe is its eligibility check,
+so a key host reconnects and a password host goes red.
+
 Finally, none of this is the only line of defence: the backend refuses a
 background dial to a tagged host inside the ssh-argv builders themselves
 (`docs/context/hpc_careful_mode.md`, "The dial policy"). The frontend gates decide

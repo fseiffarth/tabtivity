@@ -1,7 +1,7 @@
 import { useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useSettingsStore, whenSettingsLoaded } from "../../stores/settings";
-import { retryAutoConnectAfterVpn } from "../../stores/projects";
+import { retryAutoConnectAfterVpn, retryUnreachableNow } from "../../stores/projects";
 
 /**
  * Wire the two *event-driven* halves of remote auto-connect that the imperative
@@ -22,6 +22,9 @@ import { retryAutoConnectAfterVpn } from "../../stores/projects";
  *     is actually on, and only once settings have loaded to say so (`machineSweep`).
  *     The sweep then re-runs the active project's auto-connect, because an armed
  *     machine counts as the opt-in of the project host that is the same login.
+ *  3. **On the network coming back** (`online`: a wake, a Wi-Fi hop), run every
+ *     host re-try that is waiting out an unreachable host's backoff now
+ *     (`retryUnreachableNow`), instead of up to five minutes later.
  *
  * We subscribe to the machine-level VPN store rather than poll, so the retry is
  * immediate on the exact `→ connected` transition (an earlier poll-based reaction
@@ -46,6 +49,8 @@ export function initRemoteAutoReconnect(): void {
     );
     if (roseToConnected) onVpnTunnelUp();
   });
+
+  window.addEventListener("online", () => retryUnreachableNow());
 
   // Launch-time global-machine sweep, decoupled from the header component so it runs
   // even before the Machines menu is ever opened.

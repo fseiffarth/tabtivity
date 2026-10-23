@@ -32,7 +32,13 @@ vi.mock("../../lib/terminal/terminalBus", async (importOriginal) => ({
   },
 }));
 
-import { retryAutoConnectAfterVpn, useProjectsStore } from "../../stores/projects";
+import {
+  disconnectRemote,
+  retryAutoConnectAfterVpn,
+  retryUnreachableNow,
+  silentReconnectDeadHost,
+  useProjectsStore,
+} from "../../stores/projects";
 import { useConnectDialogStore } from "../../stores/remote/connectDialog";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSettingsStore } from "../../stores/settings";
@@ -120,6 +126,9 @@ const sshLamp = () => useRemoteStatusStore.getState().byProject.remote1?.ssh;
 const vpnLamp = () => useRemoteStatusStore.getState().byProject.remote1?.vpn;
 
 beforeEach(() => {
+  // An unreachable host's re-try timer is module-level: cancel any a previous test
+  // left behind, or it fires into this one.
+  disconnectRemote("remote1");
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
   useConnectDialogStore.setState({ projectId: null });
@@ -555,5 +564,144 @@ describe("auto-connect with connections_headless off", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(rootTabs()).toHaveLength(2);
     expect(rootTabs()[1].login).toEqual(SSH_LOGIN);
+  });
+});
+
+/**
+ * An opted-in host the network could not reach is re-tried until it answers.
+ *
+ * Every unattended path used to try once, so a reconnect worked or not on timing
+ * alone: a dropped master is noticed within 15 s, and after a wake or a Wi-Fi hop the
+ * network is often not back by then — the host went red for good unless a tunnel
+ * happened to come up. Only *unreachable* is re-tried: a host that answered and said
+ * no is never re-dialled, since that would replay a rejected login.
+ */
+describe("re-trying an unreachable host", () => {
+  const probes = () => invokeMock.mock.calls.filter(([cmd]) => cmd === "ssh_probe").length;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    disconnectRemote("remote1");
+    vi.useRealTimers();
+  });
+
+  it("connects once the network is back, without the user", async () => {
+    backend({ probe: [UNREACHABLE, UNREACHABLE, REACHABLE], sshSaved: true });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sshLamp()).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(probes()).toBe(2);
+    expect(sshLamp()).toBe("error");
+
+    // Backed off: the second re-try waits longer than the first.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(probes()).toBe(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(probes()).toBe(3);
+    expect(sshLamp()).toBe("connected");
+    expect(invokeMock).toHaveBeenCalledWith("remote_connect", {
+      projectId: "remote1",
+      password: null,
+    });
+  });
+
+  it("never re-dials a host that answered and rejected the login", async () => {
+    backend({ probe: REJECTED, sshSaved: true });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(probes()).toBe(1);
+    expect(sshLamp()).toBe("error");
+  });
+
+  it("re-tries at once when the network reports itself back", async () => {
+    backend({ probe: [UNREACHABLE, REACHABLE], sshSaved: true });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sshLamp()).toBe("error");
+
+    retryUnreachableNow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sshLamp()).toBe("connected");
+  });
+
+  it("stops when the user disconnects in the meantime", async () => {
+    backend({ probe: [UNREACHABLE, REACHABLE], sshSaved: true });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    disconnectRemote("remote1");
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(probes()).toBe(1);
+    expect(invokeMock).not.toHaveBeenCalledWith("remote_connect", expect.anything());
+  });
+
+  it("re-tries a dropped connection the network had not yet got back", async () => {
+    backend({ probe: [UNREACHABLE, REACHABLE], sshSaved: true });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true })],
+      activeId: "remote1",
+    });
+    useRemoteStatusStore.getState().setSsh("remote1", "connected");
+
+    // What the 15 s reconciler does on finding the pooled master gone.
+    await silentReconnectDeadHost("remote1", "primary");
+    expect(sshLamp()).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sshLamp()).toBe("connected");
+  });
+
+  it("reconnects a dropped key-auth host with headless connections off", async () => {
+    useSettingsStore.setState({
+      settings: { connections_headless: false } as unknown as Settings,
+      loaded: true,
+    });
+    backend({ probe: REACHABLE, sshSaved: false });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true })],
+      activeId: "remote1",
+    });
+    useRemoteStatusStore.getState().setSsh("remote1", "connected");
+
+    await silentReconnectDeadHost("remote1", "primary");
+
+    expect(sshLamp()).toBe("connected");
+    // Nothing saved: riding a login's master, never evidence of key auth.
+    expect(invokeMock).toHaveBeenCalledWith(
+      "remote_connect",
+      expect.objectContaining({ projectId: "remote1", viaLogin: true }),
+    );
+  });
+
+  it("opens no login tab for a host nothing answers, with headless connections off", async () => {
+    useSettingsStore.setState({
+      settings: { connections_headless: false } as unknown as Settings,
+      loaded: true,
+    });
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {} });
+    forgetConnection("ssh:alice@host.example:");
+    backend({ probe: UNREACHABLE, sshSaved: false });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    // ssh in a login tab could only fail too; the re-try opens it once the host answers.
+    expect(useTabsStore.getState().tabsByScope.root ?? []).toHaveLength(0);
+    expect(sshLamp()).toBe("error");
   });
 });
