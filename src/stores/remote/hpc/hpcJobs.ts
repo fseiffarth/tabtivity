@@ -29,6 +29,10 @@ interface HpcJobsStore {
   add: (projectId: string, job: HpcJob) => void;
   /** Forget a job (e.g. after a successful cancel). */
   remove: (projectId: string, jobId: string, host: string) => void;
+  /** projectId → the last SLURM probe's answer. The edge rail reads it to
+   *  offer Jobs while the panel (which runs the probe) is closed. */
+  slurmByProject: Record<string, boolean>;
+  setSlurm: (projectId: string, available: boolean) => void;
 }
 
 export const useHpcJobsStore = create<HpcJobsStore>((set) => ({
@@ -49,4 +53,11 @@ export const useHpcJobsStore = create<HpcJobsStore>((set) => ({
         },
       };
     }),
+  slurmByProject: {},
+  setSlurm: (projectId, available) =>
+    set((s) =>
+      s.slurmByProject[projectId] === available
+        ? s
+        : { slurmByProject: { ...s.slurmByProject, [projectId]: available } },
+    ),
 }));

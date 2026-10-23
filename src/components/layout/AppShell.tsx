@@ -63,14 +63,12 @@ import { RootOverlayHost } from "./RootOverlay";
 import { AssistantScopeHost } from "./AssistantScopeHost";
 import { LocalLossDialog } from "../common/LocalLossDialog";
 import {
-  RailAgentsIcon,
-  RailAssistantIcon,
-  RailAppsIcon,
   RailChevronIcon,
-  RailFilesIcon,
-  RailGitIcon,
   RailSwitchSideIcon,
 } from "../common/EdgeRailIcons";
+import { availableSidePanelViews } from "../files/sidePanelViews";
+import { useDevTodoAvailable } from "../files/DevTodoView";
+import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
 import { HostKeyConfirmDialog } from "../common/HostKeyConfirmDialog";
 import { HpcGuardDialog } from "../common/HpcGuardDialog";
 import { UnfencedPlatformDialog } from "../common/UnfencedPlatformDialog";
@@ -118,7 +116,7 @@ import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { subscribeTauri } from "../../hooks/useTauriListener";
-import { useT, useI18nStore, translate, type TranslationKey } from "../../lib/i18n";
+import { useT, useI18nStore, translate } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { RailAiSwitch } from "./RailAiSwitch";
@@ -262,30 +260,6 @@ const RAIL_DWELL_MS = 400;
 // so a pointer resting where the panel is about to arrive is found under it.
 const HOVER_GUARD_MS = 450;
 
-// The views the closed panel's edge rail can open it straight onto — the same
-// four the panel's own switcher leads with (`ProjectFilesView`), named from the
-// same keys so the rail and the switcher can never read differently. Every rail
-// button is an icon (`EdgeRailIcons`), not a vertical label; the chevron above
-// the tabs opens the panel on whichever view it was last left on, and the
-// switch pinned to the top of the bar moves the panel to the other edge.
-const EDGE_VIEWS: ReadonlyArray<{
-  view: FilesPanelView;
-  labelKey: TranslationKey;
-  Icon: (props: { className?: string }) => JSX.Element;
-}> = [
-  { view: "files", labelKey: "projectFilesView.tabFiles", Icon: RailFilesIcon },
-  { view: "git", labelKey: "projectFilesView.tabGit", Icon: RailGitIcon },
-  { view: "windows", labelKey: "projectFilesView.tabApps", Icon: RailAppsIcon },
-  { view: "agents", labelKey: "projectFilesView.tabAgents", Icon: RailAgentsIcon },
-];
-// Tabby's tab, after the four and only with the experimental `assistant`
-// switch on (the panel's switcher gates its own button the same way).
-const ASSISTANT_EDGE_VIEW: (typeof EDGE_VIEWS)[number] = {
-  view: "assistant",
-  labelKey: "assistant.title",
-  Icon: RailAssistantIcon,
-};
-
 // Side-panel width bounds. The default matches the historical fixed 280px so
 // existing installs (no stored width) look unchanged; the max is capped against
 // the live window so the panel can never swallow the whole workspace.
@@ -401,7 +375,9 @@ export function AppShell() {
   const autoHide = useSettingsStore((s) => s.settings?.side_panel_auto_hide ?? false);
   const viewByScope = useSettingsStore((s) => s.settings?.side_panel_view_by_project);
   const lastPanelView = useSettingsStore((s) => s.settings?.side_panel_view ?? "files");
-  const edgeViews = useExperimental("assistant") ? [...EDGE_VIEWS, ASSISTANT_EDGE_VIEW] : EDGE_VIEWS;
+  const assistantEnabled = useExperimental("assistant");
+  const remarksEnabled = useExperimental("project_remarks");
+  const devTodo = useDevTodoAvailable();
   const widthSetting = useSettingsStore(
     (s) => s.settings?.side_panel_width ?? s.settings?.right_panel_width ?? SIDE_PANEL_DEFAULT,
   );
@@ -427,6 +403,23 @@ export function AppShell() {
   // folder had a terminal but no file view, so the only way to see what was in it
   // was to `ls`. Gated on `rootDir` because it arrives with the projects load —
   // an empty root would give the panel no tree to mount.
+  const activeRemote = useProjectsStore(
+    (s) => !!s.projects.find((p) => p.id === activeId)?.remote,
+  );
+  // The edge rail offers every view the panel's own view row does for this
+  // scope — the same table (`sidePanelViews`), so the two never read
+  // differently. SLURM is only known once the panel's probe ran; the rail
+  // offers Jobs from its last answer.
+  const activeSlurm = useHpcJobsStore((s) => (activeId ? s.slurmByProject[activeId] ?? false : false));
+  const edgeViews = availableSidePanelViews({
+    inBox: scope.startsWith(BOX_SCOPE_PREFIX),
+    projectId: activeId,
+    remote: activeRemote,
+    slurm: activeSlurm,
+    remarks: remarksEnabled,
+    todo: devTodo,
+    assistant: assistantEnabled,
+  });
   const panelTarget =
     activeId !== null || scope.startsWith(BOX_SCOPE_PREFIX) || (scope === ROOT_SCOPE && !!rootDir);
   const switchToast = useProjectsStore((s) => s.switchToast);
