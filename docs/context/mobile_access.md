@@ -40,9 +40,35 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    agent restarts in the mirror, a container project's agent as it always did
    (`launch_prep` puts it in the container); a remote-host or VM agent is not
    restarted without a window (there is no pool to reach it; it failed before
-   too). Tabs on a host, in a container or in a VM reach the phone in a
-   later version. The desktop's phone button and Settings → Mobile rows say this
-   per type (`mobile.hostReach.*`, pill `mobile-every-project-type`).
+   too). Tabs in a container or in a VM reach the phone in a later version.
+   The desktop's phone button and Settings → Mobile rows say this per type
+   (`mobile.hostReach.*`, pill `mobile-every-project-type`).
+
+   **Remote-host tabs** (`docs/mobile_remote_host_tabs_plan.md`). A remote
+   (not VM) project's tab that runs on its host — `location` `"remote"`,
+   `"host:<id>"` (a worker its record still names) or a location-less shell —
+   is listed too (`discovery::host_of_tab`, one rule with the refresher's
+   targets): a resumable agent, or a shell behind `shell_tabs`, carrying its
+   scope's tmux name, only while `remote.persist_sessions` is not `false`;
+   never on Windows. It is read off the session file with no mirror and no
+   cwd check, and `PublicTab.on_host` is the only new fact the phone gets. The
+   phone reaches it **only through the desktop's ControlMaster** for that
+   host, by its literal socket path (`ssh_exec::host_mux_args`:
+   `ControlMaster=no`, `ProxyCommand=false`, `BatchMode=yes`, `-e none`): it
+   never dials and never prompts, so a host tab is available only while the
+   desktop holds that master (or `ControlPersist` after). Liveness comes from
+   `host_live`'s background refresher, never from a request; with no window
+   it trusts the socket file alone (probing would keep the master alive), and
+   the terminal upgrade re-checks with `ssh -O check` (`409 host_offline`; an
+   open terminal whose host goes away closes with `host_offline`). What would
+   act on this machine answers `409 tab_on_host`: inbox upload, desktop
+   images, Mark up Submit, sign-in and its callback, activate-with-tab, and —
+   with no window only — schedule writes, held prompts, a stored prompt's
+   send-now and undo-clear. Transcript, readings, worktrees and git skip a
+   host tab (nothing local describes it). A close with no window drops the
+   record only (the host session runs on, as after a desktop close), and the
+   closed tab is not offered under "Recently closed" there (`reopen_tab`
+   could not start it).
 3. **The scope's switch** — `tabtivity_mobile_access` (`MOBILE_ACCESS_KEY`) on
    the project entry in `projects.json` or the box in `boxes.json`. Absent or
    false = off. A box's switch is the one consent for the box's `box:<id>`
