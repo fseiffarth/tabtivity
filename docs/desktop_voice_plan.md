@@ -547,6 +547,12 @@ connecting SSIP there would freeze the window). Each gets a `Client` row in
   `src-tauri/entitlements.plist`, and a new `Info.plist` with an
   `NSMicrophoneUsageDescription` that does not name the app (or it needs a
   `brand-check.sh` row).
+  **This breaks the browser plan's macOS rule** (no capture usage
+  descriptions, `docs/browser_plan_b.md` §5.2), caught by its test in CI. The
+  user decided (2026-10-23) to allow the microphone, and wry 0.57 turned out
+  to grant media capture when no handler is set, so macOS now denies every
+  webview permission request app-wide (`with_macos_permission_deny`); the
+  test fails if the microphone is declared without it.
 
 #### Listening (2b)
 
