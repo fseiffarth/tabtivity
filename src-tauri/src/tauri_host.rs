@@ -156,6 +156,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "timer.rs",
     "usage_stats.rs",
     "vm.rs",
+    "voice.rs",
 ];
 
 #[cfg(test)]

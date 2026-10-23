@@ -240,6 +240,11 @@ pub mod usage_stats;
 // plus its allowlisting egress proxy and the built-in cloud-init seed writer.
 pub mod iso9660;
 pub mod vm;
+// The desktop's speech engine (docs/desktop_voice_plan.md): the microphone,
+// whisper and read-aloud belong to the machine the user sits at, so the
+// daemon's build leaves it out.
+#[cfg(feature = "desktop")]
+pub mod voice;
 pub use app_core::services::vm_proxy;
 pub use app_core::services::web_safety;
 pub use app_core::services::webkit_a11y;

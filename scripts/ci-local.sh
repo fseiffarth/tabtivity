@@ -88,9 +88,9 @@ STEPS=(
   "test-gateway|test-ubuntu|Run gateway crate tests|ci|gateway"
   "test-daemon-lib|test-ubuntu|Run the daemon build's library tests|ci|backend"
   "daemon-ldd|test-ubuntu|Daemon links no desktop libraries|sub:target_dir|rs"
-  "windows-clippy|local|Windows cross-check: clippy (src-tauri, all targets, no voice)|local:windows_clippy|rs"
-  "windows-check|local|Windows cross-check: cargo check (workspace, all targets, no voice)|local:windows_check|rs"
-  "macos-check|local|macOS cross-check: cargo check (workspace, all targets, no voice)|local:macos_check|rs"
+  "windows-clippy|local|Windows cross-check: clippy (src-tauri, all targets, no whisper)|local:windows_clippy|rs"
+  "windows-check|local|Windows cross-check: cargo check (workspace, all targets, no whisper)|local:windows_check|rs"
+  "macos-check|local|macOS cross-check: cargo check (workspace, all targets, no whisper)|local:macos_check|rs"
 )
 
 # Steps of ci-cd.yml's Linux jobs that are not run here.
@@ -188,11 +188,12 @@ windows_cargo() {
   echo "+ RC=$rc AR_x86_64_pc_windows_msvc=$lib cargo $*"
   RC="$rc" AR_x86_64_pc_windows_msvc="$lib" cargo "$@"
 }
-# The cross-checks build `desktop` without the default `voice` feature
-# (docs/desktop_voice_plan.md, step 0): whisper.cpp's cmake build needs cl.exe
-# or Xcode, which no stand-in replaces. test-windows/test-macos build voice.
-CROSS_FEATURES=(--no-default-features --features desktop)
-cross_note() { echo "(without voice: whisper.cpp needs cl.exe/Xcode; CI's test-windows/test-macos build it)"; }
+# The cross-checks build `desktop` and the audio half (`voice-io`: cpal, the
+# tts crate) without whisper (`voice`; docs/desktop_voice_plan.md, step 2):
+# whisper.cpp's cmake build needs cl.exe or Xcode, which no stand-in replaces.
+# test-windows/test-macos build all of it.
+CROSS_FEATURES=(--no-default-features --features desktop,voice-io)
+cross_note() { echo "(without whisper: whisper.cpp needs cl.exe/Xcode; CI's test-windows/test-macos build it)"; }
 skip_windows_clippy() { skip_windows; }
 run_windows_clippy() {
   cross_note

@@ -1576,7 +1576,39 @@ A GitHub API or release-naming change breaks the update banner.
 
 ---
 
-## 21. Quick routine after any update
+## 21. Voice: whisper.cpp, the model catalog, cpal, speech-dispatcher
+
+**Where** `services/voice/` (`models.rs`, `stt.rs`, `capture.rs`; read-aloud
+in step 2c), `Cargo.toml`'s voice block, `ci-cd.yml` (`GGML_NATIVE`, the apt
+lists), `tauri.conf.json` (deb `depends`/`recommends`).
+Plan: `docs/desktop_voice_plan.md`.
+
+**Assumes**
+- `whisper-rs` =0.16.0 / `whisper-rs-sys` 0.15.0 (whisper.cpp 1.8.3):
+  `FullParams` setters leak and panic on a NUL (built once per session),
+  `set_abort_callback_safe`, `no_speech_probability`, `get_lang_id` /
+  `get_lang_str`, `WhisperVadContext::segments_from_samples`. Its build runs
+  bindgen (libclang required; Windows needs `LIBCLANG_PATH` if clang-sys
+  misses it) and forwards `GGML_*` to cmake; `GGML_NATIVE=OFF` means x86_64
+  AVX/AVX2/FMA/F16C/BMI2, which `voice::cpu::REQUIRED` must match.
+- The catalog pins each model by Hugging Face repo **and commit** with its
+  SHA-256 and exact size (`ggerganov/whisper.cpp`, `ggml-org/whisper-vad`).
+  A new model is a new row, never a moved commit under an old one.
+- `cpal` =0.18.2, ALSA host only on Linux (its `pulseaudio` host drops input
+  in 0.18.2); errors classified by `ErrorKind`, Windows privacy denial as a
+  `BackendError` carrying `E_ACCESSDENIED`.
+- `tts` =0.26.3 on Windows/macOS only (never on Linux, where it links
+  libspeechd).
+
+**Verify** `cargo test -p tabtivity --lib -- services::voice`; a clean
+`cargo build` with the new pins on Linux, then the CI Windows/macOS jobs;
+for a new catalog row, `sha256sum` and `stat -c %s` of the downloaded file
+against the row, at the commit the URL names; dictate one sentence in a
+frozen dev build.
+
+---
+
+## 22. Quick routine after any update
 
 ```sh
 rustup update && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

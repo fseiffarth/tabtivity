@@ -1424,6 +1424,18 @@ pub fn run() {
         .manage(usage_watch.clone())
         .manage(mobile_desktop.clone())
         .manage(pick_grants)
+        // A reload (`src/` hot-reloads into the window) drops the page that
+        // showed the mic was on; the mic goes off with it. Every webview's
+        // own load handler still runs as well.
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                use tauri::Manager;
+                if webview.app_handle().try_state::<app_core::CoreCtx>().is_some() {
+                    let ctx = tauri_host::system_ctx(webview.app_handle());
+                    services::voice::stop_for_window(&ctx, webview.label());
+                }
+            }
+        })
         .setup(move |_app| {
             // The main window is built here, not by Tauri from the config,
             // so it gets the new-window gate (`create_main_window`). Before
@@ -1749,6 +1761,14 @@ pub fn run() {
             commands::vm::vm_set_spec,
             commands::vm::remote_download_size,
             commands::vm::remote_download_to,
+            commands::voice::voice_status,
+            commands::voice::voice_model_install_script,
+            commands::voice::voice_listen_start,
+            commands::voice::voice_listen_pause,
+            commands::voice::voice_listen_stop,
+            commands::voice::voice_speak,
+            commands::voice::voice_speak_stop,
+            commands::voice::voice_voices,
             commands::projects::set_project_remote_control,
                         commands::projects::set_project_schedule_mcp,
             commands::projects::set_project_git_push_mcp,
@@ -2560,6 +2580,8 @@ pub fn run() {
                 if label != services::window_service::MAIN_WINDOW_LABEL {
                     crate::terminal::route_drop_window_views(label);
                 }
+                // A mic whose window is gone has nothing left to show it is on.
+                services::voice::stop_for_window(&tauri_host::system_ctx(_app), label);
                 if label.starts_with("detached-") {
                     // Guard against a same-label window already re-created
                     // (rapid destroy → re-detach): only clean up when no live
@@ -2618,6 +2640,9 @@ pub fn run() {
                 // streams in flight briefly. Before the PTY teardown below, so
                 // its tab-gone hooks find nothing left to sweep.
                 services::api_proxy::stop_for_exit();
+                // The microphone, whisper and any speech: nothing of the
+                // voice outlives the quit (bounded at half a second).
+                services::voice::stop_for_exit();
                 // Abort every terminal's process subtree so no inner process (a
                 // dev server, a build, a training run) outlives Tabtivity. Runs
                 // before the container teardown below, since a containerized
