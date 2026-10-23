@@ -54,7 +54,8 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
-import { BRAND, storageKey } from "../../lib/brand";
+import { resetInboxFiles } from "../../../mobile-web/src/terminal/inboxRefs";
+import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 /** A bubble's words, without the time a messenger puts in its corner. */
 function said(bubble: Element | null | undefined): string | null {
@@ -600,6 +601,41 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(prompts()[1]).toBe(bubble);
     expect(said(bubble)).toBe("also the tests");
     expect(said(bubble.nextElementSibling)).toBe("Still on the button.");
+  });
+
+  it("shows a picture sent from Terminal view in its own place once the chat is opened", async () => {
+    resetInboxFiles();
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "terminal");
+    const leaf = "20261022-175701-photo.jpg";
+    const stored = { ...STORED, version: "1300:2", entries: [
+      ...STORED.entries,
+      { kind: "prompt", text: `@${NAMES.inboxDir}/${leaf}`, at: "2026-09-15T05:52:00.000Z" },
+      { kind: "answer", text: "That is the error dialog.", at: "2026-09-15T05:52:30.000Z" },
+    ] };
+    const sidecar = sidecarFetch(() => stored);
+    vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/inbox?")
+      ? Promise.resolve(jsonResponse(200, { files: [{ name: leaf, kind: "image/jpeg", size: 1024, modified: 0 }] }))
+      : sidecar(url)));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    // Terminal view reads no session: nothing the phone holds says where the
+    // prompt stands in it.
+    fireEvent.change(screen.getByRole("textbox", { name: "Message agent" }), { target: { value: `@${NAMES.inboxDir}/${leaf}` } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle();
+
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Chat" }));
+    await settle();
+    await settle();
+    // Where the session recorded it — above the answer to it, not over the
+    // whole conversation — and as a picture, not as a reference.
+    const chat = screen.getByTestId("session-transcript");
+    const prompts = [...chat.querySelectorAll(".readable-turn.user")];
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1].className).toBe("readable-turn user with-files");
+    expect(prompts[1].querySelector(".inbox-album img")).not.toBeNull();
+    expect(said(prompts[1].nextElementSibling)).toBe("That is the error dialog.");
   });
 
   it("keeps a sent prompt in Reader while Codex is binding its rollout", async () => {

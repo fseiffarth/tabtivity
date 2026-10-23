@@ -2171,6 +2171,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [view, transcript, pending, tab.agent_label, tab.label, composerTyping]);
   /** Whether Focus is reading the stored session rather than the screen. */
   const sessionFocus = tab.kind === "agent" && view === "focus" && focusSource === "session";
+  /** Whether `transcript` is the session as it stands: a read answered since
+   * Focus last opened. Terminal view reads none, so what it holds is the
+   * session of when the reader left Focus — or nothing at all. */
+  const [transcriptCurrent, setTranscriptCurrent] = useState(false);
+  useEffect(() => { if (view !== "focus") setTranscriptCurrent(false); }, [view]);
   const transcriptVersion = useRef<string | undefined>();
   const transcriptRequest = useRef<AbortController>();
   useEffect(() => { transcriptVersion.current = transcript?.version; }, [transcript]);
@@ -2196,7 +2201,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         (next) => {
           if (stopped || controller.signal.aborted) return;
           // A malformed answer is a failed read: keep what is shown.
-          if (!next || typeof next !== "object" || next.unchanged) return;
+          if (!next || typeof next !== "object") return;
+          setTranscriptCurrent(true);
+          if (next.unchanged) return;
           // A forced full read (after an Undo) answers the same session: keep
           // what is shown, but ask by its version again from here on.
           transcriptVersion.current = next.version;
@@ -2223,8 +2230,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       transcriptRequest.current = controller;
       void getTranscript(tab.id, transcriptVersion.current, transcriptLimit, controller.signal).then(
         (next) => {
-          if (controller.signal.aborted || !next || typeof next !== "object" || next.unchanged) return;
-          showTranscript(next);
+          if (controller.signal.aborted || !next || typeof next !== "object") return;
+          setTranscriptCurrent(true);
+          if (!next.unchanged) showTranscript(next);
         },
         () => {},
       );
@@ -2815,8 +2823,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setUndoable(false);
       setClearQueued(false);
       setUndoNote("");
-      const sent = pendingPrompt(id, text, storedEntries);
-      setPending((current) => [...current, sent].slice(-MAX_PENDING));
+      // A bubble takes its place from the session the phone holds. Sent from
+      // Terminal view that one is stale or empty, and the bubble stood above
+      // turns that came before it — at the top of the chat for a session never
+      // read here — while its record, where it belongs, was hidden for it. The
+      // record alone shows it once Focus reads the session.
+      if (transcriptCurrent) {
+        const sent = pendingPrompt(id, text, storedEntries);
+        setPending((current) => [...current, sent].slice(-MAX_PENDING));
+      }
       // The phone knows the words before they leave; the desktop records them
       // as this tab's prompt — the only record of it for an agent whose
       // transcript is not read (OpenCode's cards list these).
