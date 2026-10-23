@@ -2260,7 +2260,7 @@ mod tests {
         std::fs::write(
             &path,
             [
-                command("rename", "ProjectEldrun", "2026-10-23T09:05:00.000Z"),
+                command("rename", "my-project", "2026-10-23T09:05:00.000Z"),
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"fix it\"}}\n".to_string(),
                 "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Login expired\"}]}}\n".to_string(),
                 command("login", "", "2026-10-23T09:08:27.014Z"),
