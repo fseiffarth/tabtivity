@@ -194,7 +194,8 @@ impl AttachTarget {
 
 /// The attach for a host tab: `ssh -tt` through the master's literal socket
 /// (`ssh_exec::host_mux_args`, which can only ride it, never dial), running
-/// `exec tmux -u attach-session` in the remote's non-login shell. `TERM` is
+/// `tmux -u attach-session` in the remote's non-login shell (silent when the
+/// session is gone: `ssh_exec::host_tmux_attach_command`). `TERM` is
 /// set on the ssh process, which the mux client forwards to the remote PTY:
 /// the same `vt100` as the local attach, for the same reason.
 fn host_attach_command(name: &str, ssh: &HostSsh) -> Result<CommandBuilder, String> {
@@ -918,7 +919,7 @@ mod tests {
         assert!(std::path::Path::new(&argv[0]).file_stem().is_some_and(|stem| stem == "ssh"), "{argv:?}");
         assert_eq!(argv[1], "-tt");
         assert!(argv.contains(&literal) && argv.contains(&"ProxyCommand=false".to_string()), "{argv:?}");
-        assert_eq!(&argv[argv.len() - 2..], ["--".to_string(), format!("exec tmux -u attach-session -t '{name}'")]);
+        assert_eq!(&argv[argv.len() - 2..], ["--".to_string(), crate::services::ssh_exec::host_tmux_attach_command(name).unwrap()]);
         for (probe, script) in [
             (Probe::Capture, format!("tmux -u capture-pane -p -e -J -S -{MOBILE_SCROLLBACK_LINES} -E -1 -t '{name}'")),
             (Probe::WindowSize, format!("tmux -u display-message -p -t '{name}' '#{{window_width}}x#{{window_height}}'")),

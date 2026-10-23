@@ -1050,9 +1050,20 @@ pub fn master_alive(control_path: &std::path::Path, limit: std::time::Duration) 
 /// started the session ([`remote_command`]), so the same binary and server
 /// answer. No `=` exact-match prefix (an older HPC tmux lacks it): the name is
 /// validated and unique. `None` for a name that is not [`valid_tmux_session_name`].
+///
+/// Silent when it cannot attach: the remote PTY carries stderr to the phone's
+/// screen, and tmux's refusals name what must never cross the browser API —
+/// `can't find session: <name>` (the scope's raw id is in the name), `no
+/// server running on /tmp/tmux-<uid>/default`, the shell's `tmux: not found`.
+/// A host tab reads as available on its master alone where the host's tmux
+/// is not asked (no window up, an HPC host), so attaching to a session that
+/// has ended is the ordinary case here, not a race: `has-session` gates the
+/// attach and both keep stderr off the PTY. The phone sees the stream end.
 pub fn host_tmux_attach_command(session: &str) -> Option<String> {
-    valid_tmux_session_name(session)
-        .then(|| format!("exec tmux -u attach-session -t {}", shell_quote(session)))
+    valid_tmux_session_name(session).then(|| {
+        let name = shell_quote(session);
+        format!("tmux -u has-session -t {name} 2>/dev/null && exec tmux -u attach-session -t {name} 2>/dev/null")
+    })
 }
 
 /// The host-side history capture, the local bridge's `capture-pane` flags: the
@@ -2149,7 +2160,7 @@ mod tests {
         let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
         assert_eq!(
             host_tmux_attach_command(name).unwrap(),
-            format!("exec tmux -u attach-session -t '{name}'")
+            format!("tmux -u has-session -t '{name}' 2>/dev/null && exec tmux -u attach-session -t '{name}' 2>/dev/null")
         );
         assert_eq!(
             host_tmux_capture_command(name, 10_000).unwrap(),
@@ -2164,6 +2175,44 @@ mod tests {
             assert!(host_tmux_capture_command(hostile, 10).is_none(), "{hostile}");
             assert!(host_tmux_window_size_command(hostile).is_none(), "{hostile}");
         }
+    }
+
+    /// The host attach runs in the remote's `$SHELL -c` and its output is the
+    /// phone's screen: a session that has ended, a tmux server that is not
+    /// running and a host with no tmux at all print nothing — tmux's refusal
+    /// would name the session (and with it the scope's raw id) or the
+    /// server's socket path. Run through a real `sh` with a stub `tmux`.
+    #[cfg(unix)]
+    #[test]
+    fn host_tmux_attach_says_nothing_when_it_cannot_attach() {
+        use std::os::unix::fs::PermissionsExt;
+        let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
+        let script = host_tmux_attach_command(name).unwrap();
+        let run = |stub: Option<&str>| {
+            let dir = tempfile::tempdir().unwrap();
+            if let Some(body) = stub {
+                let tmux = dir.path().join("tmux");
+                std::fs::write(&tmux, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&script)
+                .env("PATH", dir.path())
+                .output()
+                .unwrap()
+        };
+        let gone = run(Some(r#"echo "can't find session: $4" >&2; exit 1"#));
+        let no_server = run(Some(r#"echo "no server running on /tmp/tmux-1000/default" >&2; exit 1"#));
+        let no_tmux = run(None);
+        for (what, out) in [("gone", gone), ("no server", no_server), ("no tmux", no_tmux)] {
+            assert!(!out.status.success(), "{what}");
+            assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{what}: {out:?}");
+        }
+        // A live session attaches: the client's screen is its stdout.
+        let live = run(Some(r#"[ "$2" = has-session ] && exit 0; echo "attached $4""#));
+        assert!(live.status.success());
+        assert_eq!(String::from_utf8_lossy(&live.stdout).trim(), format!("attached {name}"));
     }
 
     /// The no-dial claim against the real `ssh` (run with `--ignored`): with
