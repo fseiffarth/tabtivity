@@ -32,7 +32,8 @@ import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen"
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
-import { STATUS_AGENTS, TerminalReaderStatus } from "./TerminalReaderStatus";
+import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./TerminalReaderStatus";
+import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import { assistantModelChoices, assistantOptions } from "../../lib/assistant";
@@ -96,9 +97,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   /** Whether a session picker is up: the Reader then leaves it out of
    * its own answer buttons. */
   onPicking: (picking: boolean) => void;
-  statusOpen: boolean;
+  /** The panel open over the composer, if any. */
+  statusOpen: ReaderPanel | null;
   statusRequest: number;
-  onStatusRequest: () => void;
+  onStatusRequest: (panel: ReaderPanel) => void;
   onStatusClose: () => void;
   /** Takes the row's end, where the composer portals its chip row. */
   chipSlot?: (slot: HTMLDivElement | null) => void;
@@ -434,12 +436,17 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   return (
     <div className="terminal-reader-facts-wrap">
-      {statusOpen && STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderStatus key={ptyId}
+      {statusOpen === "status" && STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderStatus key={ptyId}
         tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         model={modelLabel} effort={effortLabel} path={shownPath} contextLeft={contextLeft} usage={usage}
         limits={shown} limitsReadAt={readTime.getTime()}
-        onClose={onStatusClose} onRefresh={onStatusRequest}
+        onClose={onStatusClose} onRefresh={() => onStatusRequest("status")}
+      />}
+      {statusOpen === "context" && CONTEXT_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderContext key={ptyId}
+        tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
+        canRefresh={!live.working && !live.question && !picking && !modeOpen}
+        onClose={onStatusClose} onRefresh={() => onStatusRequest("context")}
       />}
       {picking && (
         <div
@@ -625,9 +632,14 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       )}
       <div className="terminal-reader-facts">
         {STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <button type="button" className="terminal-reader-fact-model"
-          onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); closeWorktrees(); onStatusRequest(); }}
-          aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
+          onClick={statusOpen === "status" ? onStatusClose : () => { close(); closeModes(); closeEffort(); closeWorktrees(); onStatusRequest("status"); }}
+          aria-haspopup="dialog" aria-expanded={statusOpen === "status"} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
           {t("terminal.reader.status.button")} {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
+        </button>}
+        {CONTEXT_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <button type="button" className="terminal-reader-fact-model"
+          onClick={statusOpen === "context" ? onStatusClose : () => { close(); closeModes(); closeEffort(); closeWorktrees(); onStatusRequest("context"); }}
+          aria-haspopup="dialog" aria-expanded={statusOpen === "context"} title={t("terminal.reader.context.hint", { agent: agentLabel })}>
+          {t("terminal.reader.context.button")} <UntestedTag id="terminal.reader.context" />
         </button>}
         {assistantLaunch ? (
           <button

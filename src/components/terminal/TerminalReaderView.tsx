@@ -37,7 +37,8 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { withAssistantPromptTarget } from "../../lib/assistant";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
-import { STATUS_AGENTS } from "./TerminalReaderStatus";
+import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
+import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
@@ -505,7 +506,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   /** The facts row's end, where the chip row goes; over the text box without it. */
   chipSlot: HTMLElement | null;
   onEscape: () => void;
-  onStatus: () => void;
+  onStatus: (panel: ReaderPanel) => void;
   /** These of `queued` left Claude's queue for the composer. */
   onPulled: (ids: number[]) => void;
 }) {
@@ -620,8 +621,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const current = tabRef.current;
     const text = draft.trim();
     if (!current || !text || sending) return;
-    if (STATUS_AGENTS[current.cmd] && text === "/status") {
-      onStatus();
+    const panel = STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
+      : CONTEXT_AGENTS[current.cmd] && text === "/context" ? "context" : null;
+    if (panel) {
+      onStatus(panel);
       setDraft("");
       undo.current.clear();
       setSendError("");
@@ -951,12 +954,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * (`NEXT_DIALOG_HOLD_MS`). */
   const [heldSignature, setHeldSignature] = useState("");
   const [picking, setPicking] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState<ReaderPanel | null>(null);
   /** The facts row's end, where the composer's chips go while it shows. */
   const [chipSlot, setChipSlot] = useState<HTMLDivElement | null>(null);
   const [statusRequest, setStatusRequest] = useState(0);
-  const requestStatus = () => { setStatusOpen(true); setStatusRequest((request) => request + 1); };
-  const closeStatus = () => setStatusOpen(false);
+  const requestStatus = (panel: ReaderPanel) => { setStatusOpen(panel); setStatusRequest((request) => request + 1); };
+  const closeStatus = () => setStatusOpen(null);
   /** Steering holds the keyboard (or its prompt box does): a composer on show
    * would take typing that goes to steering, so it stands aside — the Prompt
    * key (I) is how a prompt goes in then. */
