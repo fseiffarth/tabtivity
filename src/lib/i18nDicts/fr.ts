@@ -5291,6 +5291,7 @@ export const dict: Dict = {
   "headerPins.item.inbox": "Boîte de réception",
   "headerPins.item.models": "Modèles locaux",
   "headerPins.item.help": "Aide",
+  "headerPins.item.settings": "Paramètres",
   "headerPins.item.alerts": "Alertes",
   "headerPins.item.conn": "Connexion",
   "headerPins.item.battery": "Batterie",

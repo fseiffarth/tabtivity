@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSettingsStore } from "../../stores/settings";
-import { useHeaderSlotsStore } from "../../stores/headerSlots";
+import { useHeaderSlotsStore, type HeaderSlotsDrag } from "../../stores/headerSlots";
 import {
-  headerGroupOf,
   isHeaderPinned,
   moveHeaderItem,
-  orderedHeaderIds,
+  placedGroupOf,
   resetHeaderGroup,
+  setHeaderPin,
   toggleHeaderPin,
   useHeaderPinDefaults,
+  type HeaderGroup,
   type HeaderItemId,
 } from "../../lib/headerPins";
 import { useT } from "../../lib/i18n";
@@ -21,21 +22,46 @@ const OWN_CONTEXT = ".tab-new-menu, .project-switcher-add-menu, .context-menu, i
 /** Pointer travel before a press on an icon becomes a drag, so a click stays one. */
 const DRAG_THRESHOLD = 5;
 
+type Target = Omit<NonNullable<HeaderSlotsDrag>, "id">;
+
 /**
- * Where a drag at `x` would drop `id`: in front of the first visible sibling of
- * its group whose middle is right of the pointer, else at the end. Folded slots
- * have no box and are skipped.
+ * Where a drag at `x` would drop `id`, over every visible slot: in front of the
+ * first one whose middle is right of the pointer, else at the end. The bar has
+ * three stretches — the always-shown run, the cluster's pinned items and (while
+ * the chevron is open) its folded ones — and the slot decides which one the drop
+ * lands in, so dragging across a boundary moves the icon between the stretches:
+ * into the folded one it folds, out of it it pins. Between two stretches the
+ * pointer picks the nearer side of the gap. Folded-away slots have no box and
+ * are skipped; the gear stays pinned, so it has no folded stretch to drop in.
  */
-function dropBefore(id: HeaderItemId, x: number, order: readonly string[] | undefined): HeaderItemId | null {
-  const group = headerGroupOf(id);
-  for (const other of orderedHeaderIds(group, order)) {
-    if (other === id) continue;
-    const el = document.querySelector<HTMLElement>(`[data-header-slot="${other}"]`);
-    const r = el?.getBoundingClientRect();
-    if (!r || r.width === 0) continue;
-    if (x < r.left + r.width / 2) return other;
+function dropTarget(id: HeaderItemId, x: number, order: readonly string[] | undefined): Target | null {
+  const slots = Array.from(document.querySelectorAll<HTMLElement>("[data-header-slot]"))
+    .map((el) => ({ el, id: el.dataset.headerSlot as HeaderItemId, r: el.getBoundingClientRect() }))
+    .filter((sl) => sl.id !== id && sl.r.width > 0)
+    .sort((p, q) => p.r.left - q.r.left);
+  type Slot = (typeof slots)[number];
+  const area = (sl: Slot) =>
+    !sl.el.closest(".header-status-cluster") ? "bar" : sl.el.dataset.pinned === "true" ? "pinned" : "folded";
+  const place = (sl: Slot, before: boolean): Target | null => {
+    const a = area(sl);
+    if (a === "folded" && id === "settings") return null;
+    const group: HeaderGroup =
+      a === "bar" ? "apps" : a === "pinned" || !before ? "status" : placedGroupOf(sl.id, order);
+    return {
+      beforeId: before ? sl.id : null,
+      afterId: before ? null : sl.id,
+      group,
+      pin: a !== "folded",
+    };
+  };
+  for (let i = 0; i < slots.length; i++) {
+    const sl = slots[i];
+    if (x >= sl.r.left + sl.r.width / 2) continue;
+    const prev = slots[i - 1];
+    if (prev && area(prev) !== area(sl) && x < (prev.r.right + sl.r.left) / 2) return place(prev, false);
+    return place(sl, true);
   }
-  return null;
+  return slots.length ? place(slots[slots.length - 1], false) : null;
 }
 
 /**
@@ -43,10 +69,12 @@ function dropBefore(id: HeaderItemId, x: number, order: readonly string[] | unde
  * chevron of `StatusCluster`. Right-clicking the item chooses (the setting is
  * `header_pins`, defaults in `lib/headerPins`).
  *
- * Dragging an icon sideways reorders it within its group (`header_order`). It
- * is pointer-based like the tab drag: HTML5 DnD is unreliable on WebKitGTK, and
- * the release is handled by a listener bound at pointerdown, the only kind that
- * reliably sees it there.
+ * Dragging an icon sideways reorders it (`header_order`), also across the
+ * bar's stretches: into the cluster's folded stretch it folds, out of it it
+ * pins (`header_pins`), and between the bar's run and the cluster it changes
+ * group. It is pointer-based like the tab drag: HTML5 DnD is unreliable on
+ * WebKitGTK, and the release is handled by a listener bound at pointerdown, the
+ * only kind that reliably sees it there.
  *
  * Folding is `display: none`, never unmounting, for the reason the cluster
  * gives: a folded readout keeps polling and a folded mail button keeps its
@@ -65,12 +93,10 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
   const ref = useRef<HTMLSpanElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const pinned = isHeaderPinned(pins, id, pinDefaults);
-  const group = headerGroupOf(id);
+  const group = placedGroupOf(id, order);
   const dragging = dragInfo?.id === id;
   const dropHere = dragInfo != null && dragInfo.id !== id && dragInfo.beforeId === id;
-  const dropEnd =
-    dragInfo != null && dragInfo.beforeId === null && headerGroupOf(dragInfo.id) === group &&
-    dragInfo.id !== id && orderedHeaderIds(group, order).filter((x) => x !== dragInfo.id).pop() === id;
+  const dropEnd = dragInfo != null && dragInfo.id !== id && dragInfo.afterId === id;
 
   const onPointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest(OWN_CONTEXT)) return;
@@ -81,7 +107,8 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
     const move = (ev: PointerEvent) => {
       if (!engaged && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_THRESHOLD) return;
       engaged = true;
-      setDrag({ id, beforeId: dropBefore(id, ev.clientX, order) });
+      const target = dropTarget(id, ev.clientX, order);
+      setDrag(target && { id, ...target });
     };
     const end = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", move);
@@ -95,7 +122,11 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
       window.addEventListener("click", swallow, { capture: true, once: true });
       setTimeout(() => window.removeEventListener("click", swallow, true), 0);
       if (ev.type === "pointercancel" || !drop) return;
-      void updateSettings({ header_order: moveHeaderItem(order, id, drop.beforeId) });
+      const nextPins = setHeaderPin(pins, id, drop.pin, pinDefaults);
+      void updateSettings({
+        header_order: moveHeaderItem(order, id, drop.beforeId, drop.group),
+        ...(isHeaderPinned(pins, id, pinDefaults) !== drop.pin && { header_pins: nextPins }),
+      });
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
@@ -122,6 +153,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
         ref={ref}
         className="header-slot"
         data-header-slot={id}
+        data-pinned={pinned}
         data-folded={!pinned && !expanded}
         data-dragging={dragging || undefined}
         data-drop={dropHere ? "before" : dropEnd ? "after" : undefined}
@@ -138,16 +170,18 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
         <ContextMenuPortal x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <div className="context-menu-group">
             <div className="context-menu-group-label">{t(`headerPins.item.${id}` as "headerPins.item.mail")}</div>
-            <button
-              className="untested"
-              onClick={() => {
-                setMenu(null);
-                void updateSettings({ header_pins: toggleHeaderPin(pins, id, pinDefaults) });
-              }}
-            >
-              {pinned ? t("headerPins.fold") : t("headerPins.pin")}
-              <UntestedTag id="headerPins.menu" />
-            </button>
+            {id !== "settings" && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setMenu(null);
+                  void updateSettings({ header_pins: toggleHeaderPin(pins, id, pinDefaults) });
+                }}
+              >
+                {pinned ? t("headerPins.fold") : t("headerPins.pin")}
+                <UntestedTag id="headerPins.menu" />
+              </button>
+            )}
             {resetHeaderGroup(order, group).length !== (order ?? []).length && (
               <button
                 className="untested"

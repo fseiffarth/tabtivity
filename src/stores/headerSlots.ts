@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { HeaderItemId } from "../lib/headerPins";
+import type { HeaderGroup, HeaderItemId } from "../lib/headerPins";
 
 /**
  * Which top-bar slots currently hold something. A slot whose feature is off (no
@@ -8,12 +8,21 @@ import type { HeaderItemId } from "../lib/headerPins";
  * would offer to unfold nothing. `HeaderSlot` watches its own children and
  * reports here.
  */
+export type HeaderSlotsDrag = {
+  id: HeaderItemId;
+  beforeId: HeaderItemId | null;
+  afterId: HeaderItemId | null;
+  group: HeaderGroup;
+  pin: boolean;
+} | null;
+
 interface HeaderSlotsState {
   present: Partial<Record<HeaderItemId, true>>;
   setPresent: (id: HeaderItemId, present: boolean) => void;
-  /** The icon being dragged and where it would land: in front of `beforeId`
-   *  (`null` → the end of its group). */
-  drag: { id: HeaderItemId; beforeId: HeaderItemId | null } | null;
+  /** The icon being dragged and where it would land: in `group`, in front of
+   *  `beforeId` (`null` → the end of it), pinned or folded. `afterId` is the slot
+   *  the drop bar is drawn behind when there is no `beforeId` to draw it before. */
+  drag: HeaderSlotsDrag;
   setDrag: (drag: HeaderSlotsState["drag"]) => void;
 }
 
@@ -22,7 +31,13 @@ export const useHeaderSlotsStore = create<HeaderSlotsState>((set) => ({
   drag: null,
   setDrag: (drag) =>
     set((s) =>
-      s.drag?.id === drag?.id && s.drag?.beforeId === drag?.beforeId ? s : { drag },
+      s.drag?.id === drag?.id &&
+      s.drag?.beforeId === drag?.beforeId &&
+      s.drag?.afterId === drag?.afterId &&
+      s.drag?.group === drag?.group &&
+      s.drag?.pin === drag?.pin
+        ? s
+        : { drag },
     ),
   setPresent: (id, present) =>
     set((s) => {

@@ -206,7 +206,7 @@ export function StatusCluster() {
   const pinnedCount = pinnedReadouts.length;
   const slotIds: HeaderItemId[] = [
     ...pinnedReadouts,
-    ...(["apps", "menus", "status"] as const)
+    ...(["apps", "status"] as const)
       .flatMap((g) => orderedHeaderIds(g, order))
       .filter((id) => !isHeaderPinned(pins, id, pinDefaults)),
   ];

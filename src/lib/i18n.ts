@@ -5491,6 +5491,7 @@ export const enSource = {
   "headerPins.item.inbox": "Inbox",
   "headerPins.item.models": "Local models",
   "headerPins.item.help": "Help",
+  "headerPins.item.settings": "Settings",
   "headerPins.item.alerts": "Alerts",
   "headerPins.item.conn": "Connection",
   "headerPins.item.battery": "Battery",

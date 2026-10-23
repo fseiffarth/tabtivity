@@ -4,6 +4,7 @@ import { CalendarIndicator } from "./CalendarIndicator";
 import { TodoIndicator } from "./TodoIndicator";
 import { InboxIndicator } from "./InboxIndicator";
 import { HelpAgentButton } from "./HelpAgentButton";
+import { SettingsMenu } from "./SettingsMenu";
 import { LocalModelMenu } from "../layout/LocalModelMenu";
 import type { HeaderItemId } from "../../lib/headerPins";
 
@@ -17,4 +18,5 @@ export const APP_ICONS: Partial<Record<HeaderItemId, ReactNode>> = {
   inbox: <InboxIndicator />,
   models: <LocalModelMenu />,
   help: <HelpAgentButton />,
+  settings: <SettingsMenu />,
 };
