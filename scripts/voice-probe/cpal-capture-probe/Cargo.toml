@@ -1,0 +1,22 @@
+[package]
+name = "cpal-capture-probe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"   # cpal 0.18's MSRV
+publish = false
+
+[dependencies]
+# Newest cpal published on or before 2026-10-08 (0.18.2, 2026-08-16).
+# 0.18 changed the API (unified cpal::Error/ErrorKind, StreamConfig by value,
+# streams no longer auto-start). Default features = ALSA host only.
+cpal = "=0.18.2"
+
+[features]
+# Optional comparison hosts (not needed for the plan's ALSA path):
+#   pulseaudio: needs libpulse-dev
+#   pipewire:   needs libpipewire-0.3-dev, libspa-0.2-dev and clang (bindgen)
+pulseaudio = ["cpal/pulseaudio"]
+pipewire = ["cpal/pipewire"]
+
+# Keep the probe out of any surrounding workspace.
+[workspace]

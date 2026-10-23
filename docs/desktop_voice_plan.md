@@ -1,7 +1,9 @@
 # Desktop voice: dictation, read-aloud and hands-free in the Chat
 
-Status: plan only (2026-10-21; reviewed and amended 2026-10-22). Nothing
-implemented.
+Status: plan (2026-10-21; reviewed and amended 2026-10-22). Step 0 partly
+done 2026-10-22: build, API and CI probes recorded under step 0; the host's
+audio probes (`scripts/voice-probe/`) are still for the user to run. No voice
+code yet.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds
@@ -199,6 +201,186 @@ state all behave exactly as for a typed prompt.
   outside the repo.
 - Record the results in this file.
 
+#### Step 0 results (2026-10-22)
+
+Probed in a scratch crate on Ubuntu 24.04, rustc 1.99.0, outside the repo.
+Nothing voice-related is linked yet; the repo changes are only the CI, deb
+and cross-check wiring listed at the end.
+
+**Pins** (newest published on or before 2026-10-08): `cpal` **0.18.2**
+(2026-08-16), `whisper-rs` **0.16.0** with `whisper-rs-sys` **0.15.0**
+(2026-03-12, whisper.cpp 1.8.3), `tts` **0.26.3** (2024-07-06, the latest).
+
+**System packages (Linux).**
+- Build: `libasound2-dev` (without it `alsa-sys` fails), `cmake`, a C++
+  compiler (`build-essential`), `pkg-config`, and **libclang**
+  (`libclang-dev`). Correction to the plan above: `whisper-rs-sys` runs
+  bindgen by default and **panics** when libclang is missing; its fallback to
+  the bundled bindings covers only a bindgen error after libclang loaded.
+  `WHISPER_DONT_GENERATE_BINDINGS=1` forces the bundled bindings and builds
+  fine on Linux and macOS, but they do not compile on Windows (they assume an
+  8-byte `long`), so it is no general switch. The `clang` binary is not
+  needed.
+- Host line for the user, outside the fence:
+  `sudo apt install libasound2-dev cmake build-essential pkg-config libclang-dev`.
+- CI (ubuntu-24.04): only `libasound2-dev` is new; the runner image already
+  has cmake, clang 16–18 (libclang), g++ and pkg-config. Added to all three
+  `apt-get install` lists (lint, test-ubuntu, package-linux).
+- Runtime (`ldd` of the scratch binary): libasound.so.2 and libstdc++ beyond
+  libc/libgcc/libm. **No libgomp**: `whisper-rs-sys` sets `GGML_OPENMP=OFF`
+  unless its `openmp` feature is on. The deb gains `depends: libasound2`
+  (Ubuntu 24.04's `libasound2t64` provides it) and
+  `recommends: speech-dispatcher`.
+- Build cost: a clean release build of cpal + whisper-rs takes ~57 s on 4
+  cores (~38 s for `whisper-rs-sys` alone); the stripped binary grows by
+  ~1.3 MB.
+
+**New risk: `GGML_NATIVE`.** ggml defaults to `-march=native`; on the probe
+machine that compiled AVX-512 and AMX in, so a CI-built package would die
+with an illegal instruction on an older CPU. `whisper-rs-sys` forwards every
+`GGML_*` env var to cmake; `GGML_NATIVE=OFF` gives
+`-mavx -mavx2 -mfma -mf16c -mbmi2` (x86_64). It is now set workflow-wide in
+`ci-cd.yml`. Its build script does not watch `GGML_*`, so after changing one
+locally run `cargo clean -p whisper-rs-sys`. Whether to require AVX2 at all
+(pre-2013 x86 CPUs) is the user's call; nothing in the app checks for it yet.
+
+**Cross-checks.** `cpal` and `tts` pass both cross-checks with the existing
+stand-ins (`cpal` 0.18 uses `objc2-core-audio` on macOS, no `coreaudio-sys`
+bindgen; `windows` crates are pure Rust). `whisper-rs-sys` fails both
+(Windows: cmake finds no Visual Studio generator; macOS: cmake reaches the
+Linux `c++`). The `DOCS_RS=1` / `WHISPER_DONT_GENERATE_BINDINGS=1` tricks
+make the macOS check pass but not Windows without mingw headers and
+libclang; not adopted. So, as planned, the cross-checks build without
+`voice`, and **the feature wiring is inverted** relative to step 2's first
+sentence:
+
+```toml
+default = ["desktop", "voice"]
+voice   = ["desktop", "dep:cpal", "dep:whisper-rs", "dep:tts"]
+```
+
+`desktop` cannot be the one to turn `voice` on, or a check could not drop it
+while still checking `desktop` code. `scripts/ci-local.sh` already runs the
+Windows check, Windows clippy and macOS check with
+`--no-default-features --features desktop` (they say so in their output);
+until `voice` exists that equals the old default. `src-core`/`src-gateway`
+have no features and `app-serverd` takes the library with
+`default-features = false`, so the flags only touch the desktop crate;
+packaging (`--features custom-protocol`) keeps the defaults and so voice.
+Two refinements for step 2: split `voice-io = ["dep:cpal", "dep:tts"]` out
+of `voice` so the cross-checks still check the WASAPI/CoreAudio/WinRT code
+(`--features desktop,voice-io`), and register the voice commands in every
+desktop build (stubs answering "unavailable" without `voice`), so
+`command_class` and `commandClasses.ts` do not change with the feature set.
+
+**Real CI runners** (decide by the first CI run in step 2): windows-2025 has
+MSVC, cmake and LLVM; on Windows bindgen *must* succeed (the bundled bindings
+do not compile there), so set `LIBCLANG_PATH: C:\Program Files\LLVM\bin` in
+the Windows jobs if clang-sys does not find it. macos-26's Xcode supplies
+libclang, the SDK and Accelerate (`ggml-blas` is always linked on macOS); the
+universal DMG's `x86_64` slice is built on the arm64 runner and relies on
+cmake-rs setting `CMAKE_OSX_ARCHITECTURES`, with `GGML_NATIVE=OFF` now set.
+
+**whisper-rs 0.16.0 API.**
+- Silero VAD: **yes.** In a full run: `FullParams::enable_vad`,
+  `set_vad_model_path`, `set_vad_params(WhisperVadParams)`. Standalone:
+  `WhisperVadContext::new(path, WhisperVadContextParams)`, `detect_speech`,
+  `probabilities`, `segments_from_samples` → `WhisperVadSegments`. These take
+  a whole buffer, not a stream, so `vad.rs` runs it over a sliding window (or
+  uses `webrtc-vad` for the streaming start/end decision and Silero only to
+  confirm a segment). The VAD model (~1 MB ggml) needs its own catalog entry.
+- No-speech probability: **yes**, `WhisperSegment::no_speech_probability()`;
+  also `FullParams::set_no_speech_thold`.
+- `set_initial_prompt(&str)`, `set_language(Option<&str>)`,
+  `set_detect_language(bool)`. `WhisperContext`, `WhisperState` and
+  `WhisperVadContext` are `Send + Sync`.
+- Features: default empty = CPU only; `vulkan`/`metal`/`cuda`/`openmp` stay
+  off (step 8).
+
+**`tts` 0.26.3** (Windows/macOS only, as planned: on Linux it would link
+`libspeechd`).
+- Windows uses the WinRT voices (`windows` 0.58, `Media.SpeechSynthesis` +
+  `MediaPlayer`), not SAPI; which of the two fixed decision 2 means is
+  thereby settled.
+- macOS uses AVFoundation through the old `objc` 0.2 crate (not `objc2`).
+- End of utterance: `on_utterance_end` is supported on both
+  (`MediaEnded` / `didFinishSpeechUtterance`), so the risk "the `tts` crate
+  does not report the end" does not apply.
+- **Threading:** `Tts` is an `Rc<RwLock<…>>` with an unsafe `Send`/`Sync`;
+  keep it on one thread. On macOS the callbacks fire only while that thread
+  runs an NSRunLoop, so `OsTts` on macOS needs its own thread pumping a run
+  loop (or runs on the main thread).
+
+**cpal on PipeWire.** cpal's default build has only the ALSA host, which
+reaches PipeWire through `pipewire-alsa` (the ALSA `default` PCM). Its
+optional `pulseaudio` host has a record-stream bug in 0.18.2 (a
+`BufferSize::Fixed` input stream drops audio after the first callback,
+fixed in the `handy-cpal` fork); do not enable that feature, and use
+`BufferSize::Default`.
+
+**ALSA on the host** goes through PipeWire only with `pipewire-alsa`
+installed (its `99-pipewire-default.conf` points ALSA's `default` at
+PipeWire; Ubuntu 24.04's `pipewire-audio` depends on it). Without it,
+`default` falls to the pulse plugin (`libasound2-plugins`) or straight to
+`hw`, fighting PipeWire for the card. cpal's ALSA `default_input_device()`
+always returns `Some("default")`, so "no input device" must be classified
+from the `ErrorKind` of the next call (`DeviceNotAvailable`,
+`PermissionDenied`, `DeviceBusy`), not from `None`. cpal 0.18 also changed
+its API: one `Error`/`ErrorKind`, configs by value, explicit `play()`.
+
+**speech-dispatcher** (Ubuntu 24.04: 0.12.0~rc2; source `src/clients/say/say.c`).
+These change step 2's `OsTts`:
+- `-e` **echoes stdin to stdout**: discard the child's stdout.
+- Pipe mode is **line by line**: each line (≤ 16 KB, `fgets`) is its own
+  `spd_say` and its own wait. Feed one chunk as one line: fold newlines to
+  spaces, keep it under 16 KB.
+- **A line starting with `!-!` is executed as a raw SSIP command**
+  (`spd_execute_command`; verified: `!-!SET self RATE 100` changed the
+  rate). Text from an agent's answer is attacker-controlled, so `OsTts`
+  strips a leading `!-!` from every line, with a unit test. A line starting
+  with `-` is safe (never argv).
+- Pipe mode ignores a failed `spd_say`, and then `--wait` blocks forever:
+  the child needs a timeout scaled to the chunk's length.
+- **Killing the child does not stop the speech**: the server only marks the
+  client inactive and plays its queue out (`speaking.c`; measured: the voice
+  ran on 5.5 s after the kill). `spd-say -C` cancels *every* client's speech,
+  a screen reader's included, and `spd-say -S` with nothing speaking spun at
+  100 % CPU and never exited in 0.12.0~rc2. So `stop()` cannot be "kill the
+  child". The clean answer: `OsTts` speaks SSIP itself over
+  speech-dispatcher's Unix socket (`SPEAK` … `.`, `CANCEL self`, END/CANCEL
+  notifications for the speaking flag), still linking nothing and still
+  "unavailable" when no server answers. That replaces the `spd-say` child of
+  fixed decision 2 and needs the user's OK before step 2.
+- `--wait` returns on the server's END (or CANCEL) event, which is queued
+  behind the audio. With the **pulse** output backend END is sent after a
+  drain that subtracts the sink latency, so it may come up to one sink
+  latency early; the **pipewire** backend returns once its own ring buffer
+  is under 10 ms, so graph and device latency come on top. A null-sink run
+  here returned 320–406 ms *after* the monitor went silent (espeak's trailing
+  silence); it proves the flags, not the host's latency.
+
+**Still to run on the host** (the user, outside the fence): the probes in
+`scripts/voice-probe/` (README there: what to run and send back).
+`spd_wait_probe.sh` measures the time from `--wait` returning to the sink
+going silent, which sets the mute gate's tail (300 ms until then), and the
+kill behaviour on real hardware. `cpal-capture-probe` captures 5 s through
+cpal 0.18.2's ALSA host and checks it went through `pipewire-alsa`. It is
+built and clippy-clean here; it reports `NO_DEVICE` in a container with no
+sound card. Record the numbers here, then delete `scripts/voice-probe/`.
+
+**Repo changes in step 0:** `libasound2-dev` in `ci-cd.yml`'s three apt
+lists; `GGML_NATIVE: "OFF"` in its workflow env; `libasound2` in the deb's
+`depends` and `speech-dispatcher` in its `recommends`
+(`tauri.conf.json`); the cross-checks in `scripts/ci-local.sh` without
+`voice`; the host probes in `scripts/voice-probe/`.
+
+**Decisions for the user before step 2:**
+1. `OsTts` on Linux over SSIP on the socket instead of an `spd-say` child
+   (above), or keep `spd-say` and accept that stopping uses `-C` (silences
+   other apps' speech too) or lets the queued chunk finish.
+2. Require AVX2/FMA (`GGML_NATIVE=OFF`'s default on x86_64), or build for an
+   older baseline at some speed cost.
+
 ### 1. Shared voice text helpers — `shared/voice.ts`
 
 Move these pure helpers out of `mobile-web/src/` into `shared/voice.ts`, next
@@ -225,7 +407,8 @@ behaviour does not change. Their tests (in
 
 ### 2. Backend voice service — `src-tauri/src/services/voice/`
 
-Behind a `voice` cargo feature that `desktop` turns on. The daemon build
+Behind a default `voice` cargo feature that turns `desktop` on (wired the
+other way round from the first draft; see step 0's results). The daemon build
 (`--no-default-features`) never links `cpal`, `whisper-rs` or `tts`, and its
 `ldd` stays clean. The service modules stay `AppHandle`-free.
 
@@ -274,7 +457,10 @@ Behind a `voice` cargo feature that `desktop` turns on. The daemon build
 - `voice/tts.rs` — `trait TtsEngine { speak(chunk, lang), stop(), voices() }`:
   - Phase 1's only implementation is `OsTts`: on Linux, one
     `spd-say --wait -l <lang> -r <rate>` child per chunk (the text goes on
-    stdin through `-e`, never as an argument), killed on `stop()`. On Windows
+    stdin through `-e`, never as an argument). **Step 0 found that killing
+    the child does not stop the speech** and that `!-!` lines are SSIP
+    commands; `stop()` and the Linux transport wait for the user's decision
+    there (SSIP over the socket, or `spd-say` with `-C`). On Windows
     and macOS, it uses the `tts` crate, a `cfg(not(target_os = "linux"))`
     dependency. No `spd-say` on the PATH means read-aloud is unavailable,
     reported by `voice_status`, never a crash.
@@ -543,7 +729,8 @@ The shape it started from:
     phantom line are dropped (as an empty `final`); real speech that merely
     contains such words is kept.
   - `OsTts` on Linux: `spd-say` gets its text on stdin, never as an argument
-    (a chunk starting with `-` stays text); `stop()` kills the child.
+    (a chunk starting with `-` stays text, a leading `!-!` is stripped);
+    `stop()` silences the queued speech (how: step 0's decision 1).
   - `ReaderComposer` with a mocked `voice://` stream: final → draft; "go on" →
     `send` once without the words; hands-free pause → cancel window → send;
     "stop" in the window → no send, draft kept; the pause never sends before

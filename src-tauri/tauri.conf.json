@@ -49,12 +49,14 @@
       "deb": {
         "depends": [
           "libwebkit2gtk-4.1-0",
-          "libgtk-3-0"
+          "libgtk-3-0",
+          "libasound2"
         ],
         "recommends": [
           "bubblewrap",
           "tmux",
-          "cups-client"
+          "cups-client",
+          "speech-dispatcher"
         ],
         "provides": [
           "eldrun"
