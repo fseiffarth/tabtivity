@@ -32,7 +32,8 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore, useReaderChangesOpen } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import type { TabEntry } from "../../stores/tabs";
+import { hostTabCwd, type TabEntry } from "../../stores/tabs";
+import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { withAssistantPromptTarget } from "../../lib/assistant";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
@@ -1124,6 +1125,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // remote project runs in its local mirror), not the stored `tab.cwd`, which
   // for such a project names its state folder.
   const tabDir = cwd || tab?.cwd || "";
+  // What the facts row shows: a tab that runs on a host is in that host's
+  // project folder, which `tabDir` (the state folder the backend resolves to
+  // it) is not.
+  const hostDir = useProjectsStore((s) =>
+    !tab || localOnly ? null : hostTabCwd(tab, s.projects.find((p) => p.id === projectId)));
   const pathContext = usePathLinkContext(projectId, tabDir, localOnly);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
@@ -1788,7 +1794,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           usage={transcript?.available && !sinceClear ? transcript.usage : undefined}
           contextCard={transcript?.available && !sinceClear ? transcript.contextCard : undefined}
           visible={visible}
-          path={tabDir}
+          path={hostDir ?? tabDir}
           effort={seenEffort}
           onEffortPicked={setSeenEffort}
           typeKeys={typeIntoPane}

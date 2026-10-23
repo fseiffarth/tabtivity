@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) 
 import {
   defaultLocationForKind,
   effectiveTabLocation,
+  hostTabCwd,
   isLocatableKind,
   localTabCwd,
   useTabsStore,
@@ -143,5 +144,33 @@ describe("location round-trips through save/load", () => {
     const tabs = useTabsStore.getState().tabsByScope["p"];
     expect(tabs).toHaveLength(1);
     expect(tabs[0].location).toBe("remote");
+  });
+});
+
+describe("hostTabCwd", () => {
+  const project = {
+    remote: { remote_path: "/srv/primary/p1" },
+    compute_hosts: [{ id: "h1", remote_path: "/scratch/p1" }],
+  };
+
+  it("names the folder on the host a tab runs on, not the state folder", () => {
+    expect(hostTabCwd({ kind: "agent", location: "remote" }, project)).toBe("/srv/primary/p1");
+    expect(hostTabCwd({ kind: "shell" }, project)).toBe("/srv/primary/p1");
+    expect(hostTabCwd({ kind: "agent", location: "host:h1" }, project)).toBe("/scratch/p1");
+  });
+
+  it("falls back to the primary for a removed worker, as the spawn does", () => {
+    expect(hostTabCwd({ kind: "agent", location: "host:gone" }, project)).toBe("/srv/primary/p1");
+  });
+
+  it("is null for a tab that runs locally or a project with no such host", () => {
+    expect(hostTabCwd({ kind: "agent" }, project)).toBeNull();
+    expect(hostTabCwd({ kind: "local_agent", location: "remote" }, project)).toBeNull();
+    expect(hostTabCwd({ kind: "agent", location: "remote" }, {})).toBeNull();
+    expect(hostTabCwd({ kind: "agent", location: "remote" }, undefined)).toBeNull();
+  });
+
+  it("pins a VM project's tabs to the VM host", () => {
+    expect(hostTabCwd({ kind: "agent", location: "local" }, { ...project, vm: { enabled: true } })).toBe("/srv/primary/p1");
   });
 });
