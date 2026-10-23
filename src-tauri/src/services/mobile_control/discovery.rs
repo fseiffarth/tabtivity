@@ -3324,30 +3324,9 @@ mod tests {
             assert_eq!(serde_json::to_value(host).unwrap(), row["host"], "{row}");
             let reach = runs_on_this_machine(host, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
             assert_eq!(reach, row["reach"].as_bool().unwrap(), "{row}");
-            assert_eq!(serde_json::to_value(create_verdict(host, true)).unwrap(), row["create"], "{row}");
-        }
-    }
-
-    /// The listing rule at the window's table level: a tab of a remote (not
-    /// VM) project is listed wherever it runs — `lists = reach || host ==
-    /// remote`, the rule of the `lists` column the window's side of the
-    /// fixture carries.
-    #[test]
-    fn the_table_level_listing_rule_lists_every_remote_projects_tab() {
-        let table: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../src/__tests__/mobile/projectHostReach.fixture.json"
-        )))
-        .expect("fixture");
-        for row in table {
-            let mut record = serde_json::json!({ "id": "p", "name": "P", "status": "active" });
-            for (key, value) in row["record"].as_object().expect("record") {
-                record[key] = value.clone();
-            }
-            let project: ProjectRecord = serde_json::from_value(record).expect("record");
-            let host = project_host(&project);
             let lists = phone_lists_tab(host, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
-            assert_eq!(lists, row["reach"].as_bool().unwrap() || row["host"] == "remote", "{row}");
+            assert_eq!(lists, row["lists"].as_bool().unwrap(), "{row}");
+            assert_eq!(serde_json::to_value(create_verdict(host, true)).unwrap(), row["create"], "{row}");
         }
     }
 
