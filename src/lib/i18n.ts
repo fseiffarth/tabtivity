@@ -5230,6 +5230,7 @@ export const enSource = {
   "terminal.promptStrip.all": "Prompts of this tab",
   "terminal.promptStrip.typedHint": "Read from your keystrokes — the agent may have received it slightly differently",
   "terminal.promptStrip.keys": "↑ ↓ step · Home/End first/last · {modifier}+C copy · Esc close",
+  "terminal.promptStrip.keysChat": "↑ ↓ step · Enter or double-click puts it in the box · {modifier}+C copy · Esc close",
   "terminal.reader.title": "Chat",
   "terminal.reader.showReader": "Chat",
   "terminal.reader.showReaderHint": "Talk to this agent as a chat — its conversation as messages, over the terminal",

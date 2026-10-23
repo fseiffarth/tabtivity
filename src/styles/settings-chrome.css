@@ -3532,9 +3532,8 @@ label.settings-toggle-card-row {
 }
 
 /* The same bar above a root-console login tab (TabPane): second in the DOM (the
-   terminal host stays the pane's first child), first on screen — the
-   `.prompt-strip` arrangement. A fixed row, so the terminal refits once when it
-   appears and never again. */
+   terminal host stays the pane's first child), first on screen by `order`. A
+   fixed row, so the terminal refits once when it appears and never again. */
 .credential-paste-bar-tab {
   order: -1;
   flex: none;

@@ -5049,6 +5049,7 @@ export const dict: Dict = {
   "terminal.promptStrip.all": "Prompts dieses Tabs",
   "terminal.promptStrip.typedHint": "Aus deinen Tastenanschlägen gelesen — beim Agenten kann er leicht anders angekommen sein",
   "terminal.promptStrip.keys": "↑ ↓ blättern · Pos1/Ende erster/letzter · {modifier}+C kopieren · Esc schließen",
+  "terminal.promptStrip.keysChat": "↑ ↓ blättern · Enter oder Doppelklick setzt ihn ins Eingabefeld · {modifier}+C kopieren · Esc schließen",
   "terminal.reader.title": "Chat",
   "terminal.reader.showReader": "Chat",
   "terminal.reader.showReaderHint": "Mit diesem Agenten chatten — seine Unterhaltung als Nachrichten, über dem Terminal",

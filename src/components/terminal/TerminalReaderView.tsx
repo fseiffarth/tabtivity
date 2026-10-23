@@ -527,6 +527,14 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
   }, [draft]);
+  // One line until the text needs more: the box grows with it (upward, the
+  // composer stays on the pane's last row) up to its CSS max-height.
+  useLayoutEffect(() => {
+    const box = composerRef.current;
+    if (!box) return;
+    box.style.height = "auto";
+    if (box.scrollHeight > box.clientHeight) box.style.height = `${box.scrollHeight + box.offsetHeight - box.clientHeight}px`;
+  }, [draft]);
   const shortcutOverrides = useShortcutOverrides();
   /** Where the ↑/↓ walk stands in `history`, and the draft it set aside;
    * null while the composer holds the user's own draft. */
@@ -815,23 +823,34 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     <div className="terminal-reader-composer">
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
       {chipSlot ? createPortal(chips, chipSlot) : chips}
-      <textarea
-        ref={composerRef}
-        value={draft}
-        rows={2}
-        placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
-        aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
-        onChange={(e) => editDraft(e.target.value, true)}
-        onKeyDown={onComposerKey}
-        onPaste={onComposerPaste}
-      />
+      <div className="terminal-reader-input">
+        <textarea
+          ref={composerRef}
+          value={draft}
+          rows={1}
+          placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
+          aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
+          onChange={(e) => editDraft(e.target.value, true)}
+          onKeyDown={onComposerKey}
+          onPaste={onComposerPaste}
+        />
+        <button
+          type="button"
+          className="terminal-reader-send"
+          disabled={!draft.trim() || sending}
+          onClick={() => void send()}
+          aria-label={t("terminal.reader.send")}
+          title={t("terminal.reader.send")}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
       {pastedImage && draft.includes(pastedImage) && <UntestedTag id="terminal.paste.image" />}
       {historyAt.current !== null && <UntestedTag id="terminal.reader.history" />}
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
-      <button type="button" className="terminal-reader-send" disabled={!draft.trim() || sending} onClick={() => void send()}>
-        {t("terminal.reader.send")}
-      </button>
     </div>
     {sendError && <div className="terminal-reader-error" role="alert">{sendError}</div>}
   </>;
@@ -864,7 +883,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, overStrip = false }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -875,6 +894,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   localOnly?: boolean;
   visible: boolean;
   focused: boolean;
+  /** The pane's prompt strip lies under the chat: it reaches down over the
+   * strip's row, its composer is that row, the switches right of the text box
+   * (`TerminalPromptStrip`, `--strip-actions-w`). */
+  overStrip?: boolean;
 }) {
   const t = useT();
   // A Tabby chat with its window-local prompt target: the composer, the
@@ -1330,8 +1353,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * that starts above the scroll position — while its bubble is scrolled off
    * the top, pinned there as on the phone's Focus Reader; empty while any
    * prompt bubble is in view (that one, or a newer one further down). Read
-   * off the chat as drawn (`data-prompt`). */
+   * off the chat as drawn (`data-prompt`), with the bubble's own time. */
   const [pinnedPrompt, setPinnedPrompt] = useState("");
+  const [pinnedTime, setPinnedTime] = useState("");
   const pinnedPromptEl = useRef<HTMLElement | null>(null);
   const checkPinnedPrompt = useCallback(() => {
     const list = listRef.current;
@@ -1350,6 +1374,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     }
     pinnedPromptEl.current = owner;
     setPinnedPrompt((owner?.dataset.prompt ?? "").trim());
+    setPinnedTime(owner?.querySelector(":scope > .terminal-reader-time")?.textContent ?? "");
   }, []);
 
   const onScroll = () => {
@@ -1493,7 +1518,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   return createPortal(<>
     <div
       ref={regionRef}
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${changesOpen && tab ? " with-changes" : ""}${browsed ? " browsing" : ""}`}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${changesOpen && tab ? " with-changes" : ""}${browsed ? " browsing" : ""}${overStrip ? " over-strip" : ""}`}
       role="region"
       aria-label={t("terminal.reader.title")}
       style={changesOpen && tab ? changesWidthStyle(changesWidth) : undefined}
@@ -1705,6 +1730,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             onClick={() => pinnedPromptEl.current?.scrollIntoView({ block: "start", behavior: "smooth" })}
           >
             <span className="terminal-reader-pinned-prompt-text">{pinnedPrompt}</span>
+            {pinnedTime && <small className="terminal-reader-time">{pinnedTime}</small>}
             <UntestedTag id="terminal.reader.pinnedPrompt" />
           </button>
         )}
