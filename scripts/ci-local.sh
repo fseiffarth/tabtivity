@@ -88,9 +88,9 @@ STEPS=(
   "test-gateway|test-ubuntu|Run gateway crate tests|ci|gateway"
   "test-daemon-lib|test-ubuntu|Run the daemon build's library tests|ci|backend"
   "daemon-ldd|test-ubuntu|Daemon links no desktop libraries|sub:target_dir|rs"
-  "windows-clippy|local|Windows cross-check: clippy (src-tauri, all targets)|local:windows_clippy|rs"
-  "windows-check|local|Windows cross-check: cargo check (workspace, all targets)|local:windows_check|rs"
-  "macos-check|local|macOS cross-check: cargo check (workspace, all targets)|local:macos_check|rs"
+  "windows-clippy|local|Windows cross-check: clippy (src-tauri, all targets, no voice)|local:windows_clippy|rs"
+  "windows-check|local|Windows cross-check: cargo check (workspace, all targets, no voice)|local:windows_check|rs"
+  "macos-check|local|macOS cross-check: cargo check (workspace, all targets, no voice)|local:macos_check|rs"
 )
 
 # Steps of ci-cd.yml's Linux jobs that are not run here.
@@ -188,12 +188,21 @@ windows_cargo() {
   echo "+ RC=$rc AR_x86_64_pc_windows_msvc=$lib cargo $*"
   RC="$rc" AR_x86_64_pc_windows_msvc="$lib" cargo "$@"
 }
+# The cross-checks build `desktop` without the default `voice` feature
+# (docs/desktop_voice_plan.md, step 0): whisper.cpp's cmake build needs cl.exe
+# or Xcode, which no stand-in replaces. test-windows/test-macos build voice.
+CROSS_FEATURES=(--no-default-features --features desktop)
+cross_note() { echo "(without voice: whisper.cpp needs cl.exe/Xcode; CI's test-windows/test-macos build it)"; }
 skip_windows_clippy() { skip_windows; }
 run_windows_clippy() {
-  windows_cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+  cross_note
+  windows_cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets "${CROSS_FEATURES[@]}" -- -D warnings
 }
 skip_windows_check() { skip_windows; }
-run_windows_check() { windows_cargo check --workspace --all-targets --target x86_64-pc-windows-msvc; }
+run_windows_check() {
+  cross_note
+  windows_cargo check --workspace --all-targets --target x86_64-pc-windows-msvc "${CROSS_FEATURES[@]}"
+}
 
 skip_macos_check() {
   command -v rustup >/dev/null 2>&1 || { echo "rustup not found"; return 0; }
@@ -225,9 +234,10 @@ EOF
 for a in "$@"; do case $a in *.a) : >"$a"; exit 0 ;; esac; done
 EOF
   chmod +x "$shims/cc" "$shims/ar"
-  echo "+ CC/AR_aarch64_apple_darwin=<check-only stand-ins> cargo check --workspace --all-targets --target aarch64-apple-darwin"
+  cross_note
+  echo "+ CC/AR_aarch64_apple_darwin=<check-only stand-ins> cargo check --workspace --all-targets --target aarch64-apple-darwin ${CROSS_FEATURES[*]}"
   CC_aarch64_apple_darwin="$shims/cc" AR_aarch64_apple_darwin="$shims/ar" \
-    cargo check --workspace --all-targets --target aarch64-apple-darwin
+    cargo check --workspace --all-targets --target aarch64-apple-darwin "${CROSS_FEATURES[@]}"
 }
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,11 @@ env:
   # lints and tests with exactly the compiler and clippy developers run (the
   # lint job checks the two agree). Bump both together.
   RUST_TOOLCHAIN: "1.99.0"
+  # whisper.cpp (the desktop `voice` feature) otherwise compiles with
+  # -march=native: a binary tuned to the runner's CPU, which can die with an
+  # illegal instruction on a user's older one. whisper-rs-sys hands GGML_* to
+  # cmake. OFF builds for AVX2/FMA (docs/desktop_voice_plan.md, step 0).
+  GGML_NATIVE: "OFF"
 
 # Every job's timeout-minutes is about one and a half to two times its longest
 # green run (2026-10), so a hung test fails the job instead of holding the
@@ -174,6 +179,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             libgtk-3-dev \
             libssl-dev \
@@ -253,6 +259,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             libgtk-3-dev \
             libssl-dev \
@@ -576,6 +583,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             libgtk-3-dev \
             libssl-dev \
