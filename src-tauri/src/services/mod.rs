@@ -179,6 +179,7 @@ pub mod mail_store;
 pub mod mail_thunderbird;
 pub mod mobile_control;
 pub mod net_usage;
+pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;
 pub mod openvpn;

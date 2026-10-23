@@ -725,6 +725,32 @@ async fn check_key_at(
     Ok(KeyCheck::PickWorkspace(listed))
 }
 
+/// The model ids `provider`'s stored key may call, as the provider's own
+/// listing answers it (free, the key in the provider's own header and its
+/// workspace beside it): `None` with no key, no answer in
+/// [`KEY_CHECK_WAIT`], a refusal or a body that is no listing
+/// (`opencode_models::listed_ids`).
+pub async fn key_models(provider: Provider) -> Option<Vec<String>> {
+    let stored = app_core::rt::spawn_blocking(move || stored_for(provider)).await.ok().flatten()?;
+    key_models_at(&Upstream::Provider.base(provider), provider, &stored, true).await
+}
+
+async fn key_models_at(base: &str, provider: Provider, stored: &StoredKey, https_only: bool) -> Option<Vec<String>> {
+    let client = client(https_only).ok()?;
+    // One page: every provider lists far fewer models than these bounds.
+    let path = match provider {
+        Provider::Anthropic => "/v1/models?limit=1000",
+        Provider::OpenAi => "/v1/models",
+        Provider::Gemini => "/v1beta/models?pageSize=1000",
+    };
+    let (status, body) =
+        ask_with_key(&client, base, path, provider, &stored.key, stored.workspace.as_deref()).await.ok().flatten()?;
+    if !status.is_success() {
+        return None;
+    }
+    super::opencode_models::listed_ids(provider, &body)
+}
+
 /// A GET of `path` with `key` in the provider's own header (and, for
 /// Anthropic, the version and `workspace`): its status and body, `None` when
 /// the provider did not answer in [`KEY_CHECK_WAIT`].
@@ -2797,6 +2823,23 @@ mod tests {
         // Offline: saved untested.
         let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
         assert!(check_key_at(&format!("http://{gone}"), Provider::Anthropic, FAKE_KEY, None, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_keys_model_listing_is_read_in_the_providers_own_shape() {
+        let seen = Arc::new(Seen::default());
+        let stored = StoredKey { key: FAKE_KEY.to_string(), workspace: Some(WS_A.to_string()) };
+        let gemini = answering(StatusCode::OK, r#"{"models":[{"name":"models/gemini-3.5-flash"}]}"#, seen.clone()).await;
+        assert_eq!(key_models_at(&gemini, Provider::Gemini, &stored, false).await.unwrap(), ["gemini-3.5-flash"]);
+        assert_eq!(seen.requests.lock_ok()[0].1, "/v1beta/models?pageSize=1000");
+        assert_eq!(seen.requests.lock_ok()[0].2["x-goog-api-key"], FAKE_KEY);
+        let anthropic = answering(StatusCode::OK, r#"{"data":[{"id":"claude-opus-5-5"}]}"#, seen.clone()).await;
+        assert_eq!(key_models_at(&anthropic, Provider::Anthropic, &stored, false).await.unwrap(), ["claude-opus-5-5"]);
+        assert_eq!(seen.requests.lock_ok()[1].2[WORKSPACE_HEADER], WS_A);
+        let refused = answering(StatusCode::UNAUTHORIZED, r#"{"data":[{"id":"x"}]}"#, seen.clone()).await;
+        assert!(key_models_at(&refused, Provider::OpenAi, &stored, false).await.is_none());
+        let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
+        assert!(key_models_at(&format!("http://{gone}"), Provider::OpenAi, &stored, false).await.is_none());
     }
 
     /// Anthropic for a key that is not scoped to a workspace: a listing
