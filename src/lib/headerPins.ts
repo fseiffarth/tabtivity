@@ -1,3 +1,7 @@
+import { MOBILE_HOST_KEY } from "./brand";
+import { useSettingsStore } from "../stores/settings";
+import type { Settings } from "../types";
+
 /**
  * Which top-bar items stay in the bar and which fold behind the ‹ chevron.
  *
@@ -7,6 +11,8 @@
  * fold. `Settings.header_pins` holds only the user's overrides — `true` pins an
  * item, `false` folds it — so an id the user never touched follows this table
  * and a default changed here reaches everyone who did not choose.
+ *
+ * The one moving default is the phone icon (`headerPinDefaults`).
  *
  * The settings gear is not an id on purpose: it is the way back to every other
  * setting, and a bar that could hide it would need a second way in.
@@ -39,19 +45,46 @@ const PINNED_BY_DEFAULT: ReadonlySet<HeaderItemId> = new Set([
   "help",
 ]);
 
+/** The table above plus the phone icon, while it is the way into Mobile. */
+const PINNED_WITH_MOBILE_NUDGE: ReadonlySet<HeaderItemId> = new Set([...PINNED_BY_DEFAULT, "mobile"]);
+
+/**
+ * The defaults in force. Folded, the dimmed phone icon is the door to Mobile
+ * that nobody finds, so until Mobile is switched on — or its setup guide has
+ * been opened once (`mobile_setup_seen`) — it stays in the bar. Settings not
+ * loaded yet count as no nudge: an enabled Mobile must not flash in and out.
+ */
+export function headerPinDefaults(settings: Settings | null | undefined): ReadonlySet<HeaderItemId> {
+  const nudge = settings != null && !settings[MOBILE_HOST_KEY]?.enabled && !settings.mobile_setup_seen;
+  return nudge ? PINNED_WITH_MOBILE_NUDGE : PINNED_BY_DEFAULT;
+}
+
+/** `headerPinDefaults` for the current settings. */
+export function useHeaderPinDefaults(): ReadonlySet<HeaderItemId> {
+  return useSettingsStore((s) => headerPinDefaults(s.settings));
+}
+
 export type HeaderPins = Record<string, boolean>;
 
 /** Is `id` shown in the bar even while the chevron is collapsed? */
-export function isHeaderPinned(pins: HeaderPins | undefined, id: HeaderItemId): boolean {
-  return pins?.[id] ?? PINNED_BY_DEFAULT.has(id);
+export function isHeaderPinned(
+  pins: HeaderPins | undefined,
+  id: HeaderItemId,
+  defaults: ReadonlySet<HeaderItemId> = PINNED_BY_DEFAULT,
+): boolean {
+  return pins?.[id] ?? defaults.has(id);
 }
 
 /** The overrides after flipping `id`. A flip back to the default drops the
  *  entry, so the saved map never holds a value the table already says. */
-export function toggleHeaderPin(pins: HeaderPins | undefined, id: HeaderItemId): HeaderPins {
+export function toggleHeaderPin(
+  pins: HeaderPins | undefined,
+  id: HeaderItemId,
+  defaults: ReadonlySet<HeaderItemId> = PINNED_BY_DEFAULT,
+): HeaderPins {
   const next: HeaderPins = { ...pins };
-  const pinned = !isHeaderPinned(pins, id);
-  if (pinned === PINNED_BY_DEFAULT.has(id)) delete next[id];
+  const pinned = !isHeaderPinned(pins, id, defaults);
+  if (pinned === defaults.has(id)) delete next[id];
   else next[id] = pinned;
   return next;
 }

@@ -11,7 +11,13 @@ import { DevBuildIndicator } from "./DevBuildIndicator";
 import { useQuiesce, saverInterval, usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderSlotsStore } from "../../stores/headerSlots";
-import { HEADER_ITEM_IDS, isHeaderPinned, orderedHeaderIds, type HeaderItemId } from "../../lib/headerPins";
+import {
+  HEADER_ITEM_IDS,
+  isHeaderPinned,
+  orderedHeaderIds,
+  useHeaderPinDefaults,
+  type HeaderItemId,
+} from "../../lib/headerPins";
 import { HeaderSlot } from "./HeaderSlot";
 import { APP_ICONS } from "./appIcons";
 import {
@@ -91,6 +97,7 @@ export function StatusCluster() {
   if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
   const pins = useSettingsStore((s) => s.settings?.header_pins);
+  const pinDefaults = useHeaderPinDefaults();
   const order = useSettingsStore((s) => s.settings?.header_order);
   const present = useHeaderSlotsStore((s) => s.present);
   const [resourcePeek, setResourcePeek] = useState(0);
@@ -162,7 +169,7 @@ export function StatusCluster() {
   // The chevron is offered for whatever the bar would fold right now: items
   // that drew something and are not pinned. An item whose feature is off (empty
   // slot) is not counted, or the toggle would unfold nothing.
-  const foldable = HEADER_ITEM_IDS.filter((id) => present[id] && !isHeaderPinned(pins, id)).length;
+  const foldable = HEADER_ITEM_IDS.filter((id) => present[id] && !isHeaderPinned(pins, id, pinDefaults)).length;
   const hasToggle = foldable >= 1;
   const collapsed = !expanded && hasToggle;
 
@@ -185,7 +192,7 @@ export function StatusCluster() {
     ),
     resources: (
       <AppResourceDisplay
-        folded={collapsed && !isHeaderPinned(pins, "resources")}
+        folded={collapsed && !isHeaderPinned(pins, "resources", pinDefaults)}
         peek={resourcePeek}
       />
     ),
@@ -195,13 +202,13 @@ export function StatusCluster() {
   };
 
   const readouts = orderedHeaderIds("status", order);
-  const pinnedReadouts = readouts.filter((id) => isHeaderPinned(pins, id));
+  const pinnedReadouts = readouts.filter((id) => isHeaderPinned(pins, id, pinDefaults));
   const pinnedCount = pinnedReadouts.length;
   const slotIds: HeaderItemId[] = [
     ...pinnedReadouts,
     ...(["apps", "menus", "status"] as const)
       .flatMap((g) => orderedHeaderIds(g, order))
-      .filter((id) => !isHeaderPinned(pins, id)),
+      .filter((id) => !isHeaderPinned(pins, id, pinDefaults)),
   ];
 
   const toggleTitle = collapsed

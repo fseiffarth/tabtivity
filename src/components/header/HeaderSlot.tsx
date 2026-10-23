@@ -8,6 +8,7 @@ import {
   orderedHeaderIds,
   resetHeaderGroup,
   toggleHeaderPin,
+  useHeaderPinDefaults,
   type HeaderItemId,
 } from "../../lib/headerPins";
 import { useT } from "../../lib/i18n";
@@ -55,6 +56,7 @@ function dropBefore(id: HeaderItemId, x: number, order: readonly string[] | unde
 export function HeaderSlot({ id, children }: { id: HeaderItemId; children: ReactNode }) {
   const t = useT();
   const pins = useSettingsStore((s) => s.settings?.header_pins);
+  const pinDefaults = useHeaderPinDefaults();
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const order = useSettingsStore((s) => s.settings?.header_order);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
@@ -62,7 +64,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
   const setPresent = useHeaderSlotsStore((s) => s.setPresent);
   const ref = useRef<HTMLSpanElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const pinned = isHeaderPinned(pins, id);
+  const pinned = isHeaderPinned(pins, id, pinDefaults);
   const group = headerGroupOf(id);
   const dragging = dragInfo?.id === id;
   const dropHere = dragInfo != null && dragInfo.id !== id && dragInfo.beforeId === id;
@@ -140,7 +142,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
               className="untested"
               onClick={() => {
                 setMenu(null);
-                void updateSettings({ header_pins: toggleHeaderPin(pins, id) });
+                void updateSettings({ header_pins: toggleHeaderPin(pins, id, pinDefaults) });
               }}
             >
               {pinned ? t("headerPins.fold") : t("headerPins.pin")}

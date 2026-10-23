@@ -97,6 +97,7 @@ export function MobileIndicator() {
   const mobileHost = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]);
   const mobileEnabled = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]?.enabled ?? false);
   const visible = useSettingsStore((s) => s.settings?.mobile_indicator ?? true);
+  const mobileSetupSeen = useSettingsStore((s) => s.settings?.mobile_setup_seen ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const open = useHeaderHoverMenuStore((s) => s.openId === MENU_ID);
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
@@ -287,7 +288,11 @@ export function MobileIndicator() {
           className="global-apps-menu-btn mobile-indicator-btn"
           aria-label={t("mobile.indSetUpTitle")}
           title={t("mobile.indSetUpTitle")}
-          onClick={() => setShowSetup(true)}
+          onClick={() => {
+            setShowSetup(true);
+            // Found: from now on the icon folds like any readout (lib/headerPins).
+            if (!mobileSetupSeen) void updateSettings({ mobile_setup_seen: true });
+          }}
         >
           <MobileIcon tone="off" />
         </button>

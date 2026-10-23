@@ -1002,6 +1002,10 @@ pub struct Settings {
     /// absent id follows the frontend's default (`lib/headerPins`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_pins: Option<HashMap<String, bool>>,
+    /// The header's Mobile setup guide has been opened once; until then (and
+    /// while Mobile is off) the phone icon stays pinned (`lib/headerPins`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_setup_seen: Option<bool>,
     /// Top-bar item ids in the order the user dragged them; an id that is absent
     /// keeps its built-in place after the listed ones (`lib/headerPins`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
