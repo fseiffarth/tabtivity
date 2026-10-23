@@ -60,3 +60,12 @@ f49778aa6513650ebe03570fe61375f8f6f527b0:src/__tests__/mobile/MobileSecretsRelea
 806348a7ed2bf30cbac559848926eee545b2b8f5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8578
 806348a7ed2bf30cbac559848926eee545b2b8f5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8595
 806348a7ed2bf30cbac559848926eee545b2b8f5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8646
+# phone agent-tab tests: idempotency_key fixtures "0123456789abcdef" / "fedcba9876543210"
+20d7be47c7a7d31b5be5e7fa92a95eec979453ae:src/__tests__/mobile/MobileApiKeyAgents.test.tsx:generic-api-key:49
+20d7be47c7a7d31b5be5e7fa92a95eec979453ae:src/__tests__/mobile/MobileApiKeyAgents.test.tsx:generic-api-key:114
+14b33827456ffb66c08396461d59e5bd3ba6ac2b:src/__tests__/mobile/MobileEveryProjectType.test.tsx:generic-api-key:62
+42a55e39744245ca72d38accc7e7fe15737bc045:src-tauri/src/services/mobile_control/headless.rs:generic-api-key:2354
+# docs/ai_switch_plan.md: prose "allowlist of keys passes. Keypad Enter,"
+08306d8b58d632cc16b7b53fa0249cc98ba762c1:docs/ai_switch_plan.md:generic-api-key:90
+# teleport route test: idempotency_key fixture "0123456789abcdef"
+f37b64c04c0916c8d9be4960026a4e1cf41e6adb:src-tauri/src/services/mobile_control/host.rs:generic-api-key:10040
