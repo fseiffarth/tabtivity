@@ -78,6 +78,28 @@ function formatQuiet(ms: number): string {
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
 }
 
+/** Quote one argument for display only — left bare when it needs no quoting, so
+ *  the common `tail -n 60 -F log` reads as typed. Never executed. */
+function displayArg(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * What a shell tab Tabtivity opened was started with: the program and its args
+ * when it launched one (an install's `bash`, a script's interpreter), and the
+ * command it typed into the shell (`initialInput`). A plain shell the user
+ * opened has neither, and gets no rows. Fast mode's plain tooltip (`TabBar`)
+ * reads it too.
+ */
+export function shellLaunch(tab: TabEntry): { program: string | null; input: string | null } {
+  if (tab.kind !== "shell") return { program: null, input: null };
+  const argv = [tab.cmd, ...(tab.args ?? [])].filter((a) => a !== "");
+  return {
+    program: argv.length ? argv.map(displayArg).join(" ") : null,
+    input: tab.initialInput?.trim() || null,
+  };
+}
+
 /**
  * The folder shown on the card. A file tab's `cwd` is just the project root —
  * the same for every file tab, so it says nothing; show the file's FOLDER
@@ -203,6 +225,7 @@ export function TabHoverCard({
     : null;
 
   const path = cardPath(tab);
+  const launch = shellLaunch(tab);
 
   // What the tab holds in this window (an estimate; `lib/tabCost`). Read in
   // render — the 10 s tick above refreshes it while the card is up.
@@ -222,7 +245,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input]);
 
   return createPortal(
     <div
@@ -255,6 +278,23 @@ export function TabHoverCard({
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">{t("tabHoverCard.restartLabel")}</span>
           <span className="tab-popup-meta">{restart}</span>
+        </span>
+      )}
+      {launch.program && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.programLabel")} <UntestedTag id="tabHoverCard.shellLaunch" />
+          </span>
+          <span className="tab-popup-command">{launch.program}</span>
+        </span>
+      )}
+      {launch.input && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.commandLabel")}
+            {!launch.program && <> <UntestedTag id="tabHoverCard.shellLaunch" /></>}
+          </span>
+          <span className="tab-popup-command">{launch.input}</span>
         </span>
       )}
       {cost && (

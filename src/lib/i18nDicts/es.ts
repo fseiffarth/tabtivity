@@ -5794,6 +5794,8 @@ export const dict: Dict = {
   "tabHoverCard.activityLabel": "actividad",
   "tabHoverCard.restartLabel": "reinicio",
   "tabHoverCard.sessionLabel": "sesión",
+  "tabHoverCard.programLabel": "programa",
+  "tabHoverCard.commandLabel": "comando",
   "tabCost.label": "memoria",
   "tabCost.terminal": "≈ {size} · {rows} de {cap} líneas",
   "tabCost.terminalAsleep": "Descargada: el programa sigue ejecutándose",

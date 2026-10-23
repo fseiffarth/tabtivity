@@ -5962,6 +5962,8 @@ export const enSource = {
   "tabHoverCard.activityLabel": "activity",
   "tabHoverCard.restartLabel": "restart",
   "tabHoverCard.sessionLabel": "session",
+  "tabHoverCard.programLabel": "program",
+  "tabHoverCard.commandLabel": "command",
   "tabCost.label": "memory",
   "tabCost.terminal": "≈ {size} · {rows} of {cap} lines",
   "tabCost.terminalAsleep": "Unloaded — the program keeps running",

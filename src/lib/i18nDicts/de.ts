@@ -5798,6 +5798,8 @@ export const dict: Dict = {
   "tabHoverCard.activityLabel": "Aktivität",
   "tabHoverCard.restartLabel": "Neustart",
   "tabHoverCard.sessionLabel": "Sitzung",
+  "tabHoverCard.programLabel": "Programm",
+  "tabHoverCard.commandLabel": "Befehl",
   "tabCost.label": "Speicher",
   "tabCost.terminal": "≈ {size} · {rows} von {cap} Zeilen",
   "tabCost.terminalAsleep": "Entladen – das Programm läuft weiter",
