@@ -2825,6 +2825,34 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [ ] **Follow a Claude cloud session live in a tab** (idea 2026-10-23, not
+  started): the `+` menu's *open a cloud session* runs `claude --teleport`,
+  which copies the session into the tab — the cloud session runs on and the
+  two never sync, so there is no claude.ai-style chat with it. Claude
+  2.1.309's `--help` lists `--cloud [description|session_id|url]`: "create a
+  cloud session …, or attach to an existing one by session ID or
+  claude.ai/code URL" (the *new* action already uses `--cloud <task>`).
+  Probed 2026-10-23 by the user: `claude --cloud https://claude.ai/code/cshk_…`
+  did **not** attach — it took the URL as a description, created a new
+  session (`Created cloud session … View: https://claude.ai/code/session_… ·
+  Resume with: claude --teleport session_…`) and exited. So a *new* cloud tab
+  never stays attached either, and a `cshk_` link is not an id. A bare id is
+  read as one: `claude --cloud session_01Qd…` answered `Error: Attaching to
+  an existing cloud session is not enabled for your account.` **Blocked on
+  Anthropic** turning attach on for the account; re-probe after Claude
+  updates. Still open once it is on: (1) does the attach run live — cloud
+  turns stream into the terminal, typed prompts reach the cloud session;
+  (2) the exact forms the CLI reads as an id (`session_…` yes, a `cshk_…`
+  URL no; anything else silently starts a session titled with that text, so
+  Tabtivity passes only checked `session_` ids); (3) does an attached tab
+  write a local transcript the Chat view (`agent_tab_transcript`) can read,
+  or does Chat need another source. If (1) holds: an `attach` action in
+  `lib/agents/cloudSessions.ts` (`["--cloud", id]`, id through
+  `cleanCloudSession`, or a pasted claude.ai/code URL with its own check),
+  offered in the `+` menu and on the phone beside teleport; the tab stays
+  non-resumable, but restore can re-attach by the stored id. Update
+  `docs/help/agent-clis.md` § Cloud sessions.
+
 ### AI switch (edge rail ⏻) — `docs/ai_switch_plan.md`
 
 - [x] Built 2026-10-20 (uncommitted): `services::ai_switch` + gates, side
