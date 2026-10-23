@@ -1,9 +1,12 @@
 /**
  * The desktop bridge for a remote, a container and a VM project
  * (`docs/mobile_every_project_type_plan.md`, step 4): the Mobile switch is the
- * only gate on the project itself; inside it, only the tabs with a local tmux
- * session are the phone's. Every per-tab handler answers `tab_not_found` for the
- * others, and `create` follows the sidecar's verdict (`not_attachable`).
+ * only gate on the project itself; inside it, the phone's tabs are those with a
+ * local tmux session, plus a remote project's tabs on its host, which the
+ * sidecar reaches over the desktop's SSH master
+ * (`docs/mobile_remote_host_tabs_plan.md`). Every per-tab handler answers
+ * `tab_not_found` for the others, and `create` follows the sidecar's verdict
+ * (`not_attachable`): a phone tab always starts on this machine.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,25 +133,22 @@ describe("Mobile bridge — remote, container and VM projects", () => {
       .toMatchObject({ status: "error", code: "project_ineligible" });
   });
 
-  it("reports only the tabs the phone can attach to", async () => {
+  it("reports only the tabs the phone can list", async () => {
     const sessions = async (id: string) =>
       ((await ask({ type: "catalog", request_id: `s-${id}`, project_id: id })).statuses as { tmux_session: string }[])
         .map((row) => row.tmux_session).sort();
-    expect(await sessions("rem")).toEqual(["rem-local", "rem-pinned"].map(tmux).sort());
+    expect(await sessions("rem")).toEqual(["rem-local", "rem-pinned", "rem-host", "rem-worker"].map(tmux).sort());
     expect(await sessions("ctr")).toEqual([tmux("ctr-model")]);
     expect(await sessions("cta")).toEqual([]);
     expect(await sessions("vm")).toEqual([tmux("vm-model")]);
     const all = (await ask({ type: "activity", request_id: "all" })).statuses as { tmux_session: string }[];
     expect(all.map((row) => row.tmux_session).sort()).toEqual(
-      ["rem-local", "rem-pinned", "ctr-model", "vm-model"].map(tmux).sort(),
+      ["rem-local", "rem-pinned", "rem-host", "rem-worker", "ctr-model", "vm-model"].map(tmux).sort(),
     );
   });
 
-  it("answers tab_not_found to every per-tab handler for a tab it cannot reach", async () => {
+  it("answers tab_not_found to every per-tab handler for a tab it cannot list", async () => {
     const gone = [
-      { project_id: "rem", tmux_session: tmux("rem-host") },
-      { project_id: "rem", tmux_session: tmux("rem-worker") },
-      { project_id: "rem", tmux_session: tmux("rem-shell") },
       { project_id: "ctr", tmux_session: tmux("ctr-agent") },
       { project_id: "cta", tmux_session: tmux("cta-agent") },
       { project_id: "vm", tmux_session: tmux("vm-agent") },
@@ -158,7 +158,7 @@ describe("Mobile bridge — remote, container and VM projects", () => {
       { type: "rename_tab", label: "x" },
       { type: "close_tab" },
       { type: "color_tab", color: null },
-      { type: "reorder_tab", anchor_tmux_session: tmux("rem-local"), place: "before" },
+      { type: "reorder_tab", anchor_tmux_session: tmux("ctr-model"), place: "before" },
       { type: "schedules" },
       { type: "schedule_mutate", action: { type: "delete", schedule_id: "s" } },
       { type: "agent_status", refresh: false },
@@ -178,17 +178,40 @@ describe("Mobile bridge — remote, container and VM projects", () => {
     }
   });
 
-  it("lets an unreachable tab's seen and input marks fall through silently", async () => {
-    useActivityStore.setState({ attentionByTab: { "rem:rem-host": "done", "rem:rem-local": "done" } });
-    for (const name of ["rem-host", "rem-local"]) {
-      expect(await ask({ type: "tab_seen", request_id: `seen-${name}`, project_id: "rem", tmux_session: tmux(name) }))
+  it("lets an unlisted tab's seen and input marks fall through silently", async () => {
+    useActivityStore.setState({ attentionByTab: { "ctr:ctr-agent": "done", "ctr:ctr-model": "done" } });
+    for (const name of ["ctr-agent", "ctr-model"]) {
+      expect(await ask({ type: "tab_seen", request_id: `seen-${name}`, project_id: "ctr", tmux_session: tmux(name) }))
         .toMatchObject({ status: "seen" });
     }
     const attention = useActivityStore.getState().attentionByTab;
-    expect(attention["rem:rem-host"]).toBe("done");
-    expect(attention["rem:rem-local"]).toBeUndefined();
-    expect(await ask({ type: "tab_input", request_id: "inp", project_id: "rem", tmux_session: tmux("rem-host") }))
+    expect(attention["ctr:ctr-agent"]).toBe("done");
+    expect(attention["ctr:ctr-model"]).toBeUndefined();
+    expect(await ask({ type: "tab_input", request_id: "inp", project_id: "ctr", tmux_session: tmux("ctr-agent") }))
       .toMatchObject({ status: "seen" });
+  });
+
+  it("serves a remote project's tabs on its host and on a worker", async () => {
+    for (const name of ["rem-host", "rem-worker"]) {
+      const target = { project_id: "rem", tmux_session: tmux(name) };
+      expect(await ask({ ...target, type: "schedules", request_id: `h1-${name}` })).toMatchObject({ status: "schedules" });
+      expect(await ask({ ...target, type: "rename_tab", request_id: `h2-${name}`, label: "On host" }))
+        .toMatchObject({ status: "renamed" });
+      expect(await ask({ ...target, type: "color_tab", request_id: `h3-${name}`, color: null })).toMatchObject({ status: "colored" });
+      expect(await ask({ ...target, type: "tab_seen", request_id: `h4-${name}` })).toMatchObject({ status: "seen" });
+      // Never moved between this machine's worktrees (`worktreeMoveDir`).
+      expect(await ask({ ...target, type: "tab_worktrees", request_id: `h5-${name}` }))
+        .toMatchObject({ status: "error", code: "not_movable" });
+      // Never respawned in a local tmux session, drawn or not.
+      expect(await ask({ ...target, type: "activate", request_id: `h6-${name}` }))
+        .toMatchObject({ status: "error", code: "session_gone" });
+    }
+    // A host shell is listed (the sidecar applies the Shells switch); the
+    // agent-only handlers still refuse it.
+    const shell = { project_id: "rem", tmux_session: tmux("rem-shell") };
+    expect(await ask({ ...shell, type: "color_tab", request_id: "hs1", color: null })).toMatchObject({ status: "colored" });
+    expect(await ask({ ...shell, type: "schedules", request_id: "hs2" })).toMatchObject({ status: "error", code: "tab_not_found" });
+    expect(await ask({ ...shell, type: "close_tab", request_id: "hs3" })).toMatchObject({ status: "closed" });
   });
 
   it("serves a reachable tab of the same project", async () => {

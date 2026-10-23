@@ -13,6 +13,7 @@ import { shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import type { ProjectEntry } from "../../types";
 import {
   phoneCreateVerdict,
+  phoneListsTab,
   phoneProjectFolder,
   phoneReachesTab,
   projectHostKind,
@@ -56,17 +57,50 @@ describe("the shared locality table, over a project of each host", () => {
 
 /** The whole table (project type x tab kind x location), read by the sidecar's
  * `the_project_host_table_matches_the_windows` too: the host word, whether the
- * phone reaches the tab and the create verdict (of a project with a folder). */
+ * phone reaches the tab here, whether its list may hold it (a remote project's
+ * host tab too, `docs/mobile_remote_host_tabs_plan.md`) and the create
+ * verdict (of a project with a folder). */
 describe("the shared project-host table", () => {
   for (const row of hostTable) {
     const name = `${row.project}: ${row.kind} ${row.location ?? "(no location)"}`;
-    it(`${name} is ${row.reach ? "reachable" : "not reachable"}, host ${row.host}, create ${row.create}`, () => {
+    it(`${name} is ${row.reach ? "reachable" : "not reachable"}, ${row.lists ? "listed" : "not listed"}, host ${row.host}, create ${row.create}`, () => {
       const project = { ...base, ...row.record } as ProjectEntry;
       expect(projectHostKind(project)).toBe(row.host);
       expect(phoneReachesTab(project, tab(row.kind, row.location), "p1")).toBe(row.reach);
+      expect(phoneListsTab(project, tab(row.kind, row.location), "p1")).toBe(row.lists);
       expect(phoneCreateVerdict(project)).toBe(row.create);
     });
   }
+
+  it("lists what it reaches, plus a remote project's host tabs, and nothing else", () => {
+    for (const row of hostTable) expect(row.lists, JSON.stringify(row)).toBe(row.reach || row.host === "remote");
+    expect(hostTable.some((row) => row.lists && !row.reach)).toBe(true);
+  });
+});
+
+describe("remote-host tabs", () => {
+  it("are listed in a remote project, a worker's too, but never reached here", () => {
+    for (const location of ["remote", "host:w1"]) {
+      expect(phoneListsTab(remoteProject, tab("agent", location), "p1")).toBe(true);
+      expect(phoneReachesTab(remoteProject, tab("agent", location), "p1")).toBe(false);
+    }
+    // A shell with no location runs on the host.
+    expect(phoneListsTab(remoteProject, tab("shell", null), "p1")).toBe(true);
+    expect(phoneReachesTab(remoteProject, tab("shell", null), "p1")).toBe(false);
+  });
+
+  it("are not listed for a VM or a container project", () => {
+    expect(phoneListsTab(vmProject, tab("agent", "remote"), "p1")).toBe(false);
+    expect(phoneListsTab(vmProject, tab("shell", null), "p1")).toBe(false);
+    expect(phoneListsTab(containerProject, tab("agent", null), "p1")).toBe(false);
+  });
+
+  it("feed the bridge's per-tab handlers, while create and reopen stay on reach", () => {
+    const src = readFileSync("src/components/mobile/MobileBridgeHost.tsx", "utf8") as string;
+    expect(src).toContain(".filter((tab) => phoneListsTab(project, tab, scopeId));");
+    expect(src).toContain(".filter((closed) => phoneReachesTab(scope.project, closed.tab, scope.id));");
+    expect(src).toContain("if (wanted && !phoneReachesTab(scope.project, wanted.tab, scope.id)) return notAttachable;");
+  });
 });
 
 describe("project hosts", () => {

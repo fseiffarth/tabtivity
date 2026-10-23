@@ -2,8 +2,10 @@
  * Where a project's tabs run, and so what the phone can attach to.
  *
  * The phone attaches to a tab through a tmux session ON THIS MACHINE, so a tab
- * that runs on a remote host, inside a container or in a VM has nothing to
- * attach to (`docs/mobile_every_project_type_plan.md`, phase 1). The sidecar
+ * that runs inside a container or in a VM has nothing to attach to
+ * (`docs/mobile_every_project_type_plan.md`, phase 1); a remote project's tab
+ * on its host is reached through the desktop's SSH master instead
+ * (`phoneListsTab`). The sidecar
  * decides it in Rust from the saved record (`discovery::runs_on_this_machine`,
  * `create_verdict`); this is the desktop bridge's twin, over the live tab and
  * project the window holds. Both read `tabLocality.fixture.json`
@@ -72,6 +74,22 @@ export function phoneReachesTab(
     case "local":
       return true;
   }
+}
+
+/** Whether the phone's tab list may hold `tab`: every tab it reaches here,
+ * and every tab of a remote (not VM) project, since a tab that runs on the
+ * project's host is reached over the desktop's own SSH connection
+ * (`docs/mobile_remote_host_tabs_plan.md`). The catalog's listing rule at
+ * table level: the sidecar narrows further (tmux name, `persist_sessions`,
+ * kind, the host's master alive), and the window only acts on tmux names the
+ * sidecar resolved from its catalog, so listing more here is harmless.
+ * Create and reopen keep `phoneReachesTab`: a phone tab always starts here. */
+export function phoneListsTab(
+  project: ProjectEntry | null | undefined,
+  tab: { kind: TabKind; location?: TabLocation },
+  scopeKey: string,
+): boolean {
+  return projectHostKind(project) === "remote" || phoneReachesTab(project, tab, scopeKey);
 }
 
 /** What the phone may create in the project: anything in a local one (and in a

@@ -35,7 +35,7 @@ import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
-import { phoneCreateVerdict, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
+import { phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
 import type { CalendarEvent, CalendarTask, ProjectEntry, Subtask, TaskColumn } from "../../types";
 import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
@@ -414,14 +414,17 @@ function mobileProject(projectId: string | undefined) {
   return project?.[MOBILE_ACCESS_KEY] ? project : undefined;
 }
 
-/** The scope's tabs the phone can attach to: all of a local project's, box's,
- * root's or assistant's, and of a remote, container or VM project only those
- * with a local tmux session (`lib/projectTabHost`). EVERY per-tab handler of
- * this bridge reads its tabs through here, so a tab the phone cannot reach is
- * `tab_not_found` to all of them, as the sidecar's catalog does not list it. */
+/** The scope's tabs the phone can list: all of a local project's, box's,
+ * root's, assistant's and remote project's (a host tab too: the sidecar
+ * attaches to it over the desktop's SSH master), and of a container or VM
+ * project only those with a local tmux session (`lib/projectTabHost`
+ * `phoneListsTab`). EVERY per-tab handler of this bridge reads its tabs
+ * through here, so a tab the phone cannot list is `tab_not_found` to all of
+ * them, as the sidecar's catalog does not list it. Create and reopen keep
+ * `phoneReachesTab`: a phone tab always starts on this machine. */
 function phoneTabs(scopeId: string): TabEntry[] {
   const project = useProjectsStore.getState().projects.find((entry) => entry.id === scopeId);
-  return (useTabsStore.getState().tabsByScope[scopeId] ?? []).filter((tab) => phoneReachesTab(project, tab, scopeId));
+  return (useTabsStore.getState().tabsByScope[scopeId] ?? []).filter((tab) => phoneListsTab(project, tab, scopeId));
 }
 
 /** A scope the phone may reach, in the four facts a handler needs of it. A
@@ -1333,15 +1336,18 @@ async function activate(projectId: string, tmuxSession?: string): Promise<Deskto
 function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string | null {
   const tab = mobileTargetTab(scope.id, tmuxSession);
   if (!tab) return "tab_not_found";
+  // A tab on a remote host (listed since the phone reaches it over the
+  // desktop's SSH master) is never wrapped here, drawn or not: its session,
+  // if any, runs on the host.
+  const project = scope.project;
+  if (project?.remote && effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) !== "local") return "session_gone";
   const ready = mobileTmuxReadiness(scope.id, tab.key);
   // Not drawn yet (a scope `enterScope` just restored): its first render
   // stamps the switch, which is on, and the spawn is wrapped.
   if (ready === undefined) return null;
   if (ready || (tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
-  const project = scope.project;
-  const localRunning = !project?.remote || effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) === "local";
   const localPersist = !IS_HOST_WINDOWS && useSettingsStore.getState().settings?.persist_local_sessions !== false;
-  if (!localRunning || !localPersist || tab.login) return "session_gone";
+  if (!localPersist || tab.login) return "session_gone";
   if (!isResumableAgentTab(tab)) return "tab_not_resumable";
   if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") return "agent_busy";
   // One render takes both: the stamp turns the tmux name on and the relaunch
