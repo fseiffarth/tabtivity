@@ -79,8 +79,25 @@ sign-in or cloud tab) is reopened on the desktop instead.
 Any project type can be shared. A **remote** project gives the phone its agents
 that run on this computer (the default for agents) and the files of its local
 mirror, and you can start an agent from the phone, which runs in the mirror;
-tabs that run on the remote host are not reachable, and the phone shows no git
-dot or "uncommitted changes" card for it. A **container** or **VM** project is
+the phone shows no git dot or "uncommitted changes" card for it.
+
+Its tabs that run on the remote host (or on one of its worker hosts) are listed
+too, marked **on host**. The phone reaches them through the desktop's own
+connection to that host, so they open only while the project is connected on
+the desktop (and for up to ten minutes after the desktop lets go of the
+connection); the phone never logs in to a host itself and never asks for a
+password. While the desktop is not connected, such a tab says "Connect this
+project on the desktop to open it", and an open one closes with that line.
+Shell tabs on the host follow the **shell tabs** switch, as local ones do. A
+host tab is only typed into: sending a file from the phone or the desktop,
+**Submit** of a markup and **Sign in** are not offered on it (they work through
+the project's inbox and this computer, which the host cannot see), and with no
+window open its schedules are not offered either. Recaps and the reading view
+fall back to the screen for it, as the desktop has no transcript of a session
+on the host. A tab on the host has a session to attach to only while the
+project's **Persistent sessions (tmux)** (its pill's menu) is on, the default.
+
+A **container** or **VM** project is
 listed on the phone with its tabs that run on this computer; the tabs inside the
 container or VM reach the phone in a later version. A VM has files on the phone
 only if you set up a local mirror for it.

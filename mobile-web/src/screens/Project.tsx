@@ -16,7 +16,7 @@ import { PromptsSheet } from "./PromptsSheet";
 import { SubagentsSheet } from "./SubagentsSheet";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
-import { FileTabCard, TAB_ACTION_LABEL, TabCard, tabActions, type TabAction } from "../components/TabCard";
+import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
 import { lastWorkedAt } from "../components/AgentModeMarks";
 import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
@@ -443,7 +443,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       show: (tab: TabRow, markupBack?: MarkupBack) => terminal(tab, { markupBack }),
       linked: (file) => {
         const tabId = findFileTab(id, file)?.tab;
-        return tabId ? tabRows.current.find((row) => row.id === tabId && row.kind === "agent") : undefined;
+        // Never a tab on the remote host: it cannot read the marked pages.
+        return tabId ? tabRows.current.find((row) => row.id === tabId && row.kind === "agent" && !row.on_host) : undefined;
       },
     } : undefined,
     [detail?.agents.length, creates, id, terminal],
@@ -718,13 +719,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       statusShown={showsStatusBadge(seenDone, seenInterrupted, tab)}
       drag={drag}
       canReorder={canReorder}
-      terminalsOffered={terminalsOffered}
-      restart={terminalsOffered && tab.kind === "agent" ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
+      schedulesOffered={schedulesOffered(tab, terminalsOffered, detail?.desktop_available)}
+      restart={terminalsOffered && tab.kind === "agent" && !tab.on_host ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
       swiped={swipedId === tab.id}
       closing={closingId !== null}
       moreOpen={moreTab?.id === tab.id}
       scheduleOpen={scheduleTab?.tab.id === tab.id}
-      onOpen={() => (!tab.available && terminalsOffered && tab.kind === "agent" ? void startTab(tab) : openTab(tab))}
+      onOpen={() => (!tab.available && terminalsOffered && tab.kind === "agent" && !tab.on_host ? void startTab(tab) : openTab(tab))}
       onModel={() => terminal(tab, { pickModel: true })}
       onMore={() => setMoreTab(tab)}
       onSchedule={() => setScheduleTab({ tab })}
@@ -799,8 +800,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       waiting=""
       busy={false}
       onClose={() => setMoreTab(null)}
-      options={tabActions(moreTab, terminalsOffered).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
-      onPick={(key) => { const action = tabActions(moreTab, terminalsOffered).find((row) => row === key); if (action) runAction(moreTab, action); }}
+      options={tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available)).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
+      onPick={(key) => { const action = tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available)).find((row) => row === key); if (action) runAction(moreTab, action); }}
     >{isUntested("mobile.project.cardMenu") && <p className="sheet-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}</OptionSheet>}
     {newTabOpen && detail && <NewTabSheet
       projectId={id}
@@ -817,7 +818,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
     />}
     {subagentsTab && <SubagentsSheet tab={subagentsTab} onClose={() => setSubagentsTab(null)} onOpen={(step) => { const row = subagentsTab; setSubagentsTab(null); terminal(row, { subagent: step }); }} />}
-    {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={terminalsOffered ? (tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); } : undefined} />}
+    {/* A send-now is a one-time schedule: with no window, not to a tab on
+        the remote host (`schedulesOffered`). */}
+    {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.desktop_available === false ? detail.tabs.filter((tab) => !tab.on_host) : detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={terminalsOffered ? (tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); } : undefined} />}
     {colorTab && <ColorSheet
       tab={colorTab}
       onClose={() => setColorTab(null)}

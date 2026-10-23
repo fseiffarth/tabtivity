@@ -158,6 +158,14 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     expect(fileInput().multiple).toBe(true);
   });
 
+  it("keeps only the project @ on a tab on the remote host, whose inbox the agent cannot read", async () => {
+    render(<Terminal tab={{ ...TAB, on_host: true }} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
+    const sheet = screen.getByRole("dialog", { name: "Add to the message" });
+    expect(Array.from(sheet.querySelectorAll(".attach-tile")).map((tile) => tile.className.replace("attach-tile attach-tile-", ""))).toEqual(["project"]);
+  });
+
   it("offers the gallery as its own entry: a media-only picker over the same inbox drop", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, {
       attachment: { name: "20260917-120000-IMG_0099.jpg", reference: `${NAMES.inboxDir}/20260917-120000-IMG_0099.jpg`, size: 3 },

@@ -147,6 +147,9 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   replaced: "mobile.failure.replaced",
   session_busy: "mobile.failure.sessionBusy",
   session_gone: "mobile.failure.sessionGone",
+  // A tab on a remote project's host whose desktop SSH connection is gone:
+  // the terminal upgrade's 409 and the closing reason alike.
+  host_offline: "mobile.failure.hostOffline",
   // The sidecar's own refusals (`host.rs`).
   desktop_unavailable: "mobile.unavailable.desktopDownTitle",
   launch_pending: "mobile.failure.launchPending",
@@ -214,6 +217,9 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   // A project type whose tabs the phone cannot attach to yet (`create` in the
   // detail payload: `agents` or `none`).
   not_attachable: "mobile.failure.notAttachable",
+  // Something that acts on this machine (inbox, Mark up, sign-in, and with no
+  // window schedules and held prompts) aimed at a tab on the remote host.
+  tab_on_host: "mobile.failure.tabOnHost",
   unsupported_mode: "mobile.failure.unsupportedMode",
   persist_failed: "mobile.failure.persistFailed",
   calendar_unavailable: "mobile.failure.calendarUnavailable",

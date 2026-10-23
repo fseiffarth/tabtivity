@@ -94,13 +94,15 @@ export function firstGrapheme(text: string): string {
  * doing (turn time, PLAN/GOAL, worktree, subagents), then what it was asked.
  * Rename, colour and the rest live behind ⋯ (`moreFor`).
  */
-export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
+export function TabCard({ tab, statusShown, drag, canReorder, schedulesOffered, swiped, closing, moreOpen, scheduleOpen, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
   tab: TabRow;
   /** False once a finished or interrupted tab has been opened here. */
   statusShown: boolean;
   drag: RowDrag;
   canReorder: boolean;
-  terminalsOffered: boolean;
+  /** The tab's schedules can be reached: the host has tmux, and a tab on
+   * the remote host has a window to type them (`schedulesOffered`). */
+  schedulesOffered: boolean;
   /** A swipe is closing this card: it slides out while the desktop answers. */
   swiped: boolean;
   /** Some close is in flight: every ✕ waits for it. */
@@ -111,7 +113,8 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
    * before the project's Mobile switch went on runs outside tmux and is listed
    * as not available, so the card still opens — by asking the desktop to
    * restart it where the phone can attach (`starting` = this one, `busy` = some
-   * tab is). */
+   * tab is). Never on a tab on the remote host (`on_host`), which no restart
+   * here brings back. */
   restart?: { busy: boolean; starting: boolean };
   onOpen: () => void;
   onModel: () => void;
@@ -125,7 +128,7 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
   const agent = tab.kind === "agent";
   // The ◷ is a shortcut to schedules a tab already has; adding the first one
   // is a row of the ⋯ sheet, so a card without any spends no width on it.
-  const scheduled = agent && terminalsOffered && (tab.schedules?.total ?? 0) > 0;
+  const scheduled = agent && schedulesOffered && (tab.schedules?.total ?? 0) > 0;
   const schedule = agent ? scheduleLine(tab.schedules, t) : null;
   return <div
     className={`tab-card${color ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}${swiped ? " swiped-out" : ""}`}
@@ -159,6 +162,10 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
               run, PLAN/GOAL, the worktree it (and its subagents) work in, and
               how many subagents are at work — a tap lists them. */}
           <span className="tab-card-meta">
+            {/* Runs on the remote project's host, which the phone reaches
+                through the desktop's SSH connection. */}
+            {tab.on_host && <small className="agent-mode-mark" title={t("mobile.project.onHostTitle")}>{t("mobile.project.onHost")}</small>}
+            {tab.on_host && isUntested("mobile.project.onHost") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             {agent && <TurnDuration tab={tab} />}
             <AgentModeMarks tab={tab} />
             <WorktreeMark tab={tab} />
@@ -186,6 +193,9 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
     {schedule && <div className="tab-card-foot">
       <small className="tab-card-when" title={tab.schedules?.next ? t("mobile.project.nextRunTitle", { when: tab.schedules.next.replace("T", " ") }) : undefined}>{schedule}</small>
     </div>}
+    {/* A host tab is out of reach while the desktop is not connected to the
+        host; it never restarts for the phone, so the card says what to do. */}
+    {tab.on_host && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.hostOffline")}</small></div>}
     {restart?.starting && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.restarting")}</small>{isUntested("mobile.project.restartForPhone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>}
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}
@@ -198,12 +208,20 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
  * keeps one accessible name. */
 export type TabAction = "rename" | "color" | "schedule" | "subagents" | "close";
 
-export function tabActions(tab: TabRow, terminalsOffered: boolean): TabAction[] {
+/** Whether a tab's schedules are offered: the host has tmux (`terminals`),
+ * and a tab on the remote host only while a desktop window is open — with
+ * none, the Mobile host's scheduler types into local tmux only and refuses
+ * them (`tab_on_host`). */
+export function schedulesOffered(tab: TabRow, terminalsOffered: boolean, desktopAvailable: boolean | undefined): boolean {
+  return terminalsOffered && !(tab.on_host && desktopAvailable === false);
+}
+
+export function tabActions(tab: TabRow, schedules: boolean): TabAction[] {
   const agent = tab.kind === "agent";
   return [
     ...(agent ? ["rename" as const] : []),
     "color" as const,
-    ...(agent && terminalsOffered ? ["schedule" as const] : []),
+    ...(agent && schedules ? ["schedule" as const] : []),
     ...(agent && tab.available && (tab.agent_subagents ?? 0) > 0 ? ["subagents" as const] : []),
     "close" as const,
   ];

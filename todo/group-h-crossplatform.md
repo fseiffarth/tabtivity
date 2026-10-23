@@ -3730,6 +3730,42 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cj — The phone reaches a remote project's tabs on the host** (2026-10-24;
+  window + phone half code-complete, automated tests passing —
+  `MobileTabReach.test.ts` (`lists` column of `projectHostReach.fixture.json`),
+  `MobileEveryProjectType.test.tsx`, `MobileHostTabs.test.tsx`,
+  `MobileTerminalInbox.test.tsx`; the sidecar half on its own branch; ⚠️ never
+  run live). Plan `docs/mobile_remote_host_tabs_plan.md`, handoff
+  `docs/mobile_remote_host_tabs_handoff.md`. A remote project's tabs that run
+  on its host or a worker are listed with an "on host" chip and attached
+  through the desktop's own SSH ControlMaster (never a new connection, never a
+  prompt); unreachable while the desktop is not connected. Untested id
+  `mobile.project.onHost`.
+  - Needs the sidecar updated and the PWA rebuilt (`npm run backend:stale`,
+    `npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, desktop + phone — (1) A remote project with Mobile on,
+    an agent tab running on the host, the desktop connected (green lamp): the
+    phone lists it with the "on host" chip; open it, type a prompt, see the
+    reply; the desktop tab shows the same. (2) Disconnect the project on the
+    desktop: the card says "Connect this project on the desktop to open it" and
+    does not open; an open phone terminal closes with that line; no ssh login or
+    prompt appears anywhere (`ss -tnp` shows no new `:22` connection from the
+    sidecar). (3) A shell tab on the host: hidden while "shell tabs" is off,
+    listed when on. (4) A worker tab (`host:<id>`) on a connected worker: listed
+    and opens. (5) On a host tab the composer's ＋ offers only "Project file"
+    (no camera, gallery, files or desktop), its viewers offer no Mark up, and
+    the Status sheet no Sign in; with the window closed its ◷ / Scheduled
+    prompts are gone. (6) A host reached through `ProxyJump` in
+    `~/.ssh/config`: its tab is listed and opens.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **31ci — The phone reaches every project type** (2026-10-21; ✅ code-complete,
   automated tests passing — catalog `discovery.rs` (per-type folder, locality
   rule, folder-less listing), host `not_attachable`/`folder`/`create`/`host`,

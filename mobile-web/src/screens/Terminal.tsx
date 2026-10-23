@@ -1823,16 +1823,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       // A session that ended on the desktop refuses the upgrade at the HTTP
       // layer, so no `closing` frame can ever say why — the phone would show
       // "reconnecting…" forever. After two straight failures, ask the tab
-      // endpoint; a transient network failure keeps the reconnect loop.
+      // endpoint; a transient network failure keeps the reconnect loop. A tab
+      // on the remote host that is out of reach lost the desktop's connection
+      // to the host (its upgrade's `409 host_offline`), not its session.
       if (reconnectAttempt >= 2) {
         void api<{ tab: TabRow }>(`/api/v1/tabs/${tab.id}`)
-          .then((body) => { if (!body.tab.available) throw new ApiError(410, "session_gone"); })
+          .then((body) => { if (!body.tab.available) throw new ApiError(410, body.tab.on_host ? "host_offline" : "session_gone"); })
           .catch((reason) => {
             if (stopped || !(reason instanceof ApiError)) return;
             if (reason.status !== 404 && reason.status !== 410) return;
             stopped = true;
             clearTimeout(reconnectTimer);
-            setStoppedReason(describeFailure("session_gone"));
+            setStoppedReason(describeFailure(reason.code === "host_offline" ? "host_offline" : "session_gone"));
           });
       }
       clearTimeout(reconnectTimer);
@@ -3618,7 +3620,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** How this CLI signs in from here: a sign-in tab where the desktop has a
    * login command for it, else its slash command in this session. */
   const typedSignIn = signInCommand(slashCliKey);
-  const signInWay = !connected || tab.kind !== "agent" ? null
+  // Not on a tab on the remote host: a sign-in tab would start a local CLI,
+  // and its callback would reach a port on this machine, not the host's.
+  const signInWay = !connected || tab.kind !== "agent" || tab.on_host ? null
     : hasSignInTab(slashCliKey) && openTab
       ? { hint: t("mobile.signIn.tabHint", { agent: agentLabel }), start: () => void openSignIn(false) }
       : typedSignIn
@@ -3982,13 +3986,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * only — `tab.agent_status` is the snapshot taken when this tab was
    * opened, and would read "working" forever for a tab opened mid-turn. */
   const markupAgent: AgentSignal = liveQuestion !== null ? "question" : liveBusy ? "working" : "idle";
-  /** An agent tab's viewers offer **Mark up**; a shell has no chat to send to.
+  /** An agent tab's viewers offer **Mark up**; a shell has no chat to send to,
+   * and a tab on the remote host cannot read the marked pages Submit puts in
+   * the mirror's inbox (`tab_on_host`).
    * The agent's state is in the deps, so the viewers re-render on its edges. */
   const markupTarget = useMemo<MarkupTarget | undefined>(
-    () => (tab.kind === "agent" && !bare
+    () => (tab.kind === "agent" && !bare && !tab.on_host
       ? { tabId: tab.id, projectId: project ?? `tab:${tab.id}`, onSend: sendMarkup, agent: markupAgent, refresh: refreshOutboxFile }
       : undefined),
-    [tab.kind, tab.id, bare, project, sendMarkup, markupAgent, refreshOutboxFile],
+    [tab.kind, tab.id, tab.on_host, bare, project, sendMarkup, markupAgent, refreshOutboxFile],
   );
   /** The agent's open markup question (`markup_ask`), for the banner over the
    * composer: read on the markup views' own poll, only while the Focus chat
@@ -4334,7 +4340,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     current: row.id === worktreeChoices?.current,
     pending: row.id === worktreeMoving,
   }));
-  const attachTiles: AttachTile[] = [
+  /** The composer's ＋ sheet. The camera, gallery, phone and desktop tiles
+   * put a file in the mirror's inbox, which a tab on the remote host cannot
+   * read (`tab_on_host`): such a tab keeps only the project reference. */
+  const allAttachTiles: AttachTile[] = [
     { key: "camera", tone: "camera", label: t("mobile.add.camera"), hint: t("mobile.add.cameraHint"), untested: "mobile.add.camera",
       icon: <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.5" /></svg> },
     { key: "gallery", tone: "gallery", label: t("mobile.add.gallery"), hint: t("mobile.add.galleryHint"),
@@ -4346,6 +4355,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
       icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
+  const attachTiles = tab.on_host ? allAttachTiles.filter((tile) => tile.key === "project") : allAttachTiles;
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
     label: image.name,

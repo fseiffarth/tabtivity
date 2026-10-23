@@ -234,7 +234,7 @@ describe("Mobile project access in the file viewer", () => {
     const user = userEvent.setup();
     const remote = { host: "h.invalid", user: "u", remote_path: "/srv/p" } as ProjectEntry["remote"];
     const kinds: [Partial<ProjectEntry>, RegExp][] = [
-      [{ remote }, /agents that run on this computer and the files of its local mirror/],
+      [{ remote }, /agents that run on this computer, the files of its local mirror, and its tabs on the remote host/],
       [{ sandbox: { enabled: true } }, /Container project: .*in a later version/],
       [{ remote, vm: { enabled: true } as ProjectEntry["vm"] }, /VM project: .*in a later version/],
     ];
