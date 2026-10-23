@@ -3,8 +3,11 @@
 //! folder the tab runs in, newest first, each named by its first prompt, to
 //! read in the Reader and resume in the tab.
 //!
-//! Claude and Codex, the two CLIs whose conversations Tabtivity finds by id and
-//! resumes by id. Claude files a folder's sessions as
+//! Claude and Codex keep a file per conversation, found and resumed by id.
+//! OpenCode and Antigravity keep theirs in SQLite stores read by folder
+//! (`opencode_store::folder_chats`, `google_chat::antigravity_chats`): a
+//! listed id is checked to be one of the folder's top-level conversations
+//! ([`is_folder_chat`]) before it is read or resumed. Claude files a folder's sessions as
 //! `<scope home>/.claude/projects/<folder slug>/<uuid>.jsonl` — the folder is
 //! the one the tab's current conversation lies in, else the slug of the tab's
 //! folder. Codex keeps every rollout under `.codex/sessions/<y>/<m>/<d>/`, each
@@ -68,6 +71,20 @@ pub struct ChatList {
     pub next: Option<usize>,
 }
 
+/// One earlier conversation as a store read by folder lists it (OpenCode's,
+/// Antigravity's): [`StoredChat`] before the tab's own is marked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderChat {
+    pub id: String,
+    /// Its first prompt, whole.
+    pub title: String,
+    /// Its last prompt, when that is another one.
+    pub last: Option<String>,
+    pub started: Option<String>,
+    /// When it was last written (epoch ms).
+    pub updated: u64,
+}
+
 /// A session file of the folder, before it is read.
 struct Candidate {
     path: PathBuf,
@@ -87,11 +104,14 @@ pub fn list_chats(
     offset: usize,
     limit: usize,
 ) -> ChatList {
+    let limit = limit.clamp(1, MAX_PAGE);
+    let dir = tab_dir.map(normal_dir);
+    if matches!(cmd, "opencode" | "agy") {
+        return folder_store_chats(cmd, project_id, dir.as_deref(), launch_id, offset, limit);
+    }
     let Some(kind) = kind_of(cmd) else {
         return ChatList::default();
     };
-    let limit = limit.clamp(1, MAX_PAGE);
-    let dir = tab_dir.map(normal_dir);
     let current = current_chat(cmd, project_id, launch_id);
     let candidates = candidates(cmd, project_id, dir.as_deref(), launch_id);
     let mut chats = Vec::new();
@@ -141,6 +161,78 @@ pub fn chat_file(
             let regular = std::fs::symlink_metadata(&path).ok()?.is_file();
             (regular && rollout_chat(&path, dir.as_deref()?).as_deref() == Some(chat)).then_some(path)
         }
+    }
+}
+
+/// [`list_chats`] for a CLI whose store is read by folder. Remote projects'
+/// stores are on the far host: not listed.
+fn folder_store_chats(
+    cmd: &str,
+    project_id: Option<&str>,
+    dir: Option<&str>,
+    launch_id: &str,
+    offset: usize,
+    limit: usize,
+) -> ChatList {
+    let Some(dir) = dir.filter(|dir| Path::new(dir).is_absolute()) else {
+        return ChatList { supported: true, ..Default::default() };
+    };
+    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return ChatList::default();
+    }
+    let home = crate::services::agent_home::scope_home(project_id);
+    let (read, current) = if cmd == "opencode" {
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        (
+            crate::services::opencode_store::folder_chats(&db, dir, offset, limit, MAX_SCANNED),
+            crate::services::opencode_session::recorded_session(project_id, launch_id),
+        )
+    } else {
+        (
+            crate::services::google_chat::antigravity_chats(&home, dir, offset, limit, MAX_SCANNED),
+            crate::services::google_chat::recorded_tab_conversation(&home, dir, project_id, launch_id),
+        )
+    };
+    let (found, next) = read.unwrap_or_default();
+    let chats = found
+        .into_iter()
+        .map(|chat| {
+            let title = row_text(&chat.title);
+            StoredChat {
+                current: current.as_deref() == Some(chat.id.as_str()),
+                last: chat.last.map(|text| row_text(&text)).filter(|text| *text != title),
+                title,
+                started: chat.started,
+                updated: chat.updated,
+                id: chat.id,
+            }
+        })
+        .collect();
+    ChatList { supported: true, chats, next }
+}
+
+/// Whether `chat` is one of the conversations [`list_chats`] would list for
+/// the folder (a session no prompt went into included): what a read or a
+/// resume of a renderer-named id checks first.
+pub fn is_folder_chat(cmd: &str, project_id: Option<&str>, tab_dir: Option<&str>, launch_id: &str, chat: &str) -> bool {
+    let dir = tab_dir.map(normal_dir);
+    let local = || project_id.is_none_or(|id| crate::services::remote::remote_target_for(id).is_none());
+    match cmd {
+        "opencode" => {
+            crate::services::opencode_session::is_session_id(chat)
+                && local()
+                && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
+                    crate::services::opencode_store::folder_session(&crate::services::opencode_store::db_path_for(project_id), dir, chat)
+                })
+        }
+        "agy" => {
+            agent_session::is_uuid_shaped(chat)
+                && local()
+                && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
+                    crate::services::google_chat::antigravity_folder_chat(&crate::services::agent_home::scope_home(project_id), dir, chat)
+                })
+        }
+        _ => chat_file(cmd, project_id, tab_dir, launch_id, chat).is_some(),
     }
 }
 

@@ -182,6 +182,13 @@ pub fn stored_chat_changes(
     if subagent.is_some_and(|token| !agent_transcript::is_subagent_token(token)) {
         return AgentChanges::unavailable("no_subagent");
     }
+    if cmd == "opencode" {
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return AgentChanges::unavailable("no_transcript");
+        }
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        return opencode_changes(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+    }
     let kind = match cmd {
         "claude" => Store::Claude,
         "codex" => Store::Codex,
@@ -510,10 +517,10 @@ fn codex_changes(value: &Value, out: &mut Vec<FileChange>) {
     }
 }
 
-/// The changes one OpenCode tool part records, created at `created` (epoch
-/// ms) unless the part says when it ended.
 /// V2's public tool content carries FileDiff records directly. Reuse the
 /// renderer's bounded diff format without reconstructing V1 tool envelopes.
+/// A tool without them (OpenCode 2.1.3's `edit`, `write`, …) keeps V1's
+/// `state` shape under its `name`, and is read as V1's are.
 pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileChange> {
     if tool.pointer("/state/status").and_then(Value::as_str) != Some("completed") {
         return Vec::new();
@@ -533,26 +540,28 @@ pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileCh
             Some(change(path, kind, diff.to_string(), at.clone()))
         }).collect();
     if !changes.is_empty() { return changes; }
-    if tool["name"] == "write" {
-        if let (Some(path), Some(content)) = (tool.pointer("/state/input/path").and_then(Value::as_str), tool.pointer("/state/input/content").and_then(Value::as_str)) {
-            return vec![whole_file(path, "write", content, at)];
-        }
-    }
-    Vec::new()
+    tool_state_changes(tool["name"].as_str(), &tool["state"], ended)
 }
 
+/// The changes one OpenCode tool part records, created at `created` (epoch
+/// ms) unless the part says when it ended.
 pub(crate) fn opencode_part_changes(created: i64, part: &Value) -> Vec<FileChange> {
     let Some(state) = part.get("state") else {
         return Vec::new();
     };
+    let ended = state.pointer("/time/end").and_then(Value::as_i64).unwrap_or(created);
+    tool_state_changes(part.get("tool").and_then(Value::as_str), state, ended)
+}
+
+/// The changes a completed `tool` call's `state` records, ended at `ended`.
+fn tool_state_changes(tool: Option<&str>, state: &Value, ended: i64) -> Vec<FileChange> {
     if state.get("status").and_then(Value::as_str) != Some("completed") {
         return Vec::new();
     }
-    let ended = state.pointer("/time/end").and_then(Value::as_i64).unwrap_or(created);
     let at = Some(crate::services::prompt_blame::epoch_ms_to_iso(ended));
     let input = |key: &str| state.pointer(&format!("/input/{key}")).and_then(Value::as_str);
     let meta = |key: &str| state.pointer(&format!("/metadata/{key}"));
-    match part.get("tool").and_then(Value::as_str) {
+    match tool {
         Some("edit") => {
             let (Some(path), Some(diff)) = (input("filePath"), meta("diff").and_then(Value::as_str).map(hunks_only)) else {
                 return Vec::new();

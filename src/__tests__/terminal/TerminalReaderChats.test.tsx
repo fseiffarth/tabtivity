@@ -125,6 +125,22 @@ describe("the Resume menu", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("relaunches an OpenCode tab onto the chat its record now names", async () => {
+    const opencode: TabEntry = { ...tab, cmd: "opencode", label: "OpenCode" };
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [opencode] } }));
+    invoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      Promise.resolve(command === "agent_tab_resume_chat" ? { kind: "relaunch" } : answer(command, args)));
+    render(<TerminalReaderChats ptyId="p:agent-1" scope="p" tab={opencode} cwd="/p" onReturnFocus={() => {}} />);
+    fireEvent.click(toggle());
+    await screen.findByText("fix the parser");
+    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Resume" })[0]); });
+    expect(invoke).toHaveBeenCalledWith("agent_tab_resume_chat", expect.objectContaining({ agent: "opencode", chat: "c-1" }));
+    await waitFor(() => expect(useTabsStore.getState().tabsByScope.p?.[0]?.relaunchSeq).toBe(1));
+    // The spawn turns the resume flag into `--session <id>` from the record.
+    expect(useTabsStore.getState().tabsByScope.p?.[0]?.args).toEqual(["--continue"]);
+    expect(submitCommand).not.toHaveBeenCalled();
+  });
+
   it("resumes nothing while the agent works", async () => {
     useActivityStore.setState((state) => ({ ...state, busyByTab: { "p:agent-1": true } }));
     menu();
@@ -199,10 +215,13 @@ describe("the chats model", () => {
     expect(chatPosition(browsed)).toEqual({ index: 0, count: 2 });
   });
 
-  it("is offered for Claude and Codex tabs with a launch id only", () => {
+  it("is offered for Claude, Codex, OpenCode and Antigravity tabs with a launch id only", () => {
     expect(chatsOffered("p", tab)).toBe(true);
     expect(chatsOffered("p", { ...tab, cmd: "codex" })).toBe(true);
-    expect(chatsOffered("p", { ...tab, cmd: "opencode" })).toBe(false);
+    expect(chatsOffered("p", { ...tab, cmd: "opencode" })).toBe(true);
+    expect(chatsOffered("p", { ...tab, cmd: "agy" })).toBe(true);
+    expect(chatsOffered("p", { ...tab, cmd: "gemini" })).toBe(false);
+    expect(chatsOffered("p", { ...tab, kind: "local_agent", cmd: "ollama" })).toBe(false);
     expect(chatsOffered("p", { ...tab, sessionId: undefined })).toBe(false);
     expect(chatsOffered("p", { ...tab, kind: "shell" })).toBe(false);
   });

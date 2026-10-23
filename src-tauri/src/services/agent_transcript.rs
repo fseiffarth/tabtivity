@@ -359,7 +359,9 @@ pub fn agent_session_transcript(
             return AgentTranscript::unavailable("unsupported");
         }
         let home = crate::services::agent_home::scope_home(project_id);
-        return crate::services::google_chat::transcript(cmd, &home, directory, since, version, limit);
+        let own = (cmd == "agy").then(|| crate::services::google_chat::recorded_conversation(project_id, launch_id)).flatten();
+        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
+        return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
     }
     let read = match cmd {
         "claude" => claude_transcript(project_id, launch_id, subagent, version, limit),
@@ -399,6 +401,21 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
+    if matches!(cmd, "opencode" | "agy") {
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return AgentTranscript::unavailable("no_transcript");
+        }
+        let dir = tab_dir.unwrap_or_default();
+        if cmd == "agy" {
+            if subagent.is_some() {
+                return AgentTranscript::unavailable("no_subagent");
+            }
+            let home = crate::services::agent_home::scope_home(project_id);
+            return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
+        }
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        return opencode_transcript(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+    }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
     };
@@ -421,6 +438,14 @@ pub fn stored_chat_watch_targets(
 ) -> Vec<crate::services::transcript_watch::Target> {
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return Vec::new();
+    }
+    if cmd == "opencode" {
+        // Its store, as the tab's own session is watched.
+        return if crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            watch_targets(cmd, project_id, launch_id, subagent, false)
+        } else {
+            Vec::new()
+        };
     }
     stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent)
         .map(|file| conversation_targets(cmd, &file, subagent.is_some()))

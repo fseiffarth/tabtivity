@@ -225,6 +225,19 @@ pub fn recorded_session(project_id: Option<&str>, uid: &str) -> Option<String> {
         .map(|(_, id)| id)
 }
 
+/// Point the record of `uid` in `dir` at the session `id`, as its plugin
+/// would at the session's next prompt: the Reader's Resume menu
+/// (`agent_session::resume_chat_plan`), before the tab is relaunched onto it.
+pub fn record_session_in(dir: &Path, uid: &str, id: &str) -> std::io::Result<()> {
+    if !is_uuid_shaped(uid) || !is_session_id(id) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a tab key and an OpenCode session"));
+    }
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{uid}.tmp"));
+    std::fs::write(&tmp, id)?;
+    std::fs::rename(&tmp, dir.join(uid))
+}
+
 /// How a tab's last launch began, from its launch note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Launch {
@@ -369,6 +382,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_resume_menu_records_the_session_a_relaunch_resumes() {
+        let dir = tmp("record");
+        record_session_in(&dir, UID, "ses_Picked1").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(UID)).unwrap(), "ses_Picked1");
+        let (args, _) = session_args(&["--continue".to_string()], Some("ses_Picked1"), true);
+        assert_eq!(args, ["--session", "ses_Picked1"]);
+        assert!(record_session_in(&dir, UID, "ses_bad/../x").is_err());
+        assert!(record_session_in(&dir, "../escape", "ses_Picked1").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn opts(args: &[&str]) -> PtyOptions {

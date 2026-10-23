@@ -9,6 +9,11 @@
 //! planner_response (20).response (1), and metadata (5).created_at (1). Only
 //! these fields are decoded; tool output, thoughts, config and context never
 //! become chat.
+//!
+//! Antigravity has no session hook. The Reader's Resume menu lists a folder's
+//! conversations and records the one it takes a tab onto in the tab's
+//! live-session record; the tab reads it, and is relaunched with
+//! `--conversation <id>`, until it begins another conversation.
 
 use std::io::Read;
 use std::path::Path;
@@ -17,18 +22,23 @@ use rusqlite::{Connection, OpenFlags, config::DbConfig, limits::Limit};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::services::agent_chats::FolderChat;
 use crate::services::agent_transcript::{AgentTranscript, transcript_entry};
 use crate::services::home_io::{HomeDir, HomeFile};
+use crate::terminal::PtyOptions;
 
 const MAX_FILES: usize = 512;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_STEP_BYTES: usize = 6 * 1024 * 1024;
 
-pub fn transcript(cmd: &str, home: &Path, directory: &str, since: Option<i64>, version: Option<&str>, limit: usize) -> AgentTranscript {
+/// The tab's conversation: the folder's newest main one (begun since `since`
+/// when given). Antigravity's `own` is the one the Resume menu took the tab
+/// onto and when ([`recorded_conversation`]), read until it begins another.
+pub fn transcript(cmd: &str, home: &Path, directory: &str, since: Option<i64>, own: Option<(&str, i64)>, version: Option<&str>, limit: usize) -> AgentTranscript {
     let read = if cmd == "gemini" {
         gemini(home, directory, since, version, limit)
     } else {
-        antigravity(home, directory, since, version, limit)
+        antigravity(home, directory, since, own, version, limit)
     };
     read.unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
 }
@@ -198,7 +208,14 @@ fn database(file: &HomeFile) -> Option<Connection> {
     Some(conn)
 }
 
-fn antigravity(home: &Path, directory: &str, since: Option<i64>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+/// Antigravity's store in an agent home: the conversations' summaries and the
+/// folder of their own databases.
+struct AgyStore {
+    summaries: Connection,
+    conversations: HomeDir,
+}
+
+fn agy_store(home: &Path) -> Option<AgyStore> {
     // SQLite's NOFOLLOW refuses a link at *any* component of the path, the
     // home's own prefix included (a symlinked /home or temp dir), and the home
     // is Tabtivity's (`home_io` opens its root by name for the same reason):
@@ -206,46 +223,189 @@ fn antigravity(home: &Path, directory: &str, since: Option<i64>, version: Option
     #[cfg(unix)]
     let home = &std::fs::canonicalize(home).ok()?;
     let root = HomeDir::open_existing(home, ".gemini/antigravity-cli")?;
-    let summaries = database(&root.file("conversation_summaries.db")?)?;
-    let conversations = root.open_subdir("conversations")?;
+    Some(AgyStore { summaries: database(&root.file("conversation_summaries.db")?)?, conversations: root.open_subdir("conversations")? })
+}
+
+/// The main conversations Antigravity ran in `directory`, newest first.
+fn agy_folder(store: &AgyStore, directory: &str) -> Option<Vec<String>> {
     let canonical = std::fs::canonicalize(directory).ok();
-    let mut query = summaries.prepare("SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time DESC LIMIT 512").ok()?;
+    let mut query = store.summaries.prepare("SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time DESC LIMIT 512").ok()?;
     let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).ok()?;
+    let mut ids = Vec::new();
     for row in rows {
         let (id, workspaces) = row.ok()?;
         if !crate::services::agent_session::is_uuid_shaped(&id) { continue; }
         let workspaces: Vec<String> = serde_json::from_str(&workspaces).ok()?;
-        if !workspaces.iter().any(|uri| url::Url::parse(uri).ok().and_then(|uri| uri.to_file_path().ok())
-            .is_some_and(|path| path == Path::new(directory) || canonical.as_deref() == Some(path.as_path()))) { continue; }
-        let file = conversations.file(&format!("{id}.db"))?;
-        let conn = database(&file)?;
-        if let Some(since) = since {
-            let first: Vec<u8> = conn.query_row("SELECT step_payload FROM steps WHERE step_type = 14 ORDER BY idx LIMIT 1", [], |row| row.get(0)).ok()?;
-            if step_time(&first).is_none_or(|time| time < since) { continue; }
+        if workspaces.iter().any(|uri| url::Url::parse(uri).ok().and_then(|uri| uri.to_file_path().ok())
+            .is_some_and(|path| path == Path::new(directory) || canonical.as_deref() == Some(path.as_path()))) {
+            ids.push(id);
         }
-        let mut current = format!("agy:{id}:{}:{since:?}:{limit}", stamp(&file)?);
-        // SQLite can keep new turns only in the WAL until a checkpoint.
-        if let Some(wal) = conversations.file(&format!("{id}.db-wal")).and_then(|file| stamp(&file)) {
-            current.push_str(&format!(":{wal}"));
-        }
-        let mut read = empty(current, version);
-        if read.unchanged { return Some(read); }
-        let mut query = conn.prepare("SELECT step_type, step_payload FROM steps WHERE step_type IN (14, 15) AND status = 3 ORDER BY idx DESC LIMIT ?1").ok()?;
-        let rows = query.query_map([4001], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))).ok()?;
-        let mut budget = MAX_BYTES as usize;
-        for (index, row) in rows.enumerate() {
-            let (kind, payload) = row.ok()?;
-            if index == 4000 || payload.len() > budget { read.truncated = true; break; }
-            budget -= payload.len();
-            let message = proto_bytes(&payload, if kind == 14 { 19 } else { 20 })?;
-            let text = proto_bytes(message, if kind == 14 { 2 } else { 1 }).and_then(|text| std::str::from_utf8(text).ok()).unwrap_or("");
-            let role = if kind == 14 { "prompt" } else { "answer" };
-            read.entries.extend(transcript_entry(role, text, step_time(&payload).map(crate::services::prompt_blame::epoch_ms_to_iso)));
-        }
-        read.entries.reverse();
-        return Some(finish(read, limit));
     }
-    Some(empty(format!("agy:new:{}:{since:?}:{limit}", key(directory)), version))
+    Some(ids)
+}
+
+/// A conversation's database, `None` when it has none (a summary row of a
+/// conversation never begun).
+fn agy_conversation(store: &AgyStore, id: &str) -> Option<(HomeFile, Connection)> {
+    let file = store.conversations.file(&format!("{id}.db"))?;
+    let conn = database(&file)?;
+    Some((file, conn))
+}
+
+/// When the conversation's first prompt went (epoch ms).
+fn agy_started(conn: &Connection) -> Option<i64> {
+    let first: Vec<u8> = conn.query_row("SELECT step_payload FROM steps WHERE step_type = 14 ORDER BY idx LIMIT 1", [], |row| row.get(0)).ok()?;
+    step_time(&first)
+}
+
+/// Which of the folder's conversations (`ids`, newest first) the tab reads:
+/// the newest one begun since `since` — and since the moment of its `own`
+/// record, the conversation the Resume menu last took it onto — else that
+/// one. `None`: a tab before its first prompt.
+fn agy_tab_conversation(store: &AgyStore, ids: &[String], since: Option<i64>, own: Option<(&str, i64)>) -> Option<String> {
+    let own = own.filter(|(id, _)| ids.iter().any(|known| known == id));
+    let since = match own {
+        Some((_, at)) => Some(since.map_or(at, |since| since.max(at))),
+        None => since,
+    };
+    ids.iter()
+        .find(|id| {
+            let Some((_, conn)) = agy_conversation(store, id) else { return false };
+            since.is_none_or(|since| agy_started(&conn).is_some_and(|start| start >= since))
+        })
+        .cloned()
+        .or_else(|| own.map(|(id, _)| id.to_string()))
+}
+
+fn antigravity(home: &Path, directory: &str, since: Option<i64>, own: Option<(&str, i64)>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    let store = agy_store(home)?;
+    let ids = agy_folder(&store, directory)?;
+    match agy_tab_conversation(&store, &ids, since, own) {
+        Some(id) => agy_read(&store, &id, &format!("{since:?}:{own:?}"), version, limit),
+        None => Some(empty(format!("agy:new:{}:{since:?}:{limit}", key(directory)), version)),
+    }
+}
+
+/// The conversation `id`'s prompts and answers; `salt` is what else the
+/// read went by, part of its version.
+fn agy_read(store: &AgyStore, id: &str, salt: &str, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    let (file, conn) = agy_conversation(store, id)?;
+    let mut current = format!("agy:{id}:{}:{}:{limit}", stamp(&file)?, key(salt));
+    // SQLite can keep new turns only in the WAL until a checkpoint.
+    if let Some(wal) = store.conversations.file(&format!("{id}.db-wal")).and_then(|file| stamp(&file)) {
+        current.push_str(&format!(":{wal}"));
+    }
+    let mut read = empty(current, version);
+    if read.unchanged { return Some(read); }
+    let mut query = conn.prepare("SELECT step_type, step_payload FROM steps WHERE step_type IN (14, 15) AND status = 3 ORDER BY idx DESC LIMIT ?1").ok()?;
+    let rows = query.query_map([4001], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))).ok()?;
+    let mut budget = MAX_BYTES as usize;
+    for (index, row) in rows.enumerate() {
+        let (kind, payload) = row.ok()?;
+        if index == 4000 || payload.len() > budget { read.truncated = true; break; }
+        budget -= payload.len();
+        let role = if kind == 14 { "prompt" } else { "answer" };
+        read.entries.extend(transcript_entry(role, step_text(kind, &payload).unwrap_or(""), step_time(&payload).map(crate::services::prompt_blame::epoch_ms_to_iso)));
+    }
+    read.entries.reverse();
+    Some(finish(read, limit))
+}
+
+/// A user input's (14) or planner response's (15) text.
+fn step_text(kind: i64, payload: &[u8]) -> Option<&str> {
+    let message = proto_bytes(payload, if kind == 14 { 19 } else { 20 })?;
+    proto_bytes(message, if kind == 14 { 2 } else { 1 }).and_then(|text| std::str::from_utf8(text).ok())
+}
+
+/// The earlier conversation `id` of `directory`, picked in the Reader's
+/// Resume menu (`services::agent_chats`): `no_transcript` unless it is one of
+/// the folder's.
+pub fn antigravity_chat(home: &Path, directory: &str, id: &str, version: Option<&str>, limit: usize) -> AgentTranscript {
+    let read = agy_store(home).and_then(|store| {
+        agy_folder(&store, directory)?.iter().any(|known| known == id).then_some(())?;
+        agy_read(&store, id, "chat", version, limit)
+    });
+    read.unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
+}
+
+/// Whether `id` is one of the main conversations Antigravity ran in `directory`.
+pub fn antigravity_folder_chat(home: &Path, directory: &str, id: &str) -> bool {
+    agy_store(home).and_then(|store| agy_folder(&store, directory)).is_some_and(|ids| ids.iter().any(|known| known == id))
+}
+
+/// The folder's chats for the Resume menu, as `opencode_store::folder_chats`
+/// lists OpenCode's: from the `offset`-th conversation on, at most `limit`
+/// that a prompt went into, of at most `scanned` read.
+pub fn antigravity_chats(home: &Path, directory: &str, offset: usize, limit: usize, scanned: usize) -> Option<(Vec<FolderChat>, Option<usize>)> {
+    let store = agy_store(home)?;
+    let ids = agy_folder(&store, directory)?;
+    let mut chats = Vec::new();
+    let mut at = offset;
+    while at < ids.len() && chats.len() < limit && at - offset < scanned {
+        let id = &ids[at];
+        at += 1;
+        let Some((file, conn)) = agy_conversation(&store, id) else { continue };
+        let prompt = |order: &str| -> Option<(String, Option<i64>)> {
+            let payload: Vec<u8> = conn.query_row(&format!("SELECT step_payload FROM steps WHERE step_type = 14 AND status = 3 ORDER BY idx {order} LIMIT 1"), [], |row| row.get(0)).ok()?;
+            let text = step_text(14, &payload)?.to_string();
+            (!text.trim().is_empty()).then(|| (text, step_time(&payload)))
+        };
+        let Some((title, started)) = prompt("ASC") else { continue };
+        let last = prompt("DESC").map(|(text, _)| text).filter(|text| *text != title);
+        let modified = |file: &HomeFile| file.open_read().and_then(|file| file.metadata().ok()?.modified().ok());
+        let updated = [Some(file), store.conversations.file(&format!("{id}.db-wal"))].iter().flatten()
+            .filter_map(modified).max()
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |at| at.as_millis() as u64);
+        chats.push(FolderChat { id: id.clone(), title, last, started: started.map(crate::services::prompt_blame::epoch_ms_to_iso), updated });
+    }
+    Some((chats, (at < ids.len()).then_some(at)))
+}
+
+/// The conversation the Resume menu last took the Antigravity tab `uid` onto
+/// (`agent_session::resume_chat_plan`), and when: its live-session record,
+/// which no hook of Antigravity's writes.
+pub fn recorded_conversation(project_id: Option<&str>, uid: &str) -> Option<(String, i64)> {
+    use crate::services::agent_session::{is_uuid_shaped, live_record_dir, read_live_session_in};
+    let dir = live_record_dir(project_id, uid)?;
+    let id = read_live_session_in(&dir, uid).filter(|id| is_uuid_shaped(id))?;
+    let at = std::fs::metadata(dir.join(uid)).ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some((id, i64::try_from(at.as_millis()).ok()?))
+}
+
+/// The conversation the tab `uid` in `directory` is in by its record — the
+/// one the Resume menu took it onto, while it began none since — for the
+/// menu's This chat mark and the next launch.
+pub fn recorded_tab_conversation(home: &Path, directory: &str, project_id: Option<&str>, uid: &str) -> Option<String> {
+    let (own, at) = recorded_conversation(project_id, uid)?;
+    let store = agy_store(home)?;
+    let ids = agy_folder(&store, directory)?;
+    agy_tab_conversation(&store, &ids, None, Some((&own, at))).filter(|id| *id == own)
+}
+
+/// Resolve an Antigravity tab's launch: one restored on `--continue` (the
+/// most recent conversation) goes back with `--conversation <id>` to the one
+/// the Resume menu took it onto, while it began none since. Remote and
+/// local-model tabs are left as they are.
+pub fn resolve(mut opts: PtyOptions) -> PtyOptions {
+    let remote = !opts.local_only
+        && opts.project_id.as_deref().is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
+    if remote || opts.local_model || !opts.args.iter().any(|arg| arg == "--continue" || arg == "-c") {
+        return opts;
+    }
+    let Some(uid) = opts.env.get(crate::app_env!("TAB_UID")).cloned() else { return opts };
+    if !Path::new(&opts.cwd).is_absolute() { return opts; }
+    let home = crate::services::agent_home::scope_home(opts.project_id.as_deref());
+    let Some(id) = recorded_tab_conversation(&home, &opts.cwd, opts.project_id.as_deref(), &uid) else { return opts };
+    opts.args = continued_onto(&opts.args, &id);
+    opts
+}
+
+/// `args` with `--continue`/`-c` replaced by `--conversation <id>`.
+fn continued_onto(args: &[String], id: &str) -> Vec<String> {
+    let mut out: Vec<String> = args.iter().filter(|arg| *arg != "--continue" && *arg != "-c").cloned().collect();
+    out.push("--conversation".into());
+    out.push(id.into());
+    out
 }
 
 fn step_time(payload: &[u8]) -> Option<i64> {
@@ -330,20 +490,20 @@ mod tests {
                 {"type": "error", "timestamp": "2026-10-15T12:00:02Z", "content": "You have exhausted your capacity on this model."}
             ]
         }));
-        let read = transcript("gemini", home.path(), directory, None, None, 60);
+        let read = transcript("gemini", home.path(), directory, None, None, None, 60);
         assert!(read.available);
         assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed."), ("answer", "You have exhausted your capacity on this model.")]);
         assert_eq!(read.entries[0].at.as_deref(), Some("2026-10-15T12:00:00Z"));
         assert_eq!(read.model.as_deref(), Some("gemini-test"));
         assert!(!read.version.as_deref().unwrap().contains(directory));
-        assert!(transcript("gemini", home.path(), directory, None, read.version.as_deref(), 60).unchanged);
-        let tail = transcript("gemini", home.path(), directory, None, read.version.as_deref(), 1);
+        assert!(transcript("gemini", home.path(), directory, None, None, read.version.as_deref(), 60).unchanged);
+        let tail = transcript("gemini", home.path(), directory, None, None, read.version.as_deref(), 1);
         assert!(!tail.unchanged);
         assert!(tail.truncated);
         assert_eq!(texts(&tail), [("answer", "You have exhausted your capacity on this model.")]);
-        let fresh = transcript("gemini", home.path(), directory, Some(epoch("2026-10-15T13:00:00Z").unwrap()), None, 60);
+        let fresh = transcript("gemini", home.path(), directory, Some(epoch("2026-10-15T13:00:00Z").unwrap()), None, None, 60);
         assert!(fresh.available && fresh.entries.is_empty());
-        assert!(transcript("gemini", home.path(), home.path().to_str().unwrap(), None, None, 60).entries.is_empty());
+        assert!(transcript("gemini", home.path(), home.path().to_str().unwrap(), None, None, None, 60).entries.is_empty());
     }
 
     #[test]
@@ -359,7 +519,7 @@ mod tests {
         let answer = json!({"id": "a", "type": "gemini", "content": "Partial"});
         let patch = json!({"$patch": {"id": "a", "content": "Fixed."}});
         std::fs::write(chats.join("session-one.jsonl"), format!("{metadata}\n{prompt}\n{answer}\n{patch}\n")).unwrap();
-        let read = transcript("gemini", home.path(), directory, None, None, 60);
+        let read = transcript("gemini", home.path(), directory, None, None, None, 60);
         assert!(read.available);
         assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed.")]);
         assert!(!read.version.as_deref().unwrap().contains(directory));
@@ -429,22 +589,94 @@ mod tests {
         insert(&conn, 1, 15, 3, "Fixed.");
         insert(&conn, 2, 132, 3, "tool output");
         insert(&conn, 3, 15, 1, "partial answer");
-        let read = transcript("agy", home.path(), directory, None, None, 60);
+        let read = transcript("agy", home.path(), directory, None, None, None, 60);
         assert!(read.available);
         assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed.")]);
         assert!(read.entries.iter().all(|entry| entry.at.is_some()));
-        assert!(transcript("agy", home.path(), directory, None, read.version.as_deref(), 60).unchanged);
+        assert!(transcript("agy", home.path(), directory, None, None, read.version.as_deref(), 60).unchanged);
         conn.execute("UPDATE steps SET status = 3 WHERE idx = 3", []).unwrap();
-        let updated = transcript("agy", home.path(), directory, None, read.version.as_deref(), 60);
+        let updated = transcript("agy", home.path(), directory, None, None, read.version.as_deref(), 60);
         assert!(!updated.unchanged);
         assert_eq!(updated.entries.last().unwrap().text, "partial answer");
-        let fresh = transcript("agy", home.path(), directory, Some(1_791_979_201_000), None, 60);
+        let fresh = transcript("agy", home.path(), directory, Some(1_791_979_201_000), None, None, 60);
         assert!(fresh.available && fresh.entries.is_empty());
         let other = home.path().join("other");
-        assert!(transcript("agy", home.path(), other.to_str().unwrap(), None, None, 60).entries.is_empty());
-        let tail = transcript("agy", home.path(), directory, None, updated.version.as_deref(), 1);
+        assert!(transcript("agy", home.path(), other.to_str().unwrap(), None, None, None, 60).entries.is_empty());
+        let tail = transcript("agy", home.path(), directory, None, None, updated.version.as_deref(), 1);
         assert!(tail.truncated);
         assert_eq!(texts(&tail), [("answer", "partial answer")]);
+    }
+
+    /// A second conversation of `directory`, modified after the fixture's.
+    fn agy_second(home: &Path, summaries: &Connection, directory: &str, id: &str) -> Connection {
+        summaries.execute("INSERT INTO conversation_summaries VALUES (?1, ?2, '2026-10-16', '')", rusqlite::params![
+            id, serde_json::to_string(&[url::Url::from_directory_path(directory).unwrap().to_string()]).unwrap()
+        ]).unwrap();
+        let conn = Connection::open(home.join(".gemini").join("antigravity-cli").join("conversations").join(format!("{id}.db"))).unwrap();
+        conn.execute_batch("CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB)").unwrap();
+        conn
+    }
+
+    #[test]
+    fn antigravity_lists_the_folders_conversations_and_reads_one_by_id() {
+        const OLD: &str = "01234567-1234-1234-1234-0123456789ab";
+        const NEW: &str = "11234567-1234-1234-1234-0123456789ab";
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().to_str().unwrap();
+        let (summaries, conn) = agy_db(home.path(), directory);
+        insert(&conn, 0, 14, 3, "fix it");
+        insert(&conn, 1, 15, 3, "Fixed.");
+        insert(&conn, 2, 14, 3, "and the tests");
+        let second = agy_second(home.path(), &summaries, directory, NEW);
+        insert(&second, 10, 14, 3, "new question");
+        // A summary of a conversation never begun has no database: skipped.
+        summaries.execute("INSERT INTO conversation_summaries VALUES ('21234567-1234-1234-1234-0123456789ab', ?1, '2026-10-17', '')", rusqlite::params![
+            serde_json::to_string(&[url::Url::from_directory_path(directory).unwrap().to_string()]).unwrap()
+        ]).unwrap();
+        let (chats, next) = antigravity_chats(home.path(), directory, 0, 10, 10).unwrap();
+        let rows: Vec<_> = chats.iter().map(|c| (c.id.as_str(), c.title.as_str(), c.last.as_deref())).collect();
+        assert_eq!(rows, [(NEW, "new question", None), (OLD, "fix it", Some("and the tests"))]);
+        assert_eq!(next, None);
+        assert!(chats.iter().all(|chat| chat.started.is_some() && chat.updated > 0));
+        let (page, next) = antigravity_chats(home.path(), directory, 0, 1, 10).unwrap();
+        assert_eq!((page.len(), next), (1, Some(2)));
+        assert!(antigravity_folder_chat(home.path(), directory, OLD));
+        assert!(!antigravity_folder_chat(home.path(), home.path().join("other").to_str().unwrap(), OLD));
+        let read = antigravity_chat(home.path(), directory, OLD, None, 60);
+        assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed."), ("prompt", "and the tests")]);
+        assert!(antigravity_chat(home.path(), directory, OLD, read.version.as_deref(), 60).unchanged);
+        assert_eq!(antigravity_chat(home.path(), home.path().join("other").to_str().unwrap(), OLD, None, 60).reason.as_deref(), Some("no_transcript"));
+    }
+
+    #[test]
+    fn a_resumed_tab_reads_its_recorded_conversation_until_it_begins_another() {
+        const OLD: &str = "01234567-1234-1234-1234-0123456789ab";
+        const NEW: &str = "11234567-1234-1234-1234-0123456789ab";
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().to_str().unwrap();
+        let (summaries, conn) = agy_db(home.path(), directory);
+        insert(&conn, 0, 14, 3, "old question");
+        let second = agy_second(home.path(), &summaries, directory, NEW);
+        insert(&second, 10, 14, 3, "new question");
+        let recorded = 1_791_979_212_000;
+        // The newer conversation began before the record: the recorded one is the tab's.
+        let read = transcript("agy", home.path(), directory, None, Some((OLD, recorded)), None, 60);
+        assert_eq!(texts(&read), [("prompt", "old question")]);
+        let store = agy_store(home.path()).unwrap();
+        let ids = agy_folder(&store, directory).unwrap();
+        assert_eq!(agy_tab_conversation(&store, &ids, None, Some((OLD, recorded))).as_deref(), Some(OLD));
+        // One begun since the record (a /new in the tab) takes over.
+        assert_eq!(agy_tab_conversation(&store, &ids, None, Some((OLD, 1_791_979_209_000))).as_deref(), Some(NEW));
+        // A record naming no conversation of the folder is no record.
+        assert_eq!(agy_tab_conversation(&store, &ids, None, Some(("31234567-1234-1234-1234-0123456789ab", recorded))).as_deref(), Some(NEW));
+        assert_eq!(agy_tab_conversation(&store, &ids, Some(1_791_979_211_000), None), None);
+    }
+
+    #[test]
+    fn continuing_a_recorded_conversation_names_it() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(continued_onto(&args(&["--model", "m", "--continue"]), "id"), args(&["--model", "m", "--conversation", "id"]));
+        assert_eq!(continued_onto(&args(&["-c"]), "id"), args(&["--conversation", "id"]));
     }
 
     #[test]
@@ -468,7 +700,7 @@ mod tests {
         let outside = home.path().join("outside.json");
         std::fs::write(&outside, "private data").unwrap();
         std::os::unix::fs::symlink(outside, path).unwrap();
-        let read = transcript("gemini", home.path(), directory, None, None, 60);
+        let read = transcript("gemini", home.path(), directory, None, None, None, 60);
         assert!(read.available && read.entries.is_empty());
     }
 }

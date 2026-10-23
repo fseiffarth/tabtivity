@@ -1936,7 +1936,8 @@ pub async fn agent_tab_resume_chat(
     chat: String,
 ) -> Option<crate::services::agent_session::UndoClearPlan> {
     app_core::rt::spawn_blocking(move || {
-        crate::services::agent_chats::chat_file(&agent, project_id.as_deref(), tab_dir.as_deref(), &session_id, &chat)?;
+        crate::services::agent_chats::is_folder_chat(&agent, project_id.as_deref(), tab_dir.as_deref(), &session_id, &chat)
+            .then_some(())?;
         crate::services::agent_session::resume_chat_plan(&agent, project_id.as_deref(), &session_id, &chat)
     })
     .await
