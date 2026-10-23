@@ -64,11 +64,11 @@ pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// add an agent: run its `--version`, paste the output as the comment, add the
 /// line. Do not add one from a README.
 const VERSION_ARGV: &[(&str, &[&str])] = &[
-    // "opencode v2.1.2"
+    // "opencode v2.1.3"
     ("opencode", &["--version"]),
     // "2.1.284 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.163.0"
+    // "codex-cli 0.164.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
@@ -114,7 +114,7 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "opencode",
-        version: "2.1.2",
+        version: "2.1.3",
         surface: "§1.5 — --version, --standalone, mini --model/--session and debug paths (CLI only)",
     },
     Verified {
@@ -124,22 +124,22 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "codex",
-        version: "0.163.0",
+        version: "0.164.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.163.0",
+        version: "0.164.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.163.0",
+        version: "0.164.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.163.0",
+        version: "0.164.0",
         surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
@@ -810,13 +810,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.163.0"));
+        let (state, stale) = drift("codex", Some("0.164.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.163.1"));
+        let (state, stale) = drift("codex", Some("0.164.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.163.0" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.164.0" && note.direction == Direction::Newer));
     }
 
     #[test]
