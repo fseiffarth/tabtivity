@@ -156,6 +156,11 @@ describe("Mobile settings — box access rows", () => {
   it("offers one switch per box beside the project switches and writes it through the backend", async () => {
     const user = userEvent.setup();
     render(<MobileSettings />);
+    // Unshared rows stay out of the list until the search names them.
+    // The off member project and the off box: one hint under each list.
+    expect(await screen.findAllByText("1 more not shared with the phone — search to find one.")).toHaveLength(2);
+    expect(screen.queryByRole("checkbox", { name: "Paper" })).toBeNull();
+    await user.type(screen.getByRole("textbox", { name: "Search projects with Mobile access" }), "pap");
     const toggle = await screen.findByRole("checkbox", { name: "Paper" });
     expect((toggle as HTMLInputElement).checked).toBe(false);
     await user.click(toggle);
