@@ -1735,6 +1735,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </button>
             </div>
           )}
+          {strayShown && !browsed && !openStep && live.screen.length > 0 && (
+            <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
+          )}
           {(strayShown || unrecorded) && !browsed && !openStep && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
               <span>{t(strayShown ? "terminal.reader.stray" : "terminal.reader.unrecorded")}</span>

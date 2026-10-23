@@ -435,6 +435,58 @@ describe("the desktop Reader's live screen", () => {
     expect(readReaderLive(plainBuffer(scrolledPast), "Claude", 60).question).toBeNull();
   });
 
+  it("reads Claude Code's first-run theme picker, which has no footer, when no input box is on screen", () => {
+    const picker = [
+      " Welcome to Claude Code v2.1.309",
+      "",
+      "  Let's get started.",
+      "",
+      "  Choose the text style that looks best with your terminal",
+      "  To change this later, run /theme",
+      "",
+      "    Auto (match terminal)",
+      "  ❯ ✓ Dark mode",
+      "    Light mode",
+      "    Dark mode (ANSI colors only)",
+      "",
+      "─".repeat(60),
+      "     function greet",
+      "  2 -  console.log(\"Hello, World!\");",
+      "  2 +  console.log(\"Hello, Claude!\");",
+      "─".repeat(60),
+      "   Syntax theme: Monokai Extended (ctrl+t to disable)",
+      "",
+    ];
+    const live = readReaderLive(plainBuffer(picker), "Claude", 80);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["Auto (match terminal)", "Dark mode", "Light mode", "Dark mode (ANSI colors only)"]);
+    expect(live.question?.current).toBe(1);
+    expect(live.ask.join("\n")).toMatch(/^Choose the text style that looks best with your terminal/);
+    expect(live.stray).toBe(false);
+    expect(answerKeys(live.question!, live.question!.options[2])).toEqual(["\u001b[B", "\r"]);
+    // Highlighted on its first row, close to the bottom of the screen.
+    const first = picker.map((row) => (row === "  ❯ ✓ Dark mode" ? "    ✓ Dark mode" : row === "    Auto (match terminal)" ? "  ❯ Auto (match terminal)" : row));
+    const firstLive = readReaderLive(plainBuffer([...first.slice(0, 12), "   Syntax theme: Monokai Extended (ctrl+t to disable)"]), "Claude", 80);
+    expect(firstLive.question?.current).toBe(0);
+    expect(firstLive.question?.options[1].label).toBe("Dark mode");
+    // Under an input box the same rows are output, never a dialog.
+    const output = readReaderLive(plainBuffer(["> show me", "", ...picker.slice(6, 11), "", "> ", "  ? for shortcuts"]), "Claude", 80);
+    expect(output.question).toBeNull();
+  });
+
+  it("reads a first-run screen that waits for Enter as one Continue row", () => {
+    const notes = [" Security notes:", "", "  1. Claude can make mistakes", "", " Press Enter to continue…", ""];
+    const live = readReaderLive(plainBuffer(notes), "Claude", 80);
+    expect(live.question?.options).toEqual([{ index: 0, number: 1, label: "Continue", keys: ["\r"] }]);
+    expect(answerKeys(live.question!, live.question!.options[0])).toEqual(["\r"]);
+  });
+
+  it("hands the chat the bottom of a screen it cannot read", () => {
+    const live = readReaderLive(plainBuffer(["", "⏺ Done.", "", "Error: connection lost", "user@host:~/project$", "", ""]), "Claude");
+    expect(live.stray).toBe(true);
+    expect(live.screen).toEqual(["⏺ Done.", "", "Error: connection lost", "user@host:~/project$"]);
+    expect(readReaderLive(plainBuffer(PERMISSION), "Claude").screen).toEqual([]);
+  });
+
   it("tells a redraw of the same state from a change", () => {
     const a = readReaderLive(plainBuffer(PERMISSION), "Claude");
     const b = readReaderLive(plainBuffer(PERMISSION), "Claude");

@@ -10,6 +10,7 @@ import {
   readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
+  readStrayDialog,
   selectKeys,
   selectSignature,
   UNNUMBERED,
@@ -63,11 +64,18 @@ export interface ReaderLive {
    * error or a screen of the CLI's own the chat cannot draw. The Reader
    * points at the terminal once this lasts (`STRAY_MS`). */
   stray: boolean;
+  /** The bottom of that screen as drawn, blank rows dropped at its ends, so
+   * the chat can show what it cannot read. Empty unless `stray`. */
+  screen: string[];
 }
 
 export const NO_LIVE: ReaderLive = {
-  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false,
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false, screen: [],
 };
+
+/** Rows of a stray screen the chat shows: a first-run screen fits, a long
+ * output's end says enough. */
+const STRAY_SCREEN_ROWS = 40;
 
 /** Rows read off the end of the buffer for the live reading. What it looks
  * for — a dialog, the busy row, the status line — sits at the bottom of the
@@ -92,7 +100,13 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // reads as: it is read off the whole screen.
   const hooksPage = readCodexHooksPage(lines, agentLabel);
   const tail = hooksPage ? lines : screen.slice(start);
-  const question = hooksPage ?? (tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null);
+  // No input box and no busy row: the CLI has put a screen of its own in its
+  // place — a first run's theme picker or notes — read without a footer.
+  const noFrame = frameStart >= lines.length;
+  const question = hooksPage ?? (tail.length > 0
+    ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
+      ?? (noFrame && !agentWork(lines) ? readStrayDialog(tail, columns) : null)
+    : null);
   if (question) {
     const parts = questionParts(tail, question);
     const ask = parts.ask.map((line) => line.text.trimEnd());
@@ -114,13 +128,22 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
       working: null,
       status,
       stray: false,
+      screen: [],
     };
   }
   const working = agentWork(lines);
   // `inputFrameStart` answers the screen's length when it finds no input box
   // (or the box-like row is a dialog's highlighted option).
-  const stray = !working && frameStart >= lines.length && lines.some((line) => line.text.trim() !== "");
-  return { ...NO_LIVE, working, status, stray };
+  const stray = !working && noFrame && lines.some((line) => line.text.trim() !== "");
+  return { ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [] };
+}
+
+function strayScreen(rows: string[]): string[] {
+  let end = rows.length;
+  while (end > 0 && !rows[end - 1].trim()) end -= 1;
+  let start = Math.max(0, end - STRAY_SCREEN_ROWS);
+  while (start < end && !rows[start].trim()) start += 1;
+  return rows.slice(start, end).map((row) => row.trimEnd());
 }
 
 function tabsKey(tabs: readonly QuestionTab[]): string {
@@ -141,6 +164,7 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.working?.tokens === b.working?.tokens
     && a.working?.effort === b.working?.effort
     && a.stray === b.stray
+    && a.screen.join("\n") === b.screen.join("\n")
     && sameStatus(a.status, b.status);
 }
 

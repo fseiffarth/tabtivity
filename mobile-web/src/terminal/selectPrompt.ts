@@ -610,6 +610,11 @@ export function dialogFooterShown(lines: readonly { text: string }[]): boolean {
 const UNNUMBERED_MARK = /^\s*[❯▸▶›→]\s+(\S.*)$/u;
 /** Claude Code's footer under a dialog it answers with Enter. */
 const CONFIRM_FOOTER = /^\s*Enter to confirm\b/u;
+/** The tick Claude Code's theme picker puts on the theme in use: `❯ ✓ Dark mode`. */
+const CURRENT_TICK = /^[✓✔]\s+/u;
+/** A first-run screen that only waits for Enter: Claude Code's
+ * `Press Enter to continue…`, Codex's `Press enter to continue`. */
+const PRESS_ENTER = /^\s*Press\s+enter\s+to\s+(continue|proceed|exit)\b[.…]*\s*$/iu;
 
 /**
  * Claude Code's select dialog without numbers — the folder-trust question
@@ -642,13 +647,23 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
   let end = footer - 1;
   while (end >= first && !lines[end].text.trim()) end -= 1;
   if (end < first) return null;
-  /** Where a row's label starts, past the highlight if it carries one. */
-  const labelAt = (text: string): number => text.length - (UNNUMBERED_MARK.exec(text)?.[1] ?? text.trimStart()).length;
+  return readUnnumberedRun(lines, first, end, columns);
+}
+
+/** Where a row of an unnumbered list starts its label, past the highlight if
+ * it carries one. */
+function unnumberedLabelAt(text: string): number {
+  return text.length - (UNNUMBERED_MARK.exec(text)?.[1] ?? text.trimStart()).length;
+}
+
+/** The unnumbered dialog whose last row is `lines[end]`: the rows above it at
+ * its label column, exactly one highlighted (`readUnnumberedPrompt`). */
+function readUnnumberedRun(lines: readonly SelectLineLike[], first: number, end: number, columns?: number): SelectPrompt | null {
   // The run is the rows at the bottom row's column; a line at another one —
   // the question, drawn with no blank under it — is where it starts.
-  const labelColumn = labelAt(lines[end].text);
+  const labelColumn = unnumberedLabelAt(lines[end].text);
   let start = end;
-  while (start > first && lines[start - 1].text.trim() && labelAt(lines[start - 1].text) === labelColumn) start -= 1;
+  while (start > first && lines[start - 1].text.trim() && unnumberedLabelAt(lines[start - 1].text) === labelColumn) start -= 1;
   if (end - start + 1 > MAX_OPTIONS * 2) return null;
 
   const options: SelectOption[] = [];
@@ -658,7 +673,8 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
     const text = lines[index].text;
     if (OPTION.test(text) || RADIO_OPTION.test(text)) return null;
     const marked = UNNUMBERED_MARK.exec(text);
-    const rest = marked ? marked[1] : text.trimStart();
+    // A tick before the label is the setting in force, not part of its name.
+    const rest = (marked ? marked[1] : text.trimStart()).replace(CURRENT_TICK, "");
     const last = options[options.length - 1];
     if (!marked && last && !last.description && wrapsLabel(above, text, columns)) {
       last.label = `${last.label} ${rest.trim()}`.slice(0, MAX_LABEL);
@@ -698,6 +714,72 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
     question: ruled,
     context: ruled,
   };
+}
+
+/**
+ * A dialog a CLI draws in place of its input box with no footer that names
+ * its keys — what a first run asks before a session can start. Claude Code's
+ * theme picker (2.1.309) is a highlighted list with a preview drawn under it:
+ *
+ *      Choose the text style that looks best with your terminal
+ *      To change this later, run /theme
+ *
+ *        Auto (match terminal)
+ *      ❯ ✓ Dark mode
+ *        Light mode
+ *
+ *      ──────────────────────
+ *       function greet …
+ *
+ * and its security notes, like Codex's, end in `Press Enter to continue`.
+ * Without a footer an indented run with one `❯` is as likely a quote, so only
+ * a caller that found no input box on screen asks (`readReaderLive`, the
+ * phone's `liveQuestion`): there nothing else can be waiting. The list is the
+ * lowest highlighted run, held to `readUnnumberedPrompt`'s shape; a screen
+ * that only waits for Enter is a one-row dialog of the CLI's own word.
+ */
+export function readStrayDialog(lines: readonly SelectLineLike[], columns?: number): SelectPrompt | null {
+  const first = Math.max(0, lines.length - SEARCH_WINDOW);
+  let bottom = lines.length - 1;
+  while (bottom >= first && !lines[bottom].text.trim()) bottom -= 1;
+  if (bottom < first) return null;
+  const enter = PRESS_ENTER.exec(lines[bottom].text);
+  if (enter) {
+    const word = enter[1].toLowerCase();
+    return {
+      options: [{ index: 0, number: 1, label: word.charAt(0).toUpperCase() + word.slice(1), keys: ["\r"] }],
+      current: 0,
+      title: readTitle(lines, bottom),
+      start: bottom,
+      ...readContext(lines, bottom),
+    };
+  }
+  for (let index = bottom; index >= first; index -= 1) {
+    if (!UNNUMBERED_MARK.test(lines[index].text)) continue;
+    const column = unnumberedLabelAt(lines[index].text);
+    let end = index;
+    while (end + 1 < lines.length && lines[end + 1].text.trim() && unnumberedLabelAt(lines[end + 1].text) === column) end += 1;
+    return readUnnumberedRun(lines, first, end, columns);
+  }
+  return null;
+}
+
+/** Whether `lines[index]` is the highlighted row of a list `readStrayDialog`
+ * reads. Its `❯` is the input line's too, but Claude Code draws that line
+ * under a rule, with the box's lower rule under its draft; a list's
+ * highlighted row sits under a row of its own, or its run ends in a blank. */
+export function isStrayListRow(lines: readonly SelectLineLike[], index: number): boolean {
+  const text = lines[index].text;
+  if (lines[index].afterRule || !/^\s*❯\s/u.test(text)) return false;
+  const column = unnumberedLabelAt(text);
+  let end = index;
+  while (end + 1 < lines.length && lines[end + 1].text.trim() && !lines[end + 1].afterRule && unnumberedLabelAt(lines[end + 1].text) === column) end += 1;
+  const above = index > 0 ? lines[index - 1].text : "";
+  const sibling = above.trim() !== "" && unnumberedLabelAt(above) === column;
+  const closed = end > index && end + 1 < lines.length && !lines[end + 1].text.trim();
+  if (!sibling && !closed) return false;
+  const prompt = readUnnumberedRun(lines, Math.max(0, lines.length - SEARCH_WINDOW), end);
+  return prompt !== null && prompt.start + prompt.current === index;
 }
 
 const CODEX_HOOKS_HEADING = /^\s*Hooks\s*$/u;

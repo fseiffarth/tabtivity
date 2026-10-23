@@ -98,6 +98,7 @@ import {
   readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
+  readStrayDialog,
   dialogFooterShown,
   revealSelectRow,
   sameSelectStep,
@@ -3951,8 +3952,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const liveQuestion = useMemo(
     () => (liveTail.length > 0
       ? readCodexHooksPage(liveTail, agentLabel) ?? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel)
+        // No input box and no busy row: a first run's own screen (Claude
+        // Code's theme picker, a `Press Enter to continue`).
+        ?? (inputFrameStart(liveScreen, agentLabel) >= liveScreen.length && !agentWork(liveScreen)
+          ? readStrayDialog(liveTail, paneColumns.current)
+          : null)
       : null),
-    [liveTail, agentLabel],
+    [liveTail, liveScreen, agentLabel],
   );
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
