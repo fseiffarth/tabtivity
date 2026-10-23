@@ -75,6 +75,12 @@ pub fn git_peer_key(project_id: &str) -> String {
     format!("git-peer-{project_id}")
 }
 
+/// The key of a remote project's mutation lock (`services::sync_op`), which
+/// every byte-sync and lockstep write holds for its length.
+pub fn sync_op_key(project_id: &str) -> String {
+    format!("sync-op-{project_id}")
+}
+
 /// Mark `key` used by this process (shared). Idempotent; best effort — a
 /// file system without locks leaves the thing unguarded, as before.
 pub fn hold(key: &str) {
@@ -104,6 +110,41 @@ pub fn claim(key: &str) -> bool {
 /// file system without advisory locks still claims, as before leases existed.
 pub fn claim_sync(key: &str) -> bool {
     claim_at(&path(key), false)
+}
+
+/// Held by a claimed runner's task for its whole life (a remote project's sync
+/// or lockstep loop): dropping it — the task returned, panicked or was aborted
+/// — releases the claim and tells every [`RunnerExited`] waiter. The claim
+/// ends with the runner, never with a stop that gave up waiting for it, so a
+/// timed-out stop cannot hand the key to a second runner beside the first.
+pub struct RunnerExit {
+    path: PathBuf,
+    tx: tokio::sync::watch::Sender<bool>,
+}
+
+/// Whether a runner's task has ended ([`RunnerExit`]).
+pub type RunnerExited = tokio::sync::watch::Receiver<bool>;
+
+/// The exit guard for the runner that just claimed `key`, and its waiter.
+pub fn runner_exit(key: &str) -> (RunnerExit, RunnerExited) {
+    runner_exit_at(&path(key))
+}
+
+pub(crate) fn runner_exit_at(path: &Path) -> (RunnerExit, RunnerExited) {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    (RunnerExit { path: path.to_path_buf(), tx }, rx)
+}
+
+impl Drop for RunnerExit {
+    fn drop(&mut self) {
+        release_at(&self.path);
+        self.tx.send_replace(true);
+    }
+}
+
+/// Wait up to `within` for a runner's task to end; whether it did.
+pub async fn wait_runner_exit(exited: &mut RunnerExited, within: std::time::Duration) -> bool {
+    tokio::time::timeout(within, exited.wait_for(|done| *done)).await.is_ok()
 }
 
 fn with_held<R>(f: impl FnOnce(&mut HashMap<PathBuf, FileLock>) -> R) -> R {
@@ -228,6 +269,21 @@ mod tests {
         assert!(!claim_at(&lease, false));
         assert!(claim_at(&lease, true));
         release_at(&lease);
+    }
+
+    /// A runner's claim ends with its task, not with a stop that stopped
+    /// waiting: until the guard drops, the key stays held.
+    #[tokio::test]
+    async fn a_runner_holds_its_claim_until_its_task_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = path_in(dir.path(), &git_peer_key("r/2"));
+        assert!(claim_at(&lease, false));
+        let (exit, mut exited) = runner_exit_at(&lease);
+        assert!(!wait_runner_exit(&mut exited, std::time::Duration::from_millis(50)).await);
+        assert!(FileLock::try_exclusive(&lease).unwrap().is_none(), "still the runner's");
+        drop(exit);
+        assert!(wait_runner_exit(&mut exited, std::time::Duration::from_millis(50)).await);
+        assert!(FileLock::try_exclusive(&lease).unwrap().is_some(), "released with the task");
     }
 
     #[test]

@@ -220,6 +220,11 @@ pub async fn sync_pull(
 ) -> Result<remote_sync::PullOutcome, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
+    // The project's one writer for this whole command (`services::sync_op`):
+    // the auto pass, lockstep and the other process wait, and so does this —
+    // taken first, so the target and session below are resolved as they are
+    // once it is this command's turn.
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let (target, sftp) = resolve(&project_id, pool).await?;
     pull_subtree(
         &ctx,
@@ -241,6 +246,11 @@ pub async fn sync_whole_project(
 ) -> Result<remote_sync::PullOutcome, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
+    // The project's one writer for this whole command (`services::sync_op`):
+    // the auto pass, lockstep and the other process wait, and so does this —
+    // taken first, so the target and session below are resolved as they are
+    // once it is this command's turn.
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let (target, sftp) = resolve(&project_id, pool).await?;
     pull_subtree(&ctx, &project_id, &target, &sftp, "", manifest).await
 }
@@ -1013,6 +1023,11 @@ pub async fn sync_resolve_if_identical(
 ) -> Result<bool, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
+    // The project's one writer for this whole command (`services::sync_op`):
+    // the auto pass, lockstep and the other process wait, and so does this —
+    // taken first, so the target and session below are resolved as they are
+    // once it is this command's turn.
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Read both sides fully. A side that can't be read (deleted on the host, never
@@ -1080,6 +1095,11 @@ pub async fn sync_apply_delete(
     if side != "host" && side != "local" {
         return Err(format!("unknown delete side: {side}"));
     }
+    // The project's one writer for this whole command (`services::sync_op`):
+    // the auto pass, lockstep and the other process wait, and so does this —
+    // taken first, so the target and session below are resolved as they are
+    // once it is this command's turn.
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     let mirror_path = mirror_local_path(&project_id, &rel_path);
@@ -1515,6 +1535,11 @@ pub async fn sync_push(
 ) -> Result<SyncPushResult, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
+    // The project's one writer for this whole command (`services::sync_op`):
+    // the auto pass, lockstep and the other process wait, and so does this —
+    // taken first, so the target and session below are resolved as they are
+    // once it is this command's turn.
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let (target, sftp) = resolve(&project_id, pool).await?;
     let files = remote_sync::walk_mirror_files(&project_id, &rel_path)?;
     let walked = files.len();

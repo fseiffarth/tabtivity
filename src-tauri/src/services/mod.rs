@@ -213,6 +213,7 @@ pub mod ssh_common;
 pub mod ssh_exec;
 pub mod state_gc;
 pub mod sync_auto;
+pub mod sync_op;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share

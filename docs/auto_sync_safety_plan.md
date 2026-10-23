@@ -180,10 +180,26 @@ Split for landing (user decision, 2026-10-23):
   `sync.json` kept and never replaced (`remote_sync::check_manifest_readable`,
   gated in `commands::sync::resolve`), `process_lease::claim_sync` for the two sync
   loops, and revision-checked status heals (`apply_status_heal`).
-- **1b, the operation guard** — open: the coordinator and cross-process mutation
-  lock, lock order, pause as a draining guard, and stop that keeps ownership.
-  Unreadable-manifest errors are not yet shown in the status view (`sync_status`
-  failures stay silent; phase 4 surfaces blocked work).
+- **1b, the operation guard** — implemented 2026-10-23, not live-verified:
+  `services::sync_op` (in-process mutex + `<state_dir>/leases/` file lock),
+  replacing `git_peer::reconcile_guard`, held whole by the auto pass, manual
+  pull/push/delete/resolve-if-identical, the lockstep pass and every lockstep
+  command; one lock, so no order to get wrong. The auto pass re-reads each
+  entry and its auto marker under the manifest lock before acting (the marker
+  setters do not wait for a pass). `sync_auto::pause` returns a nesting
+  `PauseGuard`; a stop that times out leaves the task registered as stopping,
+  `process_lease::RunnerExit` releases the lease only when the task ends, and
+  `start` defers behind it (both loops), dropping the restart when a newer stop
+  came meanwhile; a loop stopped while it waited for the lock runs no pass.
+  Every holder resolves its target and session after taking the lock, and a
+  project detach/extend (`clear_host_bound_state`) takes it too. Reviewed by an
+  independent subagent pass; its findings are fixed. Not covered: alias
+  detection of one checkout under two registrations; status heals and the
+  marker setters (lock-free by design: heals are revision-checked, the pass
+  re-reads markers); `remote_upload_file` (the file manager's upload into the
+  host tree). Unit tests cover the lock, the pause guard, a timed-out stop and
+  the restart decision, not a live loop's deferred restart. Unreadable-manifest errors are not yet shown in the
+  status view (`sync_status` failures stay silent; phase 4 surfaces blocked work).
 
 - Add one per-project async operation coordinator plus an advisory cross-process
   mutation lock covering auto/manual bytes, merge apply, recovery restore/delete,

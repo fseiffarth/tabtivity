@@ -47,10 +47,9 @@
 const RS: char = '\x1e';
 
 use std::collections::{HashMap, HashSet};
-use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
@@ -3062,9 +3061,9 @@ pub async fn checkout_lockstep(
     if !connected(pool, project_id).await {
         return Err("Not connected to the remote host".to_string());
     }
-    crate::services::sync_auto::pause(auto, project_id).await;
-    // Guarantee resume even on an early error.
-    let result = checkout_lockstep_inner(
+    // Resumes when dropped, on every return path.
+    let _paused = crate::services::sync_auto::pause(auto, project_id).await;
+    checkout_lockstep_inner(
         pool,
         manifest,
         project_id,
@@ -3073,9 +3072,7 @@ pub async fn checkout_lockstep(
         initiating_side,
         already_checked_out,
     )
-    .await;
-    crate::services::sync_auto::resume(auto, project_id).await;
-    result
+    .await
 }
 
 async fn checkout_lockstep_inner(
@@ -3218,10 +3215,8 @@ pub async fn resolve(
     if !connected(pool, project_id).await {
         return Err("Not connected to the remote host".to_string());
     }
-    crate::services::sync_auto::pause(auto, project_id).await;
-    let result = resolve_inner(pool, manifest, project_id, spec, authority).await;
-    crate::services::sync_auto::resume(auto, project_id).await;
-    result
+    let _paused = crate::services::sync_auto::pause(auto, project_id).await;
+    resolve_inner(pool, manifest, project_id, spec, authority).await
 }
 
 async fn resolve_inner(
@@ -3434,7 +3429,8 @@ pub async fn restore_backup(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("Backup ref {refname} no longer resolves"))?;
 
-    crate::services::sync_auto::pause(auto, project_id).await;
+    // Resumes when dropped, on every return path below.
+    let _paused = crate::services::sync_auto::pause(auto, project_id).await;
     let old_local_sha = head_sha(&probe(&Peer::Local(mirror_dir(project_id)))).unwrap_or_default();
 
     let snap = probe(&peer);
@@ -3442,9 +3438,8 @@ pub async fn restore_backup(
 
     // #23 D1 applies here too: `force_reset_branch` falls through to `update-ref` for
     // any branch that is not the MAIN worktree's HEAD, and `update-ref` does not refuse
-    // a branch a linked worktree has checked out. Resume auto-sync before returning.
+    // a branch a linked worktree has checked out.
     if !is_head && snap.checked_out.contains(&branch) {
-        crate::services::sync_auto::resume(auto, project_id).await;
         return Err(format!(
             "'{branch}' is checked out in a linked worktree on the {peer_label} side. Moving it \
              would leave that worktree's index reverting the restore — remove the worktree (or \
@@ -3453,12 +3448,10 @@ pub async fn restore_backup(
     }
 
     // #28p D9: same clobber risk as `resolve` — check before `force_reset_branch`'s
-    // `reset --hard` on the checked-out branch. Resume auto-sync before returning so a
-    // refusal never leaves it paused.
+    // `reset --hard` on the checked-out branch.
     if is_head {
         let collisions = reset_collisions(&peer, &peer, &sha);
         if !collisions.is_empty() {
-            crate::services::sync_auto::resume(auto, project_id).await;
             let shown: Vec<&str> = collisions.iter().take(5).map(String::as_str).collect();
             let more = collisions.len() - shown.len();
             let extra = if more > 0 {
@@ -3488,7 +3481,6 @@ pub async fn restore_backup(
         .map(|_| ()),
     };
     if let Err(e) = moved {
-        crate::services::sync_auto::resume(auto, project_id).await;
         return Err(format!("Restore did not apply: {e}"));
     }
 
@@ -3502,7 +3494,7 @@ pub async fn restore_backup(
     );
 
     restamp_after_checkout(pool, manifest, project_id, spec, &old_local_sha).await;
-    crate::services::sync_auto::resume(auto, project_id).await;
+    drop(_paused);
 
     prune_backups(project_id, spec);
     Ok(reconcile(pool, manifest, project_id, spec).await)
@@ -3555,6 +3547,20 @@ fn desync_state(project_id: &str, spec: &RemoteSpec, detail: &str) -> GitPeerSta
 pub struct GitPeerTask {
     cancel: Arc<Notify>,
     join: tokio::task::JoinHandle<()>,
+    /// Set by [`stop`]: the task is on its way out, though it may still be
+    /// finishing a pass that outlasted the stop's wait; a pass that only gets the
+    /// mutation lock after that never runs.
+    stopping: Arc<std::sync::atomic::AtomicBool>,
+    /// How many stops this task has been asked for (see `sync_auto`'s twin).
+    stops: Arc<std::sync::atomic::AtomicUsize>,
+    /// Flips when the task has really ended (and released its lease).
+    exited: crate::services::process_lease::RunnerExited,
+}
+
+impl GitPeerTask {
+    fn ended(&self) -> bool {
+        self.join.is_finished() || *self.exited.borrow()
+    }
 }
 
 /// Tauri-managed registry of per-project lockstep tasks, keyed by project id.
@@ -3563,26 +3569,6 @@ pub type GitPeerRegistry = Arc<Mutex<HashMap<String, GitPeerTask>>>;
 /// Build a fresh, empty registry for `tauri::Builder::manage`.
 pub fn new_registry() -> GitPeerRegistry {
     Arc::new(Mutex::new(HashMap::new()))
-}
-
-/// One async reconcile lock per project. Manual commands and the background
-/// watcher/poll loop share the same fixed bundle paths and persisted state, so
-/// their complete operations—not merely individual file writes—must serialize.
-fn reconcile_locks() -> &'static std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>> {
-    static LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
-    LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-}
-
-pub async fn reconcile_guard(project_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
-    let lock = {
-        let mut locks = reconcile_locks().lock_ok();
-        Arc::clone(
-            locks
-                .entry(project_id.to_string())
-                .or_insert_with(|| Arc::new(Mutex::new(()))),
-        )
-    };
-    lock.lock_owned().await
 }
 
 /// Attach the mirror's `.git` watcher once the repository exists. Initial
@@ -3640,6 +3626,41 @@ pub async fn start(
     worker_sync: crate::services::worker_sync::WorkerSyncState,
     project_id: &str,
 ) {
+    // A stopped loop still finishing its last pass keeps the project: start this
+    // one once it has ended, never beside it (and only if still connected then).
+    {
+        let guard = reg.lock().await;
+        if let Some(t) = guard.get(project_id) {
+            if t.stopping.load(std::sync::atomic::Ordering::SeqCst) && !t.ended() {
+                let mut exited = t.exited.clone();
+                let stops = Arc::clone(&t.stops);
+                let seen = stops.load(std::sync::atomic::Ordering::SeqCst);
+                let reg = reg.clone();
+                let project_id = project_id.to_string();
+                tokio::spawn(async move {
+                    let _ = exited.wait_for(|done| *done).await;
+                    if crate::services::sync_auto::restart_still_wanted(&stops, seen)
+                        && connected(&pool, &project_id).await
+                    {
+                        start_now(ctx, pool, manifest, auto, &reg, worker_sync, &project_id).await;
+                    }
+                });
+                return;
+            }
+        }
+    }
+    start_now(ctx, pool, manifest, auto, reg, worker_sync, project_id).await;
+}
+
+async fn start_now(
+    ctx: CoreCtx,
+    pool: RemotePoolState,
+    manifest: SyncManifestState,
+    auto: AutoSyncState,
+    reg: &GitPeerRegistry,
+    worker_sync: crate::services::worker_sync::WorkerSyncState,
+    project_id: &str,
+) {
     let Some(target) = remote_target_for(project_id) else {
         return;
     };
@@ -3660,10 +3681,7 @@ pub async fn start(
     // mid-session) is a dead registry entry, not a running task: keeping it would
     // refuse every restart until a disconnect/reconnect, so untagging the host —
     // or toggling lockstep off and on — would silently leave the loop stopped.
-    if guard
-        .get(project_id)
-        .is_some_and(|t| t.join.is_finished())
-    {
+    if guard.get(project_id).is_some_and(GitPeerTask::ended) {
         guard.remove(project_id);
     }
     if guard.contains_key(project_id) {
@@ -3671,7 +3689,8 @@ pub async fn start(
     }
     // One lockstep loop per mirror across the window and its desktop sidecar
     // (`process_lease`, final review B4): the other process may run it.
-    if !crate::services::process_lease::claim_sync(&crate::services::process_lease::git_peer_key(project_id)) {
+    let key = crate::services::process_lease::git_peer_key(project_id);
+    if !crate::services::process_lease::claim_sync(&key) {
         eprintln!("git_peer: {project_id}: another process of this app runs its lockstep");
         return;
     }
@@ -3679,7 +3698,9 @@ pub async fn start(
     let (tx, rx) = mpsc::unbounded_channel::<()>();
 
     let cancel = Arc::new(Notify::new());
-    let join = tokio::spawn(poll_loop(
+    let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (exit, exited) = crate::services::process_lease::runner_exit(&key);
+    let loop_fut = poll_loop(
         ctx,
         pool,
         manifest,
@@ -3690,24 +3711,54 @@ pub async fn start(
         tx,
         rx,
         cancel.clone(),
-    ));
-    guard.insert(project_id.to_string(), GitPeerTask { cancel, join });
+        stopping.clone(),
+    );
+    let join = tokio::spawn(async move {
+        let _exit = exit; // the lease ends with this task, however it ends
+        loop_fut.await;
+    });
+    guard.insert(
+        project_id.to_string(),
+        GitPeerTask {
+            cancel,
+            join,
+            stopping,
+            stops: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            exited,
+        },
+    );
 }
 
-/// Stop the project's lockstep task (no-op if none).
+/// Stop the project's lockstep task (no-op if none). Waits a bounded time for it
+/// to end; one still mid-pass after that stays registered as stopping and keeps
+/// its lease until it actually ends (`start` defers behind it), so a slow pass is
+/// never detached while the project reads as free.
 pub async fn stop(reg: &GitPeerRegistry, project_id: &str) {
-    let task = reg.lock().await.remove(project_id);
-    if let Some(t) = task {
+    let mut exited = {
+        let guard = reg.lock().await;
+        let Some(t) = guard.get(project_id) else {
+            return;
+        };
+        t.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+        t.stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         t.cancel.notify_one();
-        let _ = tokio::time::timeout(Duration::from_secs(5), t.join).await;
+        t.exited.clone()
+    };
+    if crate::services::process_lease::wait_runner_exit(&mut exited, Duration::from_secs(5)).await {
+        let mut guard = reg.lock().await;
+        if guard.get(project_id).is_some_and(GitPeerTask::ended) {
+            guard.remove(project_id);
+        }
+    } else {
+        eprintln!("git_peer: {project_id}: lockstep still finishing a pass; it keeps the project until it ends");
     }
-    crate::services::process_lease::release(&crate::services::process_lease::git_peer_key(project_id));
 }
 
 /// Stop every lockstep task (app exit).
 pub async fn stop_all(reg: &GitPeerRegistry) {
     let tasks: Vec<GitPeerTask> = reg.lock().await.drain().map(|(_, t)| t).collect();
     for t in tasks {
+        t.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
         t.cancel.notify_one();
         let _ = tokio::time::timeout(Duration::from_secs(5), t.join).await;
     }
@@ -3725,6 +3776,7 @@ async fn poll_loop(
     tx: mpsc::UnboundedSender<()>,
     mut rx: mpsc::UnboundedReceiver<()>,
     cancel: Arc<Notify>,
+    stopping: Arc<std::sync::atomic::AtomicBool>,
 ) {
     // Watch only `.git` (HEAD/refs/packed-refs live here) so ordinary file edits
     // remain the byte-sync watcher's concern. The watcher lives with this future.
@@ -3734,21 +3786,30 @@ async fn poll_loop(
     // Initial reconcile so both sides start in step. Forced: there is no prior pass in
     // this session to early-out against, and a stale green signature from the last run
     // must not skip it.
-    let reconcile = reconcile_guard(&project_id).await;
-    let s = detect_and_sync(
-        &pool,
-        &manifest,
-        &auto,
-        &project_id,
-        &spec,
-        ReconcileOpts {
-            forced: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    drop(reconcile);
-    emit_status(&ctx, &project_id, &s);
+    match crate::services::sync_op::acquire(&project_id).await {
+        Ok(op) => {
+            // Stopped while it waited for the lock (a disconnect behind a long
+            // transfer, lockstep turned off): never start a pass after that.
+            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let s = detect_and_sync(
+                &pool,
+                &manifest,
+                &auto,
+                &project_id,
+                &spec,
+                ReconcileOpts {
+                    forced: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            drop(op);
+            emit_status(&ctx, &project_id, &s);
+        }
+        Err(e) => eprintln!("git_peer: {project_id}: {e}"),
+    }
     // The primary now holds the current committed code; push it to any already-
     // connected workers (multi-host, `docs/multi_host_remote_plan.md` §2). Cheap
     // when they are already at HEAD (a mirror-head read, no network).
@@ -3782,13 +3843,7 @@ async fn poll_loop(
                 // finds it already finished, which is what a cancel leaves too.
                 if crate::services::hpc_mode::is_hpc_spec(&spec) { break; }
                 ensure_git_watcher(&mut watcher, &gitdir, &tx);
-                let reconcile = reconcile_guard(&project_id).await;
-                let s = detect_and_sync(
-                    &pool, &manifest, &auto, &project_id, &spec, ReconcileOpts::default(),
-                )
-                .await;
-                drop(reconcile);
-                emit_status(&ctx, &project_id, &s);
+                if !guarded_pass(&ctx, &pool, &manifest, &auto, &project_id, &spec, &stopping).await { break; }
                 own_sig = local_signature(&project_id);
                 drain_events(&mut rx);
             }
@@ -3811,13 +3866,7 @@ async fn poll_loop(
                 if watcher_burst_is_own(&own_sig, &now_sig) {
                     continue;
                 }
-                let reconcile = reconcile_guard(&project_id).await;
-                let s = detect_and_sync(
-                    &pool, &manifest, &auto, &project_id, &spec, ReconcileOpts::default(),
-                )
-                .await;
-                drop(reconcile);
-                emit_status(&ctx, &project_id, &s);
+                if !guarded_pass(&ctx, &pool, &manifest, &auto, &project_id, &spec, &stopping).await { break; }
                 own_sig = local_signature(&project_id);
                 drain_events(&mut rx);
                 // A `.git` change on the mirror = a new commit/ref move; fan the
@@ -3829,6 +3878,33 @@ async fn poll_loop(
             }
         }
     }
+}
+
+/// One background lockstep pass under the project's mutation lock
+/// (`services::sync_op`); a lock that could not be taken skips the pass. `false`
+/// when the loop was stopped while it waited for the lock: no pass ran, and the
+/// loop ends.
+async fn guarded_pass(
+    ctx: &CoreCtx,
+    pool: &RemotePoolState,
+    manifest: &SyncManifestState,
+    auto: &AutoSyncState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    stopping: &std::sync::atomic::AtomicBool,
+) -> bool {
+    match crate::services::sync_op::acquire(project_id).await {
+        Ok(op) => {
+            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                return false;
+            }
+            let s = detect_and_sync(pool, manifest, auto, project_id, spec, ReconcileOpts::default()).await;
+            drop(op);
+            emit_status(ctx, project_id, &s);
+        }
+        Err(e) => eprintln!("git_peer: {project_id}: {e}"),
+    }
+    true
 }
 
 /// The mirror's current [`refs_signature`] — local git only, no network.
@@ -3952,27 +4028,6 @@ pub async fn detect_and_sync(
 mod tests {
     use crate::brand::SLUG;
     use super::*;
-
-    #[tokio::test]
-    async fn reconcile_guard_serializes_one_project_but_not_another() {
-        let first = reconcile_guard("guard-test-a").await;
-        // A different project is independent.
-        let other =
-            tokio::time::timeout(Duration::from_millis(100), reconcile_guard("guard-test-b"))
-                .await
-                .expect("another project must not share the lock");
-        drop(other);
-
-        let waiting = tokio::spawn(async { reconcile_guard("guard-test-a").await });
-        tokio::task::yield_now().await;
-        assert!(!waiting.is_finished(), "same-project reconcile overlapped");
-        drop(first);
-        let acquired = tokio::time::timeout(Duration::from_secs(1), waiting)
-            .await
-            .expect("waiter did not acquire after release")
-            .expect("waiter task failed");
-        drop(acquired);
-    }
 
     /// Returns true when `git` is on PATH; probe tests skip gracefully otherwise.
     fn git_available() -> bool {
