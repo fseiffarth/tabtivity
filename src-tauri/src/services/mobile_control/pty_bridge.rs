@@ -507,6 +507,41 @@ fn closing_retries(reason: &str) -> bool {
     matches!(reason, "idle_timeout" | "session_expired" | "catalog_unavailable")
 }
 
+/// Why an attach whose output ended on its own may not be come back to, from
+/// its client's exit code (`None`: not reaped in time, or a signal). A local
+/// tab's end is left to the reconnect: the upgrade route asks the local tmux
+/// and answers `410 session_gone` for a session that ended. A host tab's
+/// upgrade cannot tell — with no window up, or on an HPC host, the host's tmux
+/// is not asked and the master alone makes it available — so a bare close
+/// sent the phone round a reconnect loop for good, each turn four ssh
+/// sessions over the master (keeping it alive past `ControlPersist`, the one
+/// thing the no-window rule exists to avoid). The exit code says which end it
+/// was: `0` a detach or a session that exited while attached (the phone comes
+/// back and the upgrade decides), `255` ssh itself (the master is gone), any
+/// other the host-side script (`ssh_exec::host_tmux_attach_command`: no such
+/// session, no tmux).
+fn attach_end_reason(target: &AttachTarget, code: Option<u32>) -> Option<&'static str> {
+    match (target, code) {
+        (AttachTarget::Local { .. }, _) | (_, None | Some(0)) => None,
+        (AttachTarget::Host { .. }, Some(255)) => Some("host_offline"),
+        (AttachTarget::Host { .. }, Some(_)) => Some("session_gone"),
+    }
+}
+
+/// The attach client's exit code once its output has ended: the PTY's EOF
+/// comes as the client exits, so it is reaped within moments. `None` when it
+/// is not (the drop's kill reaps it) or a signal ended it.
+async fn exit_code_soon(child: &mut (dyn portable_pty::Child + Send + Sync)) -> Option<u32> {
+    for _ in 0..50 {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.signal().is_none().then(|| status.exit_code()),
+            Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 /// What the AI switch keeps of an input frame to the tab, when it drops any of
 /// it: an agent's frame while AI is off, unless the frame only interrupts or
 /// steers (`ai_switch::filter_while_off`). `None` writes the frame as is.
@@ -655,7 +690,7 @@ pub async fn attach(
             }
         }
     });
-    let session = PtySession {
+    let mut session = PtySession {
         child,
         output_task,
         window_task,
@@ -757,8 +792,12 @@ pub async fn attach(
             chunk = output.pop() => match chunk {
                 Some(bytes) => if !deliver(&mut ws_tx, Message::Binary(bytes.into())).await { break Ok(()); },
                 // The pane's output ended: tmux detached the client, or the
-                // session is gone.
-                None => break Ok(()),
+                // session is gone (for a host tab, said outright: see
+                // `attach_end_reason`).
+                None => match attach_end_reason(&target, exit_code_soon(session.child.as_mut()).await) {
+                    Some(reason) => break Err(reason.into()),
+                    None => break Ok(()),
+                },
             },
             incoming = ws_rx.next() => match incoming {
                 Some(Ok(Message::Binary(bytes))) => {
@@ -939,6 +978,59 @@ mod tests {
         let local = AttachTarget::Local { name: name.into() };
         let argv = local.attach_command().expect("attach").get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
         assert!(std::path::Path::new(&argv[0]).file_stem().is_some_and(|stem| stem == "tmux"), "{argv:?}");
+    }
+
+    /// A host attach that ends on its own says why, so the phone stops instead
+    /// of reconnecting forever to a tab its upgrade still calls available:
+    /// ssh's own failure (255) is `host_offline`, the host-side script's (no
+    /// such session, no tmux) `session_gone`, both final; a clean end (a
+    /// detach, a session that exited while attached) and an unknown one are
+    /// left to the reconnect, as is every local end.
+    #[test]
+    fn a_host_attach_that_ends_on_its_own_says_why() {
+        use super::{attach_end_reason, AttachTarget};
+        use crate::services::mobile_control::host_live::HostSsh;
+        let host = AttachTarget::Host {
+            name: "s".into(),
+            ssh: HostSsh {
+                spec: Box::new(serde_json::from_value(serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" })).unwrap()),
+                control_path: std::env::temp_dir().join("cm-h"),
+            },
+        };
+        assert_eq!(attach_end_reason(&host, Some(255)), Some("host_offline"));
+        assert_eq!(attach_end_reason(&host, Some(1)), Some("session_gone"));
+        assert_eq!(attach_end_reason(&host, Some(127)), Some("session_gone"));
+        assert_eq!(attach_end_reason(&host, Some(0)), None);
+        assert_eq!(attach_end_reason(&host, None), None);
+        for reason in ["host_offline", "session_gone"] {
+            assert!(!closing_retries(reason), "{reason}");
+        }
+        let local = AttachTarget::Local { name: "s".into() };
+        for code in [None, Some(0), Some(1), Some(255)] {
+            assert_eq!(attach_end_reason(&local, code), None, "{code:?}");
+        }
+    }
+
+    /// The exit code is read off the attach client once its output ended.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_attach_clients_exit_code_is_read_once_it_ends() {
+        use portable_pty::{CommandBuilder, PtySize};
+        let pair = portable_pty::native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exit 3"]);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let mut code = None;
+        for _ in 0..100 {
+            code = super::exit_code_soon(child.as_mut()).await;
+            if code.is_some() {
+                break;
+            }
+        }
+        assert_eq!(code, Some(3));
     }
 
     /// A host tab still listed on the same session but gone unavailable — its

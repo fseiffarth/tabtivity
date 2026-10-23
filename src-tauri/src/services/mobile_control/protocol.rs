@@ -2107,7 +2107,9 @@ pub enum TerminalEvent {
     /// tab), `host_offline` (a remote-host tab whose host the desktop no
     /// longer holds an ssh master for — also the upgrade's `409`, beside the
     /// routes' `409 tab_on_host` for what would act on this machine;
-    /// `docs/mobile_remote_host_tabs_plan.md`), and the frame refusals
+    /// `docs/mobile_remote_host_tabs_plan.md`), `session_gone` (a host tab's
+    /// attach found no session on the host: `pty_bridge::attach_end_reason`),
+    /// and the frame refusals
     /// (`input_frame_too_large`, `invalid_terminal_control`,
     /// `invalid_terminal_size`, `resize_failed`).
     Closing { reason: String, retry: bool },
