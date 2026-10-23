@@ -1374,18 +1374,19 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
 ///
 /// NUL-delimited so paths with spaces/quotes survive verbatim (no `core.quotePath`
 /// escaping). `.git` is never listed by `ls-files`; a gitignored `.tabtivity` won't be
-/// either — both stay out of byte-sync, as elsewhere. Empty set on any failure, which
-/// degrades to today's (racy but working) behaviour rather than silently syncing nothing.
-pub fn tracked_paths(project_id: &str) -> HashSet<String> {
+/// either — both stay out of byte-sync, as elsewhere. `Err` when git could not
+/// answer: an empty set there used to read as "lockstep owns nothing", which let
+/// byte-sync write the very files lockstep owns, so a caller with lockstep on defers
+/// instead (`sync_auto::drop_tracked`). `Ok` of an empty set is a real answer (an
+/// unborn repo).
+pub fn tracked_paths(project_id: &str) -> Result<HashSet<String>, String> {
     let local = Peer::Local(mirror_dir(project_id));
-    let out = match local.run(&["ls-files", "-z"]) {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return HashSet::new(),
-    };
-    out.split(|&b| b == 0)
+    let out = run_checked(&local, &["ls-files", "-z"], "listing the git-tracked files")?.stdout;
+    Ok(out
+        .split(|&b| b == 0)
         .filter(|s| !s.is_empty())
         .map(|s| String::from_utf8_lossy(s).replace('\\', "/"))
-        .collect()
+        .collect())
 }
 
 /// Every non-gitignored file in the mirror — tracked AND untracked — as git sees
@@ -3011,7 +3012,8 @@ async fn seed_manifest_after_pairing(
     project_id: &str,
     spec: &RemoteSpec,
 ) {
-    let paths: Vec<String> = tracked_paths(project_id).into_iter().collect();
+    // Best-effort, as before: a failed listing seeds nothing.
+    let paths: Vec<String> = tracked_paths(project_id).unwrap_or_default().into_iter().collect();
     if paths.is_empty() {
         return;
     }
@@ -3669,7 +3671,7 @@ pub async fn start(
     }
     // One lockstep loop per mirror across the window and its desktop sidecar
     // (`process_lease`, final review B4): the other process may run it.
-    if !crate::services::process_lease::claim(&crate::services::process_lease::git_peer_key(project_id)) {
+    if !crate::services::process_lease::claim_sync(&crate::services::process_lease::git_peer_key(project_id)) {
         eprintln!("git_peer: {project_id}: another process of this app runs its lockstep");
         return;
     }

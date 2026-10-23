@@ -145,7 +145,7 @@ pub async fn start(
     // final review B4); it keeps doing so, and this one's manual syncs still
     // work (the manifest is compare-and-swap across processes).
     let key = crate::services::process_lease::remote_sync_key(project_id);
-    if !crate::services::process_lease::claim(&key) {
+    if !crate::services::process_lease::claim_sync(&key) {
         eprintln!("sync_auto: {project_id}: another process of this app runs its auto-sync");
         return;
     }
@@ -400,16 +400,25 @@ pub async fn reconcile_once(
 /// Subtract the git-tracked set from the byte-sync candidates when lockstep owns them
 /// (#28p D1). A no-op when lockstep is off, so a project that never opted in keeps
 /// exactly today's behaviour — including its behaviour for files git happens to track.
-/// Pure.
+/// With lockstep on, a tracked set git could not list (`git_peer::tracked_paths`'s
+/// `Err`) is `Err` here: which files lockstep owns is unknown, so nothing is
+/// byte-synced. Pure.
 pub fn drop_tracked(
     candidates: &mut BTreeSet<String>,
-    tracked: &HashSet<String>,
+    tracked: &Result<HashSet<String>, String>,
     lockstep_enabled: bool,
-) {
-    if !lockstep_enabled || tracked.is_empty() {
-        return;
+) -> Result<(), String> {
+    if !lockstep_enabled {
+        return Ok(());
     }
+    let tracked = tracked.as_ref().map_err(|e| lockstep_unknown(e))?;
     candidates.retain(|rel| !tracked.contains(rel));
+    Ok(())
+}
+
+/// The refusal when lockstep is on but its tracked set could not be listed.
+pub fn lockstep_unknown(why: &str) -> String {
+    format!("Git Lockstep owns the git-tracked files, but they could not be listed ({why}); nothing was byte-synced")
 }
 
 /// One reconcile pass over the project's auto-sync paths. Bails gracefully if the
@@ -428,6 +437,11 @@ async fn reconcile_pass(
     let Some(sftp) = pooled_sftp(pool, project_id).await else {
         return;
     };
+    // An unreadable `sync.json` stands in as empty in the cache; act on nothing
+    // until it is repaired (logged once, by the read that found it).
+    if remote_sync::check_manifest_readable(project_id).is_err() {
+        return;
+    }
 
     // Snapshot the manifest and collect the auto markers under the lock.
     let (snapshot, auto_dirs, auto_files): (Manifest, Vec<String>, Vec<String>) = {
@@ -488,11 +502,17 @@ async fn reconcile_pass(
     // delivered them properly (git refuses to overwrite an untracked file even when it
     // is byte-identical). Which of those two happened used to be decided by a debounce
     // race between the two engines — nondeterministically wedging the project.
-    drop_tracked(
-        &mut candidates,
-        &crate::services::git_peer::tracked_paths(project_id),
-        crate::services::git_peer::load_state(project_id).enabled,
-    );
+    // Only asked when lockstep is on; a listing git could not give defers the pass.
+    let lockstep = crate::services::git_peer::load_state(project_id).enabled;
+    let tracked = if lockstep {
+        crate::services::git_peer::tracked_paths(project_id)
+    } else {
+        Ok(HashSet::new())
+    };
+    if let Err(e) = drop_tracked(&mut candidates, &tracked, lockstep) {
+        eprintln!("auto-sync: {project_id}: {e}");
+        return;
+    }
 
     let mirror_root = mirror_dir(project_id);
     let mut pulled = 0usize;
@@ -502,17 +522,31 @@ async fn reconcile_pass(
         let host_abs = remote_sync::join_remote(&target.spec.remote_path, &rel);
         // `Option`, distinguishing a gone host path (None) from an empty file —
         // the same input `push_decision`/`divergence` expect (matches sync_push).
-        let (host, host_mode) = match walked_host_meta.get(&rel) {
-            Some(meta) => (Some(*meta), walked_host_mode.get(&rel).copied().flatten()),
-            None => match sftp::metadata_with_mode_on(&sftp, &host_abs).await {
-                Ok((size, mtime, mode)) => (Some((size, mtime)), mode),
-                Err(_) => (None, None),
+        // Only a positive NoSuchFile is `None`: a stat that could not answer
+        // (permissions, a dropped session, no size) skips the file, where it used
+        // to read as "gone" and let a never-synced file be pushed over a real one.
+        let walked = walked_host_meta.get(&rel).copied();
+        let (host, host_mode) = match walked {
+            Some(meta) => (Some(meta), walked_host_mode.get(&rel).copied().flatten()),
+            None => match sftp::metadata_opt_with_mode_on(&sftp, &host_abs).await {
+                Ok(Some((size, mtime, mode))) => (Some((size, mtime)), mode),
+                Ok(None) => (None, None),
+                Err(e) => {
+                    eprintln!("auto-sync: skip '{rel}': {e}");
+                    continue;
+                }
             },
         };
         let local_path = mirror_local_path(project_id, &rel);
-        let local = std::fs::metadata(&local_path)
-            .ok()
-            .map(|m| remote_sync::local_meta(&m));
+        // Same for the mirror: only NotFound is gone.
+        let local = match std::fs::metadata(&local_path) {
+            Ok(m) => Some(remote_sync::local_meta(&m)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                eprintln!("auto-sync: skip '{rel}': {e}");
+                continue;
+            }
+        };
         let entry = snapshot.get(&rel).cloned().unwrap_or_default();
 
         match remote_sync::divergence(&entry, host, local) {
@@ -551,8 +585,21 @@ async fn reconcile_pass(
             }
             (false, true) => {
                 // Local changed only → push, but only if the host still matches the
-                // recorded base (never clobber a racing host change).
-                if remote_sync::push_decision(&entry, host) == PushDecision::Safe {
+                // recorded base (never clobber a racing host change). The walk's
+                // size+mtime found the candidate; it is seconds old by now, so the
+                // host is stat'd again for the decision itself.
+                let host_now = if walked.is_some() {
+                    match sftp::metadata_opt_on(&sftp, &host_abs).await {
+                        Ok(now) => now,
+                        Err(e) => {
+                            eprintln!("auto-sync: push skip '{rel}': {e}");
+                            continue;
+                        }
+                    }
+                } else {
+                    host
+                };
+                if remote_sync::push_decision(&entry, host_now) == PushDecision::Safe {
                     match run_bounded(remote_sync::push_file_atomic(&sftp, &local_path, &host_abs))
                         .await
                     {
@@ -614,7 +661,7 @@ mod tests {
         // it untracked on the peer is what blocks the fast-forward that would have
         // delivered it as a commit.
         let mut c = set(&["src/a.rs", "notes.md", "build/out.bin"]);
-        drop_tracked(&mut c, &hset(&["src/a.rs", "README.md"]), true);
+        drop_tracked(&mut c, &Ok(hset(&["src/a.rs", "README.md"])), true).unwrap();
         assert_eq!(c, set(&["notes.md", "build/out.bin"]));
     }
 
@@ -662,13 +709,25 @@ mod tests {
         // A project that never opted in keeps exactly today's behaviour, tracked files
         // and all — this fix must not quietly stop syncing files for those projects.
         let mut c = set(&["src/a.rs", "notes.md"]);
-        drop_tracked(&mut c, &hset(&["src/a.rs"]), false);
+        drop_tracked(&mut c, &Ok(hset(&["src/a.rs"])), false).unwrap();
+        assert_eq!(c, set(&["src/a.rs", "notes.md"]));
+        // Off, a listing git could not give is never even asked about.
+        drop_tracked(&mut c, &Err("no git".into()), false).unwrap();
         assert_eq!(c, set(&["src/a.rs", "notes.md"]));
 
-        // An empty tracked set (an unborn repo, or `git ls-files` failing) is likewise a
-        // no-op: degrade to the old behaviour rather than syncing nothing at all.
+        // An empty tracked set that git answered (an unborn repo) is likewise a no-op.
         let mut c = set(&["src/a.rs"]);
-        drop_tracked(&mut c, &HashSet::new(), true);
+        drop_tracked(&mut c, &Ok(HashSet::new()), true).unwrap();
         assert_eq!(c, set(&["src/a.rs"]));
+    }
+
+    /// With lockstep on, a tracked set git could not list is not "lockstep owns
+    /// nothing": byte-sync would then write the very files lockstep owns.
+    #[test]
+    fn an_unlisted_tracked_set_defers_byte_sync_when_lockstep_is_on() {
+        let mut c = set(&["src/a.rs", "notes.md"]);
+        let err = drop_tracked(&mut c, &Err("git ls-files failed".into()), true).unwrap_err();
+        assert!(err.contains("git ls-files failed"), "{err}");
+        assert_eq!(c, set(&["src/a.rs", "notes.md"]), "the candidates are left for the caller to drop");
     }
 }

@@ -954,17 +954,33 @@ fn permission_bits(meta: &openssh_sftp_client::metadata::MetaData) -> Option<u32
 /// failure), which means "could not check", never "absent". The distinction is
 /// load-bearing for the sync-manifest prune: a helper that collapses a transient
 /// failure into "gone" is how one dropped session wipes the tracked state.
+///
+/// A present path whose attrs carry no size is `Err` too: unlike [`metadata_on`]
+/// (display), a sync decision must not read an unknown size as an empty file.
 pub async fn metadata_opt_on(
     sftp: &Sftp,
     path: &str,
 ) -> Result<Option<(u64, Option<u64>)>, String> {
+    metadata_opt_with_mode_on(sftp, path)
+        .await
+        .map(|found| found.map(|(size, modified, _)| (size, modified)))
+}
+
+/// [`metadata_opt_on`] plus the permission bits (`0o777` mask), `None` when the
+/// server omits them — the one stat a background pull or push decides on.
+pub async fn metadata_opt_with_mode_on(
+    sftp: &Sftp,
+    path: &str,
+) -> Result<Option<(u64, Option<u64>, Option<u32>)>, String> {
     use openssh_sftp_client::error::{Error as SftpClientError, SftpErrorKind};
     let mut fs = sftp.fs();
     match fs.metadata(path).await {
         Ok(meta) => {
-            let size = meta.len().unwrap_or(0);
+            let size = meta
+                .len()
+                .ok_or_else(|| format!("sftp metadata for '{path}' carries no size"))?;
             let modified = meta.modified().map(|t| t.as_duration().as_secs());
-            Ok(Some((size, modified)))
+            Ok(Some((size, modified, permission_bits(&meta))))
         }
         Err(SftpClientError::SftpError(SftpErrorKind::NoSuchFile, _)) => Ok(None),
         Err(e) => Err(format!("sftp metadata failed: {e}")),

@@ -95,7 +95,15 @@ pub fn free_to_tear_down(key: &str) -> Option<TearDown> {
 /// Become the single runner of `key`; `true` also when this process already
 /// is.
 pub fn claim(key: &str) -> bool {
-    claim_at(&path(key))
+    claim_at(&path(key), true)
+}
+
+/// [`claim`] for a remote project's sync loops, which write the user's files:
+/// a lock that exists but failed is `false` — nobody can tell whether the other
+/// process already runs them, so this one does not start a second writer. A
+/// file system without advisory locks still claims, as before leases existed.
+pub fn claim_sync(key: &str) -> bool {
+    claim_at(&path(key), false)
 }
 
 fn with_held<R>(f: impl FnOnce(&mut HashMap<PathBuf, FileLock>) -> R) -> R {
@@ -144,7 +152,9 @@ pub(crate) fn free_to_tear_down_at(path: &Path) -> Option<TearDown> {
     }
 }
 
-pub(crate) fn claim_at(path: &Path) -> bool {
+/// `error_claims`: what a lock that exists but failed answers ([`claim`] keeps
+/// its old `true`; [`claim_sync`] says `false`).
+pub(crate) fn claim_at(path: &Path, error_claims: bool) -> bool {
     with_held(|held| {
         if held.contains_key(path) {
             return true;
@@ -155,9 +165,13 @@ pub(crate) fn claim_at(path: &Path) -> bool {
                 true
             }
             Ok(None) => false,
+            Err(e) if crate::storage::lock_unsupported(&e) => {
+                eprintln!("process_lease: claim {}: {e}; running unguarded", path.display());
+                true
+            }
             Err(e) => {
                 eprintln!("process_lease: claim {}: {e}", path.display());
-                true
+                error_claims
             }
         }
     })
@@ -194,13 +208,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lease = path_in(dir.path(), &remote_sync_key("r/1"));
         let other = FileLock::try_exclusive(&lease).unwrap().expect("free at first");
-        assert!(!claim_at(&lease), "the other process runs it");
+        assert!(!claim_at(&lease, false), "the other process runs it");
         drop(other);
-        assert!(claim_at(&lease));
-        assert!(claim_at(&lease), "still ours");
+        assert!(claim_at(&lease, false));
+        assert!(claim_at(&lease, false), "still ours");
         assert!(FileLock::try_exclusive(&lease).unwrap().is_none(), "held for the claim's length");
         release_at(&lease);
         assert!(FileLock::try_exclusive(&lease).unwrap().is_some());
+    }
+
+    /// A lock that exists but cannot be taken (here: its directory is a file)
+    /// leaves the sync loops unclaimed — a second writer is worse than none —
+    /// while the VM runner's [`claim`] keeps its old answer.
+    #[test]
+    fn a_failed_lock_never_claims_the_sync_loops() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("leases"), b"not a directory").unwrap();
+        let lease = path_in(dir.path(), &remote_sync_key("r/1"));
+        assert!(!claim_at(&lease, false));
+        assert!(claim_at(&lease, true));
+        release_at(&lease);
     }
 
     #[test]

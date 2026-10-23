@@ -298,13 +298,97 @@ pub fn confined_mirror_dir(root: &Path, rel: &str) -> Result<PathBuf, String> {
 
 // ── Manifest IO ───────────────────────────────────────────────────────────
 
-/// Load a project's manifest from disk, or an empty one if absent/unparseable.
-pub fn load_manifest(project_id: &str) -> Manifest {
-    let path = manifest_path(project_id);
-    if !path.exists() {
-        return Manifest::new();
+/// Load a project's manifest from disk: an empty one only when the file is
+/// positively missing; an unreadable one is an error ([`read_manifest_at`]).
+pub fn load_manifest(project_id: &str) -> Result<Manifest, String> {
+    read_manifest_at(&manifest_path(project_id))
+}
+
+/// Read `sync.json` at `path`. Only a positively missing file is an empty
+/// manifest. A file that exists but cannot be read or parsed is an error,
+/// never "nothing selected": reading it as empty hid every selection and base,
+/// and the next save then replaced the damaged file for good. Its bytes are
+/// kept beside it (`sync.json.unreadable-<secs>`), and that version of the file
+/// is remembered so no save replaces it ([`save_manifest_at`]) until the user
+/// repairs or removes it.
+fn read_manifest_at(path: &Path) -> Result<Manifest, String> {
+    let content = match std::fs::read(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Manifest::new()),
+        Err(e) => return Err(mark_unreadable(path, None, &e.to_string())),
+    };
+    serde_json::from_slice(&content).map_err(|e| mark_unreadable(path, Some(&content), &e.to_string()))
+}
+
+/// Remember `path`'s current version as unreadable, keep a copy of `content`
+/// (once per version), and answer the error every caller reports.
+fn mark_unreadable(path: &Path, content: Option<&[u8]>, why: &str) -> String {
+    let stamp = stamp_of(path);
+    let mut unreadable = unreadable();
+    if let Some((seen, msg)) = unreadable.get(path) {
+        if *seen == stamp {
+            return msg.clone();
+        }
     }
-    crate::storage::read_json(&path).unwrap_or_default()
+    let kept = content.and_then(|bytes| {
+        let name = format!("{}.unreadable-{}", path.file_name()?.to_string_lossy(), now_secs());
+        let copy = path.with_file_name(name);
+        match std::fs::write(&copy, bytes) {
+            Ok(()) => Some(copy),
+            Err(e) => {
+                eprintln!("sync manifest: could not keep a copy of {}: {e}", path.display());
+                None
+            }
+        }
+    });
+    let msg = match kept {
+        Some(copy) => format!(
+            "The sync state of this project ({}) could not be read ({why}); nothing was synced. A copy was kept at {}. Repair or remove the file to sync again.",
+            path.display(),
+            copy.display()
+        ),
+        None => format!(
+            "The sync state of this project ({}) could not be read ({why}); nothing was synced. Repair or remove the file to sync again.",
+            path.display()
+        ),
+    };
+    eprintln!("sync manifest: {msg}");
+    unreadable.insert(path.to_path_buf(), (stamp, msg.clone()));
+    msg
+}
+
+/// The error for `path` when the version on disk is one found unreadable;
+/// `None` once it was repaired or removed (a new version, or no file).
+fn unreadable_now(path: &Path) -> Option<String> {
+    let stamp = stamp_of(path);
+    let mut unreadable = unreadable();
+    match unreadable.get(path) {
+        Some((seen, msg)) if *seen == stamp && stamp.is_some() => Some(msg.clone()),
+        Some(_) => {
+            unreadable.remove(path);
+            None
+        }
+        None => None,
+    }
+}
+
+/// Fail when the project's `sync.json` exists but cannot be read — the gate
+/// every sync command passes before it moves a byte, since the cache
+/// ([`ensure_loaded`]) stands in an empty manifest for an unreadable one. A
+/// version this process already loaded or wrote is not parsed again.
+pub fn check_manifest_readable(project_id: &str) -> Result<(), String> {
+    check_manifest_readable_at(&manifest_path(project_id))
+}
+
+fn check_manifest_readable_at(path: &Path) -> Result<(), String> {
+    if let Some(msg) = unreadable_now(path) {
+        return Err(msg);
+    }
+    let disk = stamp_of(path);
+    if disk.is_none() || stamps().get(path) == Some(&disk) {
+        return Ok(());
+    }
+    read_manifest_at(path).map(|_| ())
 }
 
 /// Persist a project's manifest to disk (creates the state dir if needed).
@@ -330,6 +414,11 @@ fn save_manifest_at(path: &Path, manifest: &Manifest) -> Result<(), String> {
     }
     // On a file system without advisory locks the stamp check alone guards.
     let _lock = crate::storage::FileLock::exclusive_or_unlocked(path).map_err(|e| e.to_string())?;
+    // Never replace a file that could not be read: the cache stood in an empty
+    // manifest for it, so this save would erase what the user selected.
+    if let Some(msg) = unreadable_now(path) {
+        return Err(msg);
+    }
     let mut stamps = stamps();
     if let Some(expected) = stamps.get(path) {
         if *expected != stamp_of(path) {
@@ -351,7 +440,7 @@ pub fn update_manifest(project_id: &str, update: impl FnOnce(&mut Manifest)) -> 
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let _lock = crate::storage::FileLock::exclusive(&path).map_err(|e| e.to_string())?;
-    let mut manifest = load_manifest(project_id);
+    let mut manifest = read_manifest_at(&path)?;
     update(&mut manifest);
     crate::storage::write_json_atomic(&path, &manifest).map_err(|e| e.to_string())?;
     stamps().remove(&path);
@@ -409,11 +498,7 @@ fn mark_stale_on_disk(path: &Path, recorded: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let read_from = stamp_of(path);
-    let mut disk: Manifest = if path.exists() {
-        crate::storage::read_json(path).map_err(|e| e.to_string())?
-    } else {
-        Manifest::new()
-    };
+    let mut disk = read_manifest_at(path)?;
     let mut marked = false;
     for rel in recorded {
         if let Some(entry) = disk.get_mut(rel) {
@@ -471,6 +556,17 @@ fn stamp_of(path: &Path) -> Option<Stamp> {
 fn stamps() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Option<Stamp>>> {
     static STAMPS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Option<Stamp>>>> = std::sync::OnceLock::new();
     STAMPS
+        .get_or_init(Default::default)
+        .lock_ok()
+}
+
+/// Each unreadable manifest's version and the error that names it, by path.
+type Unreadable = HashMap<PathBuf, (Option<Stamp>, String)>;
+
+/// The manifest versions found unreadable ([`read_manifest_at`]).
+fn unreadable() -> std::sync::MutexGuard<'static, Unreadable> {
+    static UNREADABLE: std::sync::OnceLock<std::sync::Mutex<Unreadable>> = std::sync::OnceLock::new();
+    UNREADABLE
         .get_or_init(Default::default)
         .lock_ok()
 }
@@ -701,7 +797,10 @@ fn ensure_loaded_at<'a>(cache: &'a mut HashMap<String, Manifest>, project_id: &s
     let disk = stamp_of(path);
     let fresh = cache.contains_key(project_id) && stamps.get(path) == Some(&disk);
     if !fresh {
-        let manifest = if path.exists() { crate::storage::read_json(path).unwrap_or_default() } else { Manifest::new() };
+        // An unreadable file stands in as empty here (every caller holds a
+        // `&mut Manifest`), so nothing reads as selected or auto; the commands
+        // refuse first (`check_manifest_readable`) and no save replaces it.
+        let manifest = read_manifest_at(path).unwrap_or_default();
         cache.insert(project_id.to_string(), manifest);
         stamps.insert(path.to_path_buf(), disk);
     }
@@ -1489,6 +1588,42 @@ mod tests {
         assert!(fresh.contains_key("theirs-is-longer") && !fresh.contains_key("a"), "re-read, not the stale copy");
         fresh.insert("d".into(), SyncEntry::default());
         save_manifest_at(&path, &cache["p"]).expect("current again");
+    }
+
+    /// An unparseable `sync.json` is never read as "nothing selected" and then
+    /// replaced: the cache stands in an empty manifest, every save refuses, the
+    /// bytes are kept beside it, and a repaired (here: removed) file syncs again.
+    #[test]
+    fn an_unreadable_manifest_is_kept_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p").join("sync.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let damaged = b"{\"notes.md\": {\"selected\": tr";
+        std::fs::write(&path, damaged).unwrap();
+
+        let err = check_manifest_readable_at(&path).unwrap_err();
+        assert!(err.contains("could not be read"), "{err}");
+        let mut cache = HashMap::new();
+        let m = ensure_loaded_at(&mut cache, "p", &path);
+        assert!(m.is_empty(), "stands in as empty for the callers holding a &mut");
+        m.insert("other".into(), SyncEntry::default());
+        assert!(save_manifest_at(&path, &cache["p"]).is_err(), "never replaces the damaged file");
+        assert!(save_or_mark_stale_at(&path, cache.get_mut("p").unwrap(), &["other".to_string()]).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), damaged);
+        let kept: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("sync.json.unreadable-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "one copy per damaged version");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), damaged);
+        assert!(check_manifest_readable_at(&path).is_err(), "still refused");
+
+        std::fs::remove_file(&path).unwrap();
+        check_manifest_readable_at(&path).expect("a positively missing file starts empty");
+        let m = ensure_loaded_at(&mut cache, "p", &path);
+        m.insert("fresh".into(), SyncEntry::default());
+        save_manifest_at(&path, &cache["p"]).expect("writable again once removed");
     }
 
     /// Fixed decision #7: a pull or push whose record fails to save must never
