@@ -5155,6 +5155,8 @@ export const dict: Dict = {
   "terminal.reader.voice.err.device": "Das Mikrofon funktioniert nicht mehr.",
   "terminal.reader.voice.err.model": "Das Sprachmodell konnte nicht laufen.",
   "terminal.reader.voice.err.failed": "Das Diktat ist fehlgeschlagen.",
+  "terminal.reader.voice.err.noSpeechServer": "Keine Systemstimme zum Vorlesen: installiere speech-dispatcher.",
+  "terminal.reader.voice.err.speech": "Die Systemstimme antwortet nicht mehr.",
   "terminal.reader.sending": "Wird gesendet…",
   "terminal.reader.sendNowHint": "Noch in der Warteschlange — ↑ im leeren Feld holt sie zum Bearbeiten zurück, Esc hält den Schritt an und sendet sie sofort",
   "terminal.reader.pullFailed": "Nicht zurückgeholt — Claude hat die wartende Nachricht nicht zurückgegeben. Sieh im Terminal des Agenten nach.",

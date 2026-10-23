@@ -4,7 +4,7 @@ Status: plan (2026-10-21; reviewed and amended 2026-10-22 and, before
 Batch A, 2026-10-23). Step 0 partly done 2026-10-22: build, API and CI probes
 recorded under step 0; the host's audio probes (`scripts/voice-probe/`) are
 still for the user to run. Both of step 0's decisions are made (2026-10-23).
-Step 1 and steps 2a/2b built (catalog hashes pending); step 3 built.
+Step 1 and steps 2a/2b built (catalog hashes pending); steps 3 and 2c built.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds
@@ -590,6 +590,18 @@ connecting SSIP there would freeze the window). Each gets a `Client` row in
   device. `owner` is an enum: `Tab { client, key }` now, `Window` for step 9.
 
 #### Speaking (2c, Batch B)
+
+**Built 2026-10-23** (`voice/ssip.rs`, `voice/tts.rs`; not run live). Probed
+against the real speech-dispatcher 0.12.0~rc2 here: the answers are as
+below, a `--spawn`ed server exits on its own idle timeout, and with no sound
+card it sends BEGIN and then nothing — not even an answer to `CANCEL self` —
+which is why every wait has a limit and a silent connection is dropped and
+rebuilt on the next chunk. Departures: on Windows/macOS the end of a chunk
+is read by polling `is_speaking` (WinRT's comes from its `MediaEnded`
+handler, macOS reads `isSpeaking`), not from the crate's callbacks, which
+run under its locks and on macOS need a run loop. `voice_voices` stays a
+stub until step 4's voice picker: espeak-ng alone lists thousands of
+variants, so the list needs a per-language filter first.
 
 `voice/tts.rs`: `trait TtsEngine { speak(chunk, lang, rate), stop(),
 voices() }`, a chunk queue that `stop()` empties, and a `speaking` flag set

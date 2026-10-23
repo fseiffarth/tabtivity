@@ -23,7 +23,9 @@ pub mod models;
 pub mod phantom;
 pub mod resample;
 pub mod session;
+pub mod ssip;
 pub mod stt;
+pub mod tts;
 pub mod vad;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -74,6 +76,10 @@ pub enum VoiceError {
     ModelFailed,
     /// The session named is not the active one.
     NotActive,
+    /// No OS voice to read aloud with (no speech-dispatcher answers on Linux).
+    NoSpeechServer,
+    /// The OS voice failed or stopped answering.
+    SpeechFailed,
 }
 
 impl VoiceError {
@@ -90,6 +96,8 @@ impl VoiceError {
             Self::DeviceFailed => "device-failed",
             Self::ModelFailed => "model-failed",
             Self::NotActive => "not-active",
+            Self::NoSpeechServer => "no-speech-server",
+            Self::SpeechFailed => "speech-failed",
         }
     }
 }
@@ -183,8 +191,7 @@ pub fn status() -> VoiceStatus {
         } else {
             None
         },
-        // Read-aloud lands with step 2c.
-        speak: Some(VoiceError::NotBuilt),
+        speak: tts::availability(),
         session: ACTIVE.lock_ok().as_ref().map(|a| a.info()),
     }
 }
@@ -380,9 +387,9 @@ pub const MAX_SPEAK_CHUNKS: usize = 200;
 pub const MAX_CHUNK_CHARS: usize = 1000;
 pub const SPEAK_RATE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
 
-/// Read `chunks` aloud as utterance `id`. Read-aloud lands with step 2c;
-/// until then the arguments are checked and the answer is `not-built`.
-pub fn speak(id: &str, chunks: &[String], lang: &str, rate: f32, _replace: bool) -> Result<(), VoiceError> {
+/// Read `chunks` aloud as read `id`, after whatever is being said
+/// (`replace`: instead of it). `voice:speaking` says what became of it.
+pub fn speak(ctx: &CoreCtx, id: &str, chunks: &[String], lang: &str, rate: f32, replace: bool) -> Result<(), VoiceError> {
     if id.is_empty()
         || id.len() > 200
         || chunks.len() > MAX_SPEAK_CHUNKS
@@ -392,12 +399,20 @@ pub fn speak(id: &str, chunks: &[String], lang: &str, rate: f32, _replace: bool)
     {
         return Err(VoiceError::BadArgument);
     }
-    Err(VoiceError::NotBuilt)
+    if let Some(e) = tts::availability() {
+        return Err(e);
+    }
+    tts::queue(ctx, tts::os_engine, id.to_string(), chunks.to_vec(), lang.to_string(), rate, replace)
 }
 
-pub fn speak_stop() {}
+/// Stop what is being read and everything queued.
+pub fn speak_stop() {
+    tts::stop();
+}
 
-/// The system voices read-aloud can use (step 2c).
+/// The system voices a read-aloud voice picker would offer. Not yet: the
+/// picker comes with step 4's settings, and espeak-ng alone lists thousands
+/// of variants, so it needs a per-language filter first.
 pub fn voices() -> Result<Vec<String>, VoiceError> {
     Err(VoiceError::NotBuilt)
 }
@@ -407,18 +422,21 @@ pub fn voices() -> Result<Vec<String>, VoiceError> {
 /// most half a second for its thread before leaving it behind.
 pub fn stop_for_exit() {
     let active = ACTIVE.lock_ok().take();
-    let Some(mut active) = active else { return };
-    active.control.abort();
-    if let Some(thread) = active.thread.take() {
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while !thread.is_finished() && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if thread.is_finished() {
-            let _ = thread.join();
+    if let Some(mut active) = active {
+        active.control.abort();
+        if let Some(thread) = active.thread.take() {
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            while !thread.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
         }
     }
     stt::release_now();
+    // The voice too: CANCEL self, then the speaker thread, bounded.
+    tts::stop_for_exit(Duration::from_millis(500));
 }
 
 #[cfg(test)]
@@ -451,6 +469,8 @@ mod tests {
             VoiceError::DeviceFailed,
             VoiceError::ModelFailed,
             VoiceError::NotActive,
+            VoiceError::NoSpeechServer,
+            VoiceError::SpeechFailed,
         ] {
             assert_eq!(serde_json::to_value(e).unwrap(), serde_json::json!(e.code()));
         }

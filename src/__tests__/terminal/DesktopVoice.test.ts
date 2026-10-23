@@ -18,6 +18,7 @@ import {
   startDesktopDictation,
   voiceErrorKey,
   voiceLangTag,
+  voiceSpeak,
   type DesktopDictationHandlers,
 } from "../../lib/voice/desktopVoice";
 import { en } from "../../lib/i18n";
@@ -118,6 +119,15 @@ describe("the desktop dictation session", () => {
     const dictation = await startDesktopDictation(options, h);
     dictation.pause(true);
     expect(invoke).toHaveBeenCalledWith("voice_listen_pause", { session: 5, paused: true });
+  });
+});
+
+describe("reading aloud", () => {
+  it("asks for a read with the frontend's camelCase keys", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    await voiceSpeak("turn-3", ["One.", "Two."], "de", 1.25, true);
+    expect(invoke).toHaveBeenCalledWith("voice_speak", { id: "turn-3", chunks: ["One.", "Two."], lang: "de", rate: 1.25, replace: true });
   });
 });
 

@@ -1598,7 +1598,15 @@ Plan: `docs/desktop_voice_plan.md`.
   in 0.18.2); errors classified by `ErrorKind`, Windows privacy denial as a
   `BackendError` carrying `E_ACCESSDENIED`.
 - `tts` =0.26.3 on Windows/macOS only (never on Linux, where it links
-  libspeechd).
+  libspeechd): `Tts::default`, `speak`, `stop`, `is_speaking` (polled for
+  the end of a chunk), `voices`/`set_voice` (never macOS's `voice()`, which
+  is `unimplemented!()`), `normal_rate`/`min_rate`/`max_rate`.
+- speech-dispatcher's SSIP (0.12.0~rc2, `ssip.rs`): `SET self CLIENT_NAME`,
+  `NOTIFICATION END/CANCEL on`, `SSML_MODE off`, `PRIORITY text`, `LANGUAGE`,
+  `RATE` −100…100, `SPEAK` → `230`, dot-stuffed data, `225-<id>`, `CANCEL
+  self` → `210`, events `701`/`702`/`703` naming the id; the socket at
+  `$XDG_RUNTIME_DIR/speech-dispatcher/speechd.sock` or `SPEECHD_ADDRESS`
+  `unix_socket:`, `speech-dispatcher --spawn` when nothing listens.
 
 **Verify** `cargo test -p tabtivity --lib -- services::voice`; a clean
 `cargo build` with the new pins on Linux, then the CI Windows/macOS jobs;

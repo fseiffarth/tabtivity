@@ -5137,6 +5137,8 @@ export const dict: Dict = {
   "terminal.reader.voice.err.device": "El micrófono dejó de funcionar.",
   "terminal.reader.voice.err.model": "El modelo de voz no pudo ejecutarse.",
   "terminal.reader.voice.err.failed": "El dictado falló.",
+  "terminal.reader.voice.err.noSpeechServer": "No hay voz del sistema para leer en voz alta: instala speech-dispatcher.",
+  "terminal.reader.voice.err.speech": "La voz del sistema dejó de responder.",
   "terminal.reader.sending": "Enviando…",
   "terminal.reader.sendNowHint": "Aún en cola — ↑ en el cuadro vacío lo recupera para editarlo, Esc detiene el turno y lo envía ya",
   "terminal.reader.pullFailed": "No recuperado — Claude no devolvió el mensaje en cola. Mira en el terminal del agente.",

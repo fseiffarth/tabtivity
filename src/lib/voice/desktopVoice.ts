@@ -19,7 +19,9 @@ export type VoiceErrorCode =
   | "device-busy"
   | "device-failed"
   | "model-failed"
-  | "not-active";
+  | "not-active"
+  | "no-speech-server"
+  | "speech-failed";
 
 /** Every code the backend can send, said in the UI language: a code added in
  * Rust without a row here fails the build. */
@@ -35,6 +37,8 @@ export const VOICE_ERROR_KEYS: Record<VoiceErrorCode, TranslationKey> = {
   "device-failed": "terminal.reader.voice.err.device",
   "model-failed": "terminal.reader.voice.err.model",
   "not-active": "terminal.reader.voice.err.failed",
+  "no-speech-server": "terminal.reader.voice.err.noSpeechServer",
+  "speech-failed": "terminal.reader.voice.err.speech",
 };
 
 function isVoiceErrorCode(value: unknown): value is VoiceErrorCode {
@@ -87,6 +91,7 @@ export const VOICE_EVENTS = {
   state: "voice:state",
   owner: "voice:owner",
   error: "voice:error",
+  speaking: "voice:speaking",
 } as const;
 
 export type VoiceState = "preparing" | "listening" | "paused" | "stopped";
@@ -96,6 +101,9 @@ export interface VadEvent { session: number; segment: number; state: "start" | "
 export interface TextEvent { session: number; segment: number; text: string }
 export interface StateEvent { session: number; state: VoiceState; reason?: VoiceErrorCode }
 export interface ErrorEvent { session: number; code: VoiceErrorCode }
+/** What became of a read (`voice_speak`); `done` comes after the mic's mute
+ * tail, so the room is quiet by then. */
+export interface SpeakingEvent { readId: string; state: "started" | "done" | "stopped" | "failed"; reason?: VoiceErrorCode }
 export interface OwnerEvent { session: number | null; owner: VoiceOwner | null; mode: ListenMode | null }
 
 /** The speech models the Settings page offers, smallest first (the catalog's
@@ -270,6 +278,21 @@ export async function startDesktopDictation(
       if (!ended) void invoke("voice_listen_pause", { session: id, paused }).catch(() => {});
     },
   };
+}
+
+/** `voice_speak`'s bounds (`services::voice`). */
+export const SPEAK_LIMITS = { chunks: 200, chunkChars: 1000, rate: { min: 0.5, max: 2 } } as const;
+
+/** Read `chunks` aloud as read `id` (after what is being said; `replace`:
+ * instead of it). `voice:speaking` follows it; rejects with the backend's
+ * code when there is no voice. */
+export function voiceSpeak(id: string, chunks: string[], lang: string, rate = 1, replace = false): Promise<void> {
+  return invoke("voice_speak", { id, chunks, lang, rate, replace });
+}
+
+/** Stop what is being read, and everything queued. */
+export function voiceSpeakStop(): Promise<void> {
+  return invoke("voice_speak_stop");
 }
 
 /** Stop whichever session holds the mic (the header indicator's click). */

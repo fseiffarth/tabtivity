@@ -5336,6 +5336,8 @@ export const enSource = {
   "terminal.reader.voice.err.device": "The microphone stopped working.",
   "terminal.reader.voice.err.model": "The speech model could not run.",
   "terminal.reader.voice.err.failed": "Dictation failed.",
+  "terminal.reader.voice.err.noSpeechServer": "No system voice to read aloud with: install speech-dispatcher.",
+  "terminal.reader.voice.err.speech": "The system voice stopped answering.",
   "terminal.reader.sending": "Sending…",
   "terminal.reader.sendNowHint": "Still queued — ↑ in the empty box takes it back to edit, Esc stops the turn and sends it now",
   "terminal.reader.pullFailed": "Not taken back — Claude did not hand the queued prompt back. Look in the agent's terminal.",

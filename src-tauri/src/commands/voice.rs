@@ -52,10 +52,11 @@ pub async fn voice_listen_stop(ctx: Ctx, session: u64) -> Result<(), String> {
     app_core::rt::blocking("voice", move || voice::listen_stop(&ctx.0, session)).await
 }
 
-/// Read `chunks` aloud (2c). `rate` is a multiplier, 0.5–2.0.
+/// Read `chunks` aloud as read `id`; `voice:speaking` follows it. `rate` is
+/// a multiplier, 0.5–2.0; `replace` stops what is being said first.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn voice_speak(id: String, chunks: Vec<String>, lang: String, rate: f32, replace: bool) -> Result<(), String> {
-    app_core::rt::try_blocking("voice", move || voice::speak(&id, &chunks, &lang, rate, replace).map_err(String::from)).await
+pub async fn voice_speak(ctx: Ctx, id: String, chunks: Vec<String>, lang: String, rate: f32, replace: bool) -> Result<(), String> {
+    app_core::rt::try_blocking("voice", move || voice::speak(&ctx.0, &id, &chunks, &lang, rate, replace).map_err(String::from)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -63,7 +64,7 @@ pub async fn voice_speak_stop() -> Result<(), String> {
     app_core::rt::blocking("voice", voice::speak_stop).await
 }
 
-/// The system voices read-aloud can use (2c).
+/// The system voices read-aloud can use (with step 4's voice picker).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn voice_voices() -> Result<Vec<String>, String> {
     app_core::rt::try_blocking("voice", || voice::voices().map_err(String::from)).await
