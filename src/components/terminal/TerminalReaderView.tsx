@@ -913,6 +913,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const sendTarget = tab?.scheduleTargetId;
   const pending = useSentPrompts(sendTarget);
   const [pendingTick, setPendingTick] = useState(0);
+  /** A sent prompt was let go without the stored conversation recording it
+   * (a store the Reader cannot read, a CLI that kept the turn elsewhere): the
+   * turn is only in the terminal. The entry count at that moment — the
+   * notice stays until the conversation gains a turn. */
+  const [unrecordedAt, setUnrecordedAt] = useState<number | null>(null);
   const [readTick, setReadTick] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -1340,7 +1345,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
     if (left.length !== pending.length) {
-      forgetSentPrompts(sendTarget, pending.filter((item) => !left.includes(item)).map((item) => item.id));
+      const gone = pending.filter((item) => !left.includes(item));
+      if (gone.some((item) => !recorded(item))) setUnrecordedAt(entries.length);
+      forgetSentPrompts(sendTarget, gone.map((item) => item.id));
       return;
     }
     // Nothing new may come in to look again: let the first one go on time.
@@ -1348,6 +1355,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const timer = setTimeout(() => setPendingTick((tick) => tick + 1), due);
     return () => clearTimeout(timer);
   }, [entries, pending, visible, sendTarget, pendingTick]);
+  useEffect(() => {
+    if (unrecordedAt !== null && entries.length > unrecordedAt) setUnrecordedAt(null);
+  }, [entries.length, unrecordedAt]);
+  const unrecorded = unrecordedAt !== null;
 
   /** The prompt the answer at the top of the chat belongs to — the last one
    * that starts above the scroll position — while its bubble is scrolled off
@@ -1399,7 +1410,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       list.scrollTop = list.scrollHeight;
     }
     checkPinnedPrompt();
-  }, [turns, pending, live, strayShown, shownTranscript, visible, checkPinnedPrompt]);
+  }, [turns, pending, live, strayShown, unrecorded, shownTranscript, visible, checkPinnedPrompt]);
 
   const showEarlier = () => {
     const list = listRef.current;
@@ -1445,7 +1456,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const cutLabel = t("terminal.reader.cut");
   const planLabel = t("mobile.transcript.plan");
   const subagentLabel = t("terminal.reader.subagent");
-  const empty = transcript?.available && turns.length === 0 && pending.length === 0 && !live.question && !live.working;
+  const empty = transcript?.available && turns.length === 0 && pending.length === 0 && !unrecorded && !live.question && !live.working;
   /** Where the open subagent stands among its siblings, and the conversation
    * the bar goes back up to. */
   const position = openStep ? siblingPosition(openStep) : { index: -1, count: 0 };
@@ -1695,13 +1706,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </button>
             </div>
           )}
-          {strayShown && !browsed && (
+          {(strayShown || unrecorded) && !browsed && !openStep && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
-              <span>{t("terminal.reader.stray")}</span>
+              <span>{t(strayShown ? "terminal.reader.stray" : "terminal.reader.unrecorded")}</span>
               <button type="button" className="terminal-reader-stop" onClick={openTerminal} title={t("terminal.reader.strayOpenHint")}>
                 {t("terminal.reader.strayOpen")}
               </button>
-              <UntestedTag id="terminal.reader.stray" />
+              {strayShown ? <UntestedTag id="terminal.reader.stray" /> : <UntestedTag id="terminal.reader.unrecorded" />}
             </div>
           )}
           {backgroundAtWork > 0 && (

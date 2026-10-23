@@ -180,6 +180,25 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it("says the turn is only in the terminal when the stored conversation never records a sent prompt", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "a turn the store never shows"));
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeTruthy();
+      expect(host.textContent).not.toContain("the chat can't find that turn");
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull();
+      expect(host.querySelector(".terminal-reader-stray")?.textContent).toContain("the chat can't find that turn");
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+      expect(useAgentReaderStore.getState().byAgent.claude).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets no sent prompt go while its pane is hidden", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];

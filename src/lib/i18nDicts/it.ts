@@ -5207,6 +5207,7 @@ export const dict: Dict = {
   "terminal.reader.stopHint": "Ferma il turno in corso dell'agente (invia Esc)",
   "terminal.reader.stray": "Il terminale mostra qualcosa che la chat non può visualizzare.",
   "terminal.reader.strayOpen": "Vai al terminale",
+  "terminal.reader.unrecorded": "Il tuo messaggio è arrivato al terminale, ma la chat non trova quel turno nella conversazione salvata. Il terminale lo mostra.",
   "terminal.reader.strayOpenHint": "Riporta i riquadri di questo agente al terminale (l'interruttore Chat nella barra dei prompt riporta la chat)",
   "terminal.undoClear.title": "Conversazione cancellata",
   "terminal.undoClear.body": "La conversazione precedente è ancora salvata e può tornare.",
