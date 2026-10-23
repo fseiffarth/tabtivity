@@ -1653,6 +1653,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // about the previous occupant of this id, so a reopened project's resume
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
+      // A shell tab Tabtivity opened to run something — a program of its own
+      // (`git clone`, an install's `bash`) or a line it types (a script's Run)
+      // — was asked for by whoever opened it, so it is commanded from its spawn,
+      // like a plain shell once a command is typed into it. The typed line would
+      // stamp it too, but a program has nothing to type, and a remount whose
+      // line was already typed (`claimInitialInput`) types nothing again: both
+      // stayed unstamped and never wore the running ▶.
+      if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
