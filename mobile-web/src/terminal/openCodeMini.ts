@@ -72,8 +72,9 @@ export function isOpenCodeBanner(text: string): boolean {
 /** The hint OpenCode draws inside its *empty* input box, in three shapes:
  * `Ask anything... "Fix a TODO in the codebase"`, `Ask anything… `, and
  * `Ask anything, / for commands, @ for context...`. The box is the frame, so
- * this is part of it and not a line of the conversation. */
-const PLACEHOLDER = /^\s*Ask anything[.,…]/u;
+ * this is part of it and not a line of the conversation. The start screen's
+ * centred box keeps its `┃` in front of it. */
+const PLACEHOLDER = /^\s*(?:[│┃]\s+)?Ask anything[.,…]/u;
 
 export function isOpenCodePlaceholder(text: string): boolean {
   return PLACEHOLDER.test(text);
@@ -200,6 +201,17 @@ export function openCodeStatusRow(text: string): OpenCodeStatus | null {
  * Source-read, not captured: no OpenCode binary runs inside the fence these
  * were written in. Every shape is therefore held loosely — a row that does not
  * match leaves the frame unread, the phone's state before this existed.
+ *
+ * The start screen (`routes/home.tsx`, captured from 2.1.2 and 2.1.3 at
+ * 120×40) draws the same box centred under the logo, so its `┃` stands too far
+ * in for `readableScreen` to strip, and puts its own footer row
+ * (`home.footer`, the version right-aligned) at the screen's bottom, below the
+ * box's footer:
+ *
+ *   `┃  Ask anything… "Fix broken tests"`
+ *   `┃  Build · Flint 40B Free OpenCode`
+ *   `/…/proj  shift+tab agents  ctrl+p commands`
+ *   `                                                  2.1.3`
  */
 
 /** The row under the full TUI's box: its palette hint (`ctrl+p commands`, the
@@ -212,6 +224,16 @@ const FULL_FOOTER = /\b(?:ctrl|alt|super|meta|shift)\+\S+\s+commands\b|\besc\s+e
  * Shell mode prints `Shell` alone. Only its first column is read: anything two
  * spaces further over is not the box's. */
 const COMPOSER_ROW = /^([A-Z][\w-]*(?: [A-Z][\w-]*){0,2})(?: (auto))?(?: · (\S.*?))?(?: · (\S+))?$/u;
+/** The box's own left bar, where `readableScreen` left it on the row. */
+const BOX_BAR = /^\s*(?:[│┃]\s+)?/u;
+/** The start screen's bottom row: the version, right-aligned, maybe after
+ * what plugins add to the slot. */
+const HOME_FOOTER = /(?:^|\s)v?\d+\.\d+\.\d+(?:-[\w.]+)?$/u;
+
+/** Whether `text` is the start screen's footer row, under the box's. */
+export function isOpenCodeHomeFooter(text: string): boolean {
+  return HOME_FOOTER.test(text.trim());
+}
 /** Longer than any model phrase the box prints; a longer one is prose. */
 const MAX_COMPOSER = 120;
 
@@ -267,8 +289,8 @@ function modelName(
 export function openCodeComposer(
   row: { text: string; spans?: readonly { text: string; color?: string }[] },
 ): OpenCodeComposer | null {
-  const lead = row.text.length - row.text.trimStart().length;
-  const column = row.text.trim().split(/\s{2,}/u)[0];
+  const lead = BOX_BAR.exec(row.text)?.[0].length ?? 0;
+  const column = row.text.slice(lead).trimEnd().split(/\s{2,}/u)[0];
   if (!column || column.length > MAX_COMPOSER) return null;
   const match = COMPOSER_ROW.exec(column);
   if (!match) return null;

@@ -155,6 +155,35 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
     ]);
   });
 
+  it("reads the start screen's centred box above its own version footer", () => {
+    // 2.1.3's start screen at 120×40 (tmux capture; 2.1.2 the same but its
+    // version and placeholder), through `readableScreen`: the logo is dropped,
+    // the `┃` 23 columns in is not. The composer row carries its colours.
+    const pad = " ".repeat(23);
+    const composer: ReadableLine = {
+      key: `l${seq += 1}`,
+      text: `${pad}┃  Build · Flint 40B Free OpenCode`,
+      spans: [
+        { text: `${pad}┃  ` },
+        { text: "Build", color: "#5c9cf5" },
+        { text: " · ", color: "#808080" },
+        { text: "Flint 40B Free", color: "#eeeeee" },
+        { text: " OpenCode", color: "#808080" },
+      ],
+    };
+    const screen = [
+      line(`${pad}┃  Ask anything… "What is the tech stack of this project?"`),
+      composer,
+      line(`${pad}/…/scratchpad/oc/proj  shift+tab agents  ctrl+p commands`),
+      line(""),
+      line(`${" ".repeat(113)}2.1.3`),
+    ];
+    expect(inputFrameStart(screen, "OpenCode")).toBe(0);
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ mode: "build", model: "Flint 40B Free" });
+    // A version printed as output under no box is still not a frame.
+    expect(inputFrameStart(lines("Bumped to", "", "2.1.3"), "OpenCode")).toBe(3);
+  });
+
   it("names no mode in shell mode", () => {
     const screen = lines("", " Shell", " ~/projects/app                 esc exit shell mode");
     expect(sessionStatus(screen, "OpenCode")).toEqual({});
