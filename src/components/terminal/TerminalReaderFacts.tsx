@@ -75,7 +75,7 @@ const MODE_CYCLE_LIMIT = 6;
  * CLI's usage panel (`agent_usage`, which spends no quota), or — Codex, which
  * has none — from the figures its rollout stores.
  */
-export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose, chipSlot }: {
+export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, contextCard, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose, chipSlot }: {
   tab: TabEntry;
   ptyId: string;
   agentLabel: string;
@@ -85,6 +85,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   /** The stored session's own figures (Codex), for what the screen and the
    * usage panel leave out. */
   usage: SessionUsage | undefined;
+  /** The newest `/context` card the session's transcript holds. */
+  contextCard: string | undefined;
   /** The folder the agent works in, when the screen prints none. */
   path: string | undefined;
   /** The reasoning effort last seen (busy row, transcript), when the status
@@ -444,7 +446,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         onClose={onStatusClose} onRefresh={() => onStatusRequest("status")}
       />}
       {statusOpen === "context" && CONTEXT_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderContext key={ptyId}
-        tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
+        tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest} card={contextCard}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         onClose={onStatusClose} onRefresh={() => onStatusRequest("context")}
       />}

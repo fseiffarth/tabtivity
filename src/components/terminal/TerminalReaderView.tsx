@@ -1757,6 +1757,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           live={live}
           modelTag={modelTag}
           usage={transcript?.available && !sinceClear ? transcript.usage : undefined}
+          contextCard={transcript?.available && !sinceClear ? transcript.contextCard : undefined}
           visible={visible}
           path={tabDir}
           effort={seenEffort}

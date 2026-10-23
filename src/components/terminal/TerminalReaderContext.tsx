@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useT } from "../../lib/i18n";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
@@ -8,7 +8,8 @@ import type { TabEntry } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
 
 /** `/context` prints its card into the scrollback, listings and all: a few
- * screenfuls above the input box. */
+ * screenfuls above the input box. The fullscreen renderer keeps no
+ * scrollback, so the card the transcript recorded (`card`) comes first. */
 const CONTEXT_ROWS = 400;
 const PLAIN = { plain: true } as const;
 
@@ -33,12 +34,12 @@ function tokenCount(text: string | undefined): number {
   return Number(match[1]) * (unit === "k" ? 1_000 : unit === "m" ? 1_000_000 : 1);
 }
 
-export function TerminalReaderContext({ tab, ptyId, agentLabel, visible, canRefresh, request, onClose, onRefresh }: {
-  tab: TabEntry; ptyId: string; agentLabel: string; visible: boolean; canRefresh: boolean; request: number;
+export function TerminalReaderContext({ tab, ptyId, agentLabel, visible, canRefresh, request, card, onClose, onRefresh }: {
+  tab: TabEntry; ptyId: string; agentLabel: string; visible: boolean; canRefresh: boolean; request: number; card: string | undefined;
   onClose: () => void; onRefresh: () => void;
 }) {
   const t = useT();
-  const [usage, setUsage] = useState<ContextUsage | null>(null);
+  const [screenUsage, setScreenUsage] = useState<ContextUsage | null>(null);
   const [error, setError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const refreshAllowed = useRef(canRefresh);
@@ -57,18 +58,20 @@ export function TerminalReaderContext({ tab, ptyId, agentLabel, visible, canRefr
     // Refresh only on the user's request, never when the agent becomes idle.
   }, [request, visible, tab.scheduleTargetId]);
 
+  const recorded = useMemo(() => card ? readContextUsage(card.split("\n").map((text) => ({ text }))) : null, [card]);
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || recorded) return;
     const read = () => {
       const term = terminalFor(ptyId);
       const lines = term ? readableScreen(term.buffer.active, CONTEXT_ROWS, PLAIN).lines : [];
       const next = readContextUsage(lines);
-      if (next) setUsage((previous) => previous?.raw === next.raw ? previous : next);
+      if (next) setScreenUsage((previous) => previous?.raw === next.raw ? previous : next);
     };
     read();
     const timer = setInterval(read, 500);
     return () => clearInterval(timer);
-  }, [visible, ptyId]);
+  }, [visible, ptyId, recorded]);
+  const usage = recorded ?? screenUsage;
 
   const categories = usage?.categories ?? [];
   const percent = usage?.percent;

@@ -115,4 +115,13 @@ describe("the /context card", () => {
     expect(readContextUsage(lines(["System prompt: 2.9k tokens (0.3%)", "31.2k/1m tokens (3%)"]))).toBeNull();
     expect(readContextUsage(lines(["❯ /context", "  ⎿  Context Usage", "❯ "]))).toBeNull();
   });
+
+  it("reads the card the transcript recorded, which the fullscreen renderer leaves off the screen", () => {
+    // `contextCard`: the `local_command` stdout, unindented and without `⎿`.
+    const recorded = [" Context Usage", ...CLAUDE.slice(2).map((row) => row.replace(/^ {5}/u, ""))].join("\n");
+    const usage = readContextUsage(lines(recorded.split("\n")));
+    expect(usage?.used).toBe("31.2k");
+    expect(usage?.categories.map((entry) => entry.label)).toContain("Autocompact buffer");
+    expect(usage?.sections[0]?.title).toBe("MCP tools");
+  });
 });
