@@ -923,6 +923,159 @@ pub fn ssh_control_check_args(remote: &RemoteSpec) -> Result<Vec<String>, String
     Ok(args)
 }
 
+// ── The phone sidecar's no-dial lane ───────────────────────────────────────
+//
+// The phone reaches a remote-host tab's tmux session through the desktop's
+// ControlMaster for that host and nothing else
+// (`docs/mobile_remote_host_tabs_plan.md`): it never opens a connection and
+// never prompts. Everything below is pure argv/string building, compiled and
+// tested on every OS; only [`master_alive`] spawns.
+
+/// The `ssh` argv that runs `host_command` on `spec`'s host **only through the
+/// master already listening on `control_path`** — the literal socket path
+/// [`resolve_control_path`] read, never the `cm-%C` template: `%C` hashes the
+/// ProxyJump too, and the `ProxyCommand=false` below suppresses a configured
+/// one, so the template would name a different socket than the desktop's
+/// master for every ProxyJump host.
+///
+/// Why it cannot dial: OpenSSH tries the mux client on the ControlPath before
+/// it resolves or connects anything. With `ControlMaster=no`, a missing socket,
+/// a dead master or one that refuses the session (sshd's `MaxSessions`) falls
+/// through to a normal connection, which `ProxyCommand=false` turns into
+/// running `false` locally — no DNS lookup, no TCP connect, exit 255. The
+/// command line wins over the user's `ProxyCommand`/`ProxyJump`. So it takes
+/// no `ssh_common::authorize_dial` (it never dials) and no `ssh_base_args`,
+/// whose `ControlMaster=no` falls through to a fresh key/agent login.
+///
+/// `-e none`: the phone's keystrokes pass through this client's PTY, so `~.`
+/// and `~C` must be plain text. `-q` keeps "Shared connection … closed" off
+/// the phone's screen. `RemoteCommand=none` and `ClearAllForwardings=yes` stop
+/// a user config from replacing the command or asking the master for its port
+/// forwards. `tty` picks `-tt` (the attach) or `-T` (the one-shots). `--`
+/// ends ssh's options before the host command.
+pub fn host_mux_args(
+    spec: &RemoteSpec,
+    control_path: &std::path::Path,
+    tty: bool,
+    host_command: &str,
+) -> Result<Vec<String>, String> {
+    let target = ssh_target(&spec.user, &spec.host)?;
+    let path = literal_control_path(control_path)?;
+    let mut args: Vec<String> = vec![
+        if tty { "-tt" } else { "-T" }.to_string(),
+        "-q".to_string(),
+        "-e".to_string(),
+        "none".to_string(),
+    ];
+    for option in [
+        "BatchMode=yes".to_string(),
+        "ControlMaster=no".to_string(),
+        format!("ControlPath={path}"),
+        "ProxyCommand=false".to_string(),
+        "ClearAllForwardings=yes".to_string(),
+        "ForwardAgent=no".to_string(),
+        "ForwardX11=no".to_string(),
+        "PermitLocalCommand=no".to_string(),
+        "RemoteCommand=none".to_string(),
+    ] {
+        args.push("-o".to_string());
+        args.push(option);
+    }
+    if let Some(port) = spec.port {
+        args.push("-p".to_string());
+        args.push(port.to_string());
+    }
+    args.push(target);
+    args.push("--".to_string());
+    args.push(host_command.to_string());
+    Ok(args)
+}
+
+/// `control_path` as the one `-o ControlPath=` value it may be: absolute, and
+/// with nothing ssh would read as more than a path — a `%` token it would
+/// expand, whitespace that would split the option, a control character.
+fn literal_control_path(control_path: &std::path::Path) -> Result<String, String> {
+    let path = control_path.to_string_lossy();
+    if !control_path.is_absolute()
+        || path.contains('%')
+        || path.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err("control path is not a literal socket path".to_string());
+    }
+    validate_arg("control path", &path)?;
+    Ok(path.into_owned())
+}
+
+/// `ssh -O check` on the literal socket `control_path`: asks the master
+/// whether it is alive, over the socket alone. A `-O` command whose socket
+/// does not answer exits; it never falls back to a connection, and
+/// `ProxyCommand=false` is there all the same.
+pub fn master_check_args(control_path: &std::path::Path) -> Result<Vec<String>, String> {
+    let path = literal_control_path(control_path)?;
+    Ok(vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ControlMaster=no".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={path}"),
+        "-o".to_string(),
+        "ProxyCommand=false".to_string(),
+        "-O".to_string(),
+        "check".to_string(),
+        concat!(crate::app_slug!(), "-control-probe").to_string(),
+    ])
+}
+
+/// Whether a ControlMaster answers on `control_path` within `limit` — the
+/// **strict** reading, for the phone sidecar, which acts on `true` by riding
+/// the master: anything short of the master saying yes (no `ssh`, a spawn
+/// failure, a hung master, Windows, which has no masters) is `false`.
+/// [`control_master_alive`] is the opposite reading, for callers that act on
+/// `false` by deleting.
+pub fn master_alive(control_path: &std::path::Path, limit: std::time::Duration) -> bool {
+    if cfg!(target_os = "windows") {
+        return false;
+    }
+    let Ok(args) = master_check_args(control_path) else {
+        return false;
+    };
+    let mut command = crate::paths::command_no_window("ssh");
+    command.args(args);
+    crate::paths::output_within(command, limit).is_ok_and(|out| out.status.success())
+}
+
+/// The host-side attach the phone's PTY runs through [`host_mux_args`]: plain
+/// `tmux` in the remote's non-login `$SHELL -c`, the way the desktop's wrap
+/// started the session ([`remote_command`]), so the same binary and server
+/// answer. No `=` exact-match prefix (an older HPC tmux lacks it): the name is
+/// validated and unique. `None` for a name that is not [`valid_tmux_session_name`].
+pub fn host_tmux_attach_command(session: &str) -> Option<String> {
+    valid_tmux_session_name(session)
+        .then(|| format!("exec tmux -u attach-session -t {}", shell_quote(session)))
+}
+
+/// The host-side history capture, the local bridge's `capture-pane` flags: the
+/// last `lines` of history, ending one line above the visible screen.
+pub fn host_tmux_capture_command(session: &str, lines: usize) -> Option<String> {
+    valid_tmux_session_name(session).then(|| {
+        format!(
+            "tmux -u capture-pane -p -e -J -S -{lines} -E -1 -t {}",
+            shell_quote(session)
+        )
+    })
+}
+
+/// The host-side window-size probe: `<cols>x<rows>` of the session's window.
+pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
+    valid_tmux_session_name(session).then(|| {
+        format!(
+            "tmux -u display-message -p -t {} '#{{window_width}}x#{{window_height}}'",
+            shell_quote(session)
+        )
+    })
+}
+
 /// Build the remote command string `cd <remote_path> && git <args…>` for a
 /// git-over-ssh invocation. This is the one unavoidable shell string: ssh
 /// concatenates its trailing argv and hands it to the remote `$SHELL -c`, so
@@ -1908,6 +2061,135 @@ mod tests {
         assert!(!is_valid_env_key("has space"));
         assert!(!is_valid_env_key("a;b"));
         assert!(!is_valid_env_key(""));
+    }
+
+    // ── host_mux_args (the phone's no-dial lane) ───────────────────────────
+
+    /// A literal socket path, absolute on either OS.
+    fn socket_path() -> std::path::PathBuf {
+        let root = if cfg!(windows) { std::path::PathBuf::from(r"C:\") } else { std::path::PathBuf::from("/") };
+        root.join("run").join("ssh-control").join("cm-0123abcd")
+    }
+
+    #[test]
+    fn host_mux_args_ride_the_literal_master_and_cannot_dial() {
+        let s = spec(Some("alice"), "host.example", Some(2222), "/srv/p");
+        let path = socket_path();
+        let args = host_mux_args(&s, &path, false, "tmux ls").unwrap();
+        assert_eq!(&args[..4], ["-T", "-q", "-e", "none"]);
+        let options: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w[0] == "-o")
+            .map(|w| w[1].as_str())
+            .collect();
+        let literal = format!("ControlPath={}", path.to_string_lossy());
+        for wanted in [
+            "BatchMode=yes",
+            "ControlMaster=no",
+            literal.as_str(),
+            "ProxyCommand=false",
+            "ClearAllForwardings=yes",
+            "ForwardAgent=no",
+            "ForwardX11=no",
+            "PermitLocalCommand=no",
+            "RemoteCommand=none",
+        ] {
+            assert!(options.contains(&wanted), "{wanted} in {args:?}");
+        }
+        // Never the template, never a master of its own, never a keepalive
+        // that would hold a connection this lane does not own.
+        assert!(!args.iter().any(|a| a.contains("%C")));
+        assert!(!args.iter().any(|a| a.starts_with("ControlPersist") || a == "ControlMaster=auto"));
+        assert!(!args.iter().any(|a| a.starts_with("ServerAlive")));
+        // The port before the target, `--` between the target and the command.
+        let target = args.iter().position(|a| a == "alice@host.example").unwrap();
+        assert_eq!(&args[target - 2..target], ["-p", "2222"]);
+        assert_eq!(&args[target + 1..], ["--", "tmux ls"]);
+
+        let attach = host_mux_args(&s, &path, true, "exec tmux").unwrap();
+        assert_eq!(attach[0], "-tt");
+    }
+
+    #[test]
+    fn host_mux_args_refuse_a_bad_target_or_a_path_ssh_would_rewrite() {
+        let path = socket_path();
+        for host in ["-oProxyCommand=evil", "a@b", "two words", ""] {
+            assert!(host_mux_args(&spec(None, host, None, "/p"), &path, false, "x").is_err(), "{host}");
+        }
+        let s = spec(None, "host.example", None, "/p");
+        let dir = socket_path().parent().unwrap().to_path_buf();
+        for bad in [
+            std::path::PathBuf::from("cm-relative"),
+            dir.join("cm-%C"),
+            dir.join("cm two"),
+            dir.join("cm\nx"),
+        ] {
+            assert!(host_mux_args(&s, &bad, false, "x").is_err(), "{bad:?}");
+            assert!(master_check_args(&bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn master_check_asks_the_socket_and_nothing_else() {
+        let path = socket_path();
+        let args = master_check_args(&path).unwrap();
+        assert!(args.contains(&format!("ControlPath={}", path.to_string_lossy())));
+        assert!(args.contains(&"ProxyCommand=false".to_string()));
+        assert!(args.contains(&"ControlMaster=no".to_string()));
+        let o = args.iter().position(|a| a == "-O").unwrap();
+        assert_eq!(args[o + 1], "check");
+        // Strict: a socket nobody listens on is not alive (and on Windows
+        // nothing is).
+        let gone = tempfile::tempdir().unwrap();
+        assert!(!master_alive(&gone.path().join("cm-none"), std::time::Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn host_tmux_commands_quote_a_validated_name_and_refuse_any_other() {
+        let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
+        assert_eq!(
+            host_tmux_attach_command(name).unwrap(),
+            format!("exec tmux -u attach-session -t '{name}'")
+        );
+        assert_eq!(
+            host_tmux_capture_command(name, 10_000).unwrap(),
+            format!("tmux -u capture-pane -p -e -J -S -10000 -E -1 -t '{name}'")
+        );
+        assert_eq!(
+            host_tmux_window_size_command(name).unwrap(),
+            format!("tmux -u display-message -p -t '{name}' '#{{window_width}}x#{{window_height}}'")
+        );
+        for hostile in ["x'; rm -rf ~; '", "a b", "a:1", "a.b", "$(id)", ""] {
+            assert!(host_tmux_attach_command(hostile).is_none(), "{hostile}");
+            assert!(host_tmux_capture_command(hostile, 10).is_none(), "{hostile}");
+            assert!(host_tmux_window_size_command(hostile).is_none(), "{hostile}");
+        }
+    }
+
+    /// The no-dial claim against the real `ssh` (run with `--ignored`): with
+    /// no master on the socket the client falls through to the
+    /// `ProxyCommand=false` connection, fails at once with 255, and never
+    /// resolves or connects to the host (`-v` would say "Connecting to").
+    #[test]
+    #[ignore = "runs the real ssh client"]
+    fn host_mux_args_fail_fast_without_dialing_when_no_master_listens() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = spec(None, "no-such-host.invalid", None, "/p");
+        let mut args = host_mux_args(&s, &dir.path().join("cm-none"), false, "true").unwrap();
+        args.retain(|a| a != "-q");
+        // An empty config file stands in for the machine's (a fenced tab's
+        // `/etc/ssh` is not readable as ssh wants it); the user's own
+        // ProxyJump/ProxyCommand lose to the command line either way.
+        let config = dir.path().join("config");
+        std::fs::write(&config, "").unwrap();
+        args.splice(0..0, ["-v".to_string(), "-F".to_string(), config.to_string_lossy().into_owned()]);
+        let started = std::time::Instant::now();
+        let out = std::process::Command::new("ssh").args(&args).output().expect("ssh runs");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(255), "{stderr}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(!stderr.contains("Connecting to"), "{stderr}");
+        assert!(stderr.contains("proxy command") || stderr.contains("ProxyCommand"), "{stderr}");
     }
 
     // ── ssh_pty_args ───────────────────────────────────────────────────────

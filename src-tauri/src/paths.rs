@@ -700,6 +700,51 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
+/// `Command::output` with a deadline: the child is killed and reaped once
+/// `limit` has passed, and that is reported as `TimedOut`. Both pipes are
+/// drained on their own threads meanwhile, so a child that fills one cannot
+/// block on it; the threads end when the child's ends of the pipes close,
+/// which killing it does. (The phone sidecar's probes: `tmux ls`, and the
+/// one-shots it runs over a remote host's ssh master.)
+pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
+    fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    }
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(2)),
+            waited => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match waited {
+                    Err(error) => error,
+                    _ => std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"),
+                });
+            }
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

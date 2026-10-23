@@ -1,9 +1,8 @@
 use std::{
     collections::HashMap,
     fs,
-    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -14,6 +13,7 @@ use serde_json::Value;
 use sha2::Sha256;
 
 use super::protocol::TAB_COLORS;
+use crate::paths::output_within;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -1057,50 +1057,6 @@ fn tmux_ls_command(format: &str) -> Command {
     let mut command = crate::services::tmux_local::tmux_command();
     command.args(["ls", "-F", format]);
     command
-}
-
-/// `Command::output` with a deadline: the child is killed and reaped once
-/// `limit` has passed, and that is reported as `TimedOut`. Both pipes are
-/// drained on their own threads meanwhile, so a child that fills one cannot
-/// block on it; the threads end when the child's ends of the pipes close,
-/// which killing it does.
-fn output_within(mut command: Command, limit: Duration) -> std::io::Result<Output> {
-    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
-            }
-            bytes
-        })
-    }
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stdout = drain(child.stdout.take());
-    let stderr = drain(child.stderr.take());
-    let deadline = Instant::now() + limit;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
-            waited => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(match waited {
-                    Err(error) => error,
-                    _ => std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"),
-                });
-            }
-        }
-    };
-    Ok(Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    })
 }
 
 /// Whether a failed `tmux ls` is tmux saying there is no server — which is

@@ -611,6 +611,13 @@ impl AuthStore {
         Some(session.device_id)
     }
 
+    /// Whether any phone holds an unexpired session at `t` — what the host
+    /// liveness refresher (`host_live`) waits for: with no phone signed in,
+    /// nobody reads a remote host's tabs, so their masters are left alone.
+    pub fn has_live_session(&self, t: u64) -> bool {
+        self.sessions.values().any(|s| s.expires_at >= t)
+    }
+
     /// `authenticate`, and the session slides: every authenticated HTTP request
     /// and every frame the phone sends over its terminal socket lands here.
     pub fn touch(&mut self, token: &str) -> Option<String> {
@@ -1225,6 +1232,23 @@ mod tests {
         auth.sessions.get_mut(&token).unwrap().expires_at = t - 1;
         assert!(auth.touch(&token).is_none());
         assert!(auth.authenticate(&token).is_none());
+    }
+
+    /// The host refresher's gate: a signed-in phone counts until its session
+    /// expires, and a logout ends it at once.
+    #[test]
+    fn a_live_session_is_one_that_has_not_expired() {
+        let (_dir, mut auth) = store();
+        let t = now();
+        assert!(!auth.has_live_session(t), "no phone signed in");
+        let (_device, token) = paired_login(&mut auth);
+        assert!(auth.has_live_session(t));
+        auth.sessions.get_mut(&token).unwrap().expires_at = t - 1;
+        assert!(!auth.has_live_session(t), "expired, though not yet swept");
+        auth.sessions.get_mut(&token).unwrap().expires_at = t + 60;
+        assert!(auth.has_live_session(t));
+        auth.logout(&token);
+        assert!(!auth.has_live_session(t));
     }
 
     /// The desktop's picker reads the paired phones with no host running:
