@@ -138,6 +138,7 @@ import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
+import { pullQueuedPrompts } from "../terminal/queuePull";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -1238,6 +1239,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * get there. */
   const [subagentSending, setSubagentSending] = useState(false);
   const [subagentNote, setSubagentNote] = useState<TranslationKey | "">("");
+  /** Why the queued prompts did not all come back (`pullQueued`), and
+   * whether a pull is under way. */
+  const [queueNote, setQueueNote] = useState<TranslationKey | "">("");
+  const [queuePulling, setQueuePulling] = useState(false);
   /** Why the last Undo did nothing, shown under the composer. */
   const [undoNote, setUndoNote] = useState<TranslationKey | "">("");
   /** An Undo on its way: "asking" until the desktop takes it, then the
@@ -2950,6 +2955,35 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       },
     );
   };
+  /** The queued bubbles' Send now: Esc stops Claude's turn, and Claude then
+   * sends what waits in its queue at once (the desktop chat's Send now). */
+  const sendQueuedNow = () => {
+    setQueueNote("");
+    type(AGENT_INTERRUPT);
+  };
+  /** The queued bubbles' Cancel and edit — the desktop chat's ↑ in its empty
+   * box: every prompt in Claude's queue comes back out of it into the
+   * composer, after the draft, read off the phone's copy of the screen
+   * (`queuePull`); the bubbles of those it held go. */
+  const pullQueued = () => {
+    if (queuePulling) return;
+    const arrived = arrivedPending(storedEntries, pending);
+    const queued = pending.filter((entry) => entry.held !== undefined && !arrived.has(entry.id));
+    if (queued.length === 0) return;
+    setQueueNote("");
+    setQueuePulling(true);
+    void pullQueuedPrompts({ rows: () => screenRows.current(), key: async (key) => type(key) }, queued.map((entry) => entry.text), SUBAGENT_WALK).then((result) => {
+      if (!result.ok) {
+        setQueueNote("terminal.reader.pullFailed");
+        return;
+      }
+      const taken = new Set(queued.slice(queued.length - result.pulled).map((entry) => entry.id));
+      if (taken.size > 0) setPending((current) => current.filter((entry) => !taken.has(entry.id)));
+      setDraft((current) => (current ? `${current}\n${result.text}` : result.text));
+      if (!result.cleared) setQueueNote("terminal.reader.pullLeftover");
+      composerInput.current?.focus();
+    }).finally(() => setQueuePulling(false));
+  };
   /** The bubble's Edit: its words go into the composer, the draft steps
    * aside until the edit is sent or cancelled. */
   const startEdit = (id: number) => {
@@ -4557,6 +4591,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
                   {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox} />}
+                  {/* Both act on Claude's whole queue: once, under its last bubble. */}
+                  {queuedShown && agentAtWork && !editing && agentFamily(tab.agent_label ?? tab.label) === "claude" && <div className="transcript-queued-actions">
+                    <button type="button" disabled={!connected} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>
+                    <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
+                    {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
+                  </div>}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
@@ -4612,6 +4652,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {undoNote && <div className="voice-feedback" role="status">{t(undoNote)}</div>}
       {subagentTarget && (subagentSending || subagentNote) && <div className={subagentNote ? "voice-feedback error" : "voice-feedback"} role={subagentNote ? "alert" : "status"}>{t(subagentNote || "mobile.subagent.sending")}{isUntested("mobile.subagent.input") && <em> · {t("mobile.focus.untested")}</em>}</div>}
+      {queueNote && <div className="voice-feedback error" role="alert">{t(queueNote)}</div>}
       {editNote && !editing && <div className={editNote === "mobile.composer.heldEditFailed" ? "voice-feedback error" : "voice-feedback"} role="status">{t(editNote)}{editNote === "mobile.composer.heldNote" && <> {t("mobile.composer.holdToInterrupt")}{isUntested("mobile.composer.sendHold") && <> · <em>{t("mobile.focus.untested")}</em></>}</>}{isUntested("mobile.chat.editHeld") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
       {editing && <div className="sign-in-notice" role="status">
         <span>{t(editNote === "mobile.composer.heldEditFailed" ? "mobile.composer.heldEditFailed" : "mobile.composer.editingHeld")}{isUntested("mobile.chat.editHeld") && <> · <em>{t("mobile.focus.untested")}</em></>}</span>
