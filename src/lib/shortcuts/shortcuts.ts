@@ -76,6 +76,7 @@ export type ShortcutAction =
   | "terminalCopy"
   | "terminalPaste"
   | "terminalKeySelect"
+  | "readerDictate"
   | "editorFind"
   | "editorReplace"
   | "editorAutocomplete"
@@ -412,6 +413,17 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: "terminal",
     context: "terminal",
     default: { key: "x", ctrl: true, shift: true },
+  },
+  // The Chat's mic (`ReaderComposer`, docs/desktop_voice_plan.md step 3),
+  // answered while its text box has focus. Ctrl+Shift+D: no terminal or
+  // editor default, and D for dictate.
+  {
+    action: "readerDictate",
+    labelKey: "shortcut.readerDictate",
+    group: "terminal",
+    context: "terminal",
+    default: { key: "d", ctrl: true, shift: true },
+    untested: "terminal.reader.voice.dictate",
   },
   // The text editor's own keys (`FileViewerPane`), answered only while it has
   // focus. Redo also answers Ctrl+Shift+Z while at its default

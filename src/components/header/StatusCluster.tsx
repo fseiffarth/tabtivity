@@ -6,6 +6,7 @@ import { BatteryIndicator } from "./BatteryIndicator";
 import { MobileIndicator } from "./MobileIndicator";
 import { AlertsToggle } from "./AlertsToggle";
 import { VpnIndicator } from "./VpnIndicator";
+import { VoiceIndicator } from "./VoiceIndicator";
 import { AppResourceDisplay } from "./AppResourceDisplay";
 import { DevBuildIndicator } from "./DevBuildIndicator";
 import { useQuiesce, saverInterval, usePowerStore } from "../../stores/power";
@@ -210,6 +211,8 @@ export function StatusCluster() {
 
   return (
     <div className="header-status-cluster">
+      {/* The live mic, outside the slots: never folded away while it is on. */}
+      <VoiceIndicator />
       {/* Pinned readouts first, then everything folded — apps and menus too — so
           an icon behind the chevron always opens to the right of the rest. */}
       {slotIds.map((id, i) => (

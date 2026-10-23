@@ -4,7 +4,7 @@ Status: plan (2026-10-21; reviewed and amended 2026-10-22 and, before
 Batch A, 2026-10-23). Step 0 partly done 2026-10-22: build, API and CI probes
 recorded under step 0; the host's audio probes (`scripts/voice-probe/`) are
 still for the user to run. Both of step 0's decisions are made (2026-10-23).
-Step 1 and step 2a/2b in progress.
+Step 1 and steps 2a/2b built (catalog hashes pending); step 3 built.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds
@@ -635,6 +635,17 @@ and the SSIP subset used. File-map rows land with the files (steps 1 and 2),
 not in step 6.
 
 ### 3. Desktop dictation in the Chat
+
+**Built 2026-10-23** (not run live), with these departures from the text
+below: the owner state lives in `VoiceIndicator`'s local state off
+`voice:owner` (no Zustand slice; nothing else reads it), and the indicator
+sits outside the status cluster's slots so a live mic is never folded
+away. Settings → Voice holds the model and the speech language only:
+headset mode and the hands-free pause come with step 4, the voice engine,
+system voice and rate with step 2c, and so does the stop-speaking shortcut
+(only "toggle mic", Ctrl+Shift+D, exists now). There is nothing for the ✕ to
+settle: whisper's finals are per segment, so "Heard:" only ever shows the
+open segment's partial. Like the phone, a send ends the dictation.
 
 - `src/lib/voice/desktopVoice.ts` — the renderer side of the session:
   - Start, stop, event subscription and owner tracking.

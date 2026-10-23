@@ -632,6 +632,15 @@ export interface Settings {
   show_gpu_usage?: boolean;
   /** Header clock: show seconds. Off by default (hh:mm only). */
   show_clock_seconds?: boolean;
+  /** Settings → Voice (`lib/voice/desktopVoice`): the whisper model to
+   *  dictate with (unset: `small`), the speech language (`auto` / unset: the
+   *  UI language; `detect`: whisper guesses), headset mode (talking over the
+   *  voice interrupts it) and the hands-free pause in ms. Renderer-side only;
+   *  the backend round-trips them through its catch-all. */
+  voice_model?: string;
+  voice_lang?: string;
+  voice_headset?: boolean;
+  voice_pause_ms?: number;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */

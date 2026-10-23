@@ -2915,3 +2915,9 @@
   width: auto;
   margin: 0;
 }
+
+/* The live mic (`VoiceIndicator`): red while a Chat tab holds it; a click
+   stops it. */
+.voice-indicator {
+  color: var(--danger, #d9534f);
+}

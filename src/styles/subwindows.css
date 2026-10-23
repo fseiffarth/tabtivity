@@ -3163,6 +3163,91 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   opacity: 0.35;
   cursor: var(--cur-default, default);
 }
+/* The mic (`ReaderVoice`) left of Send, in the same corner. Listening, it
+   turns red with a ring that follows the level (`--mic-level`, painted by
+   the hook); the ring is a border scaled by transform, never a blurred
+   shadow (WebKitGTK). */
+.terminal-reader-input.with-mic textarea {
+  padding-right: 62px;
+}
+.terminal-reader-mic {
+  position: absolute;
+  right: 30px;
+  bottom: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-mic:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.terminal-reader-mic:disabled {
+  opacity: 0.35;
+  cursor: var(--cur-default, default);
+}
+.terminal-reader-mic.preparing {
+  color: var(--accent);
+}
+.terminal-reader-mic.listening {
+  color: #fff;
+  background: var(--danger, #d9534f);
+}
+.terminal-reader-mic.listening::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid var(--danger, #d9534f);
+  opacity: calc(0.15 + var(--mic-level, 0) * 0.75);
+  transform: scale(calc(1 + var(--mic-level, 0) * 0.4));
+  transition: transform 80ms linear, opacity 80ms linear;
+  pointer-events: none;
+}
+/* "Heard: …", the mic's state or its error, and the install card: under the
+   chip row, over the text box. */
+.terminal-reader-voice {
+  position: relative;
+  flex: 0 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.terminal-reader-voice-line {
+  padding: 0 12px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.terminal-reader-voice-line.error {
+  color: var(--danger, #d9534f);
+}
+.terminal-reader-voice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+.terminal-reader-voice-card span {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.terminal-reader-voice-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
 /* The chat over the prompt strip's row: the composer's text box sits on
    that row, centred like the switches, and leaves them their room. */
 .terminal-reader.over-strip {
@@ -3706,4 +3791,10 @@ button.terminal-reader-option:hover:not(:disabled) {
 }
 @media (prefers-reduced-motion: reduce) {
   .terminal-reader-working-dots i { animation: none; opacity: 0.7; }
+}
+/* Settings → Voice: the model picker and its Install button side by side. */
+.settings-voice-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
