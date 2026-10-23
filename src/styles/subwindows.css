@@ -3144,7 +3144,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   box-sizing: border-box;
   min-height: calc(3 * 1.4em + 10px);
   max-height: 12em;
-  padding: 4px 36px 4px 12px;
+  padding: 4px 40px 4px 12px;
   resize: none;
   overflow-y: auto;
   font: inherit;
@@ -3158,14 +3158,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   outline: none;
   border-color: var(--accent);
 }
+/* The phone composer's Send (`.send-icon` in mobile-web): a paper plane in
+   an accent disc, faded while there is nothing to send. */
 .terminal-reader-send {
   position: absolute;
   right: 4px;
   bottom: 4px;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   color: var(--accent-contrast);
   background: var(--accent);
@@ -3174,8 +3176,20 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   cursor: var(--cur-pointer, pointer);
   transition: opacity 120ms ease;
 }
+.terminal-reader-send svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.terminal-reader-send svg path:last-child {
+  stroke: var(--accent);
+}
 .terminal-reader-send:disabled {
-  opacity: 0.35;
+  opacity: 0.45;
   cursor: var(--cur-default, default);
 }
 /* The chat over the prompt strip's row: the composer's text box sits on

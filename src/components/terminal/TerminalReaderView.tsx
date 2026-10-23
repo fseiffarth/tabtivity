@@ -855,8 +855,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           aria-label={t("terminal.reader.send")}
           title={t("terminal.reader.send")}
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          {/* The phone composer's paper plane (`.send-icon`). */}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m4 4 16 8-16 8 3-8-3-8Z" />
+            <path d="M7 12h13" />
           </svg>
         </button>
       </div>
