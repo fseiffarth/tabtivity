@@ -133,7 +133,7 @@ import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../terminal/c
 import { useChatUncommitted } from "../terminal/chatUncommitted";
 import { CommitFiles } from "./CommitFiles";
 import { agentWork } from "../terminal/agentBusy";
-import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
+import { chatTurns, isLiveEcho, opensAgentMessage } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
@@ -3970,6 +3970,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     (): QuestionParts => (liveQuestion ? questionParts(liveTail, liveQuestion) : NO_QUESTION_PARTS),
     [liveQuestion, liveTail],
   );
+  /** An agent's own question (a tab row over it) shows the agent's message
+   * above it only when that message is read from its first row. Anything else
+   * there — a thinking preview's last rows, a half-erased row of the answer
+   * before, a message whose top `CONTEXT_LINES` cut off — reached the chat as
+   * fragments cut mid-sentence; the conversation behind the card has the turn. */
+  const questionContextShown = questionContext.length > 0
+    && (questionTabs.length === 0 || opensAgentMessage(questionContext[0], agentLabel));
   /** What the list on screen *is*, as a string: a stable dep for the effects
    * below, which must not restart on every repaint of the same question. Two
    * questions of one dialog can offer the same rows (two yes/no questions):
@@ -4507,7 +4514,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                         list below — a highlight walked with arrow keys is not
                         something a phone can do — and the question above them
                         is that list's heading. */}
-                    {questionContext.length > 0 && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
+                    {questionContextShown && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
                     <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} />
                   </div>}
                   {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
