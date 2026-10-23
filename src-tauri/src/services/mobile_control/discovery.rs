@@ -349,6 +349,12 @@ pub struct PublicTab {
     /// flag crosses; never the login command.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sign_in: bool,
+    /// The tab runs a vendor cloud session (`SavedTab::cloud`): its CLI
+    /// creates or opens the session and may exit at once, leaving only what it
+    /// printed (the session's link), so the phone shows that screen rather
+    /// than waiting for a local session that never comes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
     /// The tab drives a local Ollama model (`local_agent`), so the phone shows
     /// its model rather than offering the driver's `/model` list, which would
     /// only move it off that model.
@@ -1452,6 +1458,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         last_activity: None,
         color: None,
         sign_in: false,
+        cloud: false,
         local_model: false,
         turn_started_at: None,
         worktree: None,
@@ -1664,6 +1671,7 @@ fn resolve_scope(
                 .filter(|id| TAB_COLORS.contains(id))
                 .map(str::to_string),
             sign_in: agent && tab.sign_in,
+            cloud: agent && tab.cloud,
             local_model: local_agent || chat.as_ref().is_some_and(|launch| launch.cli.is_local()),
             worktree: None,
             subagent_worktrees: Vec::new(),
@@ -2645,9 +2653,9 @@ mod tests {
 
     /// A sign-in tab and a cloud session have no session to resume, yet the
     /// phone that asked for one has to attach: the desktop saves it (flagged
-    /// `signIn` / `cloud`) while it runs, and the catalog lists it. Only the
-    /// sign-in flag reaches the phone, which opens that tab on its sign-in
-    /// sheet. An agent tab with neither stays unlisted.
+    /// `signIn` / `cloud`) while it runs, and the catalog lists it. Both
+    /// flags reach the phone: a sign-in tab opens on its sign-in sheet, a
+    /// cloud tab on its screen. An agent tab with neither stays unlisted.
     #[test]
     fn sign_in_and_cloud_tabs_are_listed_without_a_session() {
         let dir = tempfile::tempdir().expect("state dir");
@@ -2692,13 +2700,19 @@ mod tests {
 
         let catalog = Catalog::load(state, &[7; 32]).expect("catalog");
         let tabs = &catalog.projects.first().expect("project").tabs;
-        let listed: Vec<(&str, Option<&str>, bool)> = tabs
+        let listed: Vec<(&str, Option<&str>, bool, bool)> = tabs
             .iter()
-            .map(|t| (t.public.label.as_str(), t.public.agent_label.as_deref(), t.public.sign_in))
+            .map(|t| (t.public.label.as_str(), t.public.agent_label.as_deref(), t.public.sign_in, t.public.cloud))
             .collect();
-        assert_eq!(listed, vec![("Tab 1", Some("Claude"), true), ("Tab 2", Some("Claude"), false)]);
+        assert_eq!(
+            listed,
+            vec![("Tab 1", Some("Claude"), true, false), ("Tab 2", Some("Claude"), false, true)]
+        );
         let json = serde_json::to_value(&tabs[1].public).expect("public tab");
         assert!(json.get("sign_in").is_none(), "an unset flag is left out");
+        assert_eq!(json.get("cloud"), Some(&serde_json::json!(true)));
+        let json = serde_json::to_value(&tabs[0].public).expect("public tab");
+        assert!(json.get("cloud").is_none(), "an unset flag is left out");
     }
 
     /// A mobile-enabled box is a scope of its own (#31aa): listed as `kind:

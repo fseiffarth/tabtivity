@@ -576,6 +576,8 @@ export const UNTESTED = {
   "mobile.lock.brandedSheet": { area: "mobile", what: "LocalUnlock · While the fingerprint sheet is up, the mark lifts above it with turning rings; a successful unlock flares it away", tested: "2026-09-28" },
   "mobile.focus.noSessionYet": { area: "mobile", what: "Terminal · A tab created from the phone stays in the Reader and shows its stored session once the agent records one" },
   "mobile.focus.starting": { area: "mobile", what: "Terminal · A fresh agent tab's Focus chat shows a loading row while its CLI starts, not the CLI's banner" },
+  "mobile.focus.cloudLink": { area: "mobile", what: "Terminal · A cloud tab's Focus shows the CLI's screen at once (no starting wait) with an Open the cloud session button for the link it printed" },
+  "mobile.focus.cloudTeleport": { area: "mobile", what: "Terminal · A cloud tab's Teleport into a worktree: a new Claude tab runs `--teleport <session>` in a fresh detached worktree `teleport-<id>`, the project folder untouched" },
   "mobile.calendar.push": { area: "mobile", what: "Calendar · Reminders button → Notifications sheet: desktop calendar reminders as Web Push notifications on the phone (with or without details); tap opens Calendar" },
   "mobile.push.title": { area: "mobile", what: "This device · Notifications: agent tabs waiting on an answer (or finishing a turn) as push notifications, silent while the tab is open on the phone; tap opens that tab" },
   "mobile.language": { area: "mobile", what: "This device · Language: the app language on the phone, picked per phone, switched live" },

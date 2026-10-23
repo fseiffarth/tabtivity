@@ -218,6 +218,52 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(screen.getByText(/could not reach the model/)).toBeTruthy();
   });
 
+  // Built in parts: the privacy scan refuses a literal session URL, fake or not.
+  const CLOUD_SESSION = "session_011SU65rAbc";
+  const CLOUD_PAGE = `https://claude.ai/code/${CLOUD_SESSION}`;
+
+  it("shows a cloud tab's screen at once, with the session's link to open", async () => {
+    // `claude --cloud "<task>"` creates the session, prints its link and
+    // exits: no local session will ever be recorded to wait for.
+    vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false })));
+    render(<Terminal tab={{ ...TAB, cloud: true }} back={() => {}} />);
+    await settle();
+    const bytes = new TextEncoder().encode(`Created cloud session: Free hands voice plan\r\nView: ${CLOUD_PAGE}?from=cli\r\nResume with: claude --teleport ${CLOUD_SESSION}\r\n$ \r\n`);
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.queryByTestId("session-starting")).toBeNull();
+    expect(screen.getByText(/Created cloud session/)).toBeTruthy();
+    const open = screen.getByRole("link", { name: /Open the cloud session/ });
+    expect(open.getAttribute("href")).toBe(`${CLOUD_PAGE}?from=cli`);
+    expect(open.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("teleports a cloud tab's session into a new tab by the id it printed", async () => {
+    const base = sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false }));
+    const teleported = { ...TAB, id: "tab-tp", label: "Claude (cloud) · teleport-011SU65rAbc" };
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => (url.endsWith("/teleport")
+      ? Promise.resolve(jsonResponse(200, { tab: teleported }))
+      : base(url)));
+    vi.stubGlobal("fetch", fetchMock);
+    const openTab = vi.fn();
+    render(<Terminal tab={{ ...TAB, cloud: true }} back={() => {}} openTab={openTab} />);
+    await settle();
+    const bytes = new TextEncoder().encode(`Created cloud session: Plan\r\nView: ${CLOUD_PAGE}\r\nResume with: claude --teleport ${CLOUD_SESSION}\r\n$ \r\n`);
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.getByText(/the project folder and its other tabs stay as they are/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Teleport into a worktree/ }));
+    await settle();
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/teleport"));
+    expect(call?.[0]).toContain(`/api/v1/tabs/${TAB.id}/teleport`);
+    expect(JSON.parse(String(call?.[1]?.body)).session).toBe(CLOUD_SESSION);
+    expect(openTab).toHaveBeenCalledWith(teleported);
+  });
+
   it("keeps the chat while the composer has focus, even when a read answers the session unavailable", async () => {
     // Under full load the desktop misses the transcript call's deadline and
     // the host answers from the tab record — the chat dropped to the screen

@@ -205,6 +205,10 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   launch_failed: "mobile.failure.launchFailed",
   unknown_agent: "mobile.failure.unknownAgent",
   unsupported_sign_in: "mobile.failure.unsupportedSignIn",
+  // A cloud session's teleport (`POST /api/v1/tabs/{id}/teleport`).
+  cloud_tab_required: "mobile.failure.cloudTabRequired",
+  unsupported_teleport: "mobile.failure.unsupportedTeleport",
+  worktree_failed: "mobile.failure.worktreeFailed",
   api_key_unavailable: "mobile.failure.apiKeyUnavailable",
   api_budget_reached: "mobile.failure.apiBudgetReached",
   // A project type whose tabs the phone cannot attach to yet (`create` in the

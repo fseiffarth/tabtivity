@@ -147,6 +147,38 @@ export function readSignIn(lines: readonly SignInLineLike[]): SignIn | null {
   return signInFor(url, around);
 }
 
+/** The page of a vendor cloud session a cloud tab's CLI printed (`claude
+ * --cloud "<task>"` prints `View: https://claude.ai/code/session_…` and
+ * exits), or `null`. Any https link counts — the tab's own launch printed it —
+ * and the newest one in the bottom window wins. */
+export function readCloudLink(lines: readonly SignInLineLike[]): { url: string; site: string } | null {
+  const from = Math.max(0, lines.length - SEARCH_WINDOW);
+  const rows = lines.slice(from).map((line) => line.text);
+  let found: URL | null = null;
+  for (let index = 0; index < rows.length; index += 1) {
+    const hit = urlAt(rows, index);
+    if (!hit) continue;
+    found = httpsUrl(hit.url) ?? found;
+    index = hit.end;
+  }
+  return found ? { url: found.href, site: found.host } : null;
+}
+
+/** The `--teleport <session>` a cloud tab's CLI printed for taking its
+ * session over (`Resume with: claude --teleport session_…`): the session id,
+ * or `null`. The id is held to what may stand on a command line — the
+ * desktop and the sidecar check it again. */
+const TELEPORT_HINT = /--teleport\s+([A-Za-z0-9][A-Za-z0-9_-]{0,127})(?![A-Za-z0-9_-])/u;
+
+export function readCloudSession(lines: readonly SignInLineLike[]): string | null {
+  const from = Math.max(0, lines.length - SEARCH_WINDOW);
+  for (let index = lines.length - 1; index >= from; index -= 1) {
+    const hit = TELEPORT_HINT.exec(lines[index].text);
+    if (hit) return hit[1];
+  }
+  return null;
+}
+
 /** The note under a page a CLI scrolls inside its own window, one line per
  * Shift+↓/↑: Antigravity's sign-in page in a pane too short for its link
  * (`(1–20 of 34 lines)` at 42×24). The rows straight above it are lines 1 to

@@ -74,7 +74,7 @@ import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabS
 import { readerAgent } from "../../lib/agents/agentReader";
 import { agentWorktreeChoices, CARRIES_CONVERSATION, sameDir, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
 import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
-import { cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
+import { cleanCloudSession, cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
 import { loginIdForCmd, signInLaunch } from "../../lib/agents/signInLaunch";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { readUse24h } from "../../lib/timeFormat";
@@ -125,6 +125,10 @@ interface CreateRequest {
   /** The agent tab (tmux name) whose CLI to sign in, in place of `agent_id`;
    *  only the sidecar sets it. */
   like_tab?: string;
+  /** A cloud tab's session to pull into a fresh worktree (Claude's
+   *  `--teleport <id>`), with `like_tab` naming that tab; only the sidecar
+   *  sets it. */
+  teleport?: string;
   /** A local-model agent: the opaque id `launch_options.local` listed, in
    *  place of `agent_id`. */
   local?: string;
@@ -896,7 +900,7 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
 
   let spec: Omit<TabEntry, "key">;
   if (request.local) {
-    if (request.kind !== "agent" || request.agent_id || request.mode || request.worktree || request.cloud || request.sign_in) {
+    if (request.kind !== "agent" || request.agent_id || request.mode || request.worktree || request.cloud || request.sign_in || request.teleport) {
       return { status: "error", code: "invalid_request", message: "A local-model agent names nothing else" };
     }
     const local = await localChoices(scope);
@@ -913,6 +917,32 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
     // the phone may start one earlier, so the load starts with it and the
     // first answer waits for it rather than crawling on a CPU copy.
     if (!local.ready) void loadOllamaModel(local.model, "gpu").catch(() => {});
+  } else if (request.teleport) {
+    // A cloud tab's session, pulled onto this machine in a worktree of its
+    // own: teleport checks out the session's branch, which in the project
+    // folder would move every other tab there onto it (or offer to stash
+    // their changes). Local projects only, as the desktop's worktree picker.
+    const session = cleanCloudSession(request.teleport);
+    const tab = phoneTabs(scope.id)
+      .find((entry) => entry.tmuxSession === request.like_tab && entry.kind === "agent" && entry.cloud);
+    if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
+    const item = AGENT_ITEMS.find((entry) => entry.cmd === tab.cmd);
+    const launch = item ? cloudLaunch(item.cmd, "open") : undefined;
+    if (!session || !item || !launch?.session || !scope.project || projectHostKind(scope.project) !== "local") {
+      return { status: "error", code: "unsupported_teleport", message: "This cloud session cannot be teleported here" };
+    }
+    let wt: GitWorktree;
+    try {
+      wt = await teleportWorktree(cwd, session);
+    } catch (error) {
+      return { status: "error", code: "worktree_failed", message: String(error) };
+    }
+    const cloudSpec = buildCloudTabSpec(item, launch, "", wt.path, t);
+    spec = {
+      ...cloudSpec,
+      label: t("newTabMenu.agentWorktreeLabel", { agent: cloudSpec.label, branch: worktreeName(wt.path) }),
+      args: launch.session(session),
+    };
   } else if (request.sign_in) {
     // Built-ins only, as for cloud: a custom agent's login is not ours to
     // guess. The CLI is the phone's pick, or the one the named tab runs.
@@ -1040,7 +1070,7 @@ async function createAssistantChat(scope: MobileScope, request: CreateRequest): 
   if (
     scope.id !== ASSISTANT_SCOPE || request.kind !== "agent" || !request.assistant
     || request.agent_id || request.mode || request.worktree || request.cloud || request.task
-    || request.sign_in || request.like_tab || request.local
+    || request.sign_in || request.like_tab || request.teleport || request.local
   ) {
     return invalid("A chat names its launch and nothing else");
   }
@@ -1069,6 +1099,22 @@ async function createAssistantChat(scope: MobileScope, request: CreateRequest): 
   if (assistantCreated.size >= MAX_ASSISTANT_CREATED) assistantCreated.clear();
   assistantCreated.set(requestHash, created.tmuxSession);
   return { status: "created", tmux_session: created.tmuxSession };
+}
+
+/** The linked worktree a cloud session is teleported into, named after the
+ * session so a retried request (or a second teleport of it) finds the one it
+ * made. Checked out detached at the project's HEAD: teleport switches it to
+ * the session's branch, and no placeholder branch is left behind. */
+async function teleportWorktree(projectDir: string, session: string): Promise<GitWorktree> {
+  const name = `teleport-${session.replace(/^session_/, "").slice(0, 24)}`;
+  const list = (await invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" })) ?? [];
+  const known = list.find((wt) => !wt.is_main && worktreeName(wt.path) === name);
+  if (known) return known;
+  await invoke<string>("git_worktree_add", { projectDir, site: "mirror", path: name, branch: "HEAD", newBranch: false, startPoint: null });
+  const made = ((await invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" })) ?? [])
+    .find((wt) => !wt.is_main && worktreeName(wt.path) === name);
+  if (!made) throw new Error("The worktree was not created");
+  return made;
 }
 
 /** A project scope's startable worktrees under their opaque ids — the same

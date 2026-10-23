@@ -108,6 +108,14 @@ pub struct CreateTabRequest {
     /// the phone's create route refuses a body carrying it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub like_tab: Option<String>,
+    /// A vendor cloud session to pull into a fresh linked worktree (Claude's
+    /// `--teleport <session>`), by the id the cloud tab named in `like_tab`
+    /// printed. A worktree, because teleport checks out the session's branch:
+    /// in the project folder that would move every other tab there onto it.
+    /// Set by the sidecar alone (`POST /api/v1/tabs/{id}/teleport`), with
+    /// `like_tab` and nothing else; [`is_cloud_session_id`] bounds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teleport: Option<String>,
     /// A local-model agent (#31bl): the opaque id [`MobileLocalLaunch`]
     /// listed, in place of `agent_id`. Alone — no mode, worktree, cloud or
     /// sign-in rides with it.
@@ -133,6 +141,16 @@ pub struct CreateTabRequest {
 /// `MAX_CLOUD_TASK` in `src/lib/agents/cloudSessions.ts`.
 pub const MAX_CLOUD_TASK: usize = 4000;
 
+/// Whether `id` may stand on a command line as a cloud session id
+/// (`session_011SU65r…`): letters, digits, `_` and `-`, never a leading `-`
+/// that would read as a flag. The desktop's `cleanCloudSession` is the same
+/// rule.
+pub fn is_cloud_session_id(id: &str) -> bool {
+    (1..=128).contains(&id.len())
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 impl CreateTabRequest {
     /// The shape rules the sidecar can check without the desktop: worktree
     /// and cloud are agent-only and exclusive, the action is a known one, and
@@ -157,8 +175,24 @@ impl CreateTabRequest {
                 return false;
             }
         }
-        if self.like_tab.is_some() && (self.sign_in.is_none() || self.agent_id.is_some()) {
+        if self.like_tab.is_some() && ((self.sign_in.is_none() && self.teleport.is_none()) || self.agent_id.is_some()) {
             return false;
+        }
+        if let Some(session) = &self.teleport {
+            if !agent
+                || !is_cloud_session_id(session)
+                || self.like_tab.is_none()
+                || self.mode.is_some()
+                || self.worktree.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.local.is_some()
+                || self.assistant.is_some()
+                || self.api_key
+            {
+                return false;
+            }
         }
         if self.api_key
             && (!agent
@@ -3009,6 +3043,27 @@ mod tests {
         assert!(!ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "sign_in": "default", "worktree": "w1", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "agent", "like_tab": "t", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "like_tab": "t", "sign_in": "default", "idempotency_key": key})));
+        // A teleport: a cloud tab's session id beside `like_tab`, and nothing else.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "like_tab": "t", "teleport": "session_011SU65r", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "like_tab": "t", "teleport": "session_011SU65r", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "teleport": "session_011SU65r", "idempotency_key": key})));
+        for bad in ["", "-rf", "session_1; rm -rf ~", "a b", "s\u{1b}x", &"x".repeat(129)] {
+            assert!(!ok(json!({"project_id": "p", "kind": "agent", "like_tab": "t", "teleport": bad, "idempotency_key": key})), "{bad}");
+        }
+        for extra in [
+            json!({"agent_id": "a"}),
+            json!({"mode": "plan"}),
+            json!({"worktree": "w1"}),
+            json!({"cloud": "open"}),
+            json!({"sign_in": "default"}),
+            json!({"local": "l1"}),
+            json!({"assistant": "c1"}),
+            json!({"api_key": true}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "like_tab": "t", "teleport": "session_1", "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
         // A local-model agent: agent kind, a bounded id, and nothing else.
         assert!(ok(json!({"project_id": "p", "kind": "agent", "local": "l1", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "shell", "local": "l1", "idempotency_key": key})));

@@ -30,12 +30,15 @@ export interface CloudLaunch {
   needsTask: boolean;
   /** Launch args; `task` is the trimmed task text ("" when not needed). */
   args: (task: string) => string[];
+  /** An `open` that can take one session by id, as its cloud tab printed it
+   *  (`cleanCloudSession` checks the id first). */
+  session?: (id: string) => string[];
 }
 
 const CLOUD_LAUNCHES: Readonly<Record<string, readonly CloudLaunch[]>> = {
   claude: [
     { action: "new", needsTask: true, args: (task) => ["--cloud", task] },
-    { action: "open", needsTask: false, args: () => ["--teleport"] },
+    { action: "open", needsTask: false, args: () => ["--teleport"], session: (id) => ["--teleport", id] },
   ],
   codex: [{ action: "open", needsTask: false, args: () => ["cloud"] }],
   "kiro-cli": [{ action: "new", needsTask: false, args: () => ["--cloud"] }],
@@ -66,4 +69,13 @@ export function cleanCloudTask(task: string | undefined): string | null {
   if (!text || [...text].length > MAX_CLOUD_TASK) return null;
   if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return null;
   return text;
+}
+
+/**
+ * A cloud session id as it may go on a command line (`session_011SU65r…`), or
+ * null: letters, digits, `_` and `-`, never a leading `-` that would read as a
+ * flag. The sidecar's `protocol::is_cloud_session_id` is the same rule.
+ */
+export function cleanCloudSession(id: string | undefined): string | null {
+  return id && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id) ? id : null;
 }
