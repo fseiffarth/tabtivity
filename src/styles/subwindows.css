@@ -930,6 +930,11 @@ button.steering-legend-hub:hover::before {
   border: 1px solid var(--accent);
   border-radius: 9px;
 }
+/* The folded badge's exit key, on the opposite rim. */
+.steering-legend-fab-button kbd.steering-legend-fab-exit {
+  right: auto;
+  left: -5px;
+}
 
 /* Keyboard select's legend (TerminalView, Ctrl+Shift+X): the steering legend,
    pinned to the bottom of its own pane instead of the window. */
