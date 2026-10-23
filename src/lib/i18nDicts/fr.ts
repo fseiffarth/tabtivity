@@ -5032,6 +5032,7 @@ export const dict: Dict = {
   "terminal.promptStrip.copied": "Copié",
   "terminal.promptStrip.expand": "Afficher le prompt entier et les précédents",
   "terminal.promptStrip.collapse": "Fermer",
+  "terminal.promptStrip.history": "Prompts",
   "terminal.promptStrip.all": "Prompts de cet onglet",
   "terminal.promptStrip.typedHint": "Lu depuis vos frappes — l’agent a pu le recevoir légèrement différemment",
   "terminal.promptStrip.keys": "↑ ↓ parcourir · Début/Fin premier/dernier · {modifier}+C copier · Échap fermer",

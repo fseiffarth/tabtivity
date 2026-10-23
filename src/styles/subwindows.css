@@ -2074,6 +2074,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   flex: none;
   display: inline-flex;
 }
+/* Also the caret on the strip's Prompts pill (TerminalPromptStrip). */
 .reader-chats-caret {
   font-size: 0.85em;
   transition: transform 120ms ease;

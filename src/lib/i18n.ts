@@ -5232,6 +5232,7 @@ export const enSource = {
   "terminal.promptStrip.copied": "Copied",
   "terminal.promptStrip.expand": "Show the whole prompt and the earlier ones",
   "terminal.promptStrip.collapse": "Close",
+  "terminal.promptStrip.history": "Prompts",
   "terminal.promptStrip.all": "Prompts of this tab",
   "terminal.promptStrip.typedHint": "Read from your keystrokes — the agent may have received it slightly differently",
   "terminal.promptStrip.keys": "↑ ↓ step · Home/End first/last · {modifier}+C copy · Esc close",

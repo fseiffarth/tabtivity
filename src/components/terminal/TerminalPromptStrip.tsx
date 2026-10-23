@@ -256,7 +256,22 @@ export function TerminalPromptStrip({
       <span ref={actionsRef} className="prompt-strip-actions">
         {/* First of the switches, not in the prompt part: the list is offered
             over the chat too, and the row is the same in both modes. */}
-        {current && (
+        {/* Over the chat a labelled pill like Resume beside it; under the
+            terminal the prompt text sits right beside it, so a caret will do. */}
+        {current && chatShown && (
+          <button
+            type="button"
+            className={open ? "prompt-strip-reader active" : "prompt-strip-reader"}
+            onMouseDown={keepFocus}
+            onClick={() => (open ? close() : setOpen(true))}
+            aria-expanded={open}
+            title={t(open ? "terminal.promptStrip.collapse" : "terminal.promptStrip.expand")}
+          >
+            {t("terminal.promptStrip.history")}
+            <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▴</span>
+          </button>
+        )}
+        {current && !chatShown && (
           <button
             type="button"
             className="prompt-strip-btn"

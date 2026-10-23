@@ -83,7 +83,7 @@ describe("the prompt strip over an agent pane", () => {
     const inserted: string[] = [];
     const off = onReaderInsert("p:agent-1", (text) => inserted.push(text));
     try {
-      fireEvent.click(screen.getByRole("button", { name: /Show the whole prompt/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Prompts" }));
       fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter" });
       expect(inserted).toEqual(["the first prompt"]);
       expect(screen.queryByRole("dialog")).toBeNull();
