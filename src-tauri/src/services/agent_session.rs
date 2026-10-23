@@ -542,7 +542,7 @@ fn claude_goal_in_record(line: &str) -> Option<bool> {
         let failed = attachment.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
         return Some(!met && !failed);
     }
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = claude_command_content(&value)?;
     let args = between(content, "<command-args>", "</command-args>")?.trim();
     (content.contains("<command-name>/goal</command-name>") && args == "clear").then_some(false)
 }
@@ -973,7 +973,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     let model = match kind {
         TranscriptKind::Claude => {
-            if value.get("type").and_then(|t| t.as_str()) == Some("user") {
+            if matches!(value.get("type").and_then(|t| t.as_str()), Some("user" | "system")) {
                 return claude_model_switch(&value);
             }
             if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
@@ -1001,7 +1001,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
 /// `claude-opus-4-1-…` gets); a name that folds to nothing useful (`Default`)
 /// yields `None` and the scan falls back to the last answer.
 fn claude_model_switch(value: &serde_json::Value) -> Option<String> {
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = claude_command_content(value)?;
     let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
     let rest = body
         .strip_prefix("Set model to ")
@@ -1190,6 +1190,38 @@ fn prompt_in_record(line: &str, kind: TranscriptKind) -> Option<String> {
         TranscriptKind::Codex => codex_prompt_in_record(&value)?,
     };
     clean_prompt_text(&raw)
+}
+
+/// The string content of a Claude record the CLI writes for a slash command
+/// typed at its prompt — the `<command-name>…` line and the
+/// `<local-command-stdout>…` it answered with. Older releases write both as
+/// `{"type":"user","message":{"content":"…"}}`; current ones (2.1.30x) as
+/// `{"type":"system","subtype":"local_command","content":"…"}`. A sidechain's
+/// is never the session's.
+pub(crate) fn claude_command_content(value: &serde_json::Value) -> Option<&str> {
+    if value.get("isSidechain").and_then(|s| s.as_bool()) == Some(true) {
+        return None;
+    }
+    match value.get("type").and_then(|t| t.as_str())? {
+        "user" => value.get("message")?.get("content")?.as_str(),
+        "system" if value.get("subtype").and_then(|t| t.as_str()) == Some("local_command") => value.get("content")?.as_str(),
+        _ => None,
+    }
+}
+
+/// The slash command a current Claude release recorded as a `local_command`
+/// system record (`/login`, `/model`, `/goal clear`), as
+/// [`claude_prompt_text`] shows it. Its stdout record is not one. `/rename`
+/// is left out: every Claude tab opens by typing one (the session's name).
+pub(crate) fn claude_local_command(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(|t| t.as_str()) != Some("system") {
+        return None;
+    }
+    let text = claude_command_content(value)?;
+    if !text.trim_start().starts_with("<command-name>") {
+        return None;
+    }
+    claude_prompt_text(text).filter(|command| command.split_whitespace().next() != Some("/rename"))
 }
 
 /// A Claude record: `{"type":"user","message":{"content":…}}` whose content is
@@ -4830,6 +4862,10 @@ mod tests {
         // A name that folds to nothing useful leaves the last answer standing.
         write(&[answer.into(), switch("<local-command-stdout>Set model to Default</local-command-stdout>")]);
         assert_eq!(read().as_deref(), Some("claude-opus-5"));
+        // Current releases write the confirmation as a `local_command` system record.
+        let system = serde_json::json!({"type": "system", "subtype": "local_command", "content": "<local-command-stdout>Kept model as `Sonnet 5.5`</local-command-stdout>"}).to_string();
+        write(&[answer.into(), system]);
+        assert_eq!(read().as_deref(), Some("sonnet-5-5"));
     }
 
     #[test]
@@ -4976,6 +5012,9 @@ mod tests {
         assert_eq!(read(&[set, typed, answer, failed]), Some(false));
         assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
         assert_eq!(read(&[met, sidechain]), Some(false));
+        // Current releases record the typed command as a `local_command` system record.
+        let cleared = r#"{"type":"system","subtype":"local_command","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>clear</command-args>"}"#;
+        assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
     }
 
     #[test]

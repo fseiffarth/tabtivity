@@ -1214,7 +1214,7 @@ fn newest_effort(lines: &[&str], kind: TranscriptKind) -> Option<String> {
         let value = serde_json::from_str::<Value>(line).ok()?;
         let effort = match (kind, value.get("type").and_then(Value::as_str)?) {
             (TranscriptKind::Claude, "assistant") => value.get("effort")?.as_str()?.to_string(),
-            (TranscriptKind::Claude, "user") => claude_effort_switch(&value)?,
+            (TranscriptKind::Claude, "user" | "system") => claude_effort_switch(&value)?,
             (TranscriptKind::Codex, "turn_context") => value.pointer("/payload/effort")?.as_str()?.to_string(),
             _ => return None,
         };
@@ -1228,7 +1228,7 @@ fn newest_effort(lines: &[&str], kind: TranscriptKind) -> Option<String> {
 /// only): …`, or `Effort 'max' exceeds the cap for … set to 'high' instead`)
 /// — the session's next answer is the first to carry it otherwise.
 fn claude_effort_switch(value: &Value) -> Option<String> {
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = agent_session::claude_command_content(value)?;
     let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
     let body = crate::services::agent_usage::strip_ansi(body);
     let level = if let Some(rest) = body.strip_prefix("Set effort level to ") {
@@ -1897,7 +1897,8 @@ fn clean_text(raw: &str) -> Option<String> {
 
 /// A Claude record as turns: a `user` record that is a prompt (the same
 /// reading the last-prompt line makes — tool results, meta notes and
-/// reminders are not), a prompt the user queued mid-turn (the prompt chart's
+/// reminders are not), a slash command a `local_command` system record holds,
+/// a prompt the user queued mid-turn (the prompt chart's
 /// reading), or an `assistant` record's text blocks, the plan its
 /// `ExitPlanMode` call put up, the subagents its `Agent` calls spawned and
 /// the questions its `AskUserQuestion` calls asked. Thinking and other tool-use blocks are stepped over, as is a sidechain (a
@@ -1909,6 +1910,11 @@ fn claude_records(value: &Value) -> Vec<Record> {
         && value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true);
     match value.get("type").and_then(Value::as_str) {
         Some("user") => agent_session::claude_prompt_in_record(value)
+            .map(|text| Record::Turn("prompt", text))
+            .into_iter()
+            .collect(),
+        // A slash command typed at the prompt, as current releases record it.
+        Some("system") if !sidechain => agent_session::claude_local_command(value)
             .map(|text| Record::Turn("prompt", text))
             .into_iter()
             .collect(),
@@ -2238,6 +2244,42 @@ mod tests {
         assert_eq!(declined.answer, None);
         assert!(declined.options.iter().all(|o| !o.chosen));
         assert!(serde_json::to_value(&read.entries[3]).unwrap().get("questions").is_none());
+    }
+
+    #[test]
+    fn a_slash_command_recorded_as_a_local_command_is_a_prompt() {
+        // Claude 2.1.30x writes a command typed at its prompt as a `system`
+        // record, not a `user` one: `/login` never showed, and the Chat view's
+        // "Sending…" bubble for it never cleared (2026-10-23).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let command = |name: &str, args: &str, at: &str| format!(
+            "{{\"type\":\"system\",\"subtype\":\"local_command\",\"timestamp\":\"{at}\",\"content\":\"<command-name>/{name}</command-name>\\n  <command-message>{name}</command-message>\\n  <command-args>{args}</command-args>\"}}\n"
+        );
+        let stdout = "{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<local-command-stdout>Login successful</local-command-stdout>\"}\n";
+        std::fs::write(
+            &path,
+            [
+                command("rename", "ProjectEldrun", "2026-10-23T09:05:00.000Z"),
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"fix it\"}}\n".to_string(),
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Login expired\"}]}}\n".to_string(),
+                command("login", "", "2026-10-23T09:08:27.014Z"),
+                stdout.to_string(),
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":5}\n".to_string(),
+                command("model", "opus", "2026-10-23T09:09:00.000Z").replace("\"type\"", "\"isSidechain\":true,\"type\""),
+                command("model", "opus", "2026-10-23T09:10:00.000Z"),
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        // The tab's own `/rename`, the command's output, other system records
+        // and a sidechain's are not prompts.
+        assert_eq!(
+            kinds(&read),
+            vec![("prompt", "fix it"), ("answer", "Login expired"), ("prompt", "/login"), ("prompt", "/model opus")]
+        );
+        assert_eq!(read.entries[2].at.as_deref(), Some("2026-10-23T09:08:27.014Z"));
     }
 
     #[test]
@@ -2883,6 +2925,11 @@ mod tests {
         assert_eq!(read.effort.as_deref(), Some("high"));
 
         // None recorded: nothing shown, never a guess.
+        let system = "{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<local-command-stdout>Set effort level to low (this session only): x</local-command-stdout>\"}\n";
+        std::fs::write(&path, [answer("high"), system.to_string()].concat()).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.effort.as_deref(), Some("low"));
+
         std::fs::write(&path, said("Set model to Opus 5")).unwrap();
         let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
         assert_eq!(read.effort, None);
