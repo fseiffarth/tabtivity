@@ -326,10 +326,10 @@ small { color:#9498aa; }
 /* The agent's name is the tile's headline: the accent face the agent tab
    icons wear (`.tab-card-icon.accent`), so it reads apart from its modes. */
 .new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 10px; border:0; border-radius:9px; background:#2e2b48; color:#bcb0ff; font-weight:700; overflow-wrap:anywhere; }
-.new-tab-sheet .new-tab-file,.project-files .new-tab-file { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:8px 12px; text-align:left; }
-.new-tab-sheet .new-tab-file > span,.project-files .new-tab-file > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
-.new-tab-sheet .new-tab-file small,.project-files .new-tab-file small { color:#aeb4c8; font-size:.76rem; }
-.new-tab-sheet .new-tab-file svg,.project-files .new-tab-file svg { flex:0 0 20px; width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.new-tab-sheet .new-tab-file,.project-files .new-tab-file,.files-library .new-tab-file { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:8px 12px; text-align:left; }
+.new-tab-sheet .new-tab-file > span,.project-files .new-tab-file > span,.files-library .new-tab-file > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.new-tab-sheet .new-tab-file small,.project-files .new-tab-file small,.files-library .new-tab-file small { color:#aeb4c8; font-size:.76rem; }
+.new-tab-sheet .new-tab-file svg,.project-files .new-tab-file svg,.files-library .new-tab-file svg { flex:0 0 20px; width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .new-tab-agents .agent-create > .mode { flex:1 1 auto; min-height:36px; padding:6px 8px; font-size:.8rem; }
 /* The ★ that makes an agent the ＋'s tap: in the headline's corner, so a tile
    with no modes grows no second row for it. */
