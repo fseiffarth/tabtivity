@@ -55,6 +55,7 @@ type ProviderExtra = {
   legacyLimitUsd?: number | null;
   budget?: string;
   unknownModels?: string[];
+  models?: { model: string; input: number; output: number; cacheWrite: number; cacheRead: number; requests: number; billed: number; usd: number }[];
 };
 let extra: Record<string, ProviderExtra> = {};
 
@@ -73,6 +74,7 @@ function status(saved: string[], readable = true) {
       { id: "claude", enabled: false, providers: ["anthropic"], ready: false },
       { id: "gemini", enabled: false, providers: ["gemini"], ready: false },
       { id: "codex", enabled: false, providers: ["openai"], ready: false },
+      { id: "opencode", enabled: false, providers: ["anthropic", "gemini", "openai"], ready: false },
     ],
   };
 }
@@ -134,6 +136,14 @@ describe("API keys for agent CLIs", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: ["codex"] }));
     pick("Codex", /its own login/);
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] }));
+  });
+
+  it("names only the keyed providers for a CLI of several (OpenCode)", async () => {
+    saved = ["openai"];
+    render(<AgentApiKeysRows />);
+    await waitFor(() => expect(runsOn("OpenCode")).toBeTruthy());
+    fireEvent.click(runsOn("OpenCode"));
+    expect(screen.getByRole("option", { name: "my API key (OpenAI)" })).toBeTruthy();
   });
 
   it("asks which workspace an Anthropic key that names none runs in", async () => {
@@ -198,8 +208,8 @@ describe("API keys for agent CLIs", () => {
     await screen.findByRole("button", { name: "Claude runs on" });
     expect(runsOn("Claude").disabled, "only its login to choose").toBe(true);
     expect(runsOn("Claude").textContent).toContain("its own login");
-    // Only CLIs the proxy can serve have a row: Vibe and OpenCode do not.
-    expect(screen.queryByRole("button", { name: /^(Mistral|OpenCode).* runs on/ })).toBeNull();
+    // Only CLIs the proxy can serve have a row: Vibe does not.
+    expect(screen.queryByRole("button", { name: /^Mistral.* runs on/ })).toBeNull();
 
     cleanup();
     saved = ["anthropic"];
@@ -316,7 +326,16 @@ describe("API keys for agent CLIs", () => {
     saved = ["anthropic", "gemini"];
     extra = {
       anthropic: { limitTokens: 20_000_000, billed: 20_500_000, spentUsd: 20.5, budget: "reached", unknownModels: ["claude-next"] },
-      gemini: { limitTokens: 10_000_000, billed: 1_234_000, spentUsd: 1.234, budget: "open", unknownModels: [] },
+      gemini: {
+        limitTokens: 10_000_000,
+        billed: 1_234_000,
+        spentUsd: 1.234,
+        budget: "open",
+        unknownModels: [],
+        models: [
+          { model: "gemini-2.5-pro", input: 900_000, output: 300_000, cacheWrite: 0, cacheRead: 340_000, requests: 12, billed: 1_234_000, usd: 1.234 },
+        ],
+      },
     };
     useSettingsStore.setState({
       settings: { agent_api_token_limits: { anthropic: 20_000_000, gemini: 10_000_000 } } as Settings,
@@ -331,7 +350,17 @@ describe("API keys for agent CLIs", () => {
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText(new RegExp(`${compact(1_234_000)} of ${compact(10_000_000)} billed tokens this month \\(≈ \\$1\\.23\\)`)),
+      screen.getByText(
+        new RegExp(
+          `${compact(1_234_000)} of ${compact(10_000_000)} billed tokens this month, ${compact(8_766_000)} left \\(≈ \\$1\\.23\\)`,
+        ),
+      ),
+    ).toBeTruthy();
+    // Input and output apart, by model; a cache kind only when used.
+    expect(
+      screen.getByText(
+        new RegExp(`gemini-2\\.5-pro: ${compact(900_000)} in · ${compact(300_000)} out · ${compact(340_000)} cache read · ≈ \\$1\\.23$`),
+      ),
     ).toBeTruthy();
     expect(screen.getByText(/highest Anthropic rate: claude-next/)).toBeTruthy();
     expect(screen.getByText(/resets on 2026-11-01 \(UTC\)/)).toBeTruthy();

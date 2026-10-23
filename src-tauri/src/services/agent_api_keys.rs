@@ -656,8 +656,50 @@ pub struct ProviderStatus {
     /// Models used this month that the price table does not know: priced at
     /// the provider's highest rate.
     pub unknown_models: Vec<String>,
+    /// This month's use by model, most billed first: what the one billed
+    /// count is made of (input and output are priced apart).
+    pub models: Vec<ModelStatus>,
     /// The workspace a saved Anthropic key that is not scoped to one names.
     pub workspace: Option<String>,
+}
+
+/// One model's month from `api_usage::ModelUsage`, in the panel's casing.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStatus {
+    pub model: String,
+    pub input: u64,
+    pub output: u64,
+    pub cache_write: u64,
+    pub cache_read: u64,
+    pub requests: u64,
+    pub billed: u64,
+    pub usd: f64,
+}
+
+/// `ledger`'s models for `provider`, most billed first.
+fn model_statuses(ledger: &crate::services::api_usage::Ledger, provider: Provider) -> Vec<ModelStatus> {
+    let mut models: Vec<ModelStatus> = ledger
+        .providers
+        .get(provider.id())
+        .map(|u| {
+            u.models
+                .iter()
+                .map(|(name, m)| ModelStatus {
+                    model: name.clone(),
+                    input: m.input,
+                    output: m.output,
+                    cache_write: m.cache_write,
+                    cache_read: m.cache_read,
+                    requests: m.requests,
+                    billed: m.billed,
+                    usd: m.usd,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort_by(|a, b| b.billed.cmp(&a.billed).then_with(|| a.model.cmp(&b.model)));
+    models
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -730,6 +772,7 @@ fn status_with(
                 legacy_limit_usd: limit_tokens.is_none().then(|| legacy_usd.get(p.id()).copied()).flatten(),
                 budget: crate::services::api_usage::Verdict::of(billed, limit_tokens).id(),
                 unknown_models: ledger.unknown_models(p),
+                models: model_statuses(ledger, p),
                 workspace: None,
             }
         })
@@ -1220,6 +1263,9 @@ mod tests {
         assert!((anthropic.spent_usd - 20.0).abs() < 1e-9);
         assert_eq!(anthropic.legacy_limit_usd, None, "a token limit is set");
         assert_eq!(anthropic.unknown_models, ["claude-new"]);
+        // By model, most billed first, input and output kept apart.
+        let models: Vec<_> = anthropic.models.iter().map(|m| (m.model.as_str(), m.input, m.output, m.billed)).collect();
+        assert_eq!(models, [("claude-opus-5-5", 0, 12_000, 12_000), ("claude-new", 0, 8_000, 8_000)]);
         let gemini = &s.providers[1];
         assert_eq!((gemini.limit_tokens, gemini.budget, gemini.legacy_limit_usd), (None, "noLimit", Some(7.5)));
         assert_eq!(s.ledger_restarted.as_deref(), Some("2026-10-04T12:00:00Z"));
@@ -1228,6 +1274,8 @@ mod tests {
         assert_eq!(json["providers"][0]["billed"], 20_000);
         assert_eq!(json["providers"][1]["legacyLimitUsd"], 7.5);
         assert_eq!(json["providers"][1]["budget"], "noLimit");
+        assert_eq!(json["providers"][0]["models"][0]["cacheRead"], 0);
+        assert_eq!(json["providers"][2]["models"], serde_json::json!([]));
         assert_eq!(json["store"], "vault");
         // Claude's only provider is out of budget, Gemini's has no limit:
         // both are blocked; with a limit and room, Gemini is not.
