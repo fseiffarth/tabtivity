@@ -9,7 +9,8 @@
  *    page, not the geometry kept from the old one;
  *  - a reveal into a hidden pane waits: its clock does not run and it scrolls
  *    once the pane is shown;
- *  - a PDF read from the remote host asks SyncTeX nothing and says why.
+ *  - a PDF read from the remote host asks SyncTeX nothing and says why;
+ *  - a PDF with no map still opens the `.tex` that built it, at its top.
  *
  * The viewport below is pdf.js's own transform written out; the conversions it
  * feeds are pinned against the real `PageViewport` in `PdfjsContract.test.ts`.
@@ -120,6 +121,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { PdfView, SYNC_HIGHLIGHT_MS } from "../../components/embed/pdf/PdfViewer";
 import { FileScopeContext, FileSourceContext, PaneVisibleContext, type FileSource } from "../../components/embed/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
+import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { flushViewerState, useTabsStore, type TabEntry } from "../../stores/tabs";
 
 const PATH = "/home/u/paper/paper.pdf";
@@ -280,13 +282,58 @@ describe("SyncTeX on the PDF side", () => {
 
   it("asks SyncTeX nothing for a PDF read from the remote host, and says so", async () => {
     await shown("remote");
-    // No map probe over SFTP either.
-    expect(io.invoke).not.toHaveBeenCalledWith("file_mtime", expect.objectContaining({ path: expect.stringMatching(/synctex/) }));
+    // No map or source probe over SFTP either: the source is looked for on a click.
+    expect(io.invoke).not.toHaveBeenCalledWith("file_mtime", expect.objectContaining({ path: expect.stringMatching(/synctex|\.tex$/) }));
     await act(async () => {
       fireEvent.click(document.querySelector(".file-viewer-pdf-page-wrap")!, { ctrlKey: true, clientX: 50, clientY: 50 });
     });
-    await screen.findByText(/isn't available for a file read from the remote host/i);
+    // …which still opens the `.tex` beside it, at its top.
+    await screen.findByText(/isn't available for a file read from the remote host, so paper\.tex opened at its top/i);
     expect(io.invoke).not.toHaveBeenCalledWith("synctex_edit", expect.anything());
     expect(io.invoke).not.toHaveBeenCalledWith("synctex_status", expect.anything());
+  });
+
+  describe("a PDF with no SyncTeX map", () => {
+    /** `file_mtime` answers for `present` only: every other path is missing. */
+    const onDisk = (present: string[]) =>
+      io.invoke.mockImplementation(async (command: string, args?: { path?: string }) => {
+        if (command === "read_file_bytes") return [37, 80, 68, 70];
+        if (command === "file_mtime") {
+          if (args?.path === PATH || present.includes(args?.path ?? "")) return 1_000;
+          throw new Error("not found");
+        }
+        return null;
+      });
+    const ctrlClick = () =>
+      act(async () => {
+        fireEvent.click(document.querySelector(".file-viewer-pdf-page-wrap")!, { ctrlKey: true, clientX: 50, clientY: 50 });
+      });
+
+    beforeEach(() => useEditorJumpStore.setState({ requestsByPath: {} }));
+
+    it("opens the .tex beside it at its top, and says why", async () => {
+      onDisk(["/home/u/paper/paper.tex"]);
+      await shown();
+      await ctrlClick();
+      await screen.findByText(/paper\.tex opened at its top/i);
+      expect(useEditorJumpStore.getState().requestsByPath["/home/u/paper/paper.tex"]?.line).toBe(1);
+      expect(io.invoke).not.toHaveBeenCalledWith("synctex_edit", expect.anything());
+    });
+
+    it("finds the source one folder up for an -outdir build", async () => {
+      onDisk(["/home/u/paper.tex"]);
+      await shown();
+      await ctrlClick();
+      await screen.findByText(/paper\.tex opened at its top/i);
+      expect(useEditorJumpStore.getState().requestsByPath["/home/u/paper.tex"]?.line).toBe(1);
+    });
+
+    it("keeps the plain notice when no source sits by its name either", async () => {
+      onDisk([]);
+      await shown();
+      await ctrlClick();
+      await screen.findByText(/cannot be matched up/i);
+      expect(useEditorJumpStore.getState().requestsByPath).toEqual({});
+    });
   });
 });

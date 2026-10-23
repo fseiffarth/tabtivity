@@ -15,6 +15,7 @@ import {
   pdfPageMatches,
   sourceColumnFraction,
   syncNoticeKind,
+  texSourceCandidates,
   withUnsavedSource,
   editedAboveLine,
   type SyncRect,
@@ -582,6 +583,27 @@ describe("pdfSync store", () => {
     expect(usePdfSyncStore.getState().reloadByPath["/p/b.pdf"]).toBeUndefined();
     // A reload is not a reveal: nothing to scroll to or highlight.
     expect(usePdfSyncStore.getState().byPath["/p/a.pdf"]).toBeUndefined();
+  });
+});
+
+describe("texSourceCandidates (the .tex a PDF without a SyncTeX map opens)", () => {
+  it("tries the sibling first, then one folder up (an -outdir build)", () => {
+    expect(texSourceCandidates("/p/paper/build/main.pdf")).toEqual([
+      "/p/paper/build/main.tex",
+      "/p/paper/main.tex",
+    ]);
+  });
+
+  it("keeps a Windows path's separators and a mixed-case extension", () => {
+    expect(texSourceCandidates("C:\\docs\\out\\Paper.PDF")).toEqual([
+      "C:\\docs\\out\\Paper.tex",
+      "C:\\docs\\Paper.tex",
+    ]);
+  });
+
+  it("stops at the root and ignores a file that is not a PDF", () => {
+    expect(texSourceCandidates("/main.pdf")).toEqual(["/main.tex"]);
+    expect(texSourceCandidates("/p/notes.txt")).toEqual([]);
   });
 });
 

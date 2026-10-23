@@ -431,6 +431,20 @@ export function syncNoticeKind(
   return hit ? null : "miss";
 }
 
+/** Where the `.tex` that built `pdfPath` may sit, best guess first: beside it
+ *  (`<dir>/<stem>.tex`, what Compile writes), then one folder up (an `-outdir`
+ *  such as `build/` beside the source). What a reverse-search click opens when
+ *  there is no SyncTeX map to name the clicked line. Pure / unit-tested. */
+export function texSourceCandidates(pdfPath: string): string[] {
+  if (!/\.pdf$/i.test(pdfPath)) return [];
+  const dir = dirname(pdfPath);
+  const name = `${basename(pdfPath).replace(/\.pdf$/i, "")}.tex`;
+  const sibling = pdfPath.replace(/\.pdf$/i, ".tex");
+  const parent = dir ? dirname(dir) : "";
+  if (!parent || parent === dir) return [sibling];
+  return [sibling, resolvePath(parent, name)];
+}
+
 /** `status` with `source` counted among the files edited since the build — what
  *  a draft with unsaved edits is to forward search, whose caret line is the
  *  draft's while the PDF was built from the file on disk. The backend only sees

@@ -178,6 +178,7 @@ export const UNTESTED = {
   "pdfViewer.syncHighlightClears": { area: "embed", what: "PdfViewer · the SyncTeX forward-search highlight goes after ~2 s, also with reduced motion on; a reveal into a hidden pane waits and scrolls there when the pane is shown" },
   "pdfViewer.syncTurnedPage": { area: "embed", what: "PdfViewer · SyncTeX on a turned page (a pdflscape landscape page, or one turned in the viewer): the highlight sits on the text and a Ctrl+click jumps to the right source line" },
   "pdfViewer.syncRemoteMsg": { area: "embed", what: "PdfViewer / FileViewerPane · SyncTeX on a PDF read from the remote host (not the local mirror): says jumping is unavailable and makes no SyncTeX call, both directions" },
+  "pdfViewer.syncOpenedByName": { area: "embed", what: "PdfViewer · Ctrl+click on a PDF with no SyncTeX map (or one read from the remote host) still opens the .tex that built it — beside the PDF, or one folder up for an -outdir build — at its top, and the notice says so; the Ctrl crosshair shows whenever such a .tex exists" },
   "pdfViewer.printLabel": { area: "embed", what: "PdfViewer · Print the real PDF through the system print UI (Linux GTK, Windows WebView2, macOS PDFKit)" },
   "presentationOverlay.1": { area: "embed", what: "PresentationOverlay · Close presentation tools" },
   "texStructureSidebar.1": { area: "embed", what: "TexStructureSidebar · Structure" },
