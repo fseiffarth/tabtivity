@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "./projects";
+import type { ConnState } from "./remote/remoteStatus";
 
 /** Highest-priority pending git state for a project, by the user's mental model:
  *  uncommitted working-tree changes ▸ staged-not-committed ▸ committed-not-pushed
@@ -111,6 +112,22 @@ export function gitDotsDue(
     const every = foreground.has(id) ? tickMs : tickMs * GIT_DOT_BACKGROUND_EVERY;
     return now - last >= every - slack;
   });
+}
+
+/**
+ * What a remote project's dot does when its SSH lamp reads `ssh` (`prev` = the
+ * lamp at the last look, `undefined` the first time). Not connected — the VPN
+ * dropped, the pool was torn down, a connect is in flight or failed — is no
+ * reading: "unknown", never the last colour, which described a tree nobody can
+ * read any more. Becoming connected re-reads it once, so a remote project off
+ * screen has a dot again without the timer probing it over SSH every tick.
+ */
+export function remoteGitDotStep(
+  prev: ConnState | undefined,
+  ssh: ConnState,
+): "unknown" | "probe" | null {
+  if (ssh !== "connected") return "unknown";
+  return prev === "connected" ? null : "probe";
 }
 
 interface GitDirtyStore {

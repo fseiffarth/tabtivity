@@ -19,7 +19,8 @@ import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
-import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, useGitDirtyStore } from "../../stores/gitDirty";
+import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, remoteGitDotStep, useGitDirtyStore } from "../../stores/gitDirty";
+import { useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useQuiesce, saverInterval } from "../../stores/power";
@@ -244,6 +245,41 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gitDotSignature, quiesce, fastMode]);
+
+  // A remote project's dot follows its SSH lamp instead (`remoteGitDotStep`):
+  // the timer above never probes a remote tree, and the Files view stops
+  // reading one once the pool is down, so a dropped VPN used to leave the pill
+  // painting its last reading for a tree nobody could reach.
+  const remoteDotTargets = useMemo(
+    () =>
+      activeProjects
+        .filter((p) => !!p.remote)
+        .map((p) => ({ id: p.id, dir: resolveProjectDirectory(p) }))
+        .filter((t) => !!t.dir),
+    [activeProjects],
+  );
+  const remoteDotSignature = useRemoteStatusStore((s) =>
+    remoteDotTargets.map((t) => `${t.id}:${t.dir}:${s.byProject[t.id]?.ssh ?? "off"}`).join("|"),
+  );
+  const remoteDotSsh = useRef(new Map<string, ConnState>());
+  useEffect(() => {
+    const byProject = useRemoteStatusStore.getState().byProject;
+    const dots = useGitDirtyStore.getState();
+    const seen = remoteDotSsh.current;
+    // A project closed and reopened starts over, so its first connect probes.
+    for (const id of seen.keys()) {
+      if (!remoteDotTargets.some((t) => t.id === id)) seen.delete(id);
+    }
+    for (const t of remoteDotTargets) {
+      const ssh = byProject[t.id]?.ssh ?? "off";
+      const step = remoteGitDotStep(seen.get(t.id), ssh);
+      seen.set(t.id, ssh);
+      if (step === "unknown") dots.set(t.id, "unknown");
+      // Fast mode withdraws the dots' probes, as for the timer above.
+      else if (step === "probe" && !fastMode) void dots.refresh(t.id, t.dir);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteDotSignature, fastMode]);
 
   // Per-pill agent-fence markers: one `agent_fence_marks` call for every local
   // pill. Remote (and VM) projects are left out — their agents run on the far
