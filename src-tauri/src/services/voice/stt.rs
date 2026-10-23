@@ -135,6 +135,20 @@ mod imp {
         final_params: FullParams<'static, 'static>,
         partial_params: FullParams<'static, 'static>,
         vad: Option<WhisperVadContext>,
+        /// The flag the abort callback reads, kept alive as long as the
+        /// params that point at it.
+        _cancel: Arc<AtomicBool>,
+    }
+
+    /// whisper.cpp's abort callback: true stops the run between steps.
+    /// Not `FullParams::set_abort_callback_safe`: in whisper-rs 0.16.0 its
+    /// trampoline casts the boxed `dyn FnMut` back to the concrete closure
+    /// type, reads garbage and aborts every run ("failed to encode", -6;
+    /// found by transcribing real speech, 2026-10-23).
+    unsafe extern "C" fn abort_when_set(user_data: *mut std::ffi::c_void) -> bool {
+        // SAFETY: `user_data` is `Arc::as_ptr` of the `AtomicBool` the
+        // `Whisper` holds for as long as its params can run.
+        unsafe { (*(user_data as *const AtomicBool)).load(Ordering::SeqCst) }
     }
 
     impl Drop for Whisper {
@@ -176,7 +190,12 @@ mod imp {
             params.set_print_realtime(false);
             params.set_print_special(false);
             params.set_print_timestamps(false);
-            params.set_abort_callback_safe(move || cancel.load(Ordering::SeqCst));
+            // SAFETY: the callback only reads the AtomicBool behind the
+            // pointer, which `Whisper::_cancel` keeps alive with the params.
+            unsafe {
+                params.set_abort_callback(Some(abort_when_set));
+                params.set_abort_callback_user_data(Arc::as_ptr(&cancel) as *mut std::ffi::c_void);
+            }
             let mut partial_params = params.clone();
             partial_params.set_temperature_inc(0.0);
             partial_params.set_single_segment(true);
@@ -185,7 +204,7 @@ mod imp {
                 .as_deref()
                 .and_then(Path::to_str)
                 .and_then(|p| WhisperVadContext::new(p, WhisperVadContextParams::default()).ok());
-            Ok(Self { ctx, state, final_params: params, partial_params, vad })
+            Ok(Self { ctx, state, final_params: params, partial_params, vad, _cancel: cancel })
         }
     }
 

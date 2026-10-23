@@ -56,8 +56,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         file: "ggml-base-q5_1.bin",
         repo: WHISPER_REPO,
         commit: WHISPER_COMMIT,
-        sha256: "",
-        size: 0,
+        sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+        size: 59707625,
     },
     CatalogEntry {
         id: "small",
@@ -65,8 +65,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         file: "ggml-small-q5_1.bin",
         repo: WHISPER_REPO,
         commit: WHISPER_COMMIT,
-        sha256: "",
-        size: 0,
+        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+        size: 190085487,
     },
     CatalogEntry {
         id: "large-v3-turbo",
@@ -74,24 +74,26 @@ pub const CATALOG: &[CatalogEntry] = &[
         file: "ggml-large-v3-turbo-q5_0.bin",
         repo: WHISPER_REPO,
         commit: WHISPER_COMMIT,
-        sha256: "",
-        size: 0,
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        size: 574041195,
     },
     CatalogEntry {
         id: "silero-vad",
         kind: ModelKind::Vad,
-        file: "",
+        file: "ggml-silero-v6.2.0.bin",
         repo: VAD_REPO,
         commit: VAD_COMMIT,
-        sha256: "",
-        size: 0,
+        sha256: "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+        size: 885098,
     },
 ];
 
 const WHISPER_REPO: &str = "ggerganov/whisper.cpp";
-const WHISPER_COMMIT: &str = "";
+/// 2024-10-29: the commit that holds the q5 quantizations used here.
+const WHISPER_COMMIT: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
 const VAD_REPO: &str = "ggml-org/whisper-vad";
-const VAD_COMMIT: &str = "";
+/// 2025-11-17: Silero v6.2.0, the one whisper.cpp 1.8.3's README names.
+const VAD_COMMIT: &str = "9ffd54a1e1ee413ddf265af9913beaf518d1639b";
 
 pub fn entry(id: &str) -> Option<&'static CatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)

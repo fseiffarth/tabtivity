@@ -591,7 +591,18 @@ connecting SSIP there would freeze the window). Each gets a `Client` row in
 
 #### Speaking (2c, Batch B)
 
-**Built 2026-10-23** (`voice/ssip.rs`, `voice/tts.rs`; not run live). Probed
+**Built 2026-10-23** (`voice/ssip.rs`, `voice/tts.rs`; not run live).
+
+**Whisper checked on real speech (2026-10-23)**, here, with the catalog's
+own install script (both files fetched and verified) and espeak-generated
+German and English through the resampler, Silero and whisper `base`: two
+bugs only that run could find, both fixed — whisper-rs 0.16.0's
+`set_abort_callback_safe` aborts every run (its trampoline reads the wrong
+type; the raw callback is used instead), and a build without
+`GGML_NATIVE=OFF` compiled AMX in and died with SIGILL on a machine whose
+kernel refuses AMX (`.cargo/config.toml` now sets it for every build, not
+only CI). English came back right; espeak's robotic German with `base` did
+not, as expected of the smallest model. Probed
 against the real speech-dispatcher 0.12.0~rc2 here: the answers are as
 below, a `--spawn`ed server exits on its own idle timeout, and with no sound
 card it sends BEGIN and then nothing — not even an answer to `CANCEL self` —

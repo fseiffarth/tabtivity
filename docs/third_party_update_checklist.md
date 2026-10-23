@@ -1586,7 +1586,9 @@ Plan: `docs/desktop_voice_plan.md`.
 **Assumes**
 - `whisper-rs` =0.16.0 / `whisper-rs-sys` 0.15.0 (whisper.cpp 1.8.3):
   `FullParams` setters leak and panic on a NUL (built once per session),
-  `set_abort_callback_safe`, `no_speech_probability`, `get_lang_id` /
+  the raw `set_abort_callback` + user data (its `set_abort_callback_safe`
+  casts the boxed closure to the wrong type and aborts every run in
+  0.16.0 — re-check before switching back), `no_speech_probability`, `get_lang_id` /
   `get_lang_str`, `WhisperVadContext::segments_from_samples`. Its build runs
   bindgen (libclang required; Windows needs `LIBCLANG_PATH` if clang-sys
   misses it) and forwards `GGML_*` to cmake; `GGML_NATIVE=OFF` means x86_64
