@@ -2690,6 +2690,10 @@ export const dict: Dict = {
     ", poi premi il tasto di attivazione indicato nel piè di pagina. Resta attendibile; non c'è nulla da approvare una seconda volta.",
   "agents.codexHookActionUntrusted":
     ", poi usa il tasto di esame/fiducia indicato nel piè di pagina e verifica che la riga risulti accesa.",
+  "agents.codexHookTrust": "Considera attendibile in tutte le home degli agenti",
+  "agents.codexHookTrusting": "Attendibilità in corso…",
+  "agents.codexHookTrustFailed":
+    "Alcune home degli agenti hanno ancora un hook di Codex che non è stato possibile rendere attendibile (è stato modificato a mano). Aprilo in Codex ed esaminalo lì.",
   "agents.openInCodex": "Apri in Codex",
   "agents.nodeNotDetected": "non rilevato",
   "agents.nodeTooOld": "Versione {version}, precedente a {min}",

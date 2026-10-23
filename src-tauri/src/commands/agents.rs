@@ -901,6 +901,16 @@ pub async fn codex_hook_status() -> crate::services::agent_session::CodexHookSta
     crate::services::agent_session::codex_hook_state()
 }
 
+/// Trust Tabtivity's own Codex hooks in every agent home at once — what `/hooks`
+/// would record, in each scope's config rather than only the one tab's. Returns
+/// the state afterwards, as [`codex_hook_status`] reports it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn codex_hook_trust() -> crate::services::agent_session::CodexHookState {
+    app_core::rt::spawn_blocking(crate::services::agent_session::trust_codex_hooks)
+        .await
+        .unwrap_or_else(|_| crate::services::agent_session::codex_hook_state())
+}
+
 /// `cmd` prefixed with `sudo`, for the one-click "run with elevated rights"
 /// terminal fallback beside a plain `npm install -g`/`npm uninstall -g`
 /// command — the actual EACCES case (a system-wide, root-owned npm global

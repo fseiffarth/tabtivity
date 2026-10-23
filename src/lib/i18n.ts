@@ -2733,6 +2733,10 @@ export const enSource = {
     ", then press the toggle key the footer names. It stays trusted; there is nothing to approve a second time.",
   "agents.codexHookActionUntrusted":
     ", then use the review/trust key the footer names, and check that the row ends up switched on.",
+  "agents.codexHookTrust": "Trust in every agent home",
+  "agents.codexHookTrusting": "Trusting…",
+  "agents.codexHookTrustFailed":
+    "Some agent homes still hold a Codex hook that could not be trusted (it was changed by hand). Open it in Codex and review it there.",
   "agents.openInCodex": "Open in Codex",
   "agents.nodeNotDetected": "not detected",
   "agents.nodeHelpPre": "Most agent CLIs install with",

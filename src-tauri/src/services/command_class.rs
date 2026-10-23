@@ -256,6 +256,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("check_agent_updates", Core),
     ("claude_folder_trusted", Core),
     ("codex_hook_status", Core),
+    ("codex_hook_trust", Core),
     ("dismiss_agent_version", Core),
     ("install_agent", Admin),
     ("install_agent_remote", Admin),

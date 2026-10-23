@@ -2690,6 +2690,10 @@ export const dict: Dict = {
     ", y pulsa la tecla de alternancia que indica el pie. Sigue siendo de confianza; no hay nada que aprobar por segunda vez.",
   "agents.codexHookActionUntrusted":
     ", y usa la tecla de revisión/confianza que indica el pie, comprobando que la fila acabe encendida.",
+  "agents.codexHookTrust": "Confiar en todos los homes de agente",
+  "agents.codexHookTrusting": "Confiando…",
+  "agents.codexHookTrustFailed":
+    "Algún home de agente aún tiene un hook de Codex que no se pudo marcar como de confianza (se cambió a mano). Ábrelo en Codex y revísalo allí.",
   "agents.openInCodex": "Abrir en Codex",
   "agents.nodeNotDetected": "no detectado",
   "agents.nodeTooOld": "Versión {version}, anterior a {min}",

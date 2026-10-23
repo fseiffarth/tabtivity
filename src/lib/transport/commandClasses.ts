@@ -85,6 +85,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["check_agent_updates", "core"],
   ["claude_folder_trusted", "core"],
   ["codex_hook_status", "core"],
+  ["codex_hook_trust", "core"],
   ["dismiss_agent_version", "core"],
   ["install_agent", "admin"],
   ["install_agent_remote", "admin"],

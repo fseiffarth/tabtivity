@@ -2693,6 +2693,10 @@ export const dict: Dict = {
     ", und drücke dann die im Fußbereich genannte Umschalttaste. Das Vertrauen bleibt bestehen; es ist nichts erneut zu bestätigen.",
   "agents.codexHookActionUntrusted":
     ", und nutze dann die im Fußbereich genannte Prüf-/Vertrauenstaste; achte darauf, dass die Zeile am Ende eingeschaltet ist.",
+  "agents.codexHookTrust": "In allen Agent-Homes vertrauen",
+  "agents.codexHookTrusting": "Vertraue…",
+  "agents.codexHookTrustFailed":
+    "In manchen Agent-Homes ließ sich ein Codex-Hook nicht als vertrauenswürdig eintragen (er wurde von Hand geändert). Öffne ihn in Codex und prüfe ihn dort.",
   "agents.openInCodex": "In Codex öffnen",
   "agents.nodeNotDetected": "nicht erkannt",
   "agents.nodeTooOld": "Version {version}, älter als {min}",

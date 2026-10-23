@@ -738,9 +738,25 @@ function CodexHookNotice() {
   const t = useT();
   // null = still probing.
   const [state, setState] = useState<CodexHookState | null>(null);
+  const [trusting, setTrusting] = useState(false);
+  const [trustFailed, setTrustFailed] = useState(false);
   const recheck = () =>
     invoke<CodexHookState>("codex_hook_status").then(setState).catch(() => setState(null));
   useEffect(() => void recheck(), []);
+  // Codex keeps the trust verdict per config file and every scope's agent home
+  // has its own, so `/hooks` in one tab fixes one home. This writes the verdict
+  // Codex would into all of them, for the app's own hooks only.
+  const trustAll = () => {
+    setTrusting(true);
+    setTrustFailed(false);
+    invoke<CodexHookState>("codex_hook_trust")
+      .then((next) => {
+        setState(next);
+        setTrustFailed(codexHookNeedsTrust(next));
+      })
+      .catch(() => setTrustFailed(true))
+      .finally(() => setTrusting(false));
+  };
 
   // Healthy, absent, or still probing → nothing to say.
   if (!codexHookNeedsTrust(state)) return null;
@@ -762,13 +778,18 @@ function CodexHookNotice() {
       </div>
       <p className="settings-help">{off ? t("agents.codexHookCauseDisabled") : t("agents.codexHookCauseUntrusted")}</p>
       <div className="agents-actions">
-        <button type="button" className="settings-btn sm primary" onClick={openCodexHooksTab}>
+        <button type="button" className="settings-btn sm primary" onClick={trustAll} disabled={trusting}>
+          {trusting ? t("agents.codexHookTrusting") : t("agents.codexHookTrust")}
+        </button>
+        <UntestedTag id="agents.codexHookTrust" />
+        <button type="button" className="settings-btn sm" onClick={openCodexHooksTab}>
           {t("agents.openInCodex")}
         </button>
         <button type="button" className="settings-btn sm" onClick={() => void recheck()}>
           {t("common.recheck")}
         </button>
       </div>
+      {trustFailed && <p className="settings-help">{t("agents.codexHookTrustFailed")}</p>}
       <AgentsFold label={t("agents.howToFix")}>
         <p className="settings-help">{t("agents.codexHookFallback")}</p>
         <p className="settings-help">

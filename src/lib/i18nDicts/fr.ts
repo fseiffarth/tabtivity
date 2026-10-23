@@ -2692,6 +2692,10 @@ export const dict: Dict = {
     ", puis appuyez sur la touche de bascule indiquée en pied de page. La confiance reste acquise ; il n'y a rien à approuver une seconde fois.",
   "agents.codexHookActionUntrusted":
     ", puis utilisez la touche d'examen/confiance indiquée en pied de page, et vérifiez que la ligne finit activée.",
+  "agents.codexHookTrust": "Approuver dans tous les homes d'agent",
+  "agents.codexHookTrusting": "Approbation…",
+  "agents.codexHookTrustFailed":
+    "Certains homes d'agent contiennent encore un hook Codex impossible à approuver (il a été modifié à la main). Ouvrez-le dans Codex et examinez-le là.",
   "agents.openInCodex": "Ouvrir dans Codex",
   "agents.nodeNotDetected": "non détecté",
   "agents.nodeTooOld": "Version {version}, antérieure à {min}",
