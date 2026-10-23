@@ -55,12 +55,32 @@ function words(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** What the desktop shows for a block Claude Code took in as a paste
+ * (`collapse_pasted_blocks`): any words may stand behind it. */
+const PASTED_BLOCK = /\[Pasted text #\d+(?: \+\d+ lines)?\]/u;
+
 /** Whether `entry`'s words are the record of `text` — or, cut at the
- * desktop's bound (a long prompt), their opening. Shared with the desktop
- * Reader's sending bubbles. */
+ * desktop's bound (a long prompt), their opening. A part of the prompt the
+ * CLI recorded as a paste matches whatever words stand in its place. Shared
+ * with the desktop Reader's sending bubbles. */
 export function recordsPrompt(entry: Pick<TranscriptEntry, "text" | "cut">, text: string): boolean {
   const recorded = words(entry.text);
-  return entry.cut ? recorded !== "" && words(text).startsWith(recorded) : recorded === words(text);
+  const sent = words(text);
+  if (!PASTED_BLOCK.test(recorded)) {
+    return entry.cut ? recorded !== "" && sent.startsWith(recorded) : recorded === sent;
+  }
+  const parts = recorded.split(new RegExp(PASTED_BLOCK.source, "gu")).map((part) => part.trim());
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (!sent.startsWith(first)) return false;
+  let at = first.length;
+  for (const part of parts.slice(1, -1)) {
+    const found = sent.indexOf(part, at);
+    if (found < 0) return false;
+    at = found + part.length;
+  }
+  if (last === "") return true;
+  return entry.cut ? sent.indexOf(last, at) >= 0 : sent.endsWith(last) && sent.length - last.length >= at;
 }
 
 function isCopy(entry: TranscriptEntry, text: string): boolean {

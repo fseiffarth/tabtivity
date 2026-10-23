@@ -65,6 +65,20 @@ describe(`${BRAND.display} Mobile agent composer writes`, () => {
     expect(agentInputWrites("ok", true)).toEqual([AGENT_LINE_RESET, `${PASTE_START}ok${PASTE_END}`, "\r"]);
   });
 
+  it("types a long line in writes short enough not to read as a paste", () => {
+    // Claude Code takes a key event over 800 units for a paste and records a
+    // long one as `<pasted_content>` (2026-10-23).
+    const line = `${"x".repeat(600)}😀${"y".repeat(299)}`;
+    const writes = agentInputWrites(`${line}\nend`);
+    const typed = writes.slice(1, -1);
+    expect(typed.every((write) => Array.from(write).length <= 256)).toBe(true);
+    expect(typed.join("")).toBe(`${line}\nend`);
+    expect(typed.filter((write) => write === "\n")).toHaveLength(1);
+    expect(writes[writes.length - 1]).toBe("\r");
+    // Bracketed, the message stays one paste.
+    expect(agentInputWrites(line, true)).toEqual([AGENT_LINE_RESET, `${PASTE_START}${line}${PASTE_END}`, "\r"]);
+  });
+
   it("types a Claude Code message instead of pasting it", () => {
     // Claude Code shows any bracketed paste as a `[Pasted text]` block and the
     // model receives it as pasted content, not as the user's own words.
