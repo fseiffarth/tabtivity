@@ -1030,6 +1030,26 @@ mod tests {
         let events = tick(&ctx, now).await;
         assert!(matches!(events.as_slice(), [Event::Relaunched { error: Some(_), .. }]), "{events:?}");
         assert!(launched.lock().unwrap().is_empty());
+
+        // Unchanged now that the phone lists host tabs: a bound agent on the
+        // project's primary or on a worker its record names — a tab the
+        // catalog shows `on_host` — is still never restarted with no window
+        // (its session is on the host; the owner types only into local tmux).
+        for location in ["remote", "host:w1"] {
+            let fixture = Fixture::new(vec![rule_once(&key)]);
+            write(&fixture, json!({
+                "remote": { "user": "alice", "host": "primary.example", "remote_path": "/srv/p" },
+                "compute_hosts": [{ "id": "w1", "host": "w1.example", "remote_path": "/srv/w" }],
+            }));
+            let path = headless::session_file(fixture.state_dir(), PROJECT);
+            let mut session: serde_json::Value = storage::read_json(&path).unwrap();
+            session["tabLayout"][0]["location"] = json!(location);
+            storage::write_json_atomic(&path, &session).unwrap();
+            let (ctx, launched) = context(&fixture, &recorder);
+            let events = tick(&ctx, now).await;
+            assert!(matches!(events.as_slice(), [Event::Relaunched { error: Some(_), .. }]), "{location}: {events:?}");
+            assert!(launched.lock().unwrap().is_empty(), "{location}");
+        }
     }
 
     /// H2 exit, headless half: with no window, a due prompt restarts a dead

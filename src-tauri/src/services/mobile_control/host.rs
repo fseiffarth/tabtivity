@@ -37,6 +37,7 @@ use super::{
     files,
     git_overview,
     headless,
+    host_live,
     inbox,
     local_models,
     markup,
@@ -1677,7 +1678,8 @@ async fn project_tab_worktrees(
         .iter()
         .map(|tab| {
             let session = tab.session_id.clone().filter(|id| !id.is_empty() && !tab.local_model);
-            (tab.public.kind == "agent", session, tab.cmd.clone(), tab.cwd.clone())
+            // A host tab's folders are on the host: no worktree here is its.
+            (tab.public.kind == "agent" && !tab.place.on_host(), session, tab.cmd.clone(), tab.cwd.clone())
         })
         .collect();
     let launched: Vec<(String, Vec<String>)> =
@@ -1795,7 +1797,8 @@ async fn project_git(
     }
     let root = project.root.clone();
     let key = host_key(&state);
-    let tab_cwds: Vec<String> = project.tabs.iter().map(|tab| tab.cwd.clone()).collect();
+    // A host tab runs in the host's tree, which no local worktree counts.
+    let tab_cwds: Vec<String> = project.tabs.iter().filter(|tab| !tab.place.on_host()).map(|tab| tab.cwd.clone()).collect();
     let Ok(overview) = tokio::task::spawn_blocking(move || git_overview::probe(&root, &key, &tab_cwds)).await else {
         return api_error(StatusCode::INTERNAL_SERVER_ERROR, "git_failed");
     };
@@ -1910,6 +1913,11 @@ async fn activate_project(
     let tmux_session = match query.tab.as_deref() {
         None => None,
         Some(tab_id) => match catalog_snapshot.tab(tab_id) {
+            // The phone's "restart for phone": a host tab is never the
+            // window's to wrap, so the desktop is not switched for one.
+            Some((owner, tab)) if owner.raw_id == project.raw_id && tab.place.on_host() => {
+                return api_error(StatusCode::CONFLICT, "tab_on_host");
+            }
             Some((owner, tab)) if owner.raw_id == project.raw_id => {
                 chat_running = tab.public.available;
                 Some(tab.tmux_name.clone())
@@ -3372,7 +3380,7 @@ async fn held_call(
                 }
                 return (StatusCode::OK, Json(json!({ "id": held_id, "desktop_available": false })));
             }
-            Err(code) if matches!(code.as_str(), "tab_not_found" | "held_gone" | "held_busy" | "invalid_prompt") => code,
+            Err(code) if matches!(code.as_str(), "tab_not_found" | "held_gone" | "held_busy" | "invalid_prompt" | "tab_on_host") => code,
             Err(why) => {
                 // A file the owner could not write: the phone types the words.
                 eprintln!("mobile: holding a phone prompt with no window failed: {why}");
@@ -3390,7 +3398,7 @@ async fn held_call(
         match code.as_str() {
             "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             "tab_not_found" => StatusCode::NOT_FOUND,
-            "held_gone" | "held_busy" => StatusCode::CONFLICT,
+            "held_gone" | "held_busy" | "tab_on_host" => StatusCode::CONFLICT,
             _ => StatusCode::BAD_REQUEST,
         },
         &code,
@@ -3437,7 +3445,12 @@ async fn hold_prompt(
             message: message.clone(),
             device_id: Some(phone.device_id().to_string()),
         },
-        || headless::hold_prompt(&state_dir, &project_id, &tab, &message, Some(phone.device_id()), chrono::Local::now()),
+        // With no window the owner types only into local tmux: a host tab's
+        // prompt has nobody to deliver it.
+        || {
+            not_on_host(&tab).map_err(|_| "tab_on_host".to_string())?;
+            headless::hold_prompt(&state_dir, &project_id, &tab, &message, Some(phone.device_id()), chrono::Local::now())
+        },
     )
     .await;
     (if status == StatusCode::OK { StatusCode::CREATED } else { status }, body)
@@ -3485,7 +3498,10 @@ async fn edit_held_prompt(
             message: message.clone(),
             device_id: Some(phone.device_id().to_string()),
         },
-        || headless::edit_held_prompt(&state_dir, &project_id, &tab, &held_id, &message, Some(phone.device_id())).map(|()| held_id.clone()),
+        || {
+            not_on_host(&tab).map_err(|_| "tab_on_host".to_string())?;
+            headless::edit_held_prompt(&state_dir, &project_id, &tab, &held_id, &message, Some(phone.device_id())).map(|()| held_id.clone())
+        },
     )
     .await
 }
@@ -3516,8 +3532,14 @@ async fn sign_in_callback(
     let Ok(request) = serde_json::from_slice::<CallbackBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    if let Err(error) = agent_tab_target(&state, &phone, &tab_id) {
-        return error;
+    // The listener is on this machine; a host tab's CLI waits on the host's.
+    match agent_tab(&state, &phone, &tab_id) {
+        Ok((_, tab)) => {
+            if let Err(error) = not_on_host(&tab) {
+                return error;
+            }
+        }
+        Err(error) => return error,
     }
     let callback = match sign_in::parse_callback(&request.url, state.config.host.port) {
         Ok(callback) => callback,
@@ -3568,6 +3590,11 @@ async fn sign_in_tab(
     };
     if tab.public.kind != "agent" {
         return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
+    }
+    // A sign-in tab starts a local agent: it would sign this machine's CLI
+    // in, not the host's.
+    if let Err(error) = not_on_host(tab) {
+        return error;
     }
     // A chat runs on the CLI's shared login, and the scope starts nothing but
     // chats: there is no sign-in tab to open beside one.
@@ -3943,6 +3970,17 @@ fn has_folder(project: &super::discovery::ResolvedProject) -> Result<(), (Status
     Ok(())
 }
 
+/// A tab that runs on its remote project's host has nothing on this machine
+/// for a route to act on — its inbox, a sign-in, a desktop switch to it — so
+/// such a route answers `409 tab_on_host` and the phone hides the control
+/// (`docs/mobile_remote_host_tabs_plan.md`).
+fn not_on_host(tab: &ResolvedTab) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if tab.place.on_host() {
+        return Err(api_error(StatusCode::CONFLICT, "tab_on_host"));
+    }
+    Ok(())
+}
+
 /// A real project folder: the scopes git is asked about (the dot, worktrees,
 /// the Git sheet) and the 📁 drawer lists. A box and the root console have a
 /// folder and are not projects; a project the phone has no folder of is not
@@ -4303,7 +4341,11 @@ async fn schedule_mutation(
     .await;
     if desktop_down(&response) {
         // No window: the rule lands in `agent_tasks.json` under its lock
-        // (headless owner plan, H3); the sidecar's own scheduler fires it.
+        // (headless owner plan, H3); the sidecar's own scheduler fires it —
+        // into local tmux only, so not for a host tab.
+        if let Err(error) = not_on_host(&tab) {
+            return error;
+        }
         let Some(target) = tab.schedule_target_id.as_deref() else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
@@ -4534,6 +4576,10 @@ async fn prompt_mutation(
                 else {
                     return api_error(StatusCode::NOT_FOUND, "tab_not_found");
                 };
+                // The send-now is a rule the sidecar types into local tmux.
+                if let Err(error) = not_on_host(tab) {
+                    return error;
+                }
                 let Some(schedule_target_id) = tab.schedule_target_id.clone() else {
                     return api_error(StatusCode::NOT_FOUND, "tab_not_found");
                 };
@@ -4745,6 +4791,10 @@ async fn undo_clear_headless(state: &HostState, phone: &Phone, tab_id: &str) -> 
     if project.public.kind == ScopeKind::Root {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
     }
+    // The owner's undo types into, or relaunches, a local session.
+    if let Err(error) = not_on_host(tab) {
+        return error;
+    }
     let Some(uid) = tab.session_id.clone().filter(|id| !id.is_empty()) else {
         return api_error(StatusCode::CONFLICT, "nothing_to_undo");
     };
@@ -4951,9 +5001,10 @@ async fn terminal(
     let Some((tab_project, tab)) = catalog.tab(&tab_id) else {
         return api_error(StatusCode::NOT_FOUND, "tab_not_found").into_response();
     };
-    if !tab.public.available {
-        return api_error(StatusCode::GONE, "session_gone").into_response();
-    }
+    let target = match terminal_target(tab, |path| crate::services::ssh_exec::master_alive(&path, host_live::PROBE_TIMEOUT)).await {
+        Ok(target) => target,
+        Err((status, code)) => return api_error(status, code).into_response(),
+    };
     // Only an agent tab carries a status the phone can retire; a shell raises
     // none, so it never needs the desktop told about it.
     let seen_project = (tab.public.kind == "agent").then(|| tab_project.raw_id.clone());
@@ -4999,7 +5050,7 @@ async fn terminal(
             seen();
             let _ = pty_bridge::attach(
                 socket,
-                tmux,
+                target,
                 registry,
                 auth,
                 token,
@@ -5014,6 +5065,32 @@ async fn terminal(
             )
             .await;
         })
+}
+
+/// What a terminal upgrade for `tab` attaches to, or why it may not. A host
+/// tab rides the desktop's master for its host: none found by the last round
+/// is `409 host_offline`, and the master is asked again here — a foreground
+/// act, window or not (`master_alive`, off the async workers, under a
+/// deadline) — since with no window the round trusted the socket file alone.
+async fn terminal_target(
+    tab: &ResolvedTab,
+    master_alive: impl FnOnce(std::path::PathBuf) -> bool + Send + 'static,
+) -> Result<pty_bridge::AttachTarget, (StatusCode, &'static str)> {
+    let name = tab.tmux_name.clone();
+    if !tab.place.on_host() {
+        return if tab.public.available { Ok(pty_bridge::AttachTarget::Local { name }) } else { Err((StatusCode::GONE, "session_gone")) };
+    }
+    let Some(ssh) = tab.place.host_ssh() else {
+        return Err((StatusCode::CONFLICT, "host_offline"));
+    };
+    if !tab.public.available {
+        return Err((StatusCode::GONE, "session_gone"));
+    }
+    let path = ssh.control_path.clone();
+    if !tokio::task::spawn_blocking(move || master_alive(path)).await.unwrap_or(false) {
+        return Err((StatusCode::CONFLICT, "host_offline"));
+    }
+    Ok(pty_bridge::AttachTarget::Host { name, ssh })
 }
 
 #[derive(Deserialize)]
@@ -5047,9 +5124,13 @@ async fn inbox_upload(
     let Ok(catalog) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
-    let Some((project, _)) = catalog.tab(&tab_id) else {
+    let Some((project, tab)) = catalog.tab(&tab_id) else {
         return api_error(StatusCode::NOT_FOUND, "tab_not_found");
     };
+    // The mirror's inbox is not one a host agent can read.
+    if let Err(error) = not_on_host(tab) {
+        return error;
+    }
     if let Err(error) = has_folder(project) {
         return error;
     }
@@ -5160,9 +5241,10 @@ fn inbox_project(
     tab_id: &str,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     let catalog = catalog(state, phone)?;
-    let Some((project, _)) = catalog.tab(tab_id) else {
+    let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
+    not_on_host(tab)?;
     has_folder(project)?;
     Ok(project.raw_id.clone())
 }
@@ -5746,6 +5828,10 @@ async fn markup_submit(
         let Some((project, tab)) = catalog.tab(&tab_id) else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
+        // The marked copy lands in the mirror's inbox, out of a host agent's reach.
+        if let Err(error) = not_on_host(tab) {
+            return error;
+        }
         if let Err(error) = has_folder(project) {
             return error;
         }
@@ -7081,10 +7167,13 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             (_, false, _) => eprintln!("desktop client: on, but no login token could be written"),
         }
     }
+    // The remote hosts' reachability (`host_live`): written by its refresher,
+    // read by every catalog load.
+    let host_live: host_live::SharedHostLive = Arc::default();
     let state = HostState {
         config: config.clone(),
         auth: auth.clone(),
-        catalog: Arc::new(Mutex::new(CatalogCache::default())),
+        catalog: Arc::new(Mutex::new(CatalogCache::with_host_live(host_live.clone()))),
         terminal_registry: TerminalRegistry::default(),
         spawner: HeadlessSpawner::default(),
         readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
@@ -7176,6 +7265,12 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
         shutdown_tx.subscribe(),
     ));
     tokio::spawn(alarms::run(state.config.state_dir.clone(), state.auth.clone(), shutdown_tx.subscribe()));
+    // The host liveness refresher reads ssh's view of this user's masters:
+    // the real entry points only, like the relays (a test serving a host
+    // builds its snapshot by hand).
+    if BACKGROUND_RELAYS.load(std::sync::atomic::Ordering::Relaxed) {
+        tokio::spawn(host_live::run(state.config.state_dir.clone(), state.auth.clone(), host_live, shutdown_tx.subscribe()));
+    }
     if matches!(listen, Listen::Loopback { .. }) {
         let publisher_shutdown = shutdown_tx.clone();
         let publisher_origin = config.origin.clone();
@@ -9067,6 +9162,160 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/transcript"), &cookie)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    /// A host with one opted-in remote project (no mirror on disk) whose one
+    /// agent tab runs on the project's host, that host's master found by the
+    /// last liveness round (`reachable`), and no window.
+    fn host_tab_fixture(reachable: bool) -> Fixture {
+        let mut host = Fixture::bare();
+        let state_dir = host.state.config.state_dir.clone();
+        std::fs::write(
+            state_dir.join("projects.json"),
+            serde_json::to_vec(&json!([{
+                "id": RAW_PROJECT,
+                "name": "Aurora",
+                "status": "active",
+                "directory": state_dir.join("remote-projects").join(RAW_PROJECT).to_string_lossy(),
+                concat!(crate::app_slug!(), "_mobile_access"): true,
+                "remote": { "user": "alice", "host": "primary.example", "remote_path": "/srv/aurora" },
+            }]))
+            .expect("projects fixture"),
+        )
+        .expect("write projects");
+        let sessions = state_dir.join("sessions").join(RAW_PROJECT);
+        std::fs::create_dir_all(&sessions).expect("session dir");
+        std::fs::write(
+            sessions.join("terminals.json"),
+            serde_json::to_vec(&json!({
+                "tabLayout": [{
+                    "label": "Claude",
+                    "cmd": "claude",
+                    "cwd": state_dir.join("remote-projects").join(RAW_PROJECT).to_string_lossy(),
+                    "kind": "agent",
+                    "location": "remote",
+                    "sessionId": "9d0f-session",
+                    "scheduleTargetId": "target-1",
+                    "tmuxSession": format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123"),
+                }]
+            }))
+            .expect("session fixture"),
+        )
+        .expect("write session");
+        let live: host_live::SharedHostLive = Arc::default();
+        if reachable {
+            let spec = serde_json::from_value(json!({ "user": "alice", "host": "primary.example", "remote_path": "/x" })).unwrap();
+            live.lock().unwrap().insert(&spec, host_live::HostReach { control_path: state_dir.join("cm-primary"), sessions: None });
+        }
+        host.state.catalog = Arc::new(Mutex::new(CatalogCache::with_host_live(live)));
+        host
+    }
+
+    /// Plan step 3: a host tab is listed with `on_host` and nothing raw, and
+    /// every route that would act on this machine for it answers `409
+    /// tab_on_host` — the inbox, desktop images, Mark up Submit, sign-in and
+    /// its callback, activate-with-tab, and with no window the owner's
+    /// schedule, held-prompt, send-now and undo-clear writes. Its transcript
+    /// is `unsupported`.
+    #[tokio::test]
+    async fn a_host_tab_is_listed_on_host_and_refuses_what_would_act_here() {
+        let host = host_tab_fixture(true);
+        let cookie = host.pair_device(&signing_key(71)).await.0;
+        let (p, t) = project_and_tab(&host, &cookie).await;
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+        let tab = &json(&detail)["tabs"][0];
+        assert_eq!((tab["on_host"].as_bool(), tab["available"].as_bool()), (Some(true), Some(true)), "{detail}");
+        for raw in ["primary.example", "/srv/aurora", "cm-primary", RAW_PROJECT, "9d0f-session", "alice"] {
+            assert!(!detail.contains(raw), "{raw} crossed: {detail}");
+        }
+        let any = json!({});
+        let markup = json!({
+            "source": { "files": "AAAA" },
+            "pages": [{
+                "n": 1, "size": [800, 600], "layer": format!("{}/draft-p1-layer.png", inbox::INBOX_DIR),
+                "marks": [{ "kind": "ink", "color": "red", "width": 2, "points": [[10, 10, 0.5], [40, 30, 0.7]] }],
+            }],
+        });
+        let routes: Vec<(&str, String, Value)> = vec![
+            ("POST", format!("/api/v1/tabs/{t}/inbox?name=a.txt"), any.clone()),
+            ("GET", format!("/api/v1/tabs/{t}/desktop-images"), Value::Null),
+            ("POST", format!("/api/v1/tabs/{t}/desktop-images"), json!({ "image_id": desktop_images::CLIPBOARD_ID })),
+            ("POST", format!("/api/v1/tabs/{t}/markup"), markup),
+            ("POST", format!("/api/v1/tabs/{t}/sign-in"), json!({ "idempotency_key": "host-signin-0123456789abcdef" })),
+            ("POST", format!("/api/v1/tabs/{t}/sign-in-callback"), json!({ "url": "http://localhost:4567/callback?code=c&state=s" })),
+            ("POST", format!("/api/v1/projects/{p}/activate?tab={t}"), Value::Null),
+            ("POST", format!("/api/v1/tabs/{t}/schedules"), json!({ "enabled": true, "message": "x", "rule": { "type": "daily", "time": "09:00" } })),
+            ("PUT", format!("/api/v1/tabs/{t}/schedules/rule-1"), json!({ "enabled": true, "message": "x", "rule": { "type": "daily", "time": "09:00" } })),
+            ("DELETE", format!("/api/v1/tabs/{t}/schedules/rule-1"), Value::Null),
+            ("POST", format!("/api/v1/tabs/{t}/held"), json!({ "message": "next" })),
+            ("PUT", format!("/api/v1/tabs/{t}/held/held-1"), json!({ "message": "next" })),
+            ("POST", format!("/api/v1/projects/{p}/prompts/prompt-1/send"), json!({ "tab_id": t })),
+            ("POST", format!("/api/v1/tabs/{t}/undo-clear"), Value::Null),
+        ];
+        for (method, uri, body) in routes {
+            let (status, _, answer) = host.send(request_as(method, &uri, &cookie, (!body.is_null()).then_some(body))).await;
+            assert_eq!((status, json(&answer)["error"].as_str()), (StatusCode::CONFLICT, Some("tab_on_host")), "{method} {uri} -> {answer}");
+        }
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/transcript"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["transcript"]["available"], false, "{body}");
+        assert_eq!(json(&body)["transcript"]["reason"], "unsupported", "{body}");
+        assert!(host.runner.delivered.lock().unwrap().is_empty(), "nothing typed anywhere");
+    }
+
+    /// The plan's pinned close: with no window, closing a host tab removes its
+    /// record through the owner's local runner — whose `tmux kill-session`
+    /// finds no such session here, which counts as already gone — and never
+    /// reaches the host: its session keeps running, as after a desktop close.
+    #[tokio::test]
+    async fn closing_a_host_tab_with_no_window_drops_the_record_and_leaves_the_host_alone() {
+        let host = host_tab_fixture(true);
+        let cookie = host.pair_device(&signing_key(72)).await.0;
+        let (p, t) = project_and_tab(&host, &cookie).await;
+        let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{t}"), &cookie, None)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(host.runner.killed.lock().unwrap().as_slice(), [format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123")], "the local runner, no ssh");
+        assert!(crate::services::tmux_local::kill_failure_is_already_gone("can't find session: x"));
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+        assert_eq!(json(&detail)["tabs"].as_array().map(Vec::len), Some(0), "{detail}");
+        // Kept for the window to reopen, but not offered here: a reopen with no
+        // window could not start it.
+        assert_eq!(json(&detail)["closed"], json!([]), "{detail}");
+    }
+
+    /// A host tab's terminal upgrade: no master found → `409 host_offline`;
+    /// one found but gone at the foreground re-check → the same; the session
+    /// missing on a live master → `410 session_gone`; otherwise a `Host`
+    /// attach on the master's socket. A local tab is unchanged.
+    #[tokio::test]
+    async fn a_host_tabs_terminal_rides_a_live_master_or_says_host_offline() {
+        let host = host_tab_fixture(true);
+        let catalog = host.state.catalog.lock().unwrap().load(&host.state.config.state_dir, &host_key(&host.state)).unwrap();
+        let tab = catalog.projects[0].tabs[0].clone();
+        let alive = |answer: bool| move |_: std::path::PathBuf| answer;
+        match terminal_target(&tab, alive(true)).await {
+            Ok(pty_bridge::AttachTarget::Host { name, ssh }) => {
+                assert_eq!(name, tab.tmux_name);
+                assert_eq!(ssh.spec.host, "primary.example");
+                assert_eq!(ssh.control_path, host.state.config.state_dir.join("cm-primary"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(terminal_target(&tab, alive(false)).await.unwrap_err(), (StatusCode::CONFLICT, "host_offline"));
+        let mut gone = tab.clone();
+        gone.public.available = false;
+        assert_eq!(terminal_target(&gone, alive(true)).await.unwrap_err(), (StatusCode::GONE, "session_gone"));
+
+        let unreachable = host_tab_fixture(false);
+        let catalog = unreachable.state.catalog.lock().unwrap().load(&unreachable.state.config.state_dir, &host_key(&unreachable.state)).unwrap();
+        let tab = catalog.projects[0].tabs[0].clone();
+        assert!(!tab.public.available);
+        assert_eq!(terminal_target(&tab, |_| panic!("no master to ask")).await.unwrap_err(), (StatusCode::CONFLICT, "host_offline"));
+
+        let mut local = super::super::discovery::fixture_scope("t", "tmux-t", None).tabs.remove(0);
+        assert!(matches!(terminal_target(&local, |_| panic!("not asked")).await, Ok(pty_bridge::AttachTarget::Local { .. })));
+        local.public.available = false;
+        assert_eq!(terminal_target(&local, |_| panic!("not asked")).await.unwrap_err(), (StatusCode::GONE, "session_gone"));
     }
 
     /// A host with one opted-in project of each type, no window and no session

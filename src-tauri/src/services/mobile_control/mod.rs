@@ -17,6 +17,7 @@ pub mod git_overview;
 pub mod headless;
 pub mod headless_board;
 pub mod host;
+pub mod host_live;
 pub mod inbox;
 pub mod local_models;
 pub mod markup;

@@ -318,6 +318,11 @@ pub fn transcript(
     version: Option<&str>,
     limit: Option<usize>,
 ) -> AgentTranscript {
+    // A host tab's transcript is on the host: nothing here describes it, and
+    // its `cwd` is empty (`discovery::TabPlace`).
+    if tab.place.on_host() {
+        return AgentTranscript::unavailable("unsupported");
+    }
     if tab.local_model && tab.cmd == "opencode" {
         return agent_transcript::local_opencode_transcript(
             Some(project_id),
@@ -457,7 +462,9 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
 /// gets its newest prompts.
 pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -> TurnReadings {
     let mut readings = TurnReadings::default();
-    for tab in tabs.iter().filter(|t| t.public.kind == "agent") {
+    // A host tab's hooks record on the host: no local `.turn` record or
+    // transcript is its, whatever its session id says.
+    for tab in tabs.iter().filter(|t| t.public.kind == "agent" && !t.place.on_host()) {
         let Some(uid) = tab.session_id.as_deref().filter(|id| !id.is_empty()) else {
             continue;
         };
@@ -1022,7 +1029,10 @@ pub async fn create_tab(
 // ── The remaining tab requests (headless owner plan, H3) ────────────────────
 
 /// The scope's owner-closed agent tabs as the catalog's `closed` rows: the
-/// opaque id minted at close, the label, the agent and the close stamp.
+/// opaque id minted at close, the label, the agent and the close stamp. Only
+/// the ones a reopen here could start: a remote-host tab the phone closed
+/// stays closed for the window (`reopen_tab` refuses it), so "Recently
+/// closed" offers it no more than the window's list does.
 pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::ClosedAgentTab> {
     let path = session_file(state_dir, raw_id);
     // project-tree-read: ok — the state-dir session file, keyed by scope id.
@@ -1031,6 +1041,7 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
     };
     crate::services::workspace::closed_tabs(&session)
         .into_iter()
+        .filter(|closed| launch_options(state_dir, raw_id, &closed.tab).is_ok())
         .map(|closed| super::protocol::ClosedAgentTab {
             id: closed.id,
             label: closed.tab.label,
@@ -2033,6 +2044,7 @@ mod tests {
                 subagent_worktrees: Vec::new(),
                 assistant_launch: None,
                 worktree_movable: false,
+                on_host: false,
             },
             tmux_name: concat!(crate::app_slug!(), "-x").into(),
             session_id: session_id.map(str::to_string),
@@ -2042,7 +2054,33 @@ mod tests {
             cwd: if cfg!(windows) { r"C:\nowhere" } else { "/nowhere" }.into(),
             since: None,
             local_model: false,
+            place: super::super::discovery::TabPlace::Here,
         }
+    }
+
+    /// A host tab names nothing on this machine: its transcript is
+    /// `unsupported` and it has no reading, though a local `.turn` record
+    /// and session id would say otherwise for a local tab.
+    #[test]
+    fn a_host_tab_reads_nothing_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let uid = "11111111-2222-4333-8444-555555555555";
+        let live = dir.path().join("live_sessions");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join(format!("{uid}{TURN_SUFFIX}")), "working 1700000000").unwrap();
+        let local = tab("claude", Some(uid));
+        assert_eq!(turn_readings(dir.path(), "p1", std::slice::from_ref(&local)).statuses.len(), 1, "the local twin reads");
+        let mut host = local.clone();
+        host.cwd = String::new();
+        host.place = super::super::discovery::TabPlace::Host {
+            spec: Box::new(serde_json::from_value(json!({ "host": "h.invalid", "remote_path": "/srv/p" })).unwrap()),
+            control_path: None,
+        };
+        let readings = turn_readings(dir.path(), "p1", std::slice::from_ref(&host));
+        assert!(readings.statuses.is_empty() && readings.timings.is_empty() && readings.prompts.is_empty());
+        let transcript = transcript("p1", &host, None, None, None);
+        assert!(!transcript.available);
+        assert_eq!(transcript.reason.as_deref(), Some("unsupported"));
     }
 
     /// The phone's Mark up starts the agent `default_agent_cmd` names — an id

@@ -6,14 +6,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use app_core::sync::LockExt;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 
+use super::host_live::{HostLive, HostSsh, SharedHostLive};
 use super::protocol::TAB_COLORS;
 use crate::paths::output_within;
+use crate::schema::project::{ComputeHost, RemoteSpec};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -34,6 +37,12 @@ struct ProjectRecord {
     sandbox: Option<Value>,
     #[serde(default)]
     vm: Option<Value>,
+    /// A remote project's worker hosts (`ComputeHost`s), the entry's flattened
+    /// `compute_hosts` key. Loose like `remote`: parsed where a host tab is
+    /// placed (`ProjectHosts::of`), so an odd shape costs the workers, never
+    /// the file.
+    #[serde(default)]
+    compute_hosts: Option<Value>,
     /// A remote (or VM) project's explicitly chosen local mirror folder, the
     /// entry's flattened top-level `mirror` key (`remote_sync::mirror_override`
     /// reads the same key). Lenient: a value that is not a string is no
@@ -380,6 +389,38 @@ pub struct PublicTab {
     /// remote, not a VM) — the window's own test in `agentWorktreeSwitch.ts`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub worktree_movable: bool,
+    /// The tab runs on its project's remote host, and the phone reaches it
+    /// through the desktop's ssh master for that host
+    /// (`docs/mobile_remote_host_tabs_plan.md`): the phone wears an "on host"
+    /// chip and hides what would act on this machine (the inbox, desktop
+    /// images, Mark up's Submit, sign-in). Only the flag crosses — never the
+    /// host, worker, path or socket.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub on_host: bool,
+}
+
+/// Where a listed tab's tmux session is: on this machine, or on its remote
+/// project's host. Raw; never serialized.
+#[derive(Debug, Clone)]
+pub enum TabPlace {
+    Here,
+    /// On `spec`'s host. `control_path` is the desktop's master for it when
+    /// the last liveness round found one (`host_live`); `None` is unreachable.
+    Host { spec: Box<RemoteSpec>, control_path: Option<PathBuf> },
+}
+
+impl TabPlace {
+    pub fn on_host(&self) -> bool {
+        matches!(self, Self::Host { .. })
+    }
+
+    /// The host and master a host tab's attach rides, when one was found.
+    pub fn host_ssh(&self) -> Option<HostSsh> {
+        match self {
+            Self::Host { spec, control_path: Some(path) } => Some(HostSsh { spec: spec.clone(), control_path: path.clone() }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -406,6 +447,10 @@ pub struct ResolvedTab {
     /// A local-model tab: its agent runs in the scope's local-model home
     /// (`services::agent_home::local_model_home`), where its transcript is.
     pub local_model: bool,
+    /// Where its session is. A host tab's `cwd` is empty and its `cmd` and
+    /// `session_id` name nothing on this machine: every reader that would look
+    /// them up in local files (transcript, readings, worktrees, git) skips it.
+    pub place: TabPlace,
 }
 
 /// Where a project's tabs run, a type word and nothing more (it crosses the
@@ -456,7 +501,7 @@ pub struct ResolvedProject {
     /// Whether the scope has a folder the phone may read, write and probe: its
     /// first root resolved. False for a remote project whose mirror is not
     /// there yet, a VM project with no mirror (both are listed, with no
-    /// tabs) and the assistant, which has a work folder and no project folder.
+    /// local tabs) and the assistant, which has a work folder and no project folder.
     pub folder: bool,
     /// What the phone may create here ([`CreateVerdict`]).
     pub create: CreateVerdict,
@@ -497,6 +542,68 @@ struct ScopeSource {
     /// A container project whose spec scope is `all`: its shells run in the
     /// container too, not only its agents.
     shells_in_container: bool,
+    /// A remote (not VM) project's hosts, from its record: where its host
+    /// tabs run.
+    hosts: Option<ProjectHosts>,
+}
+
+/// A remote project's hosts as its `projects.json` record names them — never
+/// `remote::remote_target_for*`, which reads the global state dir.
+#[derive(Debug, Clone, Default)]
+struct ProjectHosts {
+    /// `remote`, the `"remote"` location's host.
+    primary: Option<RemoteSpec>,
+    /// `compute_hosts`, each a `"host:<id>"` location's.
+    workers: Vec<ComputeHost>,
+    /// The window wraps a host tab in tmux only while `remote.persist_sessions`
+    /// is not `false` (`persistSessionsEnabled`); otherwise no host session
+    /// exists for the name the tab was minted.
+    persist: bool,
+}
+
+impl ProjectHosts {
+    fn of(project: &ProjectRecord) -> Option<Self> {
+        if project_host(project) != ProjectHost::Remote {
+            return None;
+        }
+        let remote = project.remote.as_ref()?;
+        Some(Self {
+            primary: crate::services::remote::spec_from_value(remote),
+            workers: project
+                .compute_hosts
+                .as_ref()
+                .map(crate::services::remote::compute_hosts_from_value)
+                .unwrap_or_default(),
+            persist: remote.get("persist_sessions").and_then(Value::as_bool) != Some(false),
+        })
+    }
+
+    /// The host a tab at `location` runs on: `"remote"` or none (a shell's
+    /// default) the primary, `"host:<id>"` that worker. A worker id that no
+    /// longer resolves is no host: the session is wherever it last ran, and
+    /// that is not guessed.
+    fn spec_for(&self, location: Option<&str>) -> Option<&RemoteSpec> {
+        match host_location(location)? {
+            HostLocation::Primary => self.primary.as_ref(),
+            HostLocation::Worker(id) => self.workers.iter().find(|h| h.id == id).map(|h| &h.spec),
+        }
+    }
+}
+
+/// A non-local tab location, by the window's words.
+#[derive(Debug, PartialEq, Eq)]
+enum HostLocation<'a> {
+    Primary,
+    Worker(&'a str),
+}
+
+/// `location` as a host: absent or `"remote"` the primary, `"host:<id>"` a
+/// worker; `"local"` and anything unknown are none.
+fn host_location(location: Option<&str>) -> Option<HostLocation<'_>> {
+    match location {
+        None | Some("remote") => Some(HostLocation::Primary),
+        Some(other) => other.strip_prefix("host:").filter(|id| !id.is_empty()).map(HostLocation::Worker),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -539,9 +646,18 @@ pub struct CatalogCache {
     last_live: Option<HashMap<String, LiveTmux>>,
     /// When tmux last could not be asked; cleared by the next answer.
     tmux_failed_at: Option<Instant>,
+    /// The remote hosts' reachability, written by `host_live`'s refresher
+    /// (set once in `host::run_with`). Cloned per load — the load itself never
+    /// touches a socket. Absent: no host tab is reachable.
+    host_live: Option<SharedHostLive>,
 }
 
 impl CatalogCache {
+    /// A cache whose loads read the refresher's host snapshot from `live`.
+    pub fn with_host_live(live: SharedHostLive) -> Self {
+        Self { host_live: Some(live), ..Self::default() }
+    }
+
     /// Serves a snapshot up to `CATALOG_TTL` old.
     pub fn load(&mut self, state_dir: &Path, host_key: &[u8]) -> Result<Catalog, String> {
         if let (Some(catalog), Some(at)) = (self.last_valid.as_ref(), self.loaded_at) {
@@ -600,9 +716,14 @@ impl CatalogCache {
         host_key: &[u8],
         ask_tmux: impl FnOnce() -> Result<HashMap<String, LiveTmux>, String>,
     ) -> Result<Catalog, String> {
+        let hosts = self
+            .host_live
+            .as_ref()
+            .map(|slot| slot.lock_ok().clone())
+            .unwrap_or_default();
         let loaded = self
             .live(ask_tmux)
-            .and_then(|live| Catalog::load_with(state_dir, host_key, &RootEnv::live(), &live));
+            .and_then(|live| Catalog::load_with(state_dir, host_key, &RootEnv::live(), &live, &hosts, host_tabs_here()));
         match loaded {
             Ok(next) => {
                 self.last_valid = Some(next.clone());
@@ -1154,23 +1275,133 @@ pub fn shells_open(state_dir: &Path) -> bool {
 impl Catalog {
     #[cfg(test)]
     pub fn load(state_dir: &Path, host_key: &[u8]) -> Result<Self, String> {
-        Self::load_with(state_dir, host_key, &RootEnv::live(), &live_tmux().unwrap_or_default())
+        Self::load_with(state_dir, host_key, &RootEnv::live(), &live_tmux().unwrap_or_default(), &HostLive::default(), host_tabs_here())
     }
 
+    /// `hosts`: the remote hosts' reachability (`host_live`); `host_tabs`:
+    /// whether this build lists host tabs at all ([`host_tabs_here`]).
     fn load_with(
         state_dir: &Path,
         host_key: &[u8],
         root: &RootEnv,
         live: &HashMap<String, LiveTmux>,
+        hosts: &HostLive,
+        host_tabs: bool,
     ) -> Result<Self, String> {
         let sources = scope_sources(state_dir, root)?;
         let shells = shells_open(state_dir);
+        let listing = Listing { live, hosts, shells, host_tabs };
         let resolved = sources
             .into_iter()
-            .filter_map(|source| resolve_scope(state_dir, host_key, live, shells, source))
+            .filter_map(|source| resolve_scope(state_dir, host_key, &listing, source))
             .collect();
         Ok(Self { projects: resolved })
     }
+}
+
+/// What one catalog load joins the saved tabs against.
+struct Listing<'a> {
+    /// The live local tmux sessions.
+    live: &'a HashMap<String, LiveTmux>,
+    /// The remote hosts' reachability.
+    hosts: &'a HostLive,
+    /// [`shells_open`].
+    shells: bool,
+    /// [`host_tabs_here`].
+    host_tabs: bool,
+}
+
+/// Whether this build lists remote-host tabs: where its own tabs reach the
+/// phone through tmux (not Windows, which has no ControlMaster either).
+fn host_tabs_here() -> bool {
+    host_tabs_on(terminals_support())
+}
+
+/// [`host_tabs_here`] for a `terminals_support_on` answer, so the Windows
+/// answer has a test on every OS.
+fn host_tabs_on(terminals: &str) -> bool {
+    terminals == TERMINALS_TMUX
+}
+
+/// The remote host a saved tab of `source` runs on, when the phone lists it
+/// as a host tab: a remote (not VM) project's tab that is not local
+/// ([`tab_is_local`]) — an agent that resumes (no sign-in, no cloud session)
+/// or, behind `shell_tabs`, a shell — not ephemeral, not attached to a
+/// foreign session, carrying the tmux name its scope mints, on a host its
+/// record still names, and only while the project persists sessions. The
+/// one rule behind the catalog's listing and the refresher's targets
+/// ([`host_probe_targets`]), so the two cannot drift.
+fn host_of_tab<'a>(source: &'a ScopeSource, tab: &SavedTab, shells: bool, host_tabs: bool) -> Option<&'a RemoteSpec> {
+    if !host_tabs || tab_on_this_machine(source, tab) {
+        return None;
+    }
+    let hosts = source.hosts.as_ref().filter(|hosts| hosts.persist)?;
+    let location = tab.location.as_ref().and_then(Value::as_str);
+    let listed_kind = match tab.kind.as_str() {
+        "agent" => resumable(tab) && !tab.sign_in && !tab.cloud,
+        "shell" => shells,
+        _ => false,
+    };
+    if !listed_kind || tab.ephemeral || tab.tmux_attach.is_some() || tab_is_local(&tab.kind, location, false) {
+        return None;
+    }
+    let tmux = tab.tmux_session.as_deref()?;
+    if !expected_tmux(&source.raw_id, &tab.kind, tmux) || !crate::services::ssh_exec::valid_tmux_session_name(tmux) {
+        return None;
+    }
+    hosts.spec_for(location)
+}
+
+/// The catalog's listing rule at the window's table level
+/// (`phoneListsTab` in `lib/projectTabHost.ts`, the fixture's `lists`): a tab
+/// that runs here, or one on a remote (not VM) project's host. The per-tab
+/// facts ([`host_of_tab`]: kind, tmux name, persist flag, a worker that
+/// resolves) are the catalog's alone.
+#[cfg(test)]
+fn phone_lists_tab(host: ProjectHost, shells_in_container: bool, kind: &str, location: Option<&str>) -> bool {
+    runs_on_this_machine(host, shells_in_container, kind, location)
+        || (host == ProjectHost::Remote && matches!(kind, "agent" | "shell") && host_location(location).is_some())
+}
+
+/// One scope's saved tabs (`sessions/<key>/terminals.json`). A file that does
+/// not parse is no tabs — see `resolve_scope` for why it never fails more.
+fn read_session(state_dir: &Path, raw_id: &str) -> SessionFile {
+    let path = state_dir.join("sessions").join(project_key(raw_id)).join("terminals.json");
+    fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SessionFile>(&bytes).ok())
+        .unwrap_or(SessionFile { tab_layout: vec![] })
+}
+
+/// The hosts `host_live`'s refresher probes: those of Mobile-enabled remote
+/// projects with at least one listable host tab, by [`host_of_tab`] — the
+/// catalog's own rule. Each host once (by `target_key`). Empty where host
+/// tabs are not listed at all, or the projects file cannot be read.
+pub fn host_probe_targets(state_dir: &Path) -> Vec<RemoteSpec> {
+    if !host_tabs_here() {
+        return Vec::new();
+    }
+    // Only project sources carry hosts; the root and assistant gates are not
+    // asked about here.
+    let root = RootEnv { dir: PathBuf::new(), fenced: || false };
+    let Ok(sources) = scope_sources(state_dir, &root) else {
+        return Vec::new();
+    };
+    let shells = shells_open(state_dir);
+    let mut seen = std::collections::HashSet::new();
+    let mut targets = Vec::new();
+    for source in sources.iter().filter(|source| source.hosts.is_some()) {
+        // project-tree-read: ok — the state-dir terminal-session snapshot.
+        for tab in read_session(state_dir, &source.raw_id).tab_layout {
+            if let Some(spec) = host_of_tab(source, &tab, shells, true) {
+                let key = crate::services::ssh_common::target_key(spec.user.as_deref(), &spec.host, spec.port);
+                if seen.insert(key) {
+                    targets.push(spec.clone());
+                }
+            }
+        }
+    }
+    targets
 }
 
 /// Every scope a phone may be shown and the per-phone list of each, read
@@ -1203,6 +1434,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             host: ProjectHost::Local,
             cwd_alias: None,
             shells_in_container: false,
+            hosts: None,
         });
     }
     if assistant_open(state_dir) {
@@ -1220,6 +1452,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             host: ProjectHost::Local,
             cwd_alias: None,
             shells_in_container: false,
+            hosts: None,
         });
     }
     for project in &projects {
@@ -1254,6 +1487,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             host,
             cwd_alias: (host == ProjectHost::Remote).then(|| project.directory()).flatten(),
             shells_in_container: host == ProjectHost::Container && container_shells(project),
+            hosts: ProjectHosts::of(project),
         });
     }
     for b in &boxes {
@@ -1295,6 +1529,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             host: ProjectHost::Local,
             cwd_alias: None,
             shells_in_container: false,
+            hosts: None,
         });
     }
     Ok(sources)
@@ -1421,6 +1656,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         subagent_worktrees: Vec::new(),
         assistant_launch: None,
         worktree_movable: false,
+        on_host: false,
     };
     ResolvedProject {
         public: PublicProject {
@@ -1447,6 +1683,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             cwd: "/".into(),
             since: None,
             local_model: false,
+            place: TabPlace::Here,
         }],
         devices,
         host: ProjectHost::Local,
@@ -1489,17 +1726,18 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 /// Read one scope's saved tabs and join them to the live tmux rows. `None`
 /// when the scope's home directory does not resolve — a scope with no home has
 /// nowhere for an inbox and nothing a tab could be checked against. The
-/// exceptions are listed with no tab and `folder: false`: the assistant (until
+/// exceptions are listed with no local tab and `folder: false` (a remote
+/// project's host tabs need no folder and are listed all the same): the assistant (until
 /// its first chat makes the work folder), and a remote or VM project, whose
 /// mirror may not be there yet (or, for a VM, at all) while its Mobile switch
 /// must still show on the phone.
 fn resolve_scope(
     state_dir: &Path,
     host_key: &[u8],
-    live: &HashMap<String, LiveTmux>,
-    shells: bool,
+    listing: &Listing,
     source: ScopeSource,
 ) -> Option<ResolvedProject> {
+    let (live, shells) = (listing.live, listing.shells);
     let assistant = source.kind == ScopeKind::Assistant;
     let listed_without_folder = assistant
         || (source.kind == ScopeKind::Project && matches!(source.host, ProjectHost::Remote | ProjectHost::Vm));
@@ -1532,10 +1770,6 @@ fn resolve_scope(
             .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &source.raw_id)),
         None => return None,
     };
-    let session_path = state_dir
-        .join("sessions")
-        .join(project_key(&source.raw_id))
-        .join("terminals.json");
     // One scope's session file is that scope's problem, not the catalog's.
     // The desktop writes it atomically, so a file that does not parse is real
     // corruption or a shape this build does not read — and it used to fail
@@ -1543,12 +1777,14 @@ fn resolve_scope(
     // snapshot on every request, forever: one bad file froze every project
     // the phone could see, with nothing anywhere to say why. Such a scope
     // simply has no attachable tabs until the desktop rewrites the file.
-    let session = match fs::read(&session_path) {
-        // No root, no tab: nothing could be checked against one.
-        _ if roots.is_empty() => SessionFile { tab_layout: vec![] },
-        Ok(bytes) => serde_json::from_slice::<SessionFile>(&bytes)
-            .unwrap_or_else(|_| SessionFile { tab_layout: vec![] }),
-        Err(_) => SessionFile { tab_layout: vec![] },
+    //
+    // No root, no local tab: nothing could be checked against one. A remote
+    // project's host tabs need none (their sessions run in the host's
+    // `remote_path` whatever cwd was saved), so its file is read regardless.
+    let session = if roots.is_empty() && source.hosts.is_none() {
+        SessionFile { tab_layout: vec![] }
+    } else {
+        read_session(state_dir, &source.raw_id)
     };
     let mut tabs = Vec::new();
     // project-tree-read: ok — this is the state-dir terminal-session snapshot.
@@ -1579,15 +1815,21 @@ fn resolve_scope(
         // `directory` as its cwd, though the agent runs in the mirror (the
         // window swaps it in at spawn): read it as the mirror, so it is below
         // the root and its transcript is looked up where the agent ran.
+        //
+        // A host tab is placed by its record alone ([`host_of_tab`]); its saved
+        // cwd says nothing about where it runs and is never read.
+        let on_host = host_of_tab(&source, &tab, shells, listing.host_tabs).cloned();
         let cwd = match &source.cwd_alias {
+            _ if on_host.is_some() => String::new(),
             Some(alias) if same_dir(Path::new(&tab.cwd), alias) => root.to_string_lossy().into_owned(),
             _ => tab.cwd.clone(),
         };
-        if !eligible_kind
-            || tab.ephemeral
-            || tab.tmux_attach.is_some()
-            || !tab_on_this_machine(&source, &tab)
-            || !canonical_below_any(Path::new(&cwd), &roots)
+        if on_host.is_none()
+            && (!eligible_kind
+                || tab.ephemeral
+                || tab.tmux_attach.is_some()
+                || !tab_on_this_machine(&source, &tab)
+                || !canonical_below_any(Path::new(&cwd), &roots))
         {
             continue;
         }
@@ -1602,7 +1844,14 @@ fn resolve_scope(
         }
         let live_row = live
             .get(tmux)
-            .filter(|row| canonical_below_any(&row.cwd, &roots));
+            .filter(|row| on_host.is_none() && canonical_below_any(&row.cwd, &roots));
+        // A host tab is available while the last round found its host's
+        // master, and — where that host's tmux was asked — its session.
+        let host_reach = on_host.as_ref().and_then(|spec| listing.hosts.reach(spec));
+        let available = match &on_host {
+            Some(_) => host_reach.is_some_and(|reach| reach.has_session(tmux)),
+            None => live_row.is_some(),
+        };
         let public = PublicTab {
             id: key_id(host_key, "tab", &[&source.raw_id, tmux]),
             label: tab.label.chars().take(120).collect(),
@@ -1618,7 +1867,7 @@ fn resolve_scope(
             turn_started_at: None,
             schedules: None,
             prompts: Vec::new(),
-            available: live_row.is_some(),
+            available,
             viewer_busy: false,
             last_activity: live_row.map(|r| r.activity),
             color: tab
@@ -1639,6 +1888,7 @@ fn resolve_scope(
                 && resumable(&tab)
                 && source.kind == ScopeKind::Project
                 && matches!(source.host, ProjectHost::Local | ProjectHost::Container),
+            on_host: on_host.is_some(),
         };
         tabs.push(ResolvedTab {
             public,
@@ -1649,6 +1899,10 @@ fn resolve_scope(
             cwd,
             since: fresh_since(&tab),
             local_model: local_agent || chat.as_ref().is_some_and(|launch| launch.cli.is_local()),
+            place: match on_host {
+                Some(spec) => TabPlace::Host { spec: Box::new(spec), control_path: host_reach.map(|reach| reach.control_path.clone()) },
+                None => TabPlace::Here,
+            },
         });
     }
     let last_activity = tabs.iter().filter_map(|t| t.public.last_activity).max();
@@ -1764,6 +2018,7 @@ mod tests {
 
     use crate::brand::SLUG;
     use super::*;
+    use super::super::host_live::HostReach;
 
     #[test]
     fn agent_counts_keep_working_question_and_done_and_skip_the_rest() {
@@ -2070,7 +2325,7 @@ mod tests {
                 Some(value) => fs::write(state.join("settings.json"), value.to_string()).expect("settings"),
                 None => { let _ = fs::remove_file(state.join("settings.json")); }
             }
-            Catalog::load_with(state, &[7; 32], env, &HashMap::new()).expect("catalog").projects
+            Catalog::load_with(state, &[7; 32], env, &HashMap::new(), &HostLive::default(), true).expect("catalog").projects
         };
         let host = |on: bool| serde_json::json!({ "enabled": true, "root_access": on });
 
@@ -2107,7 +2362,7 @@ mod tests {
         );
         // Unreadable settings refuse.
         fs::write(state.join("settings.json"), b"{").expect("corrupt settings");
-        assert!(Catalog::load_with(state, &[7; 32], &fenced, &HashMap::new()).expect("catalog").projects.is_empty());
+        assert!(Catalog::load_with(state, &[7; 32], &fenced, &HashMap::new(), &HostLive::default(), true).expect("catalog").projects.is_empty());
 
         assert!(is_root_scope_id("root"));
         assert!(!is_root_scope_id("rooted"));
@@ -2140,7 +2395,7 @@ mod tests {
 
     fn load_assistant(state: &Path) -> Vec<ResolvedProject> {
         let env = RootEnv { dir: state.join("root"), fenced: || true };
-        Catalog::load_with(state, &[7; 32], &env, &HashMap::new()).expect("catalog").projects
+        Catalog::load_with(state, &[7; 32], &env, &HashMap::new(), &HostLive::default(), true).expect("catalog").projects
     }
 
     /// The chat assistant reaches the phone by its switch and gate alone
@@ -2357,7 +2612,7 @@ mod tests {
         .expect("session");
         let live = HashMap::from([(tmux.clone(), LiveTmux { activity: 5, cwd: chat.canonicalize().unwrap() })]);
         let env = RootEnv { dir: state.join("root"), fenced: || true };
-        let load = || Catalog::load_with(state, &[7; 32], &env, &live).expect("catalog");
+        let load = || Catalog::load_with(state, &[7; 32], &env, &live, &HostLive::default(), true).expect("catalog");
         let open = load();
         let tab_id = open.projects[0].tabs[0].public.id.clone();
         assert!(open.grants(&tab_id, &tmux));
@@ -2787,7 +3042,7 @@ mod tests {
 
     fn load_all(state: &Path, live: &HashMap<String, LiveTmux>) -> Vec<ResolvedProject> {
         let env = RootEnv { dir: state.join("root"), fenced: || true };
-        Catalog::load_with(state, &[7; 32], &env, live).expect("catalog").projects
+        Catalog::load_with(state, &[7; 32], &env, live, &HostLive::default(), true).expect("catalog").projects
     }
 
     fn tab_json(label: &str, kind: &str, cwd: &Path, tmux: &str, extra: serde_json::Value) -> serde_json::Value {
@@ -3073,6 +3328,174 @@ mod tests {
         }
     }
 
+    /// The listing rule at the window's table level: a tab of a remote (not
+    /// VM) project is listed wherever it runs — `lists = reach || host ==
+    /// remote`, the rule of the `lists` column the window's side of the
+    /// fixture carries.
+    #[test]
+    fn the_table_level_listing_rule_lists_every_remote_projects_tab() {
+        let table: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../src/__tests__/mobile/projectHostReach.fixture.json"
+        )))
+        .expect("fixture");
+        for row in table {
+            let mut record = serde_json::json!({ "id": "p", "name": "P", "status": "active" });
+            for (key, value) in row["record"].as_object().expect("record") {
+                record[key] = value.clone();
+            }
+            let project: ProjectRecord = serde_json::from_value(record).expect("record");
+            let host = project_host(&project);
+            let lists = phone_lists_tab(host, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
+            assert_eq!(lists, row["reach"].as_bool().unwrap() || row["host"] == "remote", "{row}");
+        }
+    }
+
+    /// A remote project with Mobile on: its primary host, worker `w1`, and its
+    /// tabs as the window saved them — `persist_sessions` as given.
+    fn host_tab_state(persist: Option<bool>, vm: bool) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let mut remote = serde_json::json!({ "user": "alice", "host": "primary.example", "remote_path": "/srv/p" });
+        if let Some(persist) = persist {
+            remote["persist_sessions"] = persist.into();
+        }
+        let mut record = serde_json::json!({
+            "id": "p-host", "name": "Host project", "status": "active",
+            "directory": state.join("dirs").join("p-host").to_string_lossy(),
+            crate::brand::MOBILE_ACCESS_KEY: true,
+            "remote": remote,
+            "compute_hosts": [{ "id": "w1", "user": "alice", "host": "w1.example", "remote_path": "/srv/w" }],
+        });
+        if vm {
+            record["vm"] = serde_json::json!({ "enabled": true });
+        }
+        fs::write(state.join("projects.json"), serde_json::to_vec(&[record]).unwrap()).unwrap();
+        let name = |kind: &str, n: u32| format!("{}-p-host--{kind}-{n}23456789", crate::app_slug!());
+        let cwd = state.join("dirs").join("p-host");
+        let agent = |label: &str, n: u32, extra: serde_json::Value| {
+            let mut tab = tab_json(label, "agent", &cwd, &name("agent", n), serde_json::json!({ "signIn": false, "sessionId": format!("sess-{n}") }));
+            tab.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            tab
+        };
+        write_session(
+            state,
+            "p-host",
+            vec![
+                agent("on primary", 1, serde_json::json!({ "location": "remote" })),
+                agent("on the worker", 2, serde_json::json!({ "location": "host:w1" })),
+                agent("on a gone worker", 3, serde_json::json!({ "location": "host:w9" })),
+                agent("local, no mirror", 4, serde_json::json!({})),
+                agent("sign-in", 5, serde_json::json!({ "location": "remote", "signIn": true })),
+                agent("cloud", 6, serde_json::json!({ "location": "remote", "cloud": true })),
+                agent("ephemeral", 7, serde_json::json!({ "location": "remote", "ephemeral": true })),
+                agent("attached", 8, serde_json::json!({ "location": "remote", "tmuxAttach": "foreign" })),
+                agent("no session id", 9, serde_json::json!({ "location": "remote", "sessionId": null })),
+                tab_json("host shell", "shell", &cwd, &name("shell", 10), serde_json::json!({})),
+                tab_json("foreign name", "shell", &cwd, "someone-elses-session", serde_json::json!({})),
+            ],
+        );
+        (dir, name("agent", 1))
+    }
+
+    fn load_hosts(state: &Path, hosts: &HostLive, host_tabs: bool) -> ResolvedProject {
+        let env = RootEnv { dir: state.join("root"), fenced: || true };
+        let mut listed = Catalog::load_with(state, &[7; 32], &env, &HashMap::new(), hosts, host_tabs).expect("catalog").projects;
+        assert_eq!(listed.len(), 1);
+        listed.remove(0)
+    }
+
+    fn spec_of(host: &str) -> RemoteSpec {
+        serde_json::from_value(serde_json::json!({ "user": "alice", "host": host, "remote_path": "/x" })).unwrap()
+    }
+
+    /// Plan step 2: a remote project's host tabs are listed off the session
+    /// file with no mirror on disk — a resumable agent on the primary or on a
+    /// worker the record names, and a shell behind `shell_tabs` — and nothing
+    /// else (a gone worker, sign-in, cloud, ephemeral, attached, unresumable,
+    /// foreign-named). They are available only by the host snapshot, carry
+    /// no cwd, and cross as `on_host` with nothing raw.
+    #[test]
+    fn remote_host_tabs_are_listed_by_the_record_and_reached_through_the_snapshot() {
+        let (dir, primary_session) = host_tab_state(None, false);
+        let state = dir.path();
+        let labels = |p: &ResolvedProject| p.tabs.iter().map(|t| t.public.label.clone()).collect::<Vec<_>>();
+
+        let project = load_hosts(state, &HostLive::default(), true);
+        assert!(!project.folder, "no mirror on disk");
+        assert_eq!(labels(&project), ["on primary", "on the worker"]);
+        for tab in &project.tabs {
+            assert!(tab.public.on_host && tab.place.on_host() && tab.cwd.is_empty(), "{}", tab.public.label);
+            assert!(!tab.public.available, "no master known: {}", tab.public.label);
+            assert!(tab.place.host_ssh().is_none());
+        }
+        assert_eq!(project.public.live_sessions, 0);
+
+        allow_shells(state);
+        assert_eq!(labels(&load_hosts(state, &HostLive::default(), true)), ["on primary", "on the worker", "host shell"]);
+
+        // The primary's master is up with no session list (no window, or an
+        // HPC host); w1's tmux answered without the tab's session.
+        let mut hosts = HostLive::default();
+        let socket = std::env::temp_dir().join("cm-primary");
+        hosts.insert(&spec_of("primary.example"), HostReach { control_path: socket.clone(), sessions: None });
+        let listed: std::collections::HashSet<String> = [primary_session.clone()].into();
+        hosts.insert(&spec_of("w1.example"), HostReach { control_path: std::env::temp_dir().join("cm-w1"), sessions: Some(listed) });
+        let project = load_hosts(state, &hosts, true);
+        let by_label = |label: &str| project.tabs.iter().find(|t| t.public.label == label).unwrap_or_else(|| panic!("{label}"));
+        assert!(by_label("on primary").public.available);
+        assert!(by_label("host shell").public.available, "a location-less shell is on the primary");
+        assert!(!by_label("on the worker").public.available, "w1's tmux does not hold it");
+        let ssh = by_label("on primary").place.host_ssh().expect("rides the primary's master");
+        assert_eq!((ssh.spec.host.as_str(), ssh.control_path.clone()), ("primary.example", socket));
+        assert!(by_label("on the worker").place.host_ssh().is_some(), "w1's master is up; its session is not");
+        assert_eq!(project.public.live_sessions, 2);
+
+        let wire = serde_json::to_string(&project.tabs.iter().map(|t| &t.public).collect::<Vec<_>>()).unwrap();
+        assert!(wire.contains(r#""on_host":true"#), "{wire}");
+        for raw in ["primary.example", "w1.example", "w1", "/srv/", "cm-", &primary_session, "sess-1", "alice"] {
+            assert!(!wire.contains(raw), "{raw} crossed: {wire}");
+        }
+    }
+
+    /// No host session exists for a minted name while the project does not
+    /// persist sessions; a VM project keeps its rule (pinned to the VM, out of
+    /// scope here); a Windows build lists no host tab.
+    #[test]
+    fn host_tabs_need_persisted_sessions_a_non_vm_project_and_tmux_terminals() {
+        let (dir, _) = host_tab_state(Some(false), false);
+        assert!(load_hosts(dir.path(), &HostLive::default(), true).tabs.is_empty());
+        let (dir, _) = host_tab_state(Some(true), false);
+        assert_eq!(load_hosts(dir.path(), &HostLive::default(), true).tabs.len(), 2);
+        let (dir, _) = host_tab_state(None, true);
+        assert!(load_hosts(dir.path(), &HostLive::default(), true).tabs.is_empty(), "a VM project lists no host tab");
+        assert!(!host_tabs_on(terminals_support_on(true)), "Windows");
+        assert!(host_tabs_on(terminals_support_on(false)));
+        let (dir, _) = host_tab_state(None, false);
+        assert!(load_hosts(dir.path(), &HostLive::default(), host_tabs_on(terminals_support_on(true))).tabs.is_empty());
+    }
+
+    /// The refresher probes exactly the hosts the catalog would list a tab
+    /// on, each once; a project without listable host tabs adds none.
+    #[test]
+    fn the_probe_targets_are_the_hosts_of_listable_host_tabs() {
+        let (dir, _) = host_tab_state(None, false);
+        let hosts = |state: &Path| {
+            let mut names: Vec<String> = host_probe_targets(state).into_iter().map(|spec| spec.host).collect();
+            names.sort();
+            names
+        };
+        if !host_tabs_here() {
+            assert!(hosts(dir.path()).is_empty());
+            return;
+        }
+        assert_eq!(hosts(dir.path()), ["primary.example", "w1.example"], "the gone worker w9 is not probed");
+        let (dir, _) = host_tab_state(Some(false), false);
+        assert!(hosts(dir.path()).is_empty());
+        let (dir, _) = host_tab_state(None, true);
+        assert!(hosts(dir.path()).is_empty());
+    }
+
     /// The `mirror` key is read leniently: a string is the folder, anything
     /// else is none, and a record with an odd one still parses.
     #[test]
@@ -3221,7 +3644,7 @@ mod tests {
         let state = dir.path();
         let (live, _) = live_tab_fixture(state);
         let kinds = |state: &Path| {
-            Catalog::load_with(state, &[7; 32], &RootEnv { dir: state.join("root"), fenced: || true }, &live)
+            Catalog::load_with(state, &[7; 32], &RootEnv { dir: state.join("root"), fenced: || true }, &live, &HostLive::default(), true)
                 .expect("catalog")
                 .projects
                 .iter()

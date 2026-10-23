@@ -2100,6 +2100,16 @@ pub enum TerminalEvent {
     Pong,
     Window { cols: u16, rows: u16 },
     Replay,
+    /// Why the bridge is closing, and whether the phone should come back
+    /// (`pty_bridge::closing_retries`). Retried: `idle_timeout`,
+    /// `session_expired`, `catalog_unavailable`. Final: `replaced` (another
+    /// viewer took over), `access_revoked` (the catalog no longer grants the
+    /// tab), `host_offline` (a remote-host tab whose host the desktop no
+    /// longer holds an ssh master for — also the upgrade's `409`, beside the
+    /// routes' `409 tab_on_host` for what would act on this machine;
+    /// `docs/mobile_remote_host_tabs_plan.md`), and the frame refusals
+    /// (`input_frame_too_large`, `invalid_terminal_control`,
+    /// `invalid_terminal_size`, `resize_failed`).
     Closing { reason: String, retry: bool },
     Ack { seq: u64 },
     /// `visibility`: this bridge accepts `TerminalControl::Visibility`.
@@ -2997,6 +3007,10 @@ mod tests {
             },
             TerminalEvent::Closing {
                 reason: "replaced".into(),
+                retry: false,
+            },
+            TerminalEvent::Closing {
+                reason: "host_offline".into(),
                 retry: false,
             },
             TerminalEvent::Features { visibility: true },

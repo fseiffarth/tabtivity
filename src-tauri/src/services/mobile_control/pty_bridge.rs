@@ -22,6 +22,7 @@ use super::protocol::{
 use super::{
     auth::AuthStore,
     discovery::{Catalog, CatalogCache},
+    host_live::{HostSsh, PROBE_TIMEOUT},
 };
 
 /// One tab's viewer, as the registry knows it.
@@ -127,6 +128,90 @@ impl TerminalRegistry {
     }
 }
 
+/// What a phone's terminal attaches to (`docs/mobile_remote_host_tabs_plan.md`).
+/// The viewer registry is keyed by the session name either way.
+#[derive(Debug, Clone)]
+pub enum AttachTarget {
+    /// A tmux session on this machine.
+    Local { name: String },
+    /// A tmux session on a remote project's host, reached through the
+    /// desktop's ssh master for it and nothing else (`HostSsh`, raw).
+    Host { name: String, ssh: HostSsh },
+}
+
+/// The two one-shots the bridge runs beside the attach.
+#[derive(Debug, Clone, Copy)]
+enum Probe {
+    Capture,
+    WindowSize,
+}
+
+impl AttachTarget {
+    fn name(&self) -> &str {
+        match self {
+            Self::Local { name } | Self::Host { name, .. } => name,
+        }
+    }
+
+    /// The attach client the PTY runs.
+    fn attach_command(&self) -> Result<CommandBuilder, String> {
+        match self {
+            Self::Local { name } => Ok(tmux_attach_command(name)),
+            Self::Host { name, ssh } => host_attach_command(name, ssh),
+        }
+    }
+
+    /// A one-shot's command. A host's runs under a deadline (`run`).
+    fn probe_command(&self, probe: Probe) -> Result<Command, String> {
+        match (self, probe) {
+            (Self::Local { name }, Probe::Capture) => Ok(tmux_capture_command(name)),
+            (Self::Local { name }, Probe::WindowSize) => Ok(tmux_window_size_command(name)),
+            (Self::Host { name, ssh }, probe) => {
+                let script = match probe {
+                    Probe::Capture => crate::services::ssh_exec::host_tmux_capture_command(name, MOBILE_SCROLLBACK_LINES),
+                    Probe::WindowSize => crate::services::ssh_exec::host_tmux_window_size_command(name),
+                }
+                .ok_or("invalid tmux session name")?;
+                let args = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script)?;
+                let mut command = crate::paths::command_no_window("ssh");
+                command.args(args);
+                Ok(command)
+            }
+        }
+    }
+
+    /// Run a one-shot. A host's has a deadline: a hung host must not pin a
+    /// blocking thread (the local tmux answers in milliseconds, as it always
+    /// has).
+    fn run(&self, probe: Probe) -> Option<std::process::Output> {
+        let mut command = self.probe_command(probe).ok()?;
+        match self {
+            Self::Local { .. } => command.output().ok(),
+            Self::Host { .. } => crate::paths::output_within(command, PROBE_TIMEOUT).ok(),
+        }
+    }
+}
+
+/// The attach for a host tab: `ssh -tt` through the master's literal socket
+/// (`ssh_exec::host_mux_args`, which can only ride it, never dial), running
+/// `exec tmux -u attach-session` in the remote's non-login shell. `TERM` is
+/// set on the ssh process, which the mux client forwards to the remote PTY:
+/// the same `vt100` as the local attach, for the same reason.
+fn host_attach_command(name: &str, ssh: &HostSsh) -> Result<CommandBuilder, String> {
+    let script = crate::services::ssh_exec::host_tmux_attach_command(name).ok_or("invalid tmux session name")?;
+    let args = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, true, &script)?;
+    // Absolute, like the local tmux (see `tmux_attach_command`).
+    let program = crate::paths::resolve_executable("ssh").unwrap_or_else(|| std::path::PathBuf::from("ssh"));
+    let mut command = CommandBuilder::new(program);
+    if let Some(path) = crate::paths::effective_path() {
+        command.env("PATH", path);
+    }
+    command.args(args);
+    command.env("TERM", "vt100");
+    command.env("COLORTERM", "truecolor");
+    Ok(command)
+}
+
 fn tmux_attach_command(tmux_name: &str) -> CommandBuilder {
     // The sidecar is a headless service with a bare inherited PATH, so tmux is
     // resolved on Tabtivity's effective PATH (Homebrew's on a Mac, `~/.local/bin`)
@@ -220,8 +305,8 @@ fn parse_window_size(raw: &str) -> Option<(u16, u16)> {
 /// phone's instead the moment it typed). The phone adopts the window geometry: its
 /// xterm is an offscreen emulator whose column count never had to match the
 /// physical screen, and the reading view re-wraps for display.
-fn window_size(tmux_name: &str) -> Option<(u16, u16)> {
-    let output = tmux_window_size_command(tmux_name).output().ok()?;
+fn window_size(target: &AttachTarget) -> Option<(u16, u16)> {
+    let output = target.run(Probe::WindowSize)?;
     if !output.status.success() {
         return None;
     }
@@ -232,8 +317,8 @@ fn window_size(tmux_name: &str) -> Option<(u16, u16)> {
 /// at any time, which would silently reintroduce the pan.
 const WINDOW_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn captured_scrollback(tmux_name: &str) -> Vec<u8> {
-    let Ok(output) = tmux_capture_command(tmux_name).output() else {
+fn captured_scrollback(target: &AttachTarget) -> Vec<u8> {
+    let Some(output) = target.run(Probe::Capture) else {
         return Vec::new();
     };
     if !output.status.success() || output.stdout.is_empty() {
@@ -414,7 +499,9 @@ fn input_report_due(last: Option<std::time::Instant>, now: std::time::Instant) -
 /// whether the tab is still granted — nothing was revoked, so the phone
 /// reconnects and the upgrade route decides; `access_revoked` is the catalog
 /// answering no (the project's phone access switched off, the tab or its
-/// session gone), and stays final.
+/// session gone), and stays final, as does `host_offline` (a host tab whose
+/// host the desktop no longer holds a master for: coming back needs the
+/// desktop, not a retry).
 fn closing_retries(reason: &str) -> bool {
     matches!(reason, "idle_timeout" | "session_expired" | "catalog_unavailable")
 }
@@ -474,7 +561,7 @@ impl Drop for PtySession {
 
 pub async fn attach(
     socket: WebSocket,
-    tmux_name: String,
+    target: AttachTarget,
     registry: TerminalRegistry,
     auth: Arc<Mutex<AuthStore>>,
     token: String,
@@ -492,14 +579,15 @@ pub async fn attach(
     // detach unless the page was hidden by then (see `host::terminal`).
     on_seen: impl Fn(),
 ) -> Result<(), String> {
+    let tmux_name = target.name().to_string();
     let guard = registry.acquire(&tmux_name).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
     // lines in xterm's normal scrollback buffer above the live screen. The
     // geometry probe rides along in the same blocking hop.
-    let probe_name = tmux_name.clone();
+    let probe_target = target.clone();
     let (history, initial_window) =
-        tokio::task::spawn_blocking(move || (captured_scrollback(&probe_name), window_size(&probe_name)))
+        tokio::task::spawn_blocking(move || (captured_scrollback(&probe_target), window_size(&probe_target)))
             .await
             .unwrap_or_default();
     // Open at the real window size so the very first redraw is already correctly
@@ -513,7 +601,7 @@ pub async fn attach(
             pixel_height: 0,
         })
         .map_err(|e| e.to_string())?;
-    let command = tmux_attach_command(&tmux_name);
+    let command = target.attach_command()?;
     let child = pair
         .slave
         .spawn_command(command)
@@ -545,14 +633,14 @@ pub async fn attach(
     // panning the phone again. Poll it off the main loop so the fork never
     // stalls output delivery.
     let (window_tx, mut window_rx) = mpsc::channel::<(u16, u16)>(1);
-    let window_name = tmux_name.clone();
+    let window_target = target.clone();
     let window_task = tokio::spawn(async move {
         let mut last = initial_window;
         let mut tick = tokio::time::interval(WINDOW_POLL);
         tick.tick().await;
         loop {
             tick.tick().await;
-            let probe = window_name.clone();
+            let probe = window_target.clone();
             let Ok(size) = tokio::task::spawn_blocking(move || window_size(&probe)).await else {
                 break;
             };
@@ -759,12 +847,19 @@ pub async fn attach(
 /// (`closing_retries`). A tmux that merely could not be asked never gets this
 /// far — the cache carries its last answer forward — so a tab the catalog no
 /// longer lists for this phone (its switch off, or a per-phone list narrowed
-/// past it) is the catalog saying no.
+/// past it) is the catalog saying no. A host tab it still lists, on the same
+/// session, that has gone unavailable is its host gone from reach — the
+/// desktop's master ended — and closes as `host_offline`.
 fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
-    match loaded.map(|catalog| catalog.for_device(device).grants(tab_id, tmux_name)) {
-        Some(true) => Ok(()),
-        Some(false) => Err("access_revoked"),
-        None => Err("catalog_unavailable"),
+    let Some(catalog) = loaded.map(|catalog| catalog.for_device(device)) else {
+        return Err("catalog_unavailable");
+    };
+    if catalog.grants(tab_id, tmux_name) {
+        return Ok(());
+    }
+    match catalog.tab(tab_id) {
+        Some((_, tab)) if tab.place.on_host() && tab.tmux_name == tmux_name => Err("host_offline"),
+        _ => Err("access_revoked"),
     }
 }
 
@@ -797,6 +892,75 @@ mod tests {
         assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", "t", "tmux-t"), Err("access_revoked"));
         assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", "t", "tmux-t"), Err("access_revoked"));
         assert_eq!(super::recheck(None, "d1", "t", "tmux-t"), Err("catalog_unavailable"));
+    }
+
+    /// A host tab's three commands ride the master's literal socket through
+    /// `host_mux_args`: `ssh -tt` for the attach with `TERM=vt100` on the
+    /// ssh process, `ssh -T` for the capture and the window size, the tmux
+    /// script last after `--`. A local tab's stay tmux here.
+    #[test]
+    fn a_host_target_runs_its_commands_through_the_masters_socket() {
+        use super::{AttachTarget, Probe};
+        use crate::services::mobile_control::host_live::HostSsh;
+        let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
+        let socket = std::env::temp_dir().join("cm-host");
+        let target = AttachTarget::Host {
+            name: name.into(),
+            ssh: HostSsh {
+                spec: Box::new(serde_json::from_value(serde_json::json!({ "user": "alice", "host": "h.example", "port": 2200, "remote_path": "/srv/p" })).unwrap()),
+                control_path: socket.clone(),
+            },
+        };
+        let literal = format!("ControlPath={}", socket.to_string_lossy());
+        let attach = target.attach_command().expect("attach");
+        assert_eq!(attach.get_env("TERM"), Some(OsStr::new("vt100")));
+        let argv: Vec<String> = attach.get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(std::path::Path::new(&argv[0]).file_stem().is_some_and(|stem| stem == "ssh"), "{argv:?}");
+        assert_eq!(argv[1], "-tt");
+        assert!(argv.contains(&literal) && argv.contains(&"ProxyCommand=false".to_string()), "{argv:?}");
+        assert_eq!(&argv[argv.len() - 2..], ["--".to_string(), format!("exec tmux -u attach-session -t '{name}'")]);
+        for (probe, script) in [
+            (Probe::Capture, format!("tmux -u capture-pane -p -e -J -S -{MOBILE_SCROLLBACK_LINES} -E -1 -t '{name}'")),
+            (Probe::WindowSize, format!("tmux -u display-message -p -t '{name}' '#{{window_width}}x#{{window_height}}'")),
+        ] {
+            let command = target.probe_command(probe).expect("one-shot");
+            let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert_eq!(args[0], "-T");
+            assert!(args.contains(&literal));
+            assert_eq!(args.last(), Some(&script));
+        }
+        // A name the catalog would never hand over is refused, not quoted.
+        let AttachTarget::Host { ssh, .. } = target else { unreachable!() };
+        let hostile = AttachTarget::Host { name: "x'; id; '".into(), ssh };
+        assert!(hostile.attach_command().is_err());
+        assert!(hostile.probe_command(Probe::Capture).is_err());
+
+        let local = AttachTarget::Local { name: name.into() };
+        let argv = local.attach_command().expect("attach").get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(std::path::Path::new(&argv[0]).file_stem().is_some_and(|stem| stem == "tmux"), "{argv:?}");
+    }
+
+    /// A host tab still listed on the same session but gone unavailable — its
+    /// master ended — closes as `host_offline`, final like a revocation.
+    #[test]
+    fn a_host_tab_whose_master_went_away_closes_as_host_offline() {
+        use crate::services::mobile_control::discovery::{fixture_scope, Catalog, TabPlace};
+        let host = |available: bool| {
+            let mut scope = fixture_scope("t", "tmux-t", None);
+            scope.tabs[0].public.available = available;
+            scope.tabs[0].place = TabPlace::Host {
+                spec: Box::new(serde_json::from_value(serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" })).unwrap()),
+                control_path: None,
+            };
+            Catalog { projects: vec![scope] }
+        };
+        assert_eq!(super::recheck(Some(host(true)), "d1", "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-t"), Err("host_offline"));
+        assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-other"), Err("access_revoked"));
+        assert!(!closing_retries("host_offline"));
+        let mut local = fixture_scope("t", "tmux-t", None);
+        local.tabs[0].public.available = false;
+        assert_eq!(super::recheck(Some(Catalog { projects: vec![local] }), "d1", "t", "tmux-t"), Err("access_revoked"));
     }
 
     #[test]
