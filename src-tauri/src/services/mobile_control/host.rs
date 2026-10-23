@@ -9166,7 +9166,12 @@ mod tests {
 
     /// A host with one opted-in remote project (no mirror on disk) whose one
     /// agent tab runs on the project's host, that host's master found by the
-    /// last liveness round (`reachable`), and no window.
+    /// last liveness round (`reachable`), and no window. Unix only, like the
+    /// tests on it: a Windows build lists no host tab at all
+    /// (`discovery::host_tabs_here`; pinned on every OS by
+    /// `host_tabs_need_persisted_sessions_a_non_vm_project_and_tmux_terminals`),
+    /// so there the fixture's tab is simply not in the catalog.
+    #[cfg(unix)]
     fn host_tab_fixture(reachable: bool) -> Fixture {
         let mut host = Fixture::bare();
         let state_dir = host.state.config.state_dir.clone();
@@ -9217,6 +9222,7 @@ mod tests {
     /// its callback, activate-with-tab, and with no window the owner's
     /// schedule, held-prompt, send-now and undo-clear writes. Its transcript
     /// is `unsupported`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_host_tab_is_listed_on_host_and_refuses_what_would_act_here() {
         let host = host_tab_fixture(true);
@@ -9267,6 +9273,7 @@ mod tests {
     /// record through the owner's local runner — whose `tmux kill-session`
     /// finds no such session here, which counts as already gone — and never
     /// reaches the host: its session keeps running, as after a desktop close.
+    #[cfg(unix)]
     #[tokio::test]
     async fn closing_a_host_tab_with_no_window_drops_the_record_and_leaves_the_host_alone() {
         let host = host_tab_fixture(true);
@@ -9287,6 +9294,7 @@ mod tests {
     /// one found but gone at the foreground re-check → the same; the session
     /// missing on a live master → `410 session_gone`; otherwise a `Host`
     /// attach on the master's socket. A local tab is unchanged.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_host_tabs_terminal_rides_a_live_master_or_says_host_offline() {
         let host = host_tab_fixture(true);
