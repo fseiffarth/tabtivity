@@ -106,6 +106,96 @@ const TRUST_FOLDER = [
   "",
 ];
 
+/** First-run screens captured off the real CLIs in a fresh home (tmux, 120×40):
+ * Claude Code 2.1.309, Codex 0.164.0, Antigravity CLI 1.4.5. */
+const CLAUDE_THEME = [
+  "Welcome to Claude Code v2.1.309",
+  "..........................................................",
+  "",
+  "     *                                       █████▓▓░",
+  "                                 *         ███▓░     ░░",
+  "            ░░░░░░                        ███▓░",
+  "    ░░░   ░░░░░░░░░░                      ███▓░",
+  "   ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓",
+  "                                             ░▓▓███▓▓░",
+  " *                                 ░░░░",
+  "                                 ░░░░░░░░",
+  "                               ░░░░░░░░░░░░░░░░",
+  "       █████████                                        *",
+  "      ██▄█████▄██                        *",
+  "       █████████      *",
+  ".......█ █   █ █..........................................",
+  "",
+  " Let's get started.",
+  "",
+  " Choose the text style that looks best with your terminal",
+  " To change this later, run /theme",
+  "",
+  "     Auto (match terminal)",
+  " ❯ ✔ Dark mode",
+  "     Light mode",
+  "     Dark mode (colorblind-friendly)",
+  "     Light mode (colorblind-friendly)",
+  "     Dark mode (ANSI colors only)",
+  "     Light mode (ANSI colors only)",
+  "",
+  " ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  "  1  function greet() {",
+  "  2 -  console.log(\"Hello, World!\");",
+  "  2 +  console.log(\"Hello, Claude!\");",
+  "  3  }",
+  " ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+  "  Syntax theme: Monokai Extended (ctrl+t to disable)",
+];
+const CODEX_SIGN_IN = [
+  "  Welcome to Codex, OpenAI's command-line coding agent",
+  "",
+  "  Choose how you want to use Codex.",
+  "",
+  "> 1. Sign in with ChatGPT",
+  "     Usage included with Plus, Pro, Business, and Enterprise plans",
+  "",
+  "  2. Sign in with Device Code",
+  "     Sign in from another device with a one-time code",
+  "",
+  "  3. Use an OpenAI API key",
+  "     Pay for what you use",
+  "",
+  "  4. Use Amazon Bedrock",
+  "     Connect using your AWS credentials",
+  "",
+  "  Press enter to continue",
+];
+const CODEX_KEY_PAGE = [
+  "  Welcome to Codex, OpenAI's command-line coding agent",
+  "",
+  "> Use your own OpenAI API key for usage-based billing",
+  "",
+  "  Paste or type your API key below.",
+  "",
+  "╭API key───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮",
+  "│Paste or type your API key                                                                                            │",
+  "╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯",
+  "  Press enter to save",
+  "  Press esc to go back",
+];
+const AGY_SIGN_IN = [
+  "",
+  "     ▄▀▀▄",
+  "    ▀▀▀▀▀▀",
+  "   ▀▀▀▀▀▀▀▀",
+  "  ▄▀▀    ▀▀▄",
+  " ▄▀▀      ▀▀▄",
+  "",
+  " Welcome to the Antigravity CLI. You are currently not signed in.",
+  "",
+  " Select login method:",
+  " > 1. Google OAuth",
+  "   2. Use a Google Cloud project",
+  "",
+  "   ↑/↓ Navigate · enter Select",
+];
+
 describe("the desktop Reader's live screen", () => {
   it("reads a question beside the fullscreen diff panel without the panel", () => {
     const live = readReaderLive(plainBuffer(DIFF_PANEL_QUESTION), "Claude", 130);
@@ -444,10 +534,10 @@ describe("the desktop Reader's live screen", () => {
       "  Choose the text style that looks best with your terminal",
       "  To change this later, run /theme",
       "",
-      "    Auto (match terminal)",
+      "      Auto (match terminal)",
       "  ❯ ✓ Dark mode",
-      "    Light mode",
-      "    Dark mode (ANSI colors only)",
+      "      Light mode",
+      "      Dark mode (ANSI colors only)",
       "",
       "─".repeat(60),
       "     function greet",
@@ -464,7 +554,7 @@ describe("the desktop Reader's live screen", () => {
     expect(live.stray).toBe(false);
     expect(answerKeys(live.question!, live.question!.options[2])).toEqual(["\u001b[B", "\r"]);
     // Highlighted on its first row, close to the bottom of the screen.
-    const first = picker.map((row) => (row === "  ❯ ✓ Dark mode" ? "    ✓ Dark mode" : row === "    Auto (match terminal)" ? "  ❯ Auto (match terminal)" : row));
+    const first = picker.map((row) => (row === "  ❯ ✓ Dark mode" ? "    ✓ Dark mode" : row === "      Auto (match terminal)" ? "  ❯   Auto (match terminal)" : row));
     const firstLive = readReaderLive(plainBuffer([...first.slice(0, 12), "   Syntax theme: Monokai Extended (ctrl+t to disable)"]), "Claude", 80);
     expect(firstLive.question?.current).toBe(0);
     expect(firstLive.question?.options[1].label).toBe("Dark mode");
@@ -485,6 +575,29 @@ describe("the desktop Reader's live screen", () => {
     expect(live.stray).toBe(true);
     expect(live.screen).toEqual(["⏺ Done.", "", "Error: connection lost", "user@host:~/project$"]);
     expect(readReaderLive(plainBuffer(PERMISSION), "Claude").screen).toEqual([]);
+  });
+
+  it("reads the CLIs' real first-run screens as their own questions", () => {
+    const theme = readReaderLive(plainBuffer(CLAUDE_THEME), "Claude", 120);
+    expect(theme.question?.options).toHaveLength(7);
+    expect(theme.question?.options[1].label).toBe("Dark mode");
+    expect(theme.question?.current).toBe(1);
+    // The logo's block characters are no rule the question starts under.
+    expect(theme.ask.join(" ")).toMatch(/^Choose the text style/);
+    const codex = readReaderLive(plainBuffer(CODEX_SIGN_IN), "Codex", 120);
+    expect(codex.question?.options.map((option) => option.label)).toEqual([
+      "Sign in with ChatGPT", "Sign in with Device Code", "Use an OpenAI API key", "Use Amazon Bedrock",
+    ]);
+    expect(codex.question?.options[2].description).toBe("Pay for what you use");
+    expect(codex.ask).toEqual(["Choose how you want to use Codex."]);
+    expect(answerKeys(codex.question!, codex.question!.options[2])).toEqual(["\u001b[B", "\u001b[B", "\r"]);
+    const agy = readReaderLive(plainBuffer(AGY_SIGN_IN), "Antigravity", 120);
+    expect(agy.question?.options.map((option) => option.label)).toEqual(["Google OAuth", "Use a Google Cloud project"]);
+    // A page that takes typed words is shown, never taken for the input box.
+    const key = readReaderLive(plainBuffer(CODEX_KEY_PAGE), "Codex", 120);
+    expect(key.question).toBeNull();
+    expect(key.stray).toBe(true);
+    expect(key.screen.join("\n")).toContain("Paste or type your API key below.");
   });
 
   it("tells a redraw of the same state from a change", () => {

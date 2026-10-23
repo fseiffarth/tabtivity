@@ -82,7 +82,12 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
   });
 
   it("refuses rows that are not one contiguous run", () => {
-    expect(readSelectPrompt(lines("❯ 1. Opus", "", "  2. Sonnet"))).toBeNull();
+    // One blank row between rows numbered on at one column is Codex's
+    // sign-in menu; two, or a row at another column, end the run.
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "  2. Sonnet"))?.options.map((option) => option.label)).toEqual(["Opus", "Sonnet"]);
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "", "  2. Sonnet"))).toBeNull();
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "      2. Sonnet"))).toBeNull();
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "  3. Sonnet"))).toBeNull();
     expect(readSelectPrompt(lines("❯ 1. Opus", "some output", "  2. Sonnet"))).toBeNull();
     expect(readSelectPrompt(lines("❯ 1. Opus"))).toBeNull();
   });

@@ -10,6 +10,7 @@ import {
   readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
+  pressHintShown,
   readStrayDialog,
   selectKeys,
   selectSignature,
@@ -92,7 +93,9 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
-  const frameStart = inputFrameStart(lines, agentLabel);
+  // A page that names its own keys (`Press enter to save`) holds no input box,
+  // whatever line of it reads as one.
+  const frameStart = pressHintShown(lines) ? lines.length : inputFrameStart(lines, agentLabel);
   const screen = lines.slice(0, frameStart);
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });

@@ -99,6 +99,7 @@ import {
   readReviewStep,
   readSelectPrompt,
   readStrayDialog,
+  pressHintShown,
   dialogFooterShown,
   revealSelectRow,
   sameSelectStep,
@@ -3954,7 +3955,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       ? readCodexHooksPage(liveTail, agentLabel) ?? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel)
         // No input box and no busy row: a first run's own screen (Claude
         // Code's theme picker, a `Press Enter to continue`).
-        ?? (inputFrameStart(liveScreen, agentLabel) >= liveScreen.length && !agentWork(liveScreen)
+        ?? ((pressHintShown(liveScreen) || inputFrameStart(liveScreen, agentLabel) >= liveScreen.length) && !agentWork(liveScreen)
           ? readStrayDialog(liveTail, paneColumns.current)
           : null)
       : null),
