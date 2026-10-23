@@ -1030,12 +1030,13 @@ const API_KEY_PROVIDERS: Record<string, string> = {
 type Credential = "login" | "key" | "admin";
 
 /** The CLIs that can take a stored key through the API proxy (the backend's
- *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
+ *  `CLI_ROUTES`: only CLIs the spawn alone can point at the proxy), each
  *  with its own pill — literal ids, which is what `scripts/untested.mjs` reads. */
 const API_KEY_CLIS: { cli: string; untested: UntestedId }[] = [
   { cli: "claude", untested: "settings.agentApiKeys.claude" },
   { cli: "gemini", untested: "settings.agentApiKeys.gemini" },
   { cli: "codex", untested: "settings.agentApiKeys.codex" },
+  { cli: "opencode", untested: "settings.agentApiKeys.opencode" },
 ];
 
 /** Provider API keys for the agent CLIs: one key per provider, kept in the OS

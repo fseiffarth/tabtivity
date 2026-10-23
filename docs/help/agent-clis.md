@@ -94,9 +94,9 @@ Sign in again in the Host session, or copy your settings back from that file.
 Copilot's case is described under the sandbox below.
 
 **API keys instead of a subscription.** If you pay per token, Settings → Agent
-sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini) in
-your system keyring (on a hosted server: your sealed server store), and a
-**runs on** choice per CLI (Claude, Gemini) — **its own login**, **my API key**
+sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini,
+OpenAI) in your system keyring (on a hosted server: your sealed server store), and a
+**runs on** choice per CLI (Claude, Gemini, Codex, OpenCode) — **its own login**, **my API key**
 or, on a server whose administrator offers you one, **the administrator's API
 key** — decides what that CLI's new local tabs use, one at a time. Every CLI
 starts on its own login — a key moves that CLI's billing off your
@@ -115,7 +115,7 @@ that outlives a Tabtivity crash in tmux loses its token — restart the CLI in i
 
 **Login and API key side by side.** Once a key with its monthly limit is
 saved, the tab bar's **+** menu gets an **API key** section with
-"Claude (API)" (and Gemini or Codex when their key is saved): that row opens a
+"Claude (API)" (and Gemini, Codex or OpenCode when their key is saved): that row opens a
 tab on the key, while the plain **Claude** row in Agents always opens one on
 Claude's own login (your subscription) — so a Max-plan tab and an API tab can
 run next to each other. The pick stays with the tab across a restart and a
@@ -131,11 +131,14 @@ is not tied to one workspace has to name one on every request: saving it lists
 its workspaces and uses the only one, or asks you to pick (or to paste the
 `wrkspc_…` ID from the Console's Workspaces page); the row then shows it. A
 tab that reports such a key "is not scoped to a workspace" ran on a key saved
-before that — remove it and save it again. Codex, Mistral Vibe and OpenCode
-are not offered: no environment variable points them at Tabtivity's proxy (use
-`codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
-instead; Codex's and OpenCode's login files are shared like any other, Vibe's
-`.env` is per project).
+before that — remove it and save it again. OpenCode (1.x and 2) on a key uses
+every provider with a saved key — Anthropic, Gemini, OpenAI — through Tabtivity,
+also when `opencode auth login` stored a key or a Claude login of its own; pick
+one of their models in `/models`, while a provider without a saved key stays on
+OpenCode's own login and the local models stay listed. A provider your own
+`OPENCODE_CONFIG_CONTENT` already points somewhere keeps that. Mistral Vibe is
+not offered: nothing points it at Tabtivity's proxy (use Vibe's own `.env`,
+which is per project).
 
 **Monthly limit.** Every key needs a monthly limit in **billed tokens**, typed
 in millions (5 is proposed); Save stays greyed out without one. Input, cache

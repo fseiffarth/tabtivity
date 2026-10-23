@@ -20,13 +20,14 @@
 //!
 //! Rules:
 //!
-//! - **Only proxyable CLIs.** A CLI is in [`CLI_ROUTES`] only if an environment
-//!   variable points it at the proxy (decision 2 of Part C): Claude
-//!   (`ANTHROPIC_BASE_URL`), Gemini (`GOOGLE_GEMINI_BASE_URL`) and Codex
-//!   (launch-only custom provider, `OPENAI_BASE_URL`). Mistral
-//!   Vibe documents no such variable; OpenCode's only one is a whole inline
-//!   config (`OPENCODE_CONFIG_CONTENT`, which Tabtivity already fills with its
-//!   Ollama model list). Neither gets a key.
+//! - **Only proxyable CLIs.** A CLI is in [`CLI_ROUTES`] only if the spawn
+//!   alone can point it at the proxy (decision 2 of Part C): Claude
+//!   (`ANTHROPIC_BASE_URL`), Gemini (`GOOGLE_GEMINI_BASE_URL`), Codex
+//!   (launch-only custom provider, `OPENAI_BASE_URL`) and OpenCode (all three
+//!   providers, in its inline config `OPENCODE_CONFIG_CONTENT` merged over
+//!   the Ollama models Tabtivity puts there, the token read from the
+//!   environment: [`route_opencode`]). Mistral Vibe documents no such
+//!   variable and gets no key.
 //! - **Off per CLI by default.** A key reaching a CLI moves its billing.
 //! - **A value the user set wins** — the CLI's credential or base-URL
 //!   variable, or another name for the same provider's credential, in the
@@ -171,6 +172,17 @@ const CLI_ROUTES: &[(&str, &[Route])] = &[
     (
         "codex",
         &[Route { provider: Provider::OpenAi, token_var: OPENAI_TOKEN_ENV, base_var: OPENAI_BASE_ENV }],
+    ),
+    // The same variables as the CLIs above, so a user's own key or base URL
+    // for a provider still wins; OpenCode reads the base URLs and tokens off
+    // its inline config ([`route_opencode`]), not these names.
+    (
+        "opencode",
+        &[
+            Route { provider: Provider::Anthropic, token_var: ANTHROPIC_TOKEN_ENV, base_var: ANTHROPIC_BASE_ENV },
+            Route { provider: Provider::Gemini, token_var: GEMINI_TOKEN_ENV, base_var: GEMINI_BASE_ENV },
+            Route { provider: Provider::OpenAi, token_var: OPENAI_TOKEN_ENV, base_var: OPENAI_BASE_ENV },
+        ],
     ),
 ];
 
@@ -457,12 +469,118 @@ pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'sta
     let subcommand = keyless_subcommand(&opts.cmd, &opts.args);
     let local_model = is_local_model(opts);
     let injected = inject_env(&opts.cmd, subcommand, local_model, opts.api_key, admin, binding, &mut opts.env);
-    if injected.contains(&OPENAI_BASE_ENV) {
-        // Put global overrides before `resume`/`fork` and their positional id.
-        let mut args = codex_proxy_args(&opts.env[OPENAI_BASE_ENV]);
-        args.append(&mut opts.args);
-        opts.args = args;
+    match cli_of(&opts.cmd) {
+        Some("codex") if injected.contains(&OPENAI_BASE_ENV) => {
+            // Put global overrides before `resume`/`fork` and their positional id.
+            let mut args = codex_proxy_args(&opts.env[OPENAI_BASE_ENV]);
+            args.append(&mut opts.args);
+            opts.args = args;
+        }
+        Some("opencode") if !injected.is_empty() => {
+            let ambient = std::env::var(OPENCODE_INLINE_ENV).ok();
+            route_opencode(&mut opts.env, &injected, ambient.as_deref());
+        }
+        _ => {}
     }
+}
+
+/// OpenCode's inline config, deep-merged over its config files.
+pub const OPENCODE_INLINE_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// OpenCode's id for `provider`, and the path its SDK expects at the end of
+/// the base URL (checked against OpenCode 1.19: `/v1/messages`,
+/// `/v1beta/models/…:streamGenerateContent`, `/v1/responses`).
+fn opencode_provider(provider: Provider) -> (&'static str, &'static str) {
+    match provider {
+        Provider::Anthropic => ("anthropic", "/v1"),
+        Provider::Gemini => ("google", "/v1beta"),
+        Provider::OpenAi => ("openai", "/v1"),
+    }
+}
+
+/// `existing` (an inline config, or none) with each of `keyed` — a provider,
+/// the variable holding its token and the proxy base URL — pointed at the
+/// proxy: `baseURL`, and the key field naming the variable (`{env:<var>}`),
+/// so the token itself never enters the config (which rides a tmux argv).
+/// Over a stored OpenCode login too: the inline config outranks `auth.json`,
+/// key or OAuth (OpenCode 1.19.3 and 2.1.3).
+/// A provider whose block in `existing` already names a base URL or key keeps
+/// it, and every one does when `existing` is not a JSON object. Returns the
+/// config when something was added, and the providers left out. Pure.
+fn opencode_inline_with(existing: Option<&str>, keyed: &[(Provider, &str, String)]) -> (Option<String>, Vec<Provider>) {
+    let all = || keyed.iter().map(|(p, _, _)| *p).collect();
+    let mut config = match existing.map(serde_json::from_str::<serde_json::Value>) {
+        None => serde_json::json!({}),
+        Some(Ok(v)) if v.is_object() => v,
+        Some(_) => return (None, all()),
+    };
+    let Some(providers) = config
+        .as_object_mut()
+        .map(|root| root.entry("provider").or_insert_with(|| serde_json::json!({})))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return (None, all());
+    };
+    let mut left_out = Vec::new();
+    for (provider, token_var, base) in keyed {
+        let (name, path) = opencode_provider(*provider);
+        let options = providers
+            .entry(name)
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .map(|block| block.entry("options").or_insert_with(|| serde_json::json!({})))
+            .and_then(serde_json::Value::as_object_mut);
+        match options {
+            Some(options) if !options.contains_key("baseURL") && !options.contains_key("apiKey") => {
+                options.insert("baseURL".into(), format!("{base}{path}").into());
+                options.insert("apiKey".into(), format!("{{env:{token_var}}}").into());
+            }
+            _ => left_out.push(*provider),
+        }
+    }
+    let added = left_out.len() < keyed.len();
+    (added.then(|| config.to_string()), left_out)
+}
+
+/// OpenCode reads none of its routes' base-URL variables: each route
+/// [`inject_env`] set (`injected`) goes into its inline config instead
+/// ([`opencode_inline_with`]), merged over the one already in `env` —
+/// Tabtivity's Ollama models — or else (`ambient`) the user's own from
+/// Tabtivity's environment. A route that config keeps for itself loses its
+/// token and base URL again, so the CLI stays on what the user set.
+fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], ambient: Option<&str>) {
+    let routes = routes_of("opencode");
+    let keyed: Vec<(Provider, &str, String)> = routes
+        .iter()
+        .filter(|r| injected.contains(&r.base_var))
+        .map(|r| (r.provider, r.token_var, env[r.base_var].clone()))
+        .collect();
+    let existing = env.get(OPENCODE_INLINE_ENV).cloned().or_else(|| ambient.map(str::to_string));
+    let (config, left_out) = opencode_inline_with(existing.as_deref(), &keyed);
+    if let Some(config) = config {
+        env.insert(OPENCODE_INLINE_ENV.to_string(), config);
+    }
+    for route in routes.iter().filter(|r| left_out.contains(&r.provider)) {
+        env.remove(route.base_var);
+        env.remove(route.token_var);
+        env.remove(carrier_of(route.token_var));
+    }
+}
+
+/// Whether `env`'s OpenCode inline config points a provider at the proxy
+/// ([`route_opencode`]): a spawn that cannot carry the token (tmux < 3.2)
+/// must not start that way, or each request would reach the proxy with none.
+pub fn opencode_routed(env: &HashMap<String, String>) -> bool {
+    let Some(config) = env.get(OPENCODE_INLINE_ENV).and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok()) else {
+        return false;
+    };
+    Provider::ALL.into_iter().any(|p| {
+        let (name, path) = opencode_provider(p);
+        config["provider"][name]["options"]["baseURL"]
+            .as_str()
+            .and_then(|url| url.strip_suffix(path))
+            .is_some_and(|base| crate::services::api_proxy::is_proxy_base(base, p))
+    })
 }
 
 pub(crate) fn keyless_subcommand(cmd: &str, args: &[String]) -> bool {
@@ -782,7 +900,7 @@ mod tests {
         assert!(inject_env_with("claude", true, false, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
         assert!(inject_env_with("claude", false, true, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
         assert!(env.is_empty());
-        assert!(proxies("claude") && proxies("gemini") && !proxies("vibe") && proxies("codex"));
+        assert!(proxies("claude") && proxies("gemini") && !proxies("vibe") && proxies("codex") && proxies("opencode"));
     }
 
     #[test]
@@ -837,11 +955,9 @@ mod tests {
         assert_eq!(cli_of("ollama"), None);
         let mut env = HashMap::new();
         assert!(inject("ollama", &["claude", "gemini"], &mut env).is_empty());
-        // Not in the table, switched on or not: no variable points them at
-        // the proxy.
-        for cli in ["vibe", "opencode"] {
-            assert!(inject(cli, &[cli], &mut env).is_empty(), "{cli}");
-        }
+        // Not in the table, switched on or not: nothing points it at the
+        // proxy.
+        assert!(inject("vibe", &["vibe"], &mut env).is_empty());
         assert!(env.is_empty());
     }
 
@@ -980,6 +1096,72 @@ mod tests {
         }
     }
 
+    /// OpenCode gets every keyed provider as an inline-config route over the
+    /// models already there, the token only as an `{env:…}` reference; the
+    /// carriers and base URLs stay for `agent_exec` and the old-tmux check.
+    #[test]
+    fn opencode_routes_every_keyed_provider_through_its_inline_config() {
+        let ollama = r#"{"provider":{"ollama":{"name":"Ollama (local)","options":{"baseURL":"http://127.0.0.1:11434/v1"}}}}"#;
+        let mut env = HashMap::from([(OPENCODE_INLINE_ENV.to_string(), ollama.to_string())]);
+        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
+        assert_eq!(set, [ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV, GEMINI_CARRIER, GEMINI_BASE_ENV, OPENAI_CARRIER, OPENAI_BASE_ENV]);
+        route_opencode(&mut env, &set, None);
+        let text = &env[OPENCODE_INLINE_ENV];
+        assert!(!text.contains(FAKE_TOKEN), "no token in the config: {text}");
+        let config: serde_json::Value = serde_json::from_str(text).unwrap();
+        let p = &config["provider"];
+        assert_eq!(p["ollama"]["options"]["baseURL"], "http://127.0.0.1:11434/v1");
+        assert_eq!(p["anthropic"]["options"]["baseURL"], "http://127.0.0.1:9/anthropic/v1");
+        assert_eq!(p["anthropic"]["options"]["apiKey"], "{env:ANTHROPIC_AUTH_TOKEN}");
+        assert_eq!(p["google"]["options"]["baseURL"], "http://127.0.0.1:9/gemini/v1beta");
+        assert_eq!(p["google"]["options"]["apiKey"], "{env:GEMINI_API_KEY}");
+        assert_eq!(p["openai"]["options"]["baseURL"], "http://127.0.0.1:9/openai/v1");
+        assert_eq!(p["openai"]["options"]["apiKey"], "{env:OPENAI_API_KEY}");
+        assert_eq!(env[ANTHROPIC_CARRIER], format!("{FAKE_TOKEN}-anthropic"));
+        assert!(opencode_routed(&env));
+        // Only the keyed providers: the others stay on OpenCode's own login.
+        let mut env = HashMap::new();
+        let anthropic_only = |p: Provider| (p == Provider::Anthropic).then(|| proxied(p)).flatten();
+        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, anthropic_only);
+        route_opencode(&mut env, &set, None);
+        let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
+        assert_eq!(config["provider"].as_object().unwrap().keys().collect::<Vec<_>>(), ["anthropic"]);
+        assert!(proxies("opencode"));
+    }
+
+    #[test]
+    fn a_provider_the_users_inline_config_points_somewhere_keeps_it() {
+        let mine = r#"{"provider":{"anthropic":{"options":{"baseURL":"https://gateway.example/v1"}}},"model":"anthropic/x"}"#;
+        let mut env = HashMap::new();
+        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
+        route_opencode(&mut env, &set, Some(mine));
+        let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
+        assert_eq!(config["provider"]["anthropic"]["options"]["baseURL"], "https://gateway.example/v1");
+        assert!(config["provider"]["anthropic"]["options"].get("apiKey").is_none());
+        assert_eq!(config["model"], "anthropic/x");
+        assert_eq!(config["provider"]["google"]["options"]["apiKey"], "{env:GEMINI_API_KEY}");
+        assert!(!env.contains_key(ANTHROPIC_CARRIER) && !env.contains_key(ANTHROPIC_BASE_ENV));
+        assert!(env.contains_key(GEMINI_CARRIER) && env.contains_key(OPENAI_CARRIER));
+        // An inline config that is not a JSON object is left alone, and so is
+        // every route: nothing points the CLI anywhere.
+        for broken in ["not json", "[1]", r#"{"provider":"x"}"#] {
+            let mut env = HashMap::new();
+            let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
+            route_opencode(&mut env, &set, Some(broken));
+            assert!(env.is_empty(), "{broken}: {env:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_proxy_base_counts_as_an_opencode_route() {
+        let with = |config: &str| HashMap::from([(OPENCODE_INLINE_ENV.to_string(), config.to_string())]);
+        assert!(!opencode_routed(&HashMap::new()));
+        assert!(!opencode_routed(&with(r#"{"provider":{"ollama":{"options":{"baseURL":"http://127.0.0.1:11434/v1"}}}}"#)));
+        assert!(!opencode_routed(&with(r#"{"provider":{"anthropic":{"options":{"baseURL":"https://api.anthropic.com/v1"}}}}"#)));
+        assert!(opencode_routed(&with(r#"{"provider":{"google":{"options":{"baseURL":"http://127.0.0.1:4242/gemini/v1beta"}}}}"#)));
+        assert!(!opencode_routed(&with("not json")));
+    }
+
     #[test]
     fn codex_resumed_and_forked_conversations_take_keys_but_sign_in_does_not() {
         for args in [vec![], on(&["resume", "session-id"]), on(&["fork", "session-id"]), on(&["--no-daemon", "resume", "session-id"])] {
@@ -999,9 +1181,12 @@ mod tests {
         assert!(!cli("gemini").ready, "on, but no Gemini key");
         assert_eq!(cli("claude").providers, vec!["anthropic"]);
         assert!(s.providers.iter().any(|p| p.id == "anthropic" && p.saved));
-        for gone in ["vibe", "opencode"] {
-            assert!(!s.clis.iter().any(|c| c.id == gone), "{gone}");
-        }
+        assert!(!s.clis.iter().any(|c| c.id == "vibe"));
+        // A CLI of several providers is ready on any one key.
+        let s = status_with(true, "keychain", |p| p == Provider::OpenAi, &on(&["opencode"]), &Default::default(), &Default::default(), &ledger);
+        let opencode = s.clis.iter().find(|c| c.id == "opencode").unwrap();
+        assert!(opencode.ready);
+        assert_eq!(opencode.providers, vec!["anthropic", "gemini", "openai"]);
         assert_eq!(s.providers.len(), 3);
         let json = serde_json::to_value(&s).unwrap();
         assert!(json.get("readable").is_some() && json["clis"][0].get("ready").is_some());

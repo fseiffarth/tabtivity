@@ -139,6 +139,11 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
     {
         return Ok(());
     }
+    // OpenCode's inline config points it at the proxy whether or not the
+    // token arrives: started without one, every request would be refused.
+    if crate::services::agent_api_keys::opencode_routed(&opts.env) {
+        return Err("OpenCode API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
+    }
     if opts.env.contains_key(crate::services::agent_api_keys::OPENAI_CARRIER) {
         return Err("Codex API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
     }
