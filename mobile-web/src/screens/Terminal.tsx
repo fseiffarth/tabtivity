@@ -3331,6 +3331,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       // Gone after it was listed: answered here, on the desktop, or dismissed.
       // After a tap the gap is given to the step that may still follow.
       if (!answered) {
+        // A reveal walk's keys still queued would land in the composer the
+        // picker gave back, where ↑ recalls old prompts from history.
+        clearPending();
+        setReveal(null);
         setModelSheet(false);
         return;
       }
@@ -3349,6 +3353,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setModelSheet(false);
     }, MODEL_PICKER_WAIT);
     return () => window.clearTimeout(timer);
+    // `clearPending` is a fresh closure every render; it only reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelSheet, picker, pickerStep, answered, openCode]);
   /** A windowed picker says how many rows it is not drawing: the highlight is
    * walked to each one it hides, which scrolls it into view, and back. Only
@@ -3577,6 +3583,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   };
   const closeModelSheet = () => {
     openCodeWalk.current?.hold();
+    // Closed mid-walk, the reveal's queued arrow keys would follow the Esc
+    // into the composer, where ↑ recalls old prompts from history: dropped.
+    clearPending();
     // The dialog is the session's own and still open: close it there too,
     // rather than leaving a modal behind that the reader can no longer see.
     if (picker) type("\u001b");
