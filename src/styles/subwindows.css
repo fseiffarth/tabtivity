@@ -1813,25 +1813,61 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 
 /* ── Agent prompt strip (components/terminal/TerminalPromptStrip) ─────────────
-   The agent pane's top row, between the tab bar and the terminal: the tab's
-   last prompt on one line. Its ground and ink are the terminal's own (set
-   inline), so it reads as part of the pane, not a toolbar over it. A fixed
-   height — it never refits the terminal; the drop-down floats over the
-   terminal's top, sized against `.center-pane` (its containing block). */
+   The agent pane's bottom row, under the terminal: the tab's last prompt on
+   one line, the pane's switches at its right end. Its ground and ink are the
+   terminal's own (set inline), so it reads as part of the pane, not a toolbar
+   under it. Under the chat (`.chat`) the chat reaches down over its row
+   (`.terminal-reader.over-strip`) and its composer is that row, the switches
+   lifted over it, right of the text box. One fixed height in both, so a mode
+   switch never refits the terminal or moves a switch; the pop-ups float up
+   over the terminal's bottom, sized against `.center-pane` (their containing
+   block). */
+.prompt-strip,
+.terminal-reader {
+  --prompt-strip-h: 36px;
+}
 .prompt-strip {
-  /* Second in the DOM (the terminal host stays the pane's first child),
-     first on screen. */
-  order: -1;
   flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 6px 0 10px;
+  height: var(--prompt-strip-h);
+  padding: 0 8px 0 12px;
   font-family: var(--font-sans);
   font-size: var(--text-sm);
-  border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
   min-width: 0;
+}
+.prompt-strip.chat {
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border-top-color: transparent;
+}
+/* A z-index on the flex item, not a position: the pop-ups inside must still
+   size against `.center-pane`. Above the chat's z-index 4. */
+.prompt-strip.chat .prompt-strip-actions {
+  z-index: 5;
+}
+/* The switches, always flush right: the same spot with or without the
+   prompt before them. */
+.prompt-strip-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+/* Chat / Terminal: both labels in one cell, the inactive one invisible, so
+   the switch is as wide in either mode. */
+.prompt-strip-mode {
+  display: inline-grid;
+}
+.prompt-strip-mode > span {
+  grid-area: 1 / 1;
+  text-align: center;
+}
+.prompt-strip-mode > span[aria-hidden="true"] {
+  visibility: hidden;
 }
 .prompt-strip-label {
   flex: none;
@@ -1907,13 +1943,13 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 .prompt-strip-panel {
   position: absolute;
-  top: 30px;
+  bottom: calc(var(--prompt-strip-h) + 6px);
   left: 8px;
   right: 8px;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  max-height: calc(100% - 42px);
+  max-height: calc(100% - var(--prompt-strip-h) - 18px);
   /* Explicit ink: the panel is an app surface, not the terminal's. */
   color: var(--text-primary);
   background: var(--bg-elevated);
@@ -1938,7 +1974,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 /* Browsing the trail swaps the full text above it: a content-sized panel and
    text box moved the list (and the row under the pointer) with every prompt. */
 .prompt-strip-panel:has(> .prompt-strip-list) {
-  height: calc(100% - 42px);
+  height: calc(100% - var(--prompt-strip-h) - 18px);
 }
 .prompt-strip-panel:has(> .prompt-strip-list) > .prompt-strip-full {
   flex: 0 0 auto;
@@ -1992,8 +2028,8 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 20px;
-  padding: 0 8px;
+  height: 22px;
+  padding: 0 10px;
   font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -2003,6 +2039,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   border-radius: var(--radius-full);
   cursor: var(--cur-pointer, pointer);
   opacity: 0.8;
+  transition: background-color 120ms ease, opacity 120ms ease;
 }
 .prompt-strip-reader:hover {
   opacity: 1;
@@ -2025,7 +2062,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   border-color: var(--accent);
 }
 
-/* The Resume drop-down (components/terminal/TerminalReaderChats): the trail's
+/* The Resume pop-up (components/terminal/TerminalReaderChats): the trail's
    panel, anchored at the strip's right end where its button sits. The
    wrapper stays static, so the panel still sizes against `.center-pane`. */
 .reader-chats {
@@ -2042,7 +2079,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 .reader-chats-panel {
   left: auto;
   width: min(640px, calc(100% - 16px));
-  height: min(560px, calc(100% - 42px));
+  height: min(560px, calc(100% - var(--prompt-strip-h) - 18px));
 }
 .reader-chats-head {
   flex: none;
@@ -2479,6 +2516,13 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 [data-theme="light_lavender"] .terminal-reader-turn.terminal-reader-pinned-prompt,
 [data-theme-pick="system"] .terminal-reader-turn.terminal-reader-pinned-prompt {
   padding: 7px 13px;
+}
+/* Its bubble's time, after the words rather than in the corner: the pinned
+   copy is two lines at most and has no room under them. */
+.terminal-reader-pinned-prompt .terminal-reader-time {
+  position: static;
+  flex: none;
+  align-self: flex-end;
 }
 .terminal-reader-pinned-prompt-text {
   display: -webkit-box;
@@ -3071,36 +3115,64 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+/* The text box with Send inside its corner: one line (30px, centred on the
+   strip's row when the composer is that row), growing upward with the text
+   (`ReaderComposer` sets the height) up to max-height. */
+.terminal-reader-input {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
 .terminal-reader-composer textarea {
   flex: 1;
-  min-height: 2.6em;
+  box-sizing: border-box;
+  min-height: 30px;
   max-height: 12em;
-  padding: 6px 10px;
-  resize: vertical;
+  padding: 4px 36px 4px 12px;
+  resize: none;
+  overflow-y: auto;
   font: inherit;
+  line-height: 1.4;
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius);
+  border-radius: 15px;
 }
 .terminal-reader-composer textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
 .terminal-reader-send {
-  flex: none;
-  padding: 6px 14px;
-  font: inherit;
-  font-weight: 600;
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   color: var(--accent-contrast);
   background: var(--accent);
   border: none;
-  border-radius: var(--radius);
+  border-radius: 50%;
   cursor: var(--cur-pointer, pointer);
+  transition: opacity 120ms ease;
 }
 .terminal-reader-send:disabled {
-  opacity: 0.45;
+  opacity: 0.35;
   cursor: var(--cur-default, default);
+}
+/* The chat over the prompt strip's row: the composer's text box sits on
+   that row, centred like the switches, and leaves them their room. */
+.terminal-reader.over-strip {
+  bottom: calc(-1 * var(--prompt-strip-h));
+}
+.terminal-reader.over-strip .terminal-reader-composer {
+  padding-bottom: calc((var(--prompt-strip-h) - 30px) / 2);
+}
+.terminal-reader.over-strip:not(.with-changes) .terminal-reader-composer {
+  padding-right: calc(var(--strip-actions-w, 0px) + 20px);
 }
 .terminal-reader-error {
   flex: none;

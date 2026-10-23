@@ -2405,6 +2405,7 @@ pub fn run() {
             commands::agents::probe_binaries,
             commands::agents::list_agents,
             commands::agents::codex_hook_status,
+            commands::agents::codex_hook_trust,
             commands::agents::install_agent,
             commands::agents::install_agent_remote,
             commands::agents::install_agent_remote_command,

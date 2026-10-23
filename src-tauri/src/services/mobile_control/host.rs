@@ -1388,7 +1388,8 @@ async fn create_tab(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // `like_tab` names a tmux session, which only the sidecar may: the tab
-    // route below sets it from an opaque tab id.
+    // routes below set it from an opaque tab id (and `teleport` rides only
+    // with it).
     if request.project_id != project_id
         || request.idempotency_key.len() < 16
         || request.idempotency_key.len() > 128
@@ -3586,6 +3587,76 @@ async fn sign_in_tab(
         task: None,
         sign_in: Some(if body.alternate { "alternate" } else { "default" }.to_string()),
         like_tab: Some(tab.tmux_name.clone()),
+        teleport: None,
+        local: None,
+        assistant: None,
+        api_key: false,
+        idempotency_key: body.idempotency_key,
+    };
+    let project_id = project.public.id.clone();
+    create_through_desktop(&state, &phone, &project_id, request).await
+}
+
+/// `POST /api/v1/tabs/{id}/teleport` — pull the session a cloud tab started
+/// into a new agent tab beside it, in a fresh linked worktree (Claude's
+/// `--teleport <session>`): teleport checks out the session's branch, which in
+/// the project folder would move every other tab there onto it. The phone
+/// names the cloud tab by opaque id and the session by the id that tab
+/// printed; the desktop builds the command line and the worktree.
+async fn teleport_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TeleportBody {
+        session: String,
+        idempotency_key: String,
+    }
+    let Ok(body) = serde_json::from_slice::<TeleportBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if body.idempotency_key.len() < 16
+        || body.idempotency_key.len() > 128
+        || !super::protocol::is_cloud_session_id(&body.session)
+    {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = catalog_snapshot.tab(&tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if tab.public.kind != "agent" || !tab.public.cloud {
+        return api_error(StatusCode::BAD_REQUEST, "cloud_tab_required");
+    }
+    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+        return error;
+    }
+    let request = CreateTabRequest {
+        project_id: project.raw_id.clone(),
+        kind: CreateTabKind::Agent,
+        agent_id: None,
+        mode: None,
+        worktree: None,
+        cloud: None,
+        task: None,
+        sign_in: None,
+        like_tab: Some(tab.tmux_name.clone()),
+        teleport: Some(body.session),
         local: None,
         assistant: None,
         api_key: false,
@@ -6722,6 +6793,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/worktrees", get(tab_worktrees))
         .route("/api/v1/tabs/{tab_id}/worktree", post(move_tab_worktree))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
+        .route("/api/v1/tabs/{tab_id}/teleport", post(teleport_tab))
         .route("/api/v1/tabs/{tab_id}/sign-in-callback", post(sign_in_callback))
         .route(
             "/api/v1/tabs/{tab_id}/schedules",
@@ -7834,6 +7906,7 @@ mod tests {
             "/api/v1/tabs/anything/held",
             "/api/v1/tabs/anything/sign-in-callback",
             "/api/v1/tabs/anything/sign-in",
+            "/api/v1/tabs/anything/teleport",
             "/api/v1/projects/anything/prompts",
             "/api/v1/projects/anything/prompts/anything/send",
             "/api/v1/mail/folders/anything/messages/anything/mark",
@@ -9937,6 +10010,72 @@ mod tests {
                     "kind": "agent",
                     "like_tab": concat!(crate::app_slug!(), "-anything"),
                     "sign_in": "default",
+                    "idempotency_key": key,
+                }),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
+        assert_eq!(json(&body)["error"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn a_teleport_names_a_cloud_tab_and_a_clean_session_id() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(33)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let (_, _, project_body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        let tab_id = json(&project_body)["tabs"][0]["id"].as_str().expect("tab id").to_string();
+        let press = |uri: String, origin: &'static str, body: Value| {
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).expect("body")))
+                .expect("request")
+        };
+        let route = format!("/api/v1/tabs/{tab_id}/teleport");
+        let key = "0123456789abcdef";
+        let session = "session_011SU65rAbc";
+
+        let (status, _, _) = host
+            .send(press(route.clone(), "https://evil.example", json!({ "session": session, "idempotency_key": key })))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _, body) = host
+            .send(press("/api/v1/tabs/not-a-tab/teleport".into(), ORIGIN, json!({ "session": session, "idempotency_key": key })))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        // The session id goes on a command line: a flag or a shell word is refused.
+        for bad in ["--dangerously-skip-permissions", "s; rm -rf ~", ""] {
+            let (status, _, body) = host
+                .send(press(route.clone(), ORIGIN, json!({ "session": bad, "idempotency_key": key })))
+                .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} answered: {body}");
+        }
+        let (status, _, body) = host
+            .send(press(route.clone(), ORIGIN, json!({ "session": session, "idempotency_key": key, "cwd": "/" })))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
+        // The fixture's tab is a plain agent, not a cloud session's.
+        let (status, _, body) = host
+            .send(press(route, ORIGIN, json!({ "session": session, "idempotency_key": key })))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
+        assert_eq!(json(&body)["error"], "cloud_tab_required");
+
+        // The create route will not take a teleport from the phone.
+        let (status, _, body) = host
+            .send(press(
+                format!("/api/v1/projects/{project_id}/tabs"),
+                ORIGIN,
+                json!({
+                    "project_id": project_id,
+                    "kind": "agent",
+                    "like_tab": concat!(crate::app_slug!(), "-anything"),
+                    "teleport": session,
                     "idempotency_key": key,
                 }),
             ))

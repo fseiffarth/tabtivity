@@ -121,3 +121,62 @@ export function RailSwitchSideIcon({ side, className }: IconProps & { side: "lef
     </Frame>
   );
 }
+
+/** Diverged (orange) files: two paths splitting off one trunk. */
+export function RailDivergedIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <path d="M12 20v-6.5" />
+      <path d="M12 13.5L6.5 6" />
+      <path d="M12 13.5L17.5 6" />
+      <path d="M6.5 10V6h4" />
+      <path d="M17.5 10V6h-4" />
+    </Frame>
+  );
+}
+
+/** Persistent host sessions (tmux): a terminal window with a prompt. */
+export function RailSessionsIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
+      <path d="M7.5 10l2.5 2-2.5 2" />
+      <path d="M12 15h4.5" />
+    </Frame>
+  );
+}
+
+/** SLURM jobs: a queue of three stacked jobs. */
+export function RailJobsIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <rect x="4" y="4.5" width="16" height="4" rx="1" />
+      <rect x="4" y="10" width="16" height="4" rx="1" />
+      <rect x="4" y="15.5" width="16" height="4" rx="1" />
+      <path d="M7 6.5h.01M7 12h.01M7 17.5h.01" />
+    </Frame>
+  );
+}
+
+/** Remarks: a speech bubble with two lines of text. */
+export function RailRemarksIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <path d="M5 5h14a1.5 1.5 0 011.5 1.5v8A1.5 1.5 0 0119 16h-8l-4 3.5V16H5a1.5 1.5 0 01-1.5-1.5v-8A1.5 1.5 0 015 5z" />
+      <path d="M8 9.5h8M8 12.5h5" />
+    </Frame>
+  );
+}
+
+/** To-do groups: a ticked box beside two list lines. */
+export function RailTodoIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <rect x="3.5" y="5" width="7" height="7" rx="1.2" />
+      <path d="M5.3 8.6l1.5 1.4 2.4-3" />
+      <path d="M13.5 7h7M13.5 10.5h5" />
+      <rect x="3.5" y="14.5" width="7" height="5" rx="1.2" />
+      <path d="M13.5 17h7" />
+    </Frame>
+  );
+}

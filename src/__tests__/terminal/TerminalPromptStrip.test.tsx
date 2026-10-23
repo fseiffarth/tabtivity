@@ -10,6 +10,7 @@ import { _resetPromptTrailForTest, notePromptTrailInput } from "../../stores/age
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
+import { onReaderInsert } from "../../lib/terminal/terminalDrop";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1" };
 const iso = "2026-09-30T08:00:00Z";
@@ -65,6 +66,33 @@ describe("the prompt strip over an agent pane", () => {
     } finally {
       useSettingsStore.setState({ settings: before });
     }
+  });
+
+  it("leaves the prompt out under the chat and keeps the switch where it was", () => {
+    const props = { ptyId: "p:agent-1", scope: "p", tabKey: "agent-1", background: "#000", foreground: "#fff", onReturnFocus: () => {} };
+    const { container, rerender } = render(<TerminalPromptStrip {...props} reader={{ open: false, onToggle: () => {} }} />);
+    expect(screen.getByText("the first prompt")).toBeTruthy();
+    const actions = container.querySelector(".prompt-strip-actions");
+    rerender(<TerminalPromptStrip {...props} chatShown reader={{ open: true, onToggle: () => {} }} />);
+    expect(screen.queryByText("the first prompt")).toBeNull();
+    expect(container.querySelector(".prompt-strip.chat")).toBeTruthy();
+    expect(container.querySelector(".prompt-strip-actions")).toBe(actions);
+    expect(screen.getByRole("button", { pressed: true }).getAttribute("title")).toMatch(/terminal/i);
+    expect(screen.queryByRole("button", { name: /Chat/ })).toBeNull();
+    // The list is offered over the chat too; Enter puts the prompt in its box.
+    const inserted: string[] = [];
+    const off = onReaderInsert("p:agent-1", (text) => inserted.push(text));
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /Show the whole prompt/ }));
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter" });
+      expect(inserted).toEqual(["the first prompt"]);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      off();
+    }
+    // No switches to show (a chat-only view): nothing under the chat.
+    rerender(<TerminalPromptStrip {...props} chatShown />);
+    expect(container.querySelector(".prompt-strip")).toBeNull();
   });
 
   it("says so when the tab has no prompt yet", () => {

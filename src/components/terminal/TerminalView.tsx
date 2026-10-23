@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -2264,6 +2264,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
    * the pane pads its right edge by the panel, so the fit leaves it free. */
   const terminalChanges = changesOn && readerAvailable && !readerOn && !!readerTab;
   const changesWidth = useAgentReaderStore((state) => state.changesWidth);
+  /** The prompt strip's switches (`TerminalPromptStrip`): a chat over this
+   * pane reaches down over the strip's row and leaves them this much room. */
+  const [stripActionsWidth, setStripActionsWidth] = useState(0);
+  const stripUnderChat = !!readerTab && readerAvailable && !readerAlways && (paneKind === "agent" || paneKind === "local_agent");
   const setReader = (on: boolean) => {
     useAgentReaderStore.getState().set(readerAgent, on);
     if (!on) setTimeout(() => termRef.current?.focus(), 0);
@@ -2372,6 +2376,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       className={[terminalChanges && "terminal-pane-with-changes", dropActive && "terminal-drop-active"].filter(Boolean).join(" ") || undefined}
       style={{
         ...(terminalChanges ? changesWidthStyle(changesWidth) : null),
+        ...(stripUnderChat ? { "--strip-actions-w": `${stripActionsWidth}px` } as CSSProperties : null),
         flex: 1,
         minHeight: 0,
         minWidth: 0,
@@ -2392,8 +2397,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         background: terminalTheme(colorScheme).background,
       }}
     />
-    {/* After the terminal in the DOM (the pane's first child is its xterm
-        host everywhere else), drawn above it by `order` in the stylesheet. */}
+    {/* After the terminal, under it: the pane's first child stays its xterm
+        host, and the strip keeps its place whether the chat is shown or not. */}
     {(paneKind === "agent" || paneKind === "local_agent") && splitId && (
       <TerminalPromptStrip
         ptyId={id}
@@ -2401,7 +2406,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         background={terminalTheme(colorScheme).background}
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
-        onReturnFocus={() => termRef.current?.focus()}
+        onReturnFocus={() => {
+          // Over the chat the keys go back to its text box, not the terminal under it.
+          const box = readerOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
+          if (box) box.focus();
+          else termRef.current?.focus();
+        }}
+        chatShown={readerOn}
+        onActionsWidth={setStripActionsWidth}
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
@@ -2444,6 +2456,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         localOnly={localOnly}
         visible={visible}
         focused={focused}
+        overStrip={stripUnderChat}
       />
     )}
     {signIn && host && (

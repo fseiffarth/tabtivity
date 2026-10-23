@@ -271,6 +271,45 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     expect(FakeWebSocket.sent).toEqual([UP, UP, "\r"]);
   });
 
+  it("drops the rest of a reveal walk when the sheet is closed mid-walk", async () => {
+    // The walk's arrows go one at a time; any still queued after the Esc
+    // reached the empty composer, where ↑ recalled old prompts from history.
+    const claudeWindow = (rows: string[]) => [
+      "   Select model",
+      "   Switch between Claude models.",
+      "",
+      ...rows,
+      "      … +2 models",
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    ].join("\n");
+    const DEFAULT = "1. Default (recommended)  Opus 5 with 1M context";
+    const OPUS = "2. Opus (1M context)      Opus 5 with 1M context";
+    const FABLE = "3. Fable ✔                Fable 5.1";
+    const SONNET = "4. Sonnet                 Sonnet 5";
+    const HAIKU = "5. Haiku                  Haiku 4.5";
+    render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", agent_model: "Fable 5.1", available: true, viewer_busy: false }} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Fable 5.1" }));
+    await settle(400);
+    await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`]));
+    await settle(300);
+    await paint(claudeWindow([`   ↑ ${OPUS}`, `     ${FABLE}`, `   ❯ ${SONNET}`]));
+    await settle(300);
+    FakeWebSocket.sent = [];
+    // The last hidden row lands: the walk back (↑ ↑) starts, and the sheet is
+    // closed before its second key went.
+    const bytes = new TextEncoder().encode(claudeWindow([`   ↑ ${FABLE}`, `     ${SONNET}`, `   ❯ ${HAIKU}`]));
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent));
+    for (let waited = 0; FakeWebSocket.sent.length === 0 && waited < 300; waited += 5) await settle(5);
+    expect(FakeWebSocket.sent).toEqual([UP]);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await settle(400);
+    expect(FakeWebSocket.sent).toEqual([UP, ESC]);
+  });
+
   it("shows a local-model tab's model and opens no picker, not even from the card's tap", async () => {
     render(<Terminal tab={{ id: "tab", label: "qwen3:8b · OpenCode", agent_label: "OpenCode", kind: "agent", agent_model: "qwen3:8b", local_model: true, available: true, viewer_busy: false }} pickModel back={() => {}} />);
     await act(async () => {});

@@ -402,6 +402,25 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     ]);
   });
 
+  it("leaves screen fragments above an agent's question out of its card", async () => {
+    // Off a live phone: no message of the agent's above the tab row, only a
+    // half-erased row of the answer before and a thinking preview's last rows.
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    await paint([
+      "    tab's Chat view. You can also find it",
+      "  tab, noting it'll end the cloud run and continue locally rather than",
+      "  \"watching\" it.",
+      "",
+      ...AGENT_QUESTION.split("\n").slice(3),
+    ].join("\n"));
+
+    expect(question().querySelector(".question-tabs")?.textContent).toBe("Push scope");
+    expect(within(question()).queryByText(/noting it'll end/)).toBeNull();
+    expect(within(question()).queryByText(/find it/)).toBeNull();
+    expect(rows()).toHaveLength(4);
+  });
+
   it("answers the free-text row with words typed under it, not a bare Enter", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});

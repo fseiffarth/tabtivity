@@ -542,7 +542,7 @@ fn claude_goal_in_record(line: &str) -> Option<bool> {
         let failed = attachment.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
         return Some(!met && !failed);
     }
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = claude_command_content(&value)?;
     let args = between(content, "<command-args>", "</command-args>")?.trim();
     (content.contains("<command-name>/goal</command-name>") && args == "clear").then_some(false)
 }
@@ -973,7 +973,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     let model = match kind {
         TranscriptKind::Claude => {
-            if value.get("type").and_then(|t| t.as_str()) == Some("user") {
+            if matches!(value.get("type").and_then(|t| t.as_str()), Some("user" | "system")) {
                 return claude_model_switch(&value);
             }
             if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
@@ -1001,7 +1001,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
 /// `claude-opus-4-1-…` gets); a name that folds to nothing useful (`Default`)
 /// yields `None` and the scan falls back to the last answer.
 fn claude_model_switch(value: &serde_json::Value) -> Option<String> {
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = claude_command_content(value)?;
     let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
     let rest = body
         .strip_prefix("Set model to ")
@@ -1190,6 +1190,38 @@ fn prompt_in_record(line: &str, kind: TranscriptKind) -> Option<String> {
         TranscriptKind::Codex => codex_prompt_in_record(&value)?,
     };
     clean_prompt_text(&raw)
+}
+
+/// The string content of a Claude record the CLI writes for a slash command
+/// typed at its prompt — the `<command-name>…` line and the
+/// `<local-command-stdout>…` it answered with. Older releases write both as
+/// `{"type":"user","message":{"content":"…"}}`; current ones (2.1.30x) as
+/// `{"type":"system","subtype":"local_command","content":"…"}`. A sidechain's
+/// is never the session's.
+pub(crate) fn claude_command_content(value: &serde_json::Value) -> Option<&str> {
+    if value.get("isSidechain").and_then(|s| s.as_bool()) == Some(true) {
+        return None;
+    }
+    match value.get("type").and_then(|t| t.as_str())? {
+        "user" => value.get("message")?.get("content")?.as_str(),
+        "system" if value.get("subtype").and_then(|t| t.as_str()) == Some("local_command") => value.get("content")?.as_str(),
+        _ => None,
+    }
+}
+
+/// The slash command a current Claude release recorded as a `local_command`
+/// system record (`/login`, `/model`, `/goal clear`), as
+/// [`claude_prompt_text`] shows it. Its stdout record is not one. `/rename`
+/// is left out: every Claude tab opens by typing one (the session's name).
+pub(crate) fn claude_local_command(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(|t| t.as_str()) != Some("system") {
+        return None;
+    }
+    let text = claude_command_content(value)?;
+    if !text.trim_start().starts_with("<command-name>") {
+        return None;
+    }
+    claude_prompt_text(text).filter(|command| command.split_whitespace().next() != Some("/rename"))
 }
 
 /// A Claude record: `{"type":"user","message":{"content":…}}` whose content is
@@ -1963,6 +1995,275 @@ pub fn codex_binder_enabled(scope_id: Option<&str>) -> bool {
     codex_hook_state_of_home(&crate::services::agent_home::scope_home(scope_id)) != CodexHookState::Enabled
 }
 
+/// Trust Tabtivity's own Codex hooks in every agent home that holds a Codex
+/// config, the way Codex's `/hooks` "trust" would: a `trusted_hash` under each
+/// hook's `[hooks.state."…"]` table, and a hook switched off is switched back
+/// on. Codex asks for that approval per config file and every scope has its
+/// own, so trusting once in one tab left every other home "not trusted".
+/// Only hooks whose `command` is [`hook_command`] are touched. Returns the
+/// state afterwards, as [`codex_hook_state`] reads it.
+pub fn trust_codex_hooks() -> CodexHookState {
+    let cmd = hook_command();
+    for home in crate::services::agent_home::existing_homes_in(&storage::state_dir()) {
+        // The agent can rewrite its own config: never a link, never a FIFO.
+        let Some(config) = HomeFile::open_existing(&home, ".codex/config.toml") else {
+            continue;
+        };
+        if !config.is_file() {
+            continue;
+        }
+        let Some(bytes) = config.read() else { continue };
+        let src = String::from_utf8_lossy(&bytes);
+        if let Some(out) = trust_codex_hooks_in(&src, &codex_config_key_paths(&home), &cmd) {
+            if let Err(e) = config.write(out.as_bytes()) {
+                eprintln!("agent_session: trust codex hooks in {}: {e}", home.display());
+            }
+        }
+    }
+    codex_hook_state()
+}
+
+/// The spellings Codex may give one home's `config.toml` in its trust keys:
+/// the path itself (the unfenced host session, macOS), and on Linux the user's
+/// own home, where bubblewrap binds a scope home for a fenced tab.
+fn codex_config_key_paths(home: &std::path::Path) -> Vec<String> {
+    let mut paths = vec![home.join(".codex").join("config.toml").to_string_lossy().into_owned()];
+    if cfg!(target_os = "linux") {
+        let fenced = paths::home_dir().join(".codex").join("config.toml").to_string_lossy().into_owned();
+        if !paths.contains(&fenced) {
+            paths.push(fenced);
+        }
+    }
+    paths
+}
+
+/// Codex's key label for one of [`CODEX_HOOK_EVENTS`], and whether the event
+/// keeps a group's `matcher` (Codex drops it for the rest, hash included).
+fn codex_event_label(event: &str) -> Option<(&'static str, bool)> {
+    Some(match event {
+        "SessionStart" => ("session_start", true),
+        "PostToolUse" => ("post_tool_use", true),
+        "SessionEnd" => ("session_end", true),
+        "UserPromptSubmit" => ("user_prompt_submit", false),
+        "Stop" => ("stop", false),
+        _ => return None,
+    })
+}
+
+/// The `trusted_hash` Codex records for one command hook: SHA-256 of the
+/// hook's normalized identity as JSON with sorted keys (codex-rs
+/// `hooks::engine::discovery::hook_hash` → `config::version_for_toml`). The
+/// timeout is normalized first — `SessionEnd` defaults to 1 s and is clamped
+/// to 1–3, every other event defaults to 600 — so a `SessionEnd` lowered from
+/// 10 to 3 keeps its hash. Reproduced against hashes Codex 0.164.0 wrote.
+fn codex_hook_hash(label: &str, matcher: Option<&str>, command: &str, timeout: Option<u64>) -> String {
+    use sha2::{Digest, Sha256};
+    let timeout = if label == "session_end" {
+        timeout.unwrap_or(1).clamp(1, u64::from(CODEX_SESSION_END_TIMEOUT))
+    } else {
+        timeout.unwrap_or(600).max(1)
+    };
+    let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
+    let mut identity = format!(
+        "{{\"event_name\":{},\"hooks\":[{{\"async\":false,\"command\":{},\"timeout\":{timeout},\"type\":\"command\"}}]",
+        quote(label),
+        quote(command),
+    );
+    if let Some(m) = matcher {
+        identity.push_str(&format!(",\"matcher\":{}", quote(m)));
+    }
+    identity.push('}');
+    let digest = Sha256::digest(identity.as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
+/// A TOML string value [`toml_value`] can hand over verbatim: a literal
+/// string, or a basic one without escapes. `None` for anything else, so a
+/// hook whose bytes we cannot be sure of is left for `/hooks` to judge.
+fn plain_toml_string(line: &str, key: &str) -> Option<String> {
+    let raw = line.split_once('=')?.1.trim();
+    if raw.starts_with("'''") || raw.starts_with("\"\"\"") || (raw.starts_with('"') && raw.contains('\\')) {
+        return None;
+    }
+    if !(raw.starts_with('\'') || raw.starts_with('"')) {
+        return None;
+    }
+    toml_value(line, key)
+}
+
+/// Testable core of [`trust_codex_hooks`]: `src` with every hook of ours
+/// trusted under each of `key_paths`, or `None` when nothing changes.
+///
+/// A line scanner and text edit, like [`register_codex_hook_as`]: it finds
+/// each `[[hooks.<Event>.hooks]]` table whose `command` is `cmd`, counts its
+/// group and position the way Codex keys them, hashes it with
+/// [`codex_hook_hash`], and sets `trusted_hash` in the matching
+/// `[hooks.state."<path>:<event>:<group>:<hook>"]` table — in place when the
+/// table exists (an `enabled = false` there is dropped), appended otherwise.
+/// A table of ours holding anything beyond `type`, `command` and `timeout` is
+/// skipped: its hash would cover fields this does not model.
+pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Option<String> {
+    struct Hook {
+        label: &'static str,
+        group: usize,
+        index: usize,
+        matcher: Option<String>,
+        command: Option<String>,
+        timeout: Option<u64>,
+        plain: bool,
+    }
+    let mut groups: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut handlers: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut hooks: Vec<Hook> = Vec::new();
+    let mut matcher: Option<String> = None;
+    // False once the group's matcher is a string we cannot read verbatim.
+    let mut matcher_known = true;
+    // Which table the scanner is in: a group (its event), or a handler (an
+    // index into `hooks`, `None` for an event that is not ours).
+    enum At {
+        Other,
+        Group,
+        Handler(Option<usize>),
+    }
+    let mut at = At::Other;
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            at = At::Other;
+            if let Some(ev) = line.strip_prefix("[[hooks.").and_then(|s| s.strip_suffix(".hooks]]")) {
+                let group = groups.get(ev).map_or(0, |g| g.saturating_sub(1));
+                let index = handlers.entry(ev.to_string()).or_insert(0);
+                let slot = codex_event_label(ev).map(|(label, keeps)| {
+                    hooks.push(Hook {
+                        label,
+                        group,
+                        index: *index,
+                        matcher: if keeps { matcher.clone() } else { None },
+                        command: None,
+                        timeout: None,
+                        plain: matcher_known || !keeps,
+                    });
+                    hooks.len() - 1
+                });
+                *index += 1;
+                at = At::Handler(slot);
+            } else if let Some(ev) = line.strip_prefix("[[hooks.").and_then(|s| s.strip_suffix("]]")) {
+                *groups.entry(ev.to_string()).or_insert(0) += 1;
+                handlers.insert(ev.to_string(), 0);
+                matcher = None;
+                matcher_known = true;
+                at = At::Group;
+            }
+            continue;
+        }
+        match at {
+            At::Group => {
+                if toml_value(line, "matcher").is_some() {
+                    matcher = plain_toml_string(line, "matcher");
+                    matcher_known = matcher.is_some();
+                }
+            }
+            At::Handler(Some(i)) => {
+                let hook = &mut hooks[i];
+                let key = line.split_once('=').map(|(k, _)| k.trim()).unwrap_or("");
+                match key {
+                    "type" => hook.plain &= toml_value(line, "type").as_deref() == Some("command"),
+                    "command" => hook.command = plain_toml_string(line, "command"),
+                    "timeout" => {
+                        hook.timeout = toml_value(line, "timeout").and_then(|v| v.parse().ok());
+                        hook.plain &= hook.timeout.is_some();
+                    }
+                    _ => hook.plain = false,
+                }
+            }
+            At::Handler(None) | At::Other => {}
+        }
+    }
+
+    // (state key, hash) for every hook of ours whose hash is known.
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for hook in &hooks {
+        if !hook.plain || hook.command.as_deref() != Some(cmd) {
+            continue;
+        }
+        let hash = codex_hook_hash(hook.label, hook.matcher.as_deref(), cmd, hook.timeout);
+        for path in key_paths {
+            wanted.push((format!("{path}:{}:{}:{}", hook.label, hook.group, hook.index), hash.clone()));
+        }
+    }
+    if wanted.is_empty() {
+        return None;
+    }
+
+    // Rewrite the state tables that exist, then append the missing ones.
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let eol_of = |l: &str| if l.ends_with("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(src.len() + wanted.len() * 160);
+    let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut changed = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let header = lines[i];
+        let want = toml_state_table_key(header.trim())
+            .and_then(|key| wanted.iter().find(|(k, _)| *k == key).cloned());
+        let Some((key, hash)) = want else {
+            out.push_str(header);
+            i += 1;
+            continue;
+        };
+        let end = (i + 1..lines.len())
+            .find(|&j| lines[j].trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        let eol = eol_of(header);
+        let new_line = format!("trusted_hash = \"{hash}\"{eol}");
+        let mut body = String::new();
+        let mut wrote = false;
+        for l in &lines[i + 1..end] {
+            let t = l.trim();
+            if toml_value(t, "trusted_hash").is_some() {
+                // One hash per table; a stale or duplicate one goes.
+                changed |= wrote || t != new_line.trim();
+                if !wrote {
+                    body.push_str(&new_line);
+                    wrote = true;
+                }
+            } else if toml_value(t, "enabled").as_deref() == Some("false") {
+                changed = true;
+            } else {
+                body.push_str(l);
+            }
+        }
+        out.push_str(header);
+        if !header.ends_with('\n') {
+            out.push_str(eol);
+        }
+        if !wrote {
+            // Straight under the header, so the table's blank tail stays last.
+            out.push_str(&new_line);
+            changed = true;
+        }
+        out.push_str(&body);
+        done.insert(key);
+        i = end;
+    }
+    for (key, hash) in &wanted {
+        if done.contains(key) {
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("\n[hooks.state.\"{key}\"]\ntrusted_hash = \"{hash}\"\n"));
+        done.insert(key.clone());
+        changed = true;
+    }
+    changed.then_some(out)
+}
+
 /// Install (idempotently) the session hooks and their script for every agent
 /// Tabtivity can track (Claude + Codex), so it learns each tab's live session id,
 /// its live permission mode (Claude's `Stop`), and its turn state (see
@@ -2589,9 +2890,10 @@ const CODEX_SESSION_END_TIMEOUT: u32 = 3;
 /// `src` with the `timeout` of our own `[[hooks.SessionEnd.hooks]]` table
 /// (the one whose `command` is `cmd`) lowered to
 /// [`CODEX_SESSION_END_TIMEOUT`], or `None` when nothing needs lowering.
-/// Earlier builds wrote `timeout = 10` there. Codex's trust hash does not
-/// cover the timeout (checked live on 0.161.0: the lowered hook stays trusted,
-/// no review menu), so the rewrite costs no re-approval. Other tables and
+/// Earlier builds wrote `timeout = 10` there. Codex's trust hash covers the
+/// timeout only after clamping it to 3 ([`codex_hook_hash`]; live on 0.161.0
+/// the lowered hook stayed trusted, no review menu), so the rewrite costs no
+/// re-approval. Other tables and
 /// lines are left byte for byte.
 fn cap_codex_session_end_timeout(src: &str, cmd: &str) -> Option<String> {
     let lines: Vec<&str> = src.split_inclusive('\n').collect();
@@ -4271,6 +4573,81 @@ mod tests {
         );
     }
 
+    /// What Codex 0.164.0 itself wrote for a hook whose command is
+    /// `/opt/hooks/session.sh`, through "Trust all and continue" (live,
+    /// 2026-10-23; its `SessionEnd` had `timeout = 10`, which Codex clamps).
+    const LIVE_HASHES: [(&str, &str); 5] = [
+        ("session_start", "sha256:0eed17ea75189a772936e59f60528cdb269f4990d139cbfd832a665def39a987"),
+        ("stop", "sha256:884a6ed2800a693aac33a14bfacb450c35e4d68b5e7dd76b5309cc70c25b86c0"),
+        ("user_prompt_submit", "sha256:996b5f251186849e3aba28f25377d93afe0f19f6b88580139513994a85c183da"),
+        ("post_tool_use", "sha256:cae7882a9a43fe21630abbbcd77dbc94a79f8deccdc8105baeaf5748f50f9151"),
+        ("session_end", "sha256:0aee76ee8e8150b8b99cbacae20528f5663be4655b1590fc1749d43d6291b54b"),
+    ];
+
+    /// Our five hook blocks for `cmd`, exactly as registration writes them.
+    fn registered_codex_config(cmd: &str, before: &str) -> String {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".codex")).unwrap();
+        std::fs::write(tmp.path().join(".codex/config.toml"), before).unwrap();
+        register_codex_hook_as(&HomeFile::open(tmp.path(), ".codex/config.toml").unwrap(), cmd).unwrap();
+        std::fs::read_to_string(tmp.path().join(".codex/config.toml")).unwrap()
+    }
+
+    #[test]
+    fn codex_hooks_are_trusted_with_the_hash_codex_writes() {
+        let cmd = "/opt/hooks/session.sh";
+        let cfg = "/c/.codex/config.toml";
+        let src = registered_codex_config(cmd, "model = \"o3\"\n");
+        let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).expect("something to trust");
+        for (label, hash) in LIVE_HASHES {
+            let table = format!("[hooks.state.\"{cfg}:{label}:0:0\"]\ntrusted_hash = \"{hash}\"\n");
+            assert!(out.contains(&table), "{label} missing in\n{out}");
+        }
+        assert!(out.starts_with(&src), "the existing text is kept byte for byte");
+        assert_eq!(codex_hook_state_in(&out, cfg, cmd), CodexHookState::Enabled);
+        // Run again: nothing left to do.
+        assert_eq!(trust_codex_hooks_in(&out, &[cfg.to_string()], cmd), None);
+    }
+
+    #[test]
+    fn codex_hook_trust_fixes_a_stale_or_disabled_verdict_in_place() {
+        let cmd = "/opt/hooks/session.sh";
+        let codex_cfg = "/c/.codex/config.toml";
+        let src = format!(
+            "{}[hooks.state]\n\n[hooks.state.\"{codex_cfg}:session_start:0:0\"]\n\
+             trusted_hash = \"sha256:0bad\"\nenabled = false\n\n[tui]\nx = 1\n",
+            registered_codex_config(cmd, ""),
+        );
+        let out = trust_codex_hooks_in(&src, &[codex_cfg.to_string()], cmd).unwrap();
+        let start = format!(
+            "[hooks.state.\"{codex_cfg}:session_start:0:0\"]\ntrusted_hash = \"{}\"\n\n[tui]\nx = 1\n",
+            LIVE_HASHES[0].1
+        );
+        assert!(out.contains(&start), "{out}");
+        assert!(!out.contains("sha256:0bad") && !out.contains("enabled = false"));
+        assert_eq!(out.matches(&format!("[hooks.state.\"{codex_cfg}:session_start:0:0\"]")).count(), 1);
+        assert_eq!(codex_hook_state_in(&out, codex_cfg, cmd), CodexHookState::Enabled);
+    }
+
+    #[test]
+    fn codex_hook_trust_counts_positions_and_leaves_other_hooks_alone() {
+        let cmd = "/opt/hooks/session.sh";
+        let cfg = "/c/.codex/config.toml";
+        // The user's own SessionStart hook comes first, so ours is 1:0; their
+        // hook gets no verdict. A Stop of ours with an extra field is skipped,
+        // since its hash would cover that field.
+        let src = format!(
+            "[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = 'mine.sh'\n\n\
+             [[hooks.SessionStart]]\nmatcher = \"startup|resume|clear|compact\"\n\n\
+             [[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = '{cmd}'\ntimeout = 10\n\n\
+             [[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = \"command\"\ncommand = '{cmd}'\ntimeout = 10\nstatusMessage = \"x\"\n"
+        );
+        let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).unwrap();
+        assert!(out.contains(&format!("[hooks.state.\"{cfg}:session_start:1:0\"]\ntrusted_hash = \"{}\"", LIVE_HASHES[0].1)));
+        assert!(!out.contains(":session_start:0:0") && !out.contains(":stop:"), "{out}");
+        assert_eq!(trust_codex_hooks_in("model = \"o3\"\n", &[cfg.to_string()], cmd), None);
+    }
+
     #[test]
     fn codex_hook_state_tolerates_a_config_path_spelled_differently() {
         // Codex builds the key from the path *it* resolved (symlinked CODEX_HOME,
@@ -4485,6 +4862,10 @@ mod tests {
         // A name that folds to nothing useful leaves the last answer standing.
         write(&[answer.into(), switch("<local-command-stdout>Set model to Default</local-command-stdout>")]);
         assert_eq!(read().as_deref(), Some("claude-opus-5"));
+        // Current releases write the confirmation as a `local_command` system record.
+        let system = serde_json::json!({"type": "system", "subtype": "local_command", "content": "<local-command-stdout>Kept model as `Sonnet 5.5`</local-command-stdout>"}).to_string();
+        write(&[answer.into(), system]);
+        assert_eq!(read().as_deref(), Some("sonnet-5-5"));
     }
 
     #[test]
@@ -4631,6 +5012,9 @@ mod tests {
         assert_eq!(read(&[set, typed, answer, failed]), Some(false));
         assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
         assert_eq!(read(&[met, sidechain]), Some(false));
+        // Current releases record the typed command as a `local_command` system record.
+        let cleared = r#"{"type":"system","subtype":"local_command","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>clear</command-args>"}"#;
+        assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
     }
 
     #[test]

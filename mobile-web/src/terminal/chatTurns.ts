@@ -214,6 +214,16 @@ function isInputBox(lines: readonly { text: string }[], index: number): boolean 
   return false;
 }
 
+/** Whether `line` opens an agent's message (`AGENT_MESSAGE`), for the tab's
+ * agent — Gemini CLI's and Qwen Code's `●` is a radio dot, not a bullet. */
+export function opensAgentMessage(line: { text: string }, agentLabel?: string): boolean {
+  return messageBullet(agentLabel).test(line.text);
+}
+
+function messageBullet(agentLabel?: string): RegExp {
+  return radioMarkerAgent(agentLabel) ? RADIO_AGENT_MESSAGE : AGENT_MESSAGE;
+}
+
 /** Whether `line` opens a Claude Code tool call, whose block Focus leaves out. */
 export function isToolCall(line: { text: string }): boolean {
   return CLAUDE_TOOL_CALL.test(line.text);
@@ -317,7 +327,7 @@ export function chatTurns(
   columns = 0,
 ): ChatTurn[] {
   const echo = echoPattern(agentLabel);
-  const bullet = radioMarkerAgent(agentLabel) ? RADIO_AGENT_MESSAGE : AGENT_MESSAGE;
+  const bullet = messageBullet(agentLabel);
   // OpenCode's minimal interface wraps its own rows at the pane width, with no
   // marker and no indent on the continuation, so a block is held together by
   // the blank row that ends it rather than by an indent (`openCodeMini.ts`).

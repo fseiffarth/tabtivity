@@ -875,6 +875,31 @@
   flex: 0 0 auto;
 }
 
+/* The two toolbar rows: views (tabs above) and actions. The action row is the
+   quieter one — smaller, icon-only buttons — and vanishes when a scope has no
+   action to offer. */
+.side-panel-actions {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  gap: 2px;
+}
+.side-panel-actions:empty {
+  display: none;
+}
+.side-panel-actions .toolbar-btn--sm {
+  height: 18px;
+  min-width: 18px;
+  padding: 0 4px;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.side-panel-actions .toolbar-btn--sm svg {
+  width: 11px;
+  height: 11px;
+}
+
 /* The Git button carries the colour of its next available action: red for Add,
    amber for Commit, green for Push. This keeps pending work visible while the
    actions themselves live in the Git view. */

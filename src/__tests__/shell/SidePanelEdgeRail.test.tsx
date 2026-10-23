@@ -16,6 +16,7 @@ const shared = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   const store = {
     settings: {} as Record<string, unknown>,
+    projects: [] as Array<{ id: string; remote?: object }>,
     listeners,
     keyboard: null as null | { onToggleSidePanel?: () => void; onSidePanel?: (o: boolean) => void },
   };
@@ -50,7 +51,9 @@ vi.mock("../../stores/projects", () => {
     clearSwitchToast: vi.fn(),
     connToast: null,
     clearConnToast: vi.fn(),
-    projects: [],
+    get projects() {
+      return shared.store.projects;
+    },
   };
   return {
     useProjectsStore: Object.assign(
@@ -133,6 +136,7 @@ vi.mock("../../hooks/useKeyboard", () => ({
 
 import { AppShell } from "../../components/layout/AppShell";
 import { showAssistant, useAssistantViewStore } from "../../stores/assistantView";
+import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
 
 async function mount() {
   await act(async () => {
@@ -144,6 +148,8 @@ async function mount() {
 const reset = (settings: Record<string, unknown> = {}) => {
   shared.updateSettings.mockClear();
   shared.store.settings = { side_panel_view_by_project: { other: "git" }, ...settings };
+  shared.store.projects = [];
+  useHpcJobsStore.setState({ slurmByProject: {} });
 };
 const viewPatches = () =>
   shared.updateSettings.mock.calls.filter(
@@ -218,6 +224,33 @@ describe("side panel rail — docked (default)", () => {
     expect(viewPatches()).toHaveLength(0);
     await click("Hide the side panel");
     expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("offers no remote-only views for a local project", async () => {
+    shared.store.projects = [{ id: "proj-1" }];
+    await mount();
+    for (const label of ["Diverged", "Sessions", "Jobs"]) {
+      expect(screen.queryByTitle(`Show the ${label} panel`)).toBeNull();
+    }
+  });
+
+  it("a remote project's rail offers Diverged and Sessions, opening those views", async () => {
+    shared.store.projects = [{ id: "proj-1", remote: { host: "h" } }];
+    await mount();
+    expect(screen.getByTitle("Show the Sessions panel")).toBeTruthy();
+    await click("Show the Diverged panel");
+    expect(shared.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ side_panel_view: "orange" }),
+    );
+  });
+
+  it("offers Jobs once the panel's probe found SLURM", async () => {
+    useHpcJobsStore.getState().setSlurm("proj-1", true);
+    await mount();
+    await click("Show the Jobs panel");
+    expect(shared.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ side_panel_view: "jobs" }),
+    );
   });
 
   it("offers no Tabby tab with the experimental switch off", async () => {

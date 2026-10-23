@@ -49,7 +49,7 @@ const AFFIRM_WORD = /^(?:yes|allow|approve|accept|proceed|continue|run|apply|ok)
 const DENY_WORD =
   /^(?:no|don'?t|deny|reject|decline|cancel|keep|skip|stop|abort|quit)$/i;
 
-// Codex's startup hook-trust menu (0.160.1–0.163.0): "Hooks need review" over
+// Codex's startup hook-trust menu (0.160.1–0.164.0): "Hooks need review" over
 // "1. Review hooks / 2. Trust all and continue / 3. Continue without trusting".
 // None of its labels is a deny word, so `hasYesNoMenu` misses it, yet Codex
 // waits on it before the session starts. Anchored on the heading as well as a

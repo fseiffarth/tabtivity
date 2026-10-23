@@ -208,7 +208,11 @@ const PANEL_COLUMN = /^[│┃┆┇┊┋┌┏╭╔└┗╰╚├┣┤┫�
  * (`Yes, and switch to accept edits (auto-approve file edits and common file
  * commands) for this session (shift+tab)`). */
 const MAX_LABEL = 160;
-const MAX_DESCRIPTION = 200;
+/** Room for an agent's own option note, which it writes as a sentence or
+ * two: at 200 an `AskUserQuestion` note of 213 characters lost its last
+ * words (`…the cloud run moves to`). Still a bound, so a run that swallowed
+ * ordinary output cannot fill the sheet with it. */
+const MAX_DESCRIPTION = 600;
 /** Non-blank rows a heading may occupy above the list: the heading itself and
  * the blurb both CLIs print under it. A longer block above the rows is
  * ordinary output, and the dialog then goes untitled rather than titled with
@@ -703,7 +707,7 @@ const CODEX_HOOKS_TABLE = /^\s*Event\s{2,}Installed\s{2,}Active\b/u;
 const CODEX_HOOKS_FOOTER = /^\s*(?:t (trust all)\s*·\s*)?enter (?:review|details)\s*·\s*esc (close)\s*$/u;
 
 /**
- * Codex's hooks page (0.163.0): what `Review hooks` on its startup "Hooks need
+ * Codex's hooks page (0.163.0, 0.164.0): what `Review hooks` on its startup "Hooks need
  * review" menu opens, and `/hooks`. A table of hook events under its heading,
  * its highlight on an event row, its answers in the footer:
  *

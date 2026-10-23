@@ -85,8 +85,8 @@ import { useExperimental } from "../../lib/experimental";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
-import { RailAgentsIcon, RailAppsIcon, RailAssistantIcon, RailFilesIcon, RailGitIcon } from "../common/EdgeRailIcons";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TerminalIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -447,24 +447,16 @@ export function ProjectFilesView({
   // SLURM support in particular is only known one async probe after mount. So
   // the unavailable view *renders* as Files while the stored value stays put:
   // switch back to a remote project, or let the probe land, and it returns.
-  const viewAvailable = (candidate: View): boolean => {
-    switch (candidate) {
-      case "orange":
-      case "sessions":
-        return !activeBox && !!project?.remote && !!projectId;
-      case "jobs":
-        return !activeBox && slurmSupported && !!projectId;
-      case "remarks":
-        return !activeBox && remarksEnabled && !!projectId;
-      case "todo":
-        return !activeBox && devTodo;
-      case "assistant":
-        return !!assistant && assistantEnabled;
-      default:
-        return true;
-    }
+  const viewGates: SidePanelViewGates = {
+    inBox: !!activeBox,
+    projectId,
+    remote: !!project?.remote,
+    slurm: slurmSupported,
+    remarks: remarksEnabled,
+    todo: devTodo,
+    assistant: !!assistant && assistantEnabled,
   };
-  const view: View = viewAvailable(requestedView) ? requestedView : "files";
+  const view: View = sidePanelViewAvailable(requestedView, viewGates) ? requestedView : "files";
   useEffect(() => {
     if (active && remarksEnabled && projectId && projectDir) {
       void useProjectRemarksStore.getState().load(projectId, projectDir);
@@ -1000,10 +992,14 @@ export function ProjectFilesView({
     }
     let cancelled = false;
     slurmAvailable(projectDir)
-      .then((info) => { if (!cancelled) setSlurmSupported(info.available); })
+      .then((info) => {
+        if (cancelled) return;
+        setSlurmSupported(info.available);
+        if (projectId) useHpcJobsStore.getState().setSlurm(projectId, info.available);
+      })
       .catch(() => { if (!cancelled) setSlurmSupported(false); });
     return () => { cancelled = true; };
-  }, [active, projectDir, primaryReady]);
+  }, [active, projectDir, primaryReady, projectId]);
   // The queue, every 7 s while the Jobs view shows and the window is in front.
   const pollJobs = useCallback(async (poll: PollRun) => {
     if (!projectDir) return;
@@ -1766,126 +1762,58 @@ export function ProjectFilesView({
         </div>
       )}
 
-      <div className="side-panel-toolbar">
-        {/* Agents (#249): every agent tab of this scope that can carry
-            schedules, plus the scope's collected prompts. Same row as Apps so
-            the side panel and the Files tab offer it alike. */}
-        {(["files", "git", "windows", "agents"] as View[]).map((v) => (
-          <button
-            key={v}
-            className={`toolbar-btn toolbar-btn--sm toolbar-btn--tab${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
-            style={{ marginLeft: v === "files" ? 0 : 2 }}
-            aria-pressed={view === v}
-            onClick={() => setView(v)}
-          >
-            {/* The rail's own glyph for this view (`EdgeRailIcons`). */}
-            {v === "files" ? <RailFilesIcon /> : v === "git" ? <RailGitIcon /> : v === "agents" ? <RailAgentsIcon /> : <RailAppsIcon />}
-            {t(
-              v === "files"
-                ? "projectFilesView.tabFiles"
-                : v === "git"
-                  ? "projectFilesView.tabGit"
-                  : v === "agents"
-                    ? "projectFilesView.tabAgents"
-                    : "projectFilesView.tabApps",
-            )}
-            {v === "git" && gitPendingColor && (
-              <span
-                className="toolbar-btn-flag"
-                style={{ backgroundColor: gitPendingColor }}
-                aria-hidden="true"
-              />
-            )}
-          </button>
-        ))}
-        {/* Orange (diverged) files: a dedicated toggle for remote projects,
-            badged with the count so conflicts are visible at a glance. Auto-sync
-            never touches these, so this is where they get resolved. The badge
-            also counts NEW local-only files — a file the host has never seen is
-            invisible in the remote tree, so this count is where its existence
-            first shows up at all. */}
-        {!activeBox && project?.remote && projectId && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "orange" ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
-            aria-pressed={view === "orange"}
-            onClick={() => setView(view === "orange" ? "files" : "orange")}
-            title={t("projectFilesView.divergedFilesTitle", {
-              count: orangeFiles.length + newLocalFiles.length,
-            })}
-          >
-            ± {orangeFiles.length + newLocalFiles.length > 0 && (
-              <span className="side-panel-orange-count">
-                {orangeFiles.length + newLocalFiles.length}
-              </span>
-            )}
-          </button>
-        )}
-        {/* Persistent (tmux) sessions on the host (TODO #85): remote-only, badged
-            with the live session count, so a run left alive on the host is one
-            click from being reattached. */}
-        {!activeBox && project?.remote && projectId && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "sessions" ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
-            aria-pressed={view === "sessions"}
-            onClick={() => setView(view === "sessions" ? "files" : "sessions")}
-            title={t("projectFilesView.persistentSessionsTitle", { count: sessionRows.length })}
-            aria-label={t("projectFilesView.persistentSessionsTitle", { count: sessionRows.length })}
-          >
-            <TerminalIcon /> {sessionRows.length > 0 && <span className="side-panel-orange-count">{sessionRows.length}</span>}
-          </button>
-        )}
-        {/* SLURM jobs (HPC): shown only when the host actually has SLURM, so the
-            toggle never appears off-cluster. Badged with the live queue count. */}
-        {!activeBox && slurmSupported && projectId && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "jobs" ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
-            aria-pressed={view === "jobs"}
-            onClick={() => setView(view === "jobs" ? "files" : "jobs")}
-            title={t("projectFilesView.slurmJobsTitle", { count: jobRows.length })}
-          >
-            <GearIcon /> {jobRows.length > 0 && <span className="side-panel-orange-count">{jobRows.length}</span>}
-          </button>
-        )}
-        {!activeBox && remarksEnabled && projectId && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "remarks" ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
-            aria-pressed={view === "remarks"}
-            onClick={() => setView(view === "remarks" ? "files" : "remarks")}
-            title={t("projectRemarks.view")}
-          >
-            <CommentIcon />
-          </button>
-        )}
-        {!activeBox && devTodo && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "todo" ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
-            aria-pressed={view === "todo"}
-            onClick={() => setView(view === "todo" ? "files" : "todo")}
-            title={t("devTodo.viewTitle")}
-            aria-label={t("devTodo.viewTitle")}
-          >
-            <CheckIcon />
-          </button>
-        )}
-        {/* Tabby: the same view the edge rail's Tabby icon opens. Not tied to
-            the project, so a box scope offers it too. */}
-        {assistant && assistantEnabled && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm side-panel-orange-btn${view === "assistant" ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
-            aria-pressed={view === "assistant"}
-            onClick={() => setView(view === "assistant" ? "files" : "assistant")}
-            title={t("assistant.title")}
-            aria-label={t("assistant.title")}
-          >
-            <RailAssistantIcon />
-          </button>
-        )}
+      {/* Row 1: every view the panel can switch to, one tab each — the same
+          glyph, label and order as the edge rail (`sidePanelViews`). Views a
+          scope doesn't have (± and Sessions off a remote project, Jobs off a
+          SLURM host, …) are simply absent. A count rides as a suffix badge:
+          the diverged files (which includes NEW local-only files — a file the
+          host has never seen is invisible in the remote tree, so this count is
+          where its existence first shows up), the live tmux sessions, the
+          queued jobs. */}
+      <div className="side-panel-toolbar side-panel-views">
+        {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }) => {
+          const count =
+            v === "orange"
+              ? orangeFiles.length + newLocalFiles.length
+              : v === "sessions"
+                ? sessionRows.length
+                : v === "jobs"
+                  ? jobRows.length
+                  : 0;
+          const title =
+            v === "orange"
+              ? t("projectFilesView.divergedFilesTitle", { count })
+              : v === "sessions"
+                ? t("projectFilesView.persistentSessionsTitle", { count })
+                : v === "jobs"
+                  ? t("projectFilesView.slurmJobsTitle", { count })
+                  : undefined;
+          return (
+            <button
+              key={v}
+              className={`toolbar-btn toolbar-btn--sm toolbar-btn--tab${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
+              aria-pressed={view === v}
+              onClick={() => setView(v)}
+              title={title}
+            >
+              <Icon />
+              {t(labelKey)}
+              {count > 0 && <span className="side-panel-orange-count">{count}</span>}
+              {v === "git" && gitPendingColor && (
+                <span
+                  className="toolbar-btn-flag"
+                  style={{ backgroundColor: gitPendingColor }}
+                  aria-hidden="true"
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Row 2: everything that acts rather than switches the view — smaller,
+          icon-only. */}
+      <div className="side-panel-toolbar side-panel-actions">
         {/* The tree's search + refresh, hoisted out of the tree itself. Files
             view only: both act on the tree, and the tree is only mounted there
             (a ↻ in the Git view would bump a counter nothing is listening to).
@@ -1893,7 +1821,6 @@ export function ProjectFilesView({
         {view === "files" && (
           <button
             className={`toolbar-btn toolbar-btn--sm${searchOpen ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
             aria-pressed={searchOpen}
             aria-expanded={searchOpen}
             onClick={() => setSearchOpen((v) => !v)}
@@ -1906,7 +1833,6 @@ export function ProjectFilesView({
         {view === "files" && (
           <button
             className="toolbar-btn toolbar-btn--sm"
-            style={{ marginLeft: 2 }}
             onClick={() => setRefreshNonce((n) => n + 1)}
             title={t("fileTree.refreshTitle")}
             aria-label={t("common.refresh")}
@@ -1917,7 +1843,6 @@ export function ProjectFilesView({
         {importDrop.canImport && (
           <button
             className="toolbar-btn toolbar-btn--sm"
-            style={{ marginLeft: 2 }}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               setImportMenu({ x: r.left, y: r.bottom + 2 });
@@ -1954,7 +1879,6 @@ export function ProjectFilesView({
         {projectDir && (
           <button
             className="toolbar-btn toolbar-btn--sm"
-            style={{ marginLeft: 2 }}
             onClick={openInOsBrowser}
             title={t("projectFilesView.openInFileManagerTitle")}
           >
@@ -1964,7 +1888,6 @@ export function ProjectFilesView({
         {!activeBox && projectDir && (
           <button
             className={`toolbar-btn toolbar-btn--sm${showDownloads ? " active" : ""}`}
-            style={{ marginLeft: 2 }}
             aria-pressed={showDownloads}
             onClick={() => {
               setShowDownloads((v) => !v);
@@ -1979,7 +1902,6 @@ export function ProjectFilesView({
         {projectId && (
           <button
             className="toolbar-btn toolbar-btn--sm"
-            style={{ marginLeft: 2 }}
             onClick={() => setShowSettings(true)}
             title={t("projectFilesView.projectSettingsTitle")}
           >

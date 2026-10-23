@@ -378,6 +378,22 @@ describe("the desktop Reader's live screen", () => {
     expect(readReaderLive(plainBuffer(idle), "Claude").stray).toBe(false);
     expect(readReaderLive(plainBuffer(PERMISSION), "Claude").stray).toBe(false);
     expect(readReaderLive(plainBuffer(["", ""]), "Claude").stray).toBe(false);
+    // OpenCode 2.1.3's start screen (120×40 capture): the box centred under
+    // the logo, the version under the box's footer.
+    const pad = " ".repeat(23);
+    const openCodeStart = [
+      ...Array<string>(14).fill(""),
+      `${" ".repeat(41)}█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█`,
+      "", "",
+      `${pad}┃`, `${pad}┃  Ask anything… "Fix broken tests"`, `${pad}┃`, `${pad}┃  Build · Flint 40B Free OpenCode`,
+      `${pad}╹${"▀".repeat(74)}`,
+      `${pad}/…/proj  shift+tab agents  ctrl+p commands`,
+      ...Array<string>(12).fill(""),
+      `${" ".repeat(113)}2.1.3`,
+    ];
+    const start = readReaderLive(plainBuffer(openCodeStart), "OpenCode", 120);
+    expect(start.stray).toBe(false);
+    expect(start.status?.mode).toBe("build");
     // A panel of the CLI's own over the input box, and a session that ended.
     const panel = readReaderLive(plainBuffer([
       "> fix it", "", "⏺ Done.", "", " Settings", "   Auto-compact          true", "   Theme                 dark", "", "  Esc to close",

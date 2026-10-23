@@ -18,6 +18,7 @@ import {
   type SelectOption,
   type SelectPrompt,
 } from "../../../mobile-web/src/terminal/selectPrompt";
+import { isAntigravityTab, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort } from "../../../mobile-web/src/terminal/antigravity";
 import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
 import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
@@ -157,7 +158,15 @@ function sameStatus(a: SessionStatus | null, b: SessionStatus | null): boolean {
  */
 export function readModelPicker(buffer: ReadableBufferLike, agentLabel: string): SelectPrompt | null {
   const { lines } = readableScreen(buffer, READER_ROWS);
+  if (isAntigravityTab(agentLabel)) return readAntigravityPicker(lines);
   return isOpenCodeTab(agentLabel) ? readOpenCodePicker(lines) : readSelectPrompt(lines, agentLabel);
+}
+
+/** The effort slider Antigravity's `Switch Model` dialog draws under the row
+ * its highlight is on: model and effort are one dialog there, so the effort is
+ * read off the same screen as the models, for whichever model is highlighted. */
+export function readAntigravitySlider(buffer: ReadableBufferLike): AntigravityEffort | null {
+  return readAntigravityEffort(readableScreen(buffer, READER_ROWS).lines);
 }
 
 /** The frame of OpenCode's picker on screen, rows and headings as drawn:

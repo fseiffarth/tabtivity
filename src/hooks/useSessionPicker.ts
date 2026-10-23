@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OPENCODE_MODEL_KEYS, OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
-import { sameSelectStep, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
+import { antigravityEffortKeys, isAntigravityTab, type AntigravityEffort } from "../../mobile-web/src/terminal/antigravity";
+import { sameSelectStep, selectMoveKeys, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
-import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../lib/agents/readerLive";
+import { modelPickKeys, readAntigravitySlider, readModelPicker, readOpenCodeModelPage } from "../lib/agents/readerLive";
+import { useT } from "../lib/i18n";
 import { holdSessionPicker, submitScheduledAgentCommand } from "../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import type { TabEntry } from "../stores/tabs";
@@ -26,6 +28,24 @@ export type SessionPickerCommand = "/model" | "/permissions";
  * only offer to move the tab off it. */
 export function modelPickOffered(tab: Pick<TabEntry, "kind">): boolean {
   return tab.kind !== "local_agent";
+}
+
+/** The effort slider as a list of its own, one row per stop. */
+function sliderPrompt(slider: AntigravityEffort, title: string): SelectPrompt {
+  return {
+    options: slider.stops.map((stop, index) => ({ index, number: index + 1, label: stop.label, ...(stop.description ? { description: stop.description } : {}) })),
+    current: slider.current,
+    title,
+    start: 0,
+    question: 0,
+    context: 0,
+  };
+}
+
+function sameSlider(a: AntigravityEffort | null, b: AntigravityEffort | null): boolean {
+  if (!a || !b) return a === b;
+  return a.current === b.current && a.stops.length === b.stops.length
+    && a.stops.every((stop, at) => stop.label === b.stops[at].label && stop.description === b.stops[at].description);
 }
 
 export interface SessionPicker {
@@ -65,6 +85,14 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const [command, setCommand] = useState<SessionPickerCommand>("/model");
   const [picker, setPicker] = useState<SelectPrompt | null>(null);
   const [answered, setAnswered] = useState<SelectStep | null>(null);
+  const t = useT();
+  /** Antigravity keeps the model and its effort on one dialog and draws the
+   * slider only under the highlighted row. A model tap walks the highlight
+   * there (`effortFor`, by the row's printed number) and nothing is accepted
+   * until the slider the dialog then draws for it has been read and answered. */
+  const antigravity = isAntigravityTab(agentLabel);
+  const [slider, setSlider] = useState<AntigravityEffort | null>(null);
+  const [effortFor, setEffortFor] = useState<{ number: number; label: string } | null>(null);
   const sawPicker = useRef(false);
   const typeKeysNow = useRef(typeKeys);
   useEffect(() => { typeKeysNow.current = typeKeys; });
@@ -93,6 +121,10 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
         next = walk.current?.prompt() ?? null;
       } else {
         next = term ? readModelPicker(term.buffer.active, agentLabel) : null;
+        if (antigravity) {
+          const drawn = term && next ? readAntigravitySlider(term.buffer.active) : null;
+          setSlider((previous) => (sameSlider(previous, drawn) ? previous : drawn));
+        }
       }
       setPicker((previous) => (previous && next && sameSelectStep(previous, next)
         && previous.current === next.current
@@ -105,12 +137,14 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
       clearInterval(timer);
       walk.current?.reset();
     };
-  }, [picking, ptyId, agentLabel]);
+  }, [picking, ptyId, agentLabel, antigravity]);
 
   const finish = useCallback(() => {
     setPicking(false);
     setPicker(null);
     setAnswered(null);
+    setSlider(null);
+    setEffortFor(null);
   }, []);
   /** OpenCode's picker is opened by keys, not a command: one this never read
    * is still up in the session, where the next prompt would land in it
@@ -124,9 +158,29 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
 
   // The step on screen, unless it is the one just answered and the session
   // has not redrawn yet.
-  const step = picker && answered && sameSelectStep(answered, picker) ? null : picker;
+  const modelStep = picker && answered && sameSelectStep(answered, picker) ? null : picker;
+  /** Whether the highlight has reached the model a tap chose, so the slider on
+   * screen is that model's. */
+  const landed = !!effortFor && !!picker && picker.options[picker.current]?.number === effortFor.number;
+  const effortStep = effortFor && landed && slider && slider.stops.length > 1
+    ? sliderPrompt(slider, t("mobile.model.effortTitle", { model: effortFor.label }))
+    : null;
+  const step = effortFor ? effortStep : modelStep;
+  // A model with no slider (every Claude model Antigravity offers) is accepted
+  // as soon as the walk lands: there is nothing left to ask.
+  useEffect(() => {
+    if (!picking || !effortFor || !landed || !picker || effortStep) return;
+    setEffortFor(null);
+    setAnswered({ title: picker.title, options: picker.options });
+    void typeKeysNow.current(["\r"]).catch(() => setAnswered(null));
+  }, [picking, effortFor, landed, picker, effortStep]);
   useEffect(() => {
     if (!picking) return;
+    if (effortFor && picker && !step) {
+      // The walk's keys have not landed: if they never do, give the list back.
+      const stuck = setTimeout(() => setEffortFor(null), PICKER_WAIT_MS);
+      return () => clearTimeout(stuck);
+    }
     if (step) {
       sawPicker.current = true;
       if (answered) setAnswered(null);
@@ -154,7 +208,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
       finish();
     }, PICKER_WAIT_MS);
     return () => clearTimeout(never);
-  }, [picking, step, picker, answered, finish, closeUnread]);
+  }, [picking, step, picker, answered, effortFor, finish, closeUnread]);
 
   const open = (next: SessionPickerCommand = "/model") => {
     if (picking) return;
@@ -162,6 +216,8 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     sawPicker.current = false;
     setAnswered(null);
     setPicker(null);
+    setSlider(null);
+    setEffortFor(null);
     const sent = isOpenCodeTab(agentLabel)
       ? typeKeys(OPENCODE_MODEL_KEYS)
       : tab.scheduleTargetId
@@ -174,6 +230,23 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     if (!step) return;
     const option = step.options.find((entry) => entry.index === index);
     if (!option) return;
+    if (antigravity && picker) {
+      if (effortStep && slider) {
+        // The slider's own ←/→, then the Enter that applies model and effort.
+        setAnswered({ title: picker.title, options: picker.options });
+        setEffortFor(null);
+        void typeKeys([...antigravityEffortKeys(slider.current, index), "\r"]).catch(() => setAnswered(null));
+        return;
+      }
+      // The tap only walks the highlight to the model; the effort it offers is
+      // the next step.
+      const at = picker.options[picker.current]?.number;
+      if (at === undefined) return;
+      setEffortFor({ number: option.number, label: option.label });
+      const keys = selectMoveKeys(at, option.number);
+      if (keys.length > 0) void typeKeys(keys).catch(() => setEffortFor(null));
+      return;
+    }
     // No walk key may follow the answer's into the session.
     walk.current?.hold();
     setAnswered({ title: step.title, options: step.options });
@@ -192,7 +265,8 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     command,
     picker,
     step,
-    shownStep: step ?? (answered && picker ? answered : null),
+    // The model list stays up while the highlight walks to a tapped model.
+    shownStep: step ?? (effortFor && picker ? { title: picker.title, options: picker.options } : answered && picker ? answered : null),
     busy: !!answered || !step,
     listing: isOpenCodeTab(agentLabel) && !!step?.hidden,
     open,

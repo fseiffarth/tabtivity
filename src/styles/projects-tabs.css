@@ -1192,6 +1192,23 @@
   text-overflow: ellipsis;
 }
 
+/* A shell tab's launch line (program + args, typed command): monospace and
+   wrapped, since the whole point is reading the args the tab was started with;
+   capped at four lines so a long one-liner can't grow the card down the window. */
+.tab-popup-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
 .tab-popup-meta.working {
   color: var(--success);
 }

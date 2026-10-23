@@ -187,7 +187,7 @@ export function TerminalReaderChats({ ptyId, scope, tab, cwd, onReturnFocus }: {
         title={t("terminal.chats.hint")}
       >
         {t("terminal.chats.button")}
-        <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▾</span>
+        <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▴</span>
         <UntestedTag id="terminal.reader.chats" />
       </button>
       {open && (

@@ -24,6 +24,7 @@ import {
   readAntigravityPicker,
 } from "./antigravity";
 import {
+  isOpenCodeHomeFooter,
   isOpenCodeTab,
   isOpenCodePlaceholder,
   openCodeComposer,
@@ -307,7 +308,14 @@ function openCodeFrame(
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0 || index < lines.length - SEARCH_WINDOW) return null;
   const row = openCodeStatusRow(lines[index].text);
-  if (!row) return openCodeFullFrame(lines, index);
+  if (!row) {
+    const full = openCodeFullFrame(lines, index);
+    if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
+    // The start screen's own footer sits under the box's.
+    let footer = index - 1;
+    while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+    return footer < 0 ? null : openCodeFullFrame(lines, footer);
+  }
   let start = index;
   while (start > 0) {
     const above = lines[start - 1].text;

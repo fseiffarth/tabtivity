@@ -1599,6 +1599,7 @@ span.files-close { background:transparent; }
 .sign-in-open a { display:grid; flex:1; gap:2px; min-width:0; padding:12px 14px; border:1px solid #8c7df4; border-radius:11px; color:#fff; text-align:center; text-decoration:none; }
 .sign-in-open small { color:#dcd6ff; font-weight:400; font-size:.78rem; overflow-wrap:anywhere; }
 .sign-in-open button { flex:0 0 auto; }
+.readable-cloud-link { margin-bottom:10px; }
 .sign-in-code { display:flex; gap:8px; align-items:center; padding:10px 12px; border:1px solid #383c4d; border-radius:12px; background:#11141c; }
 .sign-in-code code { flex:1; font:700 1.45rem ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.14em; text-align:center; -webkit-user-select:all; user-select:all; }
 .sign-in-answer { padding-top:0; border-top:0; }

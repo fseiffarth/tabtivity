@@ -41,6 +41,7 @@ import {
   listOutbox,
   MAX_INBOX_FILE,
   openSignInTab,
+  openTeleportTab,
   pickPhoneFiles,
   recoverSession,
   refreshProjectFile,
@@ -132,7 +133,7 @@ import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../terminal/c
 import { useChatUncommitted } from "../terminal/chatUncommitted";
 import { CommitFiles } from "./CommitFiles";
 import { agentWork } from "../terminal/agentBusy";
-import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
+import { chatTurns, isLiveEcho, opensAgentMessage } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
@@ -146,7 +147,7 @@ import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../ter
 import { ageLabel, sizeLabel } from "../terminal/fileLabels";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
-import { copiedSignIn, hasSignInTab, osc52Text, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, signInPageKeys, type SignIn, type SignInPage } from "../terminal/signIn";
+import { copiedSignIn, hasSignInTab, osc52Text, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, signInPageKeys, type SignIn, type SignInPage } from "../terminal/signIn";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
@@ -844,6 +845,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   // sign-in page, only the row knows — and without it the sheet lost its
   // retry, its other way in and the Done that closes the tab.
   const signInTab = openedToSignIn || tab.sign_in === true;
+  /** A vendor cloud session (`TabRow.cloud`): its CLI may only print the
+   * session's link and exit, so there is no local session to wait for. */
+  const cloudTab = tab.cloud === true;
   const t = useT();
   /** A chat of the assistant scope: it has no folder behind it, so the
    * affordances that reach one are gone — the files drawer, the outbox, inbox
@@ -993,6 +997,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     () => (tab.kind === "agent" ? readSignIn(liveScreen) ?? (signInPage ? readPagedSignIn(signInPage) : null) : null),
     [tab.kind, liveScreen, signInPage],
   );
+  /** The cloud session's page, as the cloud tab's CLI printed it. */
+  const cloudLink = useMemo(() => (cloudTab ? readCloudLink(liveScreen) : null), [cloudTab, liveScreen]);
+  /** The session id it printed for taking the session over (`--teleport`). */
+  const cloudSession = useMemo(() => (cloudTab ? readCloudSession(liveScreen) : null), [cloudTab, liveScreen]);
   const [signInSheet, setSignInSheet] = useState(signInTab);
   const [hiddenSignIn, setHiddenSignIn] = useState("");
   /** A sign-in whose page went to the desktop's browser with no link on
@@ -1084,6 +1092,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [openingSignIn, setOpeningSignIn] = useState(false);
   const [signInError, setSignInError] = useState("");
   const signInKeys = useRef<Record<string, string>>({});
+  const [teleporting, setTeleporting] = useState(false);
+  const [teleportError, setTeleportError] = useState("");
+  /** One key per session, kept until the desktop answers: a retry after a
+   * lost answer finds the tab (and worktree) the first try made. */
+  const teleportKeys = useRef<Record<string, string>>({});
   // A sign-in tab whose sheet the reader closed brings it back with the news.
   useEffect(() => { if (signInTab && signedIn) setSignInSheet(true); }, [signInTab, signedIn]);
   const [usedSlash, setUsedSlash] = useState(() => readSlashCommands(slashCliKey));
@@ -2158,6 +2171,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [view, transcript, pending, tab.agent_label, tab.label, composerTyping]);
   /** Whether Focus is reading the stored session rather than the screen. */
   const sessionFocus = tab.kind === "agent" && view === "focus" && focusSource === "session";
+  /** Whether `transcript` is the session as it stands: a read answered since
+   * Focus last opened. Terminal view reads none, so what it holds is the
+   * session of when the reader left Focus — or nothing at all. */
+  const [transcriptCurrent, setTranscriptCurrent] = useState(false);
+  useEffect(() => { if (view !== "focus") setTranscriptCurrent(false); }, [view]);
   const transcriptVersion = useRef<string | undefined>();
   const transcriptRequest = useRef<AbortController>();
   useEffect(() => { transcriptVersion.current = transcript?.version; }, [transcript]);
@@ -2183,7 +2201,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         (next) => {
           if (stopped || controller.signal.aborted) return;
           // A malformed answer is a failed read: keep what is shown.
-          if (!next || typeof next !== "object" || next.unchanged) return;
+          if (!next || typeof next !== "object") return;
+          setTranscriptCurrent(true);
+          if (next.unchanged) return;
           // A forced full read (after an Undo) answers the same session: keep
           // what is shown, but ask by its version again from here on.
           transcriptVersion.current = next.version;
@@ -2210,8 +2230,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       transcriptRequest.current = controller;
       void getTranscript(tab.id, transcriptVersion.current, transcriptLimit, controller.signal).then(
         (next) => {
-          if (controller.signal.aborted || !next || typeof next !== "object" || next.unchanged) return;
-          showTranscript(next);
+          if (controller.signal.aborted || !next || typeof next !== "object") return;
+          setTranscriptCurrent(true);
+          if (!next.unchanged) showTranscript(next);
         },
         () => {},
       );
@@ -2244,7 +2265,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * rather than painting that banner as a conversation. A screen that already
    * holds a conversation (the session read lost) keeps the screen, and so
    * does one that waited past `STARTING_GRACE` (`startGaveUp`). */
-  const preSessionWait = sessionFocus && !startGaveUp
+  const preSessionWait = sessionFocus && !startGaveUp && !cloudTab
     && (transcript === null ? screenBlank : !transcript.available && (transcript.reason === "no_session" || transcript.reason === "no_transcript"))
     && (!promptOnScreen || pending.length > 0);
   /** The stored session is what Focus paints: available, and not switched
@@ -2802,8 +2823,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setUndoable(false);
       setClearQueued(false);
       setUndoNote("");
-      const sent = pendingPrompt(id, text, storedEntries);
-      setPending((current) => [...current, sent].slice(-MAX_PENDING));
+      // A bubble takes its place from the session the phone holds. Sent from
+      // Terminal view that one is stale or empty, and the bubble stood above
+      // turns that came before it — at the top of the chat for a session never
+      // read here — while its record, where it belongs, was hidden for it. The
+      // record alone shows it once Focus reads the session.
+      if (transcriptCurrent) {
+        const sent = pendingPrompt(id, text, storedEntries);
+        setPending((current) => [...current, sent].slice(-MAX_PENDING));
+      }
       // The phone knows the words before they leave; the desktop records them
       // as this tab's prompt — the only record of it for an agent whose
       // transcript is not read (OpenCode's cards list these).
@@ -3318,6 +3346,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       // Gone after it was listed: answered here, on the desktop, or dismissed.
       // After a tap the gap is given to the step that may still follow.
       if (!answered) {
+        // A reveal walk's keys still queued would land in the composer the
+        // picker gave back, where ↑ recalls old prompts from history.
+        clearPending();
+        setReveal(null);
         setModelSheet(false);
         return;
       }
@@ -3336,6 +3368,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setModelSheet(false);
     }, MODEL_PICKER_WAIT);
     return () => window.clearTimeout(timer);
+    // `clearPending` is a fresh closure every render; it only reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelSheet, picker, pickerStep, answered, openCode]);
   /** A windowed picker says how many rows it is not drawing: the highlight is
    * walked to each one it hides, which scrolls it into view, and back. Only
@@ -3527,6 +3561,24 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setOpeningSignIn(false);
     }
   };
+  /** The cloud session pulled onto the desktop as a new agent tab in a
+   * worktree of its own (`openTeleportTab`), shown in place of this one. */
+  const teleport = async () => {
+    if (teleporting || !openTab || !cloudSession) return;
+    const key = teleportKeys.current[cloudSession] ?? crypto.randomUUID();
+    teleportKeys.current[cloudSession] = key;
+    setTeleporting(true);
+    setTeleportError("");
+    try {
+      const body = await openTeleportTab(tab.id, cloudSession, key);
+      delete teleportKeys.current[cloudSession];
+      openTab(body.tab);
+    } catch (cause) {
+      setTeleportError(describeFailure(cause));
+    } finally {
+      setTeleporting(false);
+    }
+  };
   /** How this CLI signs in from here: a sign-in tab where the desktop has a
    * login command for it, else its slash command in this session. */
   const typedSignIn = signInCommand(slashCliKey);
@@ -3546,6 +3598,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   };
   const closeModelSheet = () => {
     openCodeWalk.current?.hold();
+    // Closed mid-walk, the reveal's queued arrow keys would follow the Esc
+    // into the composer, where ↑ recalls old prompts from history: dropped.
+    clearPending();
     // The dialog is the session's own and still open: close it there too,
     // rather than leaving a modal behind that the reader can no longer see.
     if (picker) type("\u001b");
@@ -3939,6 +3994,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     (): QuestionParts => (liveQuestion ? questionParts(liveTail, liveQuestion) : NO_QUESTION_PARTS),
     [liveQuestion, liveTail],
   );
+  /** An agent's own question (a tab row over it) shows the agent's message
+   * above it only when that message is read from its first row. Anything else
+   * there — a thinking preview's last rows, a half-erased row of the answer
+   * before, a message whose top `CONTEXT_LINES` cut off — reached the chat as
+   * fragments cut mid-sentence; the conversation behind the card has the turn. */
+  const questionContextShown = questionContext.length > 0
+    && (questionTabs.length === 0 || opensAgentMessage(questionContext[0], agentLabel));
   /** What the list on screen *is*, as a string: a stable dep for the effects
    * below, which must not restart on every repaint of the same question. Two
    * questions of one dialog can offer the same rows (two yes/no questions):
@@ -4476,7 +4538,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                         list below — a highlight walked with arrow keys is not
                         something a phone can do — and the question above them
                         is that list's heading. */}
-                    {questionContext.length > 0 && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
+                    {questionContextShown && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
                     <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} />
                   </div>}
                   {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
@@ -4500,6 +4562,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
             : <div className={chat ? "readable-lines chat" : "readable-lines"}>
                 {clipped && <div className="readable-notice">{t("mobile.focus.truncated")}</div>}
+                {cloudLink && <div className="sign-in-open readable-cloud-link">
+                  <a className="button primary" href={cloudLink.url} target="_blank" rel="noopener noreferrer">
+                    <strong>{t("mobile.focus.cloudOpen")}{isUntested("mobile.focus.cloudLink") && <em> · {t("mobile.focus.untested")}</em>}</strong>
+                    <small>{cloudLink.site}</small>
+                  </a>
+                  {cloudSession && openTab && <button disabled={teleporting || !connected} onClick={() => void teleport()}>{t("mobile.focus.cloudTeleport")}{isUntested("mobile.focus.cloudTeleport") && <em> · {t("mobile.focus.untested")}</em>}</button>}
+                </div>}
+                {cloudLink && cloudSession && openTab && <div className="readable-notice">{teleportError || t("mobile.focus.cloudTeleportNote")}</div>}
                 {hiddenLines > 0 && <button className="readable-earlier" onClick={showEarlier}>{t("mobile.focus.earlierOutput", { count: hiddenLines.toLocaleString() })}</button>}
                 {hiddenLines === 0 && earlier.dropped && <div className="readable-notice">{t("mobile.focus.truncated")}</div>}
                 {/* An agent's output is laid out as ONE stream: grouped piece by

@@ -256,6 +256,27 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(readSelectPrompt(lines("  1. Red", "     Warm and loud", "❯ 2. Green", "     Calm"))?.current).toBe(1);
   });
 
+  it("keeps an agent's long option note whole", () => {
+    // 213 characters, off a live phone: the old 200 cap cut it at "moves to".
+    const prompt = readSelectPrompt(lines(
+      "☐ Teleport",
+      "",
+      "Add a \"Teleport here\" button to a cloud tab's Chat view?",
+      "",
+      "❯ 1. Add the button (Recommended)",
+      "     Types the printed `claude --teleport <id>` into the cloud tab's shell, so",
+      "     the session continues locally in that same tab and Chat shows its",
+      "     conversation. Labelled so it's clear the cloud run moves to this machine.",
+      "  2. Leave it",
+      "  3. Type something.",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ));
+    expect(prompt?.options[0].description).toBe(
+      "Types the printed `claude --teleport <id>` into the cloud tab's shell, so the session continues locally in that same tab and Chat shows its conversation. Labelled so it's clear the cloud run moves to this machine.",
+    );
+  });
+
   it("keeps a question's preview panel out of its rows", () => {
     // Claude Code 2.1.278's AskUserQuestion with previews, captured off a real
     // session at 215 columns and read back through `readableScreen`: the rows

@@ -2980,3 +2980,23 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2425. **Screenshot markup: capture from an agent tab, mark it up, send it
+    there.** 📝 Planned (2026-10-23), not built: `docs/screenshot_markup_plan.md`.
+    A 📷 on the agent tab's prompt strip captures the screen (the existing
+    `capture_screenshot` staging flow); `ScreenshotSaveOverlay` gets **Mark up**
+    beside Save/Discard, which saves into the gitignored screenshots folder and
+    opens the picture in the desktop markup (the PDF markup split into a
+    source-neutral session + PDF/picture adapters); Submit goes to the
+    originating tab. The image viewer's Annotate becomes the same Mark up, and
+    `ImageAnnotator` is removed (its flattened save kept as an action).
+    - [ ] 🤖 Automated test
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

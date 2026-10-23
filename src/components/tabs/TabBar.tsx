@@ -57,7 +57,7 @@ import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
 import { CustomAgentDialog } from "./CustomAgentDialog";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
-import { TabHoverCard } from "./TabHoverCard";
+import { TabHoverCard, shellLaunch } from "./TabHoverCard";
 import { TabStackChip, type StackMember } from "./TabStackChip";
 import { stackNames, stripItems } from "../../lib/tabStacks";
 import { useDialogs } from "../common/PromptDialogs";
@@ -254,6 +254,12 @@ function selectOnMount(el: HTMLInputElement | null) {
   if (el) el.select();
 }
 
+/** Fast mode's native tooltip: the label, then a shell's launch lines. */
+function fastModeTitle(tab: TabEntry): string {
+  const { program, input } = shellLaunch(tab);
+  return [tab.label, program, input].filter(Boolean).join("\n");
+}
+
 /**
  * One plain tab of the strip. Memoised (performance plan §5.1): the bar
  * re-renders on hover, drag, menu and activity changes, and with sixty tabs
@@ -333,8 +339,8 @@ const TabItem = memo(function TabItem({
       onPointerDown={(e) => bar.pointerDown(e, tab)}
       // Fast mode has no card, so the label becomes a plain tooltip —
       // otherwise a tab whose name is ellipsized would have no way at all
-      // to read it out.
-      title={fastMode ? tab.label : undefined}
+      // to read it out. A shell Tabtivity opened adds what it was started with.
+      title={fastMode ? fastModeTitle(tab) : undefined}
       // Styled hover card (mirrors the project pill's popup) anchored to
       // this tab's bottom-center. Skipped while inline-renaming.
       onMouseEnter={(e) => {

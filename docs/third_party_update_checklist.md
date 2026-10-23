@@ -311,6 +311,20 @@ Claude's `/fast` — different thing.
   each message once — subagent token counts just get truer. 2.1.308 is
   "bug fixes" only; 2.1.307 otherwise touches OTel, MCP retries, cloud and
   self-hosted runners, VS Code — nothing Tabtivity reads.
+  Re-checked against 2.1.309 (2026-10-23, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.308 run of the same dump: keys
+  identical on all 19 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on every one, the
+  resume start's four cost fields included; transcript record types
+  identical; `-p --resume` of a `plan` session still reports the default;
+  `/usage` three meters, every reset resolved; `--help` identical;
+  notification-type, mode-label and cold-resume dialog strings count the
+  same). 2.1.309 gives `sed -i` the standard Bash prompt instead of a
+  simulated edit preview, which the decision lamp reads like any Bash
+  prompt; its ctrl+enter, `/rename`-after-`--resume` and emoji-cut
+  transcript fixes touch nothing Tabtivity sends (it never sends
+  ctrl+enter) and only make such transcript lines parse; the rest is
+  sandbox, MCP, IDE, cloud and Slack — nothing Tabtivity reads.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
@@ -452,6 +466,42 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **0.164.0 (2026-10-23), live but outside Tabtivity** — the standalone
+  install's musl build (`codex-code-mode-host` still beside `codex`) run in a
+  private tmux with its own `CODEX_HOME` and a local Ollama model, inside a
+  fenced agent tab, `--no-daemon`. `--version` prints `codex-cli 0.164.0`;
+  `resume [SESSION_ID]` (help now points at `--last` for the most recent),
+  `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m`, `-c`,
+  `--dangerously-bypass-hook-trust` stand. New subcommands `queue`,
+  `archive`/`unarchive`/`delete`, `migrate-rollouts` (legacy sessions →
+  paginated thread history, only with `--apply`) and `doctor`; new sessions
+  still write `sessions/<Y>/<M>/<D>/rollout-*.jsonl` with `session_meta`
+  first (`session_id`, `cwd`), `turn_context.model`, user prompts as
+  `response_item` user messages and `event_msg` `token_count` totals. Fed to
+  the parsers as captured (100 columns): the approval menu (same three labels,
+  `›` on row 1, `Environment: local` / `Reason: …` over the `$ <command>`
+  title `readSelectPrompt` takes; `looksLikeDecisionPrompt` true), the
+  title frames `[ ! ]`/`[ . ] Action Required | <dir>`, both `/model` steps
+  (unchanged; reasoning footer `enter default · s session · esc back`) and
+  the mode line (tmux's backtab and CSI-u Shift+Tab toggle the silent default
+  and `Plan mode`, read as `working` / `plan`). The "Hooks need review" menu
+  and the hooks page (`t trust all · enter review · esc close`, then `enter
+  details · esc close`) are as on 0.163.0. Hook payloads unchanged (Stop
+  with `stop_hook_active` and `last_assistant_message`; SessionEnd `reason`
+  `other` at an `exec` exit). Writer lock: a second `exec resume` exits 1 with
+  "already has an active writer"; after the TUI is SIGKILLed the same resume
+  succeeds and the lock file is gone. **Trust hash:** read off the codex-rs
+  source (`hooks::engine::discovery::hook_hash`, `config::version_for_toml`)
+  and reproduced byte for byte against the hashes 0.164.0 wrote:
+  `sha256:` + hex SHA-256 of the compact, key-sorted JSON
+  `{"event_name":<snake_case event>,"hooks":[{"async":false,"command":…,
+  "timeout":<normalized>,"type":"command"}],"matcher":…}` — `matcher` only
+  for events that keep one (not `Stop`/`UserPromptSubmit`), the timeout
+  defaulted to 600 (`SessionEnd` 1, clamped to 1–3). The config path is only
+  in the state key, never in the hash, so the hash of one home's hook is the
+  hash of the same hook in every home. Manage CLIs' **Trust in every agent
+  home** (`trust_codex_hooks`) writes it into each scope's config; until then
+  `/hooks` in one tab trusted only that tab's home and the notice stayed.
 - **0.163.0 (2026-10-16), live but outside Tabtivity** — the GitHub
   release's musl build plus its `codex-code-mode-host`, run in a private tmux
   with its own `CODEX_HOME` and a local Ollama model, inside a fenced agent
@@ -624,7 +674,7 @@ tab and resume/fork remain tagged for live verification.
   duplicate guard independent of hook trust; duplicates use the documented
   `codex resume` picker (no id). Never delete Codex's writer locks to force a
   resume. Verify this lifecycle again when its thread store changes (last
-  checked live on 0.163.0, with the CLI itself: a SIGKILLed writer releases
+  checked live on 0.164.0, with the CLI itself: a SIGKILLed writer releases
   the lock).
 - Session rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`
   whose **first line** is `{"type":"session_meta","payload":{"session_id","cwd",…}}`.
@@ -646,9 +696,11 @@ tab and resume/fork remain tagged for live verification.
   (`CODEX_HOOK_EVENTS`; 0.154.0 names those events and no `Notification`, read
   off the binary's strings, not live — so a Codex approval wait is still read
   off its screen). Their payloads carry `session_id` and `hook_event_name`
-  like Claude's (verified live on 0.161.0, 0.162.1 and 0.163.0). Trust state is read from
+  like Claude's (verified live on 0.161.0, 0.162.1, 0.163.0 and 0.164.0). Trust state is read from
   `[hooks.state."…"]` tables (`trusted_hash`, enabled flag), each hook by
-  position, so the new blocks need the same one-time `/hooks` trust.
+  position, so the new blocks need the same one-time `/hooks` trust — in every
+  agent home, which Manage CLIs' Trust in every agent home does at once
+  (`trust_codex_hooks`, the hash as under 0.164.0 above).
   Text-appended per event, never reserialized.
 - Local models: `codex --oss -c oss_provider="ollama" -m <model>` as the
   fallback when `ollama launch codex` cannot be used; reasoning is turned off
@@ -657,7 +709,7 @@ tab and resume/fork remain tagged for live verification.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.163.0):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.164.0):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -682,7 +734,7 @@ tab and resume/fork remain tagged for live verification.
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
   Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
-  0.161.0, 0.162.1 and 0.163.0, where Shift+Tab toggles only the silent default and plan (the
+  0.161.0, 0.162.1, 0.163.0 and 0.164.0, where Shift+Tab toggles only the silent default and plan (the
   other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
@@ -691,7 +743,7 @@ tab and resume/fork remain tagged for live verification.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0, 0.162.1 and 0.163.0, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0, 0.162.1, 0.163.0 and 0.164.0, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 
@@ -835,6 +887,27 @@ tab's environment, MCP grants and session claim belong to its own server.
 Saved `--mini` and root `--model`/`--agent` launches use `mini` (the full V2
 TUI no longer accepts those model/agent flags). Explicit `--server` is kept;
 remote/container binaries are not inferred from the host version.
+Re-checked against 2.1.3 (2026-10-23, the install home's binary beside the
+2.1.2 one, each in a scratch `HOME` with `OPENCODE_DISABLE_AUTOUPDATE=1`, no
+agent turn): `--help`, `mini`, `run`, `session`, `serve`, `auth` and `auth
+export --help` identical; `debug paths` the same layout; a fresh database
+from `session list --standalone` has a byte-identical schema (`session_v2`,
+`session_message` …); the binary strings the plugin, Reader and phone
+parsers lean on (`session.hook`, `OPENCODE_DISABLE_AUTOUPDATE`, `Ask
+anything`, `Type your own answer`, the question hints) count the same.
+`v2.1.2...v2.1.3` (66 commits, no GitHub release) leaves `packages/plugin`
+and the TUI's routes untouched; the session, plugin-host and V1-migration
+changes are type-only refactors, plus relative V1 session directories now
+resolved to the project worktree during migration; the rest is providers,
+voice, desktop, console and a Windows-only service port move.
+A tmux capture at 120×40 (stub provider on a dead local port) showed the full
+TUI's session screen read as before, but its start screen — the composer
+centred under the logo, its `┃` 23 columns in, and `home.footer`'s
+right-aligned version row under the box's footer (2.1.2 the same) — had the
+desktop Chat calling a fresh tab stray ("The terminal shows something the
+chat can't display"); `openCodeFrame` now steps over that version row and
+`openCodeComposer`/the placeholder allow the bar. A release that moves the
+version row or adds rows under it brings that notice back on fresh tabs.
 
 The session plugin now default-exports `{id, server, setup}`: V1 ≥1.18.29
 calls `server`, V2 calls `setup`, which registers `session.hook("prompt")`

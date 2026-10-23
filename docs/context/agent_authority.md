@@ -436,8 +436,12 @@ variable (`ANTHROPIC_AUTH_TOKEN` for Claude, which takes it without its
 custom-key dialog; `GEMINI_API_KEY`), and the CLI's base-URL variable
 (`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) set plain to
 `http://127.0.0.1:<port>/<provider>`. Only CLIs an environment variable can
-point at the proxy keep a row (Claude, Gemini; Codex, Vibe and OpenCode are
-out). The proxy refuses a browser request (`Origin`) or another `Host`,
+point at the proxy keep a row (Claude, Gemini; Vibe is out). Codex gets a
+launch-only provider in its argv; OpenCode, which reads no base-URL variable,
+gets each keyed provider in its inline config (`OPENCODE_CONFIG_CONTENT`:
+`baseURL` at the proxy and the key field naming the token variable as
+`{env:<token var>}`, so the token stays out of the tmux argv), which outranks
+a key or Claude login in its `auth.json` (checked on 1.19.3 and 2.1.3). The proxy refuses a browser request (`Origin`) or another `Host`,
 needs a live token of the route's provider (`x-api-key`, `Authorization:
 Bearer`, `x-goog-api-key` or `key=`, one value), forwards only the provider's
 allowlisted paths (`/v1/messages`, `count_tokens`, `/v1/models`; Gemini's
