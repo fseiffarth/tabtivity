@@ -527,7 +527,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
   }, [draft]);
-  // One line until the text needs more: the box grows with it (upward, the
+  // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height.
   useLayoutEffect(() => {
     const box = composerRef.current;
@@ -827,7 +827,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <textarea
           ref={composerRef}
           value={draft}
-          rows={1}
+          rows={3}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
           aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
           onChange={(e) => editDraft(e.target.value, true)}

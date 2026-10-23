@@ -3120,9 +3120,10 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
-/* The text box with Send inside its corner: one line (30px, centred on the
-   strip's row when the composer is that row), growing upward with the text
-   (`ReaderComposer` sets the height) up to max-height. */
+/* The text box with Send inside its corner: three lines (its bottom where a
+   one-line 30px box would sit centred on the strip's row when the composer is
+   that row), growing upward with the text (`ReaderComposer` sets the height)
+   up to max-height. */
 .terminal-reader-input {
   position: relative;
   flex: 1;
@@ -3132,7 +3133,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-composer textarea {
   flex: 1;
   box-sizing: border-box;
-  min-height: 30px;
+  min-height: calc(3 * 1.4em + 10px);
   max-height: 12em;
   padding: 4px 36px 4px 12px;
   resize: none;
