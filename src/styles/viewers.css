@@ -4654,6 +4654,24 @@ select.file-viewer-run-args-input {
 .file-viewer-pdf-markup-more .dropdown-menu {
   min-width: 180px;
 }
+/* The pen's style button: the chosen style drawn, and a caret saying it
+   opens; its menu draws each style beside its name. */
+.file-viewer-pdf-markup-bar .file-viewer-pdf-markup-style-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.file-viewer-pdf-markup-caret {
+  font-size: 9px;
+  opacity: 0.75;
+}
+.file-viewer-pdf-markup-style .dropdown-menu {
+  min-width: 150px;
+}
+.file-viewer-pdf-markup-style .dropdown-menu .file-viewer-pdf-markup-sample {
+  vertical-align: middle;
+  margin-right: 8px;
+}
 .file-viewer-pdf-markup-round {
   display: inline-flex;
   align-items: center;

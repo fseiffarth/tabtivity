@@ -1134,6 +1134,7 @@ export const enSource = {
   "mobile.markup.noteColor": "Note colour",
   "mobile.markup.tickDiff": "Was “{before}” · now “{after}”",
   "mobile.markup.style": "Pen style",
+  "mobile.markup.styleOf": "Pen style: {style}",
   "mobile.markup.style.pen": "Plain pen",
   "mobile.markup.style.marker": "Marker",
   "mobile.markup.style.dashed": "Dashed",

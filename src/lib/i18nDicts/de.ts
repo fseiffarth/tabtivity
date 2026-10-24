@@ -1070,6 +1070,7 @@ export const dict: Dict = {
   "mobile.markup.noteColor": "Notizfarbe",
   "mobile.markup.tickDiff": "War „{before}“ · jetzt „{after}“",
   "mobile.markup.style": "Stiftart",
+  "mobile.markup.styleOf": "Stiftart: {style}",
   "mobile.markup.style.pen": "Normaler Stift",
   "mobile.markup.style.marker": "Marker",
   "mobile.markup.style.dashed": "Gestrichelt",

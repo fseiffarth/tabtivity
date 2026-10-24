@@ -210,10 +210,10 @@ describe("Mark up in the PDF viewer", () => {
     const scroll = container.querySelector(".file-viewer-pdf-scroll")!;
     const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
     expect(pressed("Pen")).toBe("true");
-    expect(pressed("Plain pen")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Plain pen" })).toBeTruthy();
     // P on the armed pen steps its style; the marker offers yellow as its 4th colour.
     fireEvent.keyDown(scroll, { key: "p" });
-    expect(pressed("Marker")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Marker" })).toBeTruthy();
     fireEvent.keyDown(scroll, { key: "4" });
     expect(pressed("Colour: Yellow")).toBe("true");
     fireEvent.keyDown(scroll, { key: "]" });
@@ -255,10 +255,13 @@ describe("Mark up in the PDF viewer", () => {
     expect(pressed("Stamp")).toBe("true");
     fireEvent.keyDown(scroll, { key: "k" });
     expect(pressed("Delete")).toBe("true");
-    // Shift+3 arms the third preset (a blue arrow), by the key's place.
+    // Shift+2 arms the second preset (a yellow marker), Shift+3 the third (a
+    // blue pen), by the key's place.
+    fireEvent.keyDown(scroll, { key: "@", code: "Digit2", shiftKey: true });
+    expect(screen.getByRole("button", { name: "Pen style: Marker" })).toBeTruthy();
     fireEvent.keyDown(scroll, { key: "#", code: "Digit3", shiftKey: true });
     expect(pressed("Pen")).toBe("true");
-    expect(pressed("Arrow")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Plain pen" })).toBeTruthy();
     expect(pressed("Colour: Blue")).toBe("true");
     // S arms the select tool; a click picks the stored box on page 1.
     fireEvent.keyDown(scroll, { key: "s" });
