@@ -179,7 +179,7 @@ export function MobileSettings() {
   // (a revoke or Forget all changes what a list still reaches).
   const { phones: pairedPhones } = usePairedPhones(devices);
   const [phonePicker, setPhonePicker] = useState<
-    { kind: "project" | "box"; id: string; x: number; y: number } | null
+    { kind: "project" | "box" | "assistant"; id: string; x: number; y: number } | null
   >(null);
   const addDevice = useAddDevice();
   const [error, setError] = useState<string | null>(null);
@@ -374,6 +374,7 @@ export function MobileSettings() {
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
+          assistant_devices: stored?.assistant_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -392,7 +393,7 @@ export function MobileSettings() {
   /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
    *  a row whose access is on: opens the per-phone picker for it. */
   const phoneScopeButton = (
-    kind: "project" | "box",
+    kind: "project" | "box" | "assistant",
     id: string,
     name: string,
     enabled: boolean,
@@ -415,6 +416,19 @@ export function MobileSettings() {
         {phoneReachLabel(reach, t)} ▾
       </button>
     );
+  };
+
+  /** Tabby's reach, from its picker: every phone (both keys gone), some phones
+   * (the list), or off (`assistant_access` false, the list gone — a list never
+   * outlives the switch). One whole-block write, like `setMailGate`. */
+  const setAssistantReach = async (enabled: boolean, list: string[] | null) => {
+    await updateSettings({
+      [MOBILE_HOST_KEY]: {
+        ...(stored ?? { enabled: false }),
+        assistant_access: enabled ? undefined : false,
+        assistant_devices: enabled ? (list ?? undefined) : undefined,
+      },
+    });
   };
 
   const setUpInTerminal = async () => {
@@ -464,6 +478,7 @@ export function MobileSettings() {
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
+          assistant_devices: stored?.assistant_devices,
         },
       });
     } catch (reason) {
@@ -505,6 +520,7 @@ export function MobileSettings() {
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
+          assistant_devices: stored?.assistant_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -742,10 +758,11 @@ export function MobileSettings() {
           on (the backend ignores it otherwise), so the row appears with it. */}
       {assistantOn && (
         <ToggleRow
-          label={<><Hint help={t("mobile.assistantGateHelp")}>{t("mobile.assistantGate")}</Hint> <UntestedTag id="settings.assistantPhone" /></>}
+          label={<><Hint help={t("mobile.assistantGateHelp")}>{t("mobile.assistantGate")}</Hint> <UntestedTag id="settings.assistantPhone" /> <UntestedTag id="mobile.assistantPhones" /></>}
           checked={stored?.assistant_access !== false}
           disabled={busy}
           onChange={(event) => void setMailGate("assistant_access", event.target.checked)}
+          aside={phoneScopeButton("assistant", "assistant", t("mobile.assistantGate"), stored?.assistant_access !== false, stored?.assistant_devices)}
         />
       )}
 
@@ -799,7 +816,18 @@ export function MobileSettings() {
         </div>
       </>}
 
-      {phonePicker && (() => {
+      {phonePicker && phonePicker.kind === "assistant" && (
+        <MobileAccessPicker
+          x={phonePicker.x}
+          y={phonePicker.y}
+          kind="assistant"
+          enabled={stored?.assistant_access !== false}
+          devices={stored?.assistant_devices}
+          onApply={setAssistantReach}
+          onClose={() => setPhonePicker(null)}
+        />
+      )}
+      {phonePicker && phonePicker.kind !== "assistant" && (() => {
         const target = phonePicker.kind === "project"
           ? projects.find((p) => p.id === phonePicker.id)
           : boxes.find((b) => b.id === phonePicker.id);

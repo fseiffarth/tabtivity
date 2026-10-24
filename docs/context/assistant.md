@@ -246,7 +246,11 @@ experimental flag on and `tabtivity_mobile_host.assistant_access` not `false`
 `Settings::assistant_phone_open` (a test holds them equal) and is read per
 catalog load; a closed gate drops the row and an open chat's grant fails its
 next recheck (`access_revoked`). The key is read through
-`brand::MOBILE_HOST_KEY`, never spelled.
+`brand::MOBILE_HOST_KEY`, never spelled. A per-phone list narrows it
+(`tabtivity_mobile_host.assistant_devices`, `discovery::assistant_devices`;
+threat recheck gap 57, D9): absent is every phone, a list only those, an empty or
+malformed one none, as for a project or box. Settings → Mobile sets it with the
+same picker (`setAssistantReach`); turning the switch off drops the list.
 
 - Only opaque handles cross the API: `mobile_control/assistant.rs` builds launch
   ids from the desktop's own `assistant_options()`; a body carries `assistant:

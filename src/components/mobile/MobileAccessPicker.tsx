@@ -63,7 +63,7 @@ export function MobileAccessPicker({
 }: {
   x: number;
   y: number;
-  kind: "project" | "box";
+  kind: "project" | "box" | "assistant";
   /** A project's type, so the head says what the phone reaches of it. */
   host?: ProjectHostKind;
   enabled: boolean;
