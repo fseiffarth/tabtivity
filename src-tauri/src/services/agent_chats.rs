@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::services::agent_session::{self, TranscriptKind};
+use crate::services::home_io::HomeDir;
 
 /// Chats one page answers.
 pub const PAGE: usize = 30;
@@ -292,7 +293,9 @@ fn claude_folders(project_id: Option<&str>, dir: Option<&str>, launch_id: &str) 
         let slug = crate::services::agent_history::claude_folder_name(dir);
         for root in agent_session::claude_projects_roots(project_id) {
             let folder = root.join(&slug);
-            if !folders.contains(&folder) && folder.is_dir() {
+            // By handle from the home: a linked folder is another scope's.
+            let own = || HomeDir::open_below(&root, 2).and_then(|projects| projects.open_subdir(&slug)).is_some();
+            if !folders.contains(&folder) && own() {
                 folders.push(folder);
             }
         }
@@ -301,20 +304,19 @@ fn claude_folders(project_id: Option<&str>, dir: Option<&str>, launch_id: &str) 
 }
 
 fn claude_candidates(folder: &Path) -> Vec<Candidate> {
-    let Ok(entries) = std::fs::read_dir(folder) else {
+    let Some(dir) = HomeDir::open_below(folder, 3) else {
         return Vec::new();
     };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let id = name.to_str()?.strip_suffix(".jsonl")?;
+    dir.names()
+        .into_iter()
+        .filter_map(|name| {
+            let id = name.strip_suffix(".jsonl")?;
             if !agent_session::is_uuid_shaped(id) {
                 return None;
             }
-            // `DirEntry::metadata` does not follow a link: a link is no chat.
-            let meta = entry.metadata().ok().filter(|meta| meta.is_file())?;
-            Some(Candidate { path: entry.path(), id: Some(id.to_string()), updated: modified_ms(&meta) })
+            // Opened by handle, no link, regular on the handle: a link is no chat.
+            let meta = dir.file(&name)?.open_read()?.metadata().ok()?;
+            Some(Candidate { path: folder.join(&name), id: Some(id.to_string()), updated: modified_ms(&meta) })
         })
         .collect()
 }
@@ -429,6 +431,23 @@ mod tests {
         assert_eq!(first.at, "2026-10-01T10:00:00Z");
         assert_eq!(last.as_deref(), Some("and the tests"));
         assert_eq!(agent_session::chat_prompts(&folder.join(format!("{blank}.jsonl")), TranscriptKind::Claude).0, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_claude_folder_lists_no_chat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = "11111111-1111-4111-8111-111111111111";
+        let other = tmp.path().join("other");
+        write(&other.join(format!("{id}.jsonl")), &claude_prompt("secret", "2026-10-01T10:00:00Z"));
+        let projects = tmp.path().join("home").join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::os::unix::fs::symlink(&other, projects.join("-slug")).unwrap();
+        assert!(claude_candidates(&projects.join("-slug")).is_empty());
+        let linked_leaf = projects.join("-leaf");
+        std::fs::create_dir_all(&linked_leaf).unwrap();
+        std::os::unix::fs::symlink(other.join(format!("{id}.jsonl")), linked_leaf.join(format!("{id}.jsonl"))).unwrap();
+        assert!(claude_candidates(&linked_leaf).is_empty());
     }
 
     #[test]

@@ -429,11 +429,12 @@ pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> b
 /// The session log behind [`claude_session_exists`], when there is one.
 fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf> {
     let file = format!("{uuid}.jsonl");
-    std::fs::read_dir(projects)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path().join(&file))
-        .find(|path| path.is_file())
+    // By handle from the home: a slug folder the agent linked elsewhere is
+    // another scope's conversations, not this one's.
+    let dir = crate::services::home_io::HomeDir::open_below(projects, 2)?;
+    dir.names().into_iter().find_map(|name| {
+        dir.open_subdir(&name)?.file(&file)?.is_file().then(|| projects.join(&name).join(&file))
+    })
 }
 
 // ── Which model a tab is answering with ──────────────────────────────────────
@@ -696,8 +697,9 @@ pub(crate) fn claude_chat_log(folder: &std::path::Path, uuid: &str) -> Option<Pa
     if !is_uuid_shaped(uuid) {
         return None;
     }
-    let path = folder.join(format!("{uuid}.jsonl"));
-    std::fs::symlink_metadata(&path).ok()?.is_file().then_some(path)
+    let name = format!("{uuid}.jsonl");
+    let dir = crate::services::home_io::HomeDir::open_below(folder, 3)?;
+    dir.file(&name)?.is_file().then(|| folder.join(name))
 }
 
 /// Read the last `MODEL_TAIL_BYTES` of `path` and return `pick`'s answer for
@@ -3419,6 +3421,35 @@ mod tests {
         assert!(!claude_session_exists(&tmp, "no-such-uuid"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_slug_folder_is_not_this_scopes_conversation() {
+        let home = unique_tmp(concat!(crate::app_slug!(), "-claude-link"));
+        let other = unique_tmp(concat!(crate::app_slug!(), "-claude-other"));
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        let projects = home.join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join(format!("{uuid}.jsonl")), b"{}").unwrap();
+        std::os::unix::fs::symlink(&other, projects.join("-slug")).unwrap();
+        assert!(!claude_session_exists(&projects, uuid));
+        assert!(claude_chat_log(&projects.join("-slug"), uuid).is_none());
+
+        let own = projects.join("-own");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join(format!("{uuid}.jsonl")), b"{}").unwrap();
+        assert_eq!(claude_session_log(&projects, uuid), Some(own.join(format!("{uuid}.jsonl"))));
+        assert_eq!(claude_chat_log(&own, uuid), Some(own.join(format!("{uuid}.jsonl"))));
+
+        let projects_link = unique_tmp(concat!(crate::app_slug!(), "-claude-plink"));
+        std::fs::create_dir_all(projects_link.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&projects, projects_link.join(".claude").join("projects")).unwrap();
+        assert!(!claude_session_exists(&projects_link.join(".claude").join("projects"), uuid));
+        for dir in [home, other, projects_link] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]
