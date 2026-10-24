@@ -96,4 +96,8 @@ pub mod usage_stats;
 // Project VMs (docs/vm_projects_plan.md): doctor/boot/shutdown/knobs + the
 // "Download to…" SFTP exit for mirrorless remote projects.
 pub mod vm;
+// Window/OS-only (`client`): not in the server daemon's build. The desktop's
+// speech engine (docs/desktop_voice_plan.md).
+#[cfg(feature = "desktop")]
+pub mod voice;
 pub mod workspace;

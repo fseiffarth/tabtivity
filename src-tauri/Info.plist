@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Merged into the bundle's Info.plist by tauri-bundler. Asked when the
+       Chat's mic is first used (docs/desktop_voice_plan.md, step 2). -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>The microphone is used only while you dictate to an agent. Speech is transcribed on this computer.</string>
+</dict>
+</plist>

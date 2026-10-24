@@ -62,6 +62,8 @@ import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/termi
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { ReaderSuggestion } from "./ReaderSuggestion";
 import { ReaderComposerChips } from "./ReaderComposerChips";
+import { useReaderVoice } from "./ReaderVoice";
+import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
@@ -632,9 +634,25 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
   };
 
+  /** A dictated segment (`useReaderVoice`) joins the draft as typed text
+   * would, undoable; one that ends in the spoken send ("go on" / "los")
+   * sends the draft without those words. */
+  const dictated = (heard: string) => {
+    const clean = sanitizeVoiceTranscript(heard);
+    if (!clean) return;
+    const current = draftRef.current;
+    const next = `${current}${current && !/\s$/.test(current) ? " " : ""}${clean}`;
+    const spoken = spokenSend(next);
+    editDraft(spoken ?? next);
+    if (spoken !== null) void send();
+  };
+  const voice = useReaderVoice({ tabKey, visible, disabled: sending, onText: dictated });
+
   const send = async () => {
     const current = tabRef.current;
-    const text = draft.trim();
+    // The ref, not the state: a spoken send calls this in the same tick the
+    // dictated words went into the draft.
+    const text = draftRef.current.trim();
     if (!current || !text || sending) return;
     const panel = STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
       : CONTEXT_AGENTS[current.cmd] && text === "/context" ? "context" : null;
@@ -674,6 +692,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         // Shown as sending by the Reader's `onSentPrompt` listener.
         await sendSteeringPrompt(current, text);
       }
+      // Words still on their way from the mic must not land in the emptied draft.
+      voice.end();
       // Offered again by the `/` menu, newest first.
       rememberSlashCommand(cli, command);
       setUsedSlash(readSlashCommands(cli));
@@ -818,6 +838,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (!e.nativeEvent.isComposing && (redo || actionMatches("editorUndo", shortcutOverrides, e))) {
       e.preventDefault();
       swapDraft(redo);
+    } else if (!e.nativeEvent.isComposing && actionMatches("readerDictate", shortcutOverrides, e)) {
+      e.preventDefault();
+      voice.toggle();
     } else if (slashKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
@@ -849,7 +872,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
       {suggestion && !draft && !subagent && !sending && <ReaderSuggestion text={suggestion} onPick={pickSuggestion} />}
       {chipSlot ? createPortal(chips, chipSlot) : chips}
-      <div className="terminal-reader-input">
+      {voice.strip}
+      <div className={voice.button ? "terminal-reader-input with-mic" : "terminal-reader-input"}>
         <textarea
           ref={composerRef}
           value={draft}
@@ -860,6 +884,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
+        {voice.button}
         <button
           type="button"
           className="terminal-reader-send"

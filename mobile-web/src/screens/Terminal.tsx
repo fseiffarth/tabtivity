@@ -166,13 +166,13 @@ import {
   DICTATION_START,
   dictationPreview,
   readDictation,
-  spokenSend,
   settleDictation,
   type DictationProgress,
 } from "../voiceInput";
 import { startDictation, type DictationSession } from "../voiceSession";
 import { usePenWriting } from "../penWriting";
-import { speak, speechOutputSupported, spokenText, stopSpeaking, unlockSpeech } from "../speechOutput";
+import { speak, speechOutputSupported, stopSpeaking, unlockSpeech } from "../speechOutput";
+import { spokenSend, spokenText } from "../../../shared/voice";
 
 /** A line the dictation strip shows: a key, not a sentence, so switching the
  * language retranslates what is already on screen. */

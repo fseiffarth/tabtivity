@@ -76,6 +76,8 @@ import {
 } from "./SettingsSubPanels";
 import { Dropdown } from "../common/Dropdown";
 import { AssistantSettings } from "../assistant/AssistantSettings";
+import { VoiceSettings } from "./VoiceSettings";
+import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import { PasswordInput } from "../common/PasswordInput";
 import { useT, translate, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
 import { revealSetting, scoreSearch, searchTerms, type SearchField } from "./settingsSearch";
@@ -1147,6 +1149,7 @@ const MAIN_SECTIONS = [
   "pdfMarkup",
   "rootConsole",
   "assistant",
+  "voice",
   "remoteFeatures",
   "vm",
   "mobile",
@@ -1171,7 +1174,7 @@ function sectionOfAnchor(anchor: string | undefined): MainSection {
 const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "system"; entries: NavEntry[] }[] = [
   { key: "general", entries: ["general", "layout", "clock", "hintsOnboarding", "shortcuts", "updates", "help"] },
   { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "calendar", "usageStats", "archive", "scaffoldRepair"] },
-  { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole", "assistant"] },
+  { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole", "assistant", "voice"] },
   { key: "remote", entries: ["remoteFeatures", "git", "remoteHosts", "vpn", "vm", "mobile"] },
   { key: "system", entries: ["performance", "resourceMonitor", "experimental"] },
 ];
@@ -1253,6 +1256,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
     labels: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   },
   assistant: { labels: ["assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
+  voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang"] },
   remoteFeatures: { labels: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"] },
   vm: { aliases: "settings.searchAlias.vm", labels: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"] },
   mobile: { aliases: "settings.searchAlias.mobile", labels: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"] },
@@ -1416,8 +1420,10 @@ export function SettingsDialog({
     return revealSetting(root, reveal.path, reveal.open);
   }, [reveal, modalRef]);
 
-  // The assistant's page exists only while its experimental switch is on.
-  const shown = (entry: NavEntry) => entry !== "assistant" || experimentalEnabled(settings, "assistant");
+  // The assistant's page exists only while its experimental switch is on;
+  // Voice only where the microphone is this machine's (not a browser client).
+  const shown = (entry: NavEntry) =>
+    (entry !== "assistant" || experimentalEnabled(settings, "assistant")) && (entry !== "voice" || voiceInputOffered());
   const pageLabelKey = (entry: NavEntry) =>
     (isMainSection(entry) ? `settings.${entry}` : `nav.${entry}.title`) as TranslationKey;
   const pageValue = (entry: NavEntry) => (isMainSection(entry) ? anchorOf(entry) : entry);
@@ -2102,6 +2108,11 @@ export function SettingsDialog({
             {section === "assistant" && (<>
             <SettingsSection anchor="settings-anchor-assistant" title={t("settings.assistant")} help={t("assistant.settings.help")} />
             <AssistantSettings />
+            </>)}
+
+            {section === "voice" && (<>
+            <SettingsSection anchor="settings-anchor-voice" title={t("settings.voice")} help={t("settings.voice.help")} />
+            <VoiceSettings />
             </>)}
 
             {section === "remoteFeatures" && (<>

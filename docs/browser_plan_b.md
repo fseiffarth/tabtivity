@@ -621,6 +621,26 @@ whole process regardless of what any delegate does.
 > This is the strongest single permission control in the plan: it is enforced by the
 > operating system, not by us.
 
+**Amended 2026-10-23, the user's decision: the microphone is the one exception.** The
+Chat's dictation (`docs/desktop_voice_plan.md`) captures natively through cpal, which
+macOS's hardened runtime refuses without `com.apple.security.device.audio-input` and
+`NSMicrophoneUsageDescription`. Both are declared — in `entitlements.plist` and
+`src-tauri/Info.plist` only, which is what the §12.1 test now allows. Camera, location
+and Bluetooth stay banned.
+
+What made this safe had to be added, because the paragraph above is out of date: wry
+0.57 **does** implement `requestMediaCapturePermissionForOrigin`, and with no
+permission handler set it answers **Grant**. The process-level ban was therefore the only
+thing keeping a browsed page off the microphone on macOS. Its replacement is an
+app-level handler that denies every webview permission request on macOS
+(`with_macos_permission_deny` in `lib.rs`, Tauri's `Builder::on_permission_request`);
+the §12.1 test fails if the microphone is declared without it. Linux is unchanged
+(WebKitGTK's unhandled `permission-request` still denies, and no handler is connected
+there) and Windows keeps its own deny handler. On every wry update, re-check that a
+Tauri handler still reaches wry's delegate (`docs/third_party_update_checklist.md`).
+Alternatives weighed: no dictation on macOS, or a separate mic helper process holding
+the entitlement so the main process, browser included, stays mic-free.
+
 **Windows (WebView2) — the gap, and the decision.** Verified: WebView2's
 `PermissionRequested` default state is `CoreWebView2PermissionState.Default`, which
 **shows WebView2's own permission prompt**. wry registers a `PermissionRequested` handler

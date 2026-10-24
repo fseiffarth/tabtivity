@@ -1615,7 +1615,7 @@ not written.
 | Dependency | Pinned / floor | Why it is load-bearing |
 |------------|----------------|------------------------|
 | WebKitGTK | 2.52 observed | no renderer-pid API (watchdog probes instead); scrollbar built once; DMABUF off (flicker + SIGBUS) |
-| Tauri / wry / plugins | `^2` | IPC fallback path evaluates PDF bytes as script — keep the custom protocol |
+| Tauri / wry / plugins | `^2` | IPC fallback path evaluates PDF bytes as script — keep the custom protocol. On macOS, wry's `WryWebViewUIDelegate` answers media-capture requests with *Grant* when no handler is set (0.57); since the mic entitlement for dictation (browser plan §5.2, 2026-10-23) the app-level deny in `lib.rs` (`with_macos_permission_deny`) is what keeps browsed pages off the microphone — check it still reaches `request_media_capture_permission` in the new wry's `src/wkwebview/class/wry_web_view_ui_delegate.rs` |
 | `@tauri-apps/api` internals (browser client) | 2.12 | `src/lib/transport/wsInternals.ts` re-implements `window.__TAURI_INTERNALS__` (`invoke`, `transformCallback`, `unregisterCallback`, `convertFileSrc`, `metadata`) and `__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener`, plus the wire shapes of `plugin:event\|*`, `plugin:dialog\|open/save/message` (`buttonsToRust`), `plugin:notification\|*` command names, `plugin:window\|*`. On an API or plugin-dialog/-notification bump: diff `core.js`, `event.js`, `window.js` and both plugins' `dist-js/index.js` against the shim (most of a release's diff is doc comments: strip them first); `WebTransport.test.ts` covers the shapes it knows and drives the installed `core`/`event`/`window`/`webview` and both plugins' JS through the shim, so a renamed command or argument key fails there |
 | `tauri-runtime-wry` | patched 2.12.1 (`src-tauri/patches/`, root `Cargo.toml` `[patch.crates-io]`) | `Context.main_thread` behind an `Arc`, or off-thread `AppHandle` clones race tao's Linux `Rc` and corrupt the heap. On a tauri bump: re-copy the new version and re-apply the `TABTIVITY PATCH` hunks (since 2.12 also `make_event_handler`, which moves fields out of `main_thread` and must clone them from the `Arc`); move `src-tauri/Cargo.toml`'s Windows `webview2-com` and `windows` to the versions the new wry uses (only the Windows clippy cross-check sees a mismatch); or drop the patch once upstream fixes it |
 | `@xterm/xterm` + addons | `^6.0`, webgl `^0.19` (no canvas addon since 6) | key encodings (`ESC [ Z`, CSI-u) the mobile bridge relies on; Alt+arrow word jumps re-added by `altArrowWordJump` (6 dropped them); scrollbar is xterm's own `.xterm-scrollable-element` slider, styled in `base.css` / phone `style.css`; mobile reads internal `_core._bufferService.buffers.normal.lines.onTrim` (`readableHistory.scrollbackTrimEvent`). On a bump run `TerminalXtermContract`, `TerminalRealXterm` and `MobileTerminalXtermTrim`: the only tests on the real package (the rest mock it) |
@@ -1648,7 +1648,49 @@ A GitHub API or release-naming change breaks the update banner.
 
 ---
 
-## 21. Quick routine after any update
+## 21. Voice: whisper.cpp, the model catalog, cpal, speech-dispatcher
+
+**Where** `services/voice/` (`models.rs`, `stt.rs`, `capture.rs`; read-aloud
+in step 2c), `Cargo.toml`'s voice block, `ci-cd.yml` (`GGML_NATIVE`, the apt
+lists), `tauri.conf.json` (deb `depends`/`recommends`).
+Plan: `docs/desktop_voice_plan.md`.
+
+**Assumes**
+- `whisper-rs` =0.16.0 / `whisper-rs-sys` 0.15.0 (whisper.cpp 1.8.3):
+  `FullParams` setters leak and panic on a NUL (built once per session),
+  the raw `set_abort_callback` + user data (its `set_abort_callback_safe`
+  casts the boxed closure to the wrong type and aborts every run in
+  0.16.0 — re-check before switching back), `no_speech_probability`, `get_lang_id` /
+  `get_lang_str`, `WhisperVadContext::segments_from_samples`. Its build runs
+  bindgen (libclang required; Windows needs `LIBCLANG_PATH` if clang-sys
+  misses it) and forwards `GGML_*` to cmake; `GGML_NATIVE=OFF` means x86_64
+  AVX/AVX2/FMA/F16C/BMI2, which `voice::cpu::REQUIRED` must match.
+- The catalog pins each model by Hugging Face repo **and commit** with its
+  SHA-256 and exact size (`ggerganov/whisper.cpp`, `ggml-org/whisper-vad`).
+  A new model is a new row, never a moved commit under an old one.
+- `cpal` =0.18.2, ALSA host only on Linux (its `pulseaudio` host drops input
+  in 0.18.2); errors classified by `ErrorKind`, Windows privacy denial as a
+  `BackendError` carrying `E_ACCESSDENIED`.
+- `tts` =0.26.3 on Windows/macOS only (never on Linux, where it links
+  libspeechd): `Tts::default`, `speak`, `stop`, `is_speaking` (polled for
+  the end of a chunk), `voices`/`set_voice` (never macOS's `voice()`, which
+  is `unimplemented!()`), `normal_rate`/`min_rate`/`max_rate`.
+- speech-dispatcher's SSIP (0.12.0~rc2, `ssip.rs`): `SET self CLIENT_NAME`,
+  `NOTIFICATION END/CANCEL on`, `SSML_MODE off`, `PRIORITY text`, `LANGUAGE`,
+  `RATE` −100…100, `SPEAK` → `230`, dot-stuffed data, `225-<id>`, `CANCEL
+  self` → `210`, events `701`/`702`/`703` naming the id; the socket at
+  `$XDG_RUNTIME_DIR/speech-dispatcher/speechd.sock` or `SPEECHD_ADDRESS`
+  `unix_socket:`, `speech-dispatcher --spawn` when nothing listens.
+
+**Verify** `cargo test -p tabtivity --lib -- services::voice`; a clean
+`cargo build` with the new pins on Linux, then the CI Windows/macOS jobs;
+for a new catalog row, `sha256sum` and `stat -c %s` of the downloaded file
+against the row, at the commit the URL names; dictate one sentence in a
+frozen dev build.
+
+---
+
+## 22. Quick routine after any update
 
 ```sh
 rustup update && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

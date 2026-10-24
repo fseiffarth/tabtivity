@@ -319,14 +319,36 @@ fn the_app_config_keeps_its_security_posture() {
 /// macOS gates camera/microphone/location on the *process* via `Info.plist`
 /// usage-description keys. Declaring none is the strongest single permission
 /// control in the browser plan, because the OS enforces it rather than us.
+///
+/// One exception, the user's decision (2026-10-23, docs/browser_plan_b.md
+/// §5.2): the microphone, for the Chat's native dictation (`services::voice`,
+/// cpal), declared only in `Info.plist` and `entitlements.plist`. A browsed
+/// page is still kept off it, by one layer: wry's `WKUIDelegate` implements
+/// no media-capture permission, so WebKit denies (re-checked on every wry
+/// update, docs/third_party_update_checklist.md). Camera, location and
+/// Bluetooth stay banned everywhere.
 #[test]
 fn the_macos_bundle_declares_no_capture_usage_descriptions() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for file in ["tauri.macos.conf.json", "entitlements.plist"] {
+    for file in ["tauri.macos.conf.json", "entitlements.plist", "Info.plist"] {
         let path = dir.join(file);
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
+        let microphone_allowed = matches!(file, "entitlements.plist" | "Info.plist");
+        if microphone_allowed && raw.contains("audio-input") {
+            // The OS no longer keeps pages off the mic: the macOS deny-all
+            // permission handler must be what does (wry grants without one).
+            let lib = std::fs::read_to_string(dir.join("src").join("lib.rs")).expect("lib.rs");
+            assert!(
+                lib.contains(".on_permission_request(|_, _| tauri::webview::PermissionResponse::Deny)")
+                    && lib.contains("with_macos_permission_deny(with_macos_menu("),
+                "`{file}` declares the microphone, so every macOS webview's permission \
+                 request must be denied by the app-level handler in lib.rs \
+                 (`with_macos_permission_deny`): wry's WKUIDelegate grants media \
+                 capture when no handler is set. See docs/browser_plan_b.md §5.2."
+            );
+        }
         for banned in [
             "NSCameraUsageDescription",
             "NSMicrophoneUsageDescription",
@@ -336,6 +358,11 @@ fn the_macos_bundle_declares_no_capture_usage_descriptions() {
             "com.apple.security.device.camera",
             "com.apple.security.device.audio-input",
         ] {
+            if microphone_allowed
+                && matches!(banned, "NSMicrophoneUsageDescription" | "com.apple.security.device.audio-input")
+            {
+                continue;
+            }
             assert!(
                 !raw.contains(banned),
                 "`{file}` declares `{banned}`. Without it those APIs are unavailable to \
