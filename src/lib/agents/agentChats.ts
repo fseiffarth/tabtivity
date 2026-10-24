@@ -11,9 +11,9 @@ import type { TabEntry } from "../../stores/tabs";
  * shows it in the Reader instead of the tab's own conversation, read-only
  * (`useReaderChatsStore`); Resume takes the tab onto it the way Undo clear
  * takes it back onto a cleared one (`agent_tab_resume_chat`): Claude gets
- * `/resume <id>` typed into the running session; Codex, OpenCode and
+ * `/resume <id>` typed into the running session; Codex, OpenCode, Copilot and
  * Antigravity have their record pointed at the chat and are relaunched onto it
- * (`--session <id>`, `--conversation <id>`). Local tabs only. The ids never
+ * (`--session <id>`, `--session-id <id>`, `--conversation <id>`). Local tabs only. The ids never
  * leave the desktop.
  */
 
@@ -39,13 +39,13 @@ export interface ChatList {
   next?: number;
 }
 
-const CHAT_AGENTS = new Set(["claude", "codex", "opencode", "agy"]);
+const CHAT_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot"]);
 
 /** The agents whose Resume menu is new and not yet checked live. */
-export const UNTESTED_CHAT_AGENTS = new Set(["opencode", "agy"]);
+export const UNTESTED_CHAT_AGENTS = new Set(["opencode", "agy", "copilot"]);
 
-/** Whether `tab` offers the Resume menu: a Claude, Codex, OpenCode or
- * Antigravity tab with its launch id, running on this machine. */
+/** Whether `tab` offers the Resume menu: a Claude, Codex, OpenCode, Copilot
+ * or Antigravity tab with its launch id, running on this machine. */
 export function chatsOffered(scope: string, tab: TabEntry | undefined): tab is TabEntry {
   return !!tab && tab.kind === "agent" && CHAT_AGENTS.has(tab.cmd) && !!tab.sessionId && runsLocally(scope, tab);
 }

@@ -47,6 +47,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "codex" => resolve_codex_session(opts),
         "vibe" => resolve_vibe_session(opts),
         "opencode" => crate::services::opencode_session::resolve(opts),
+        "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
         _ => opts,
     }
@@ -472,6 +473,10 @@ pub enum TranscriptKind {
     /// [`crate::services::codex_store`] reads the model from its database
     /// instead, and this stays for the releases that still do.
     Codex,
+    /// `<home>/.copilot/session-state/<sid>/events.jsonl`: `assistant.message`
+    /// and `session.model_change` records name the model
+    /// (`services::copilot_session`).
+    Copilot,
 }
 
 /// The model the tab launched as `cmd` with launch id `launch_id` last answered
@@ -622,6 +627,8 @@ pub(crate) fn read_agent_transcript_from<T>(
                         .find_map(|db| read_store(db, &live))
                 })
         }
+        "copilot" => crate::services::copilot_session::tab_events(project_id, launch_id)
+            .and_then(|path| read_file(&path, TranscriptKind::Copilot)),
         _ => None,
     }
 }
@@ -926,6 +933,7 @@ fn timed_prompt_in_record(line: &str, kind: TranscriptKind) -> Option<Transcript
             claude_prompt_in_record(&value).or_else(|| claude_queued_prompt(&value))?
         }
         TranscriptKind::Codex => codex_prompt_in_record(&value)?,
+        TranscriptKind::Copilot => crate::services::copilot_session::prompt_in_record(&value)?,
     };
     let at = value.get("timestamp")?.as_str()?;
     crate::services::prompt_blame::iso_to_epoch(at)?;
@@ -1002,6 +1010,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
             }
             value.get("payload")?.get("model")?.as_str()?
         }
+        TranscriptKind::Copilot => crate::services::copilot_session::model_in_record(&value)?,
     };
     clean_model_name(model)
 }
@@ -1203,6 +1212,7 @@ fn prompt_in_record(line: &str, kind: TranscriptKind) -> Option<String> {
     let raw = match kind {
         TranscriptKind::Claude => claude_prompt_in_record(&value)?,
         TranscriptKind::Codex => codex_prompt_in_record(&value)?,
+        TranscriptKind::Copilot => crate::services::copilot_session::prompt_in_record(&value)?,
     };
     clean_prompt_text(&raw)
 }
@@ -1650,6 +1660,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// record pointed at `chat` the same way and are relaunched: OpenCode's spawn
 /// turns it into `--session <chat>` (`opencode_session::resolve`),
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
+/// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
+/// pins `--session-id <chat>` (`copilot_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1672,7 +1684,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" => {
+        "agy" | "copilot" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }

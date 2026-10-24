@@ -16,7 +16,7 @@ export type { SessionTranscript };
 
 /** The agents whose transcript the backend reads; any other family answers
  * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
-const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy"]);
+const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot"]);
 
 /** The agents whose session is found by the tab's folder (and launch moment)
  * rather than by a launch id Tabtivity mints: they read with no `sessionId`. */

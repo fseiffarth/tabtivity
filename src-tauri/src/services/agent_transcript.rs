@@ -370,6 +370,9 @@ pub fn agent_session_transcript(
         let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
         return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
     }
+    if cmd == "copilot" {
+        return copilot_transcript(project_id, launch_id, subagent, version, limit);
+    }
     let read = match cmd {
         "claude" => claude_transcript(project_id, launch_id, subagent, version, limit),
         "codex" => codex_transcript(project_id, launch_id, subagent, version, limit),
@@ -429,6 +432,7 @@ pub fn stored_chat_transcript(
     let read = match cmd {
         "claude" => claude_transcript_at(&main, subagent, version, limit),
         "codex" => codex_transcript_at(project_id, &main, chat, subagent, version, limit),
+        "copilot" if subagent.is_none() => read_transcript(&main, TranscriptKind::Copilot, version, limit),
         _ => None,
     };
     read.unwrap_or_else(|| AgentTranscript::unavailable(if subagent.is_some() { "no_subagent" } else { "read_failed" }))
@@ -710,7 +714,10 @@ pub fn watch_targets(
         }
         return vec![Target { dir: dir.to_path_buf(), rule: Rule::Prefix(name.to_string()) }];
     }
-    if !matches!(cmd, "claude" | "codex") {
+    if !matches!(cmd, "claude" | "codex" | "copilot") {
+        return Vec::new();
+    }
+    if cmd == "copilot" && project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
         return Vec::new();
     }
     match conversation_file(cmd, project_id, launch_id, subagent) {
@@ -729,7 +736,9 @@ fn conversation_targets(cmd: &str, file: &Path, subagent: bool) -> Vec<crate::se
         // A Claude subagent's read is versioned by its whole folder.
         return if cmd == "claude" { vec![Target { dir: dir.to_path_buf(), rule: Rule::Any }] } else { vec![own] };
     }
-    let mut targets = vec![own, Target { dir: dir.to_path_buf(), rule: Rule::Created }];
+    // A Copilot `/new` starts the next session in a folder of its own beside this one.
+    let next = if cmd == "copilot" { dir.parent().unwrap_or(dir) } else { dir };
+    let mut targets = vec![own, Target { dir: next.to_path_buf(), rule: Rule::Created }];
     let folder = file.with_extension("").join("subagents");
     if cmd == "claude" && folder.is_dir() {
         targets.push(Target { dir: folder, rule: Rule::Any });
@@ -906,6 +915,27 @@ fn codex_rollout_in(root: &Path, thread: &crate::services::codex_store::SpawnedT
         .find(|path| named(path) && path.starts_with(&root) && path.is_file())
 }
 
+/// A Copilot tab's conversation, from its pinned session's event log
+/// (`services::copilot_session`). Copilot writes the log with the first
+/// prompt, so a tab before it is available and empty. A remote tab's Copilot
+/// keeps its store on the far host. Its subagents' events ride in the same
+/// log, tagged with their call, but have no conversation of their own to open.
+fn copilot_transcript(project_id: Option<&str>, launch_id: &str, subagent: Option<&str>, version: Option<&str>, limit: usize) -> AgentTranscript {
+    if subagent.is_some() {
+        return AgentTranscript::unavailable("no_subagent");
+    }
+    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return AgentTranscript::unavailable("unsupported");
+    }
+    let Some(live) = crate::services::copilot_session::live_id(project_id, launch_id) else {
+        return AgentTranscript::unavailable("no_session");
+    };
+    match crate::services::copilot_session::events_file(project_id, &live) {
+        Some(path) => read_transcript(&path, TranscriptKind::Copilot, version, limit).unwrap_or_else(|| AgentTranscript::unavailable("read_failed")),
+        None => AgentTranscript { available: true, version: Some(format!("new:{live}")), ..Default::default() },
+    }
+}
+
 /// A Claude session the hook has recorded but Claude has not written yet —
 /// right after a `/clear`, or a launch before its first turn: available and
 /// empty, so the phone shows a fresh chat rather than the screen or the
@@ -1070,7 +1100,7 @@ fn read_transcript_in(
     let lines: Vec<&str> = text.lines().collect();
     let usage = match kind {
         TranscriptKind::Codex => codex_usage(&lines),
-        TranscriptKind::Claude => None,
+        TranscriptKind::Claude | TranscriptKind::Copilot => None,
     };
     let model = newest_model(&lines, kind);
     let effort = newest_effort(&lines, kind);
@@ -1174,6 +1204,12 @@ fn newest_cwd(text: &str, kind: TranscriptKind, sidechain: bool) -> Option<Strin
                 }
                 value.pointer("/payload/cwd")
             }
+            TranscriptKind::Copilot => {
+                if !matches!(value.get("type").and_then(Value::as_str), Some("session.start" | "session.resume")) {
+                    return None;
+                }
+                value.pointer("/data/context/cwd")
+            }
         };
         cwd.and_then(Value::as_str).filter(|cwd| !cwd.is_empty()).map(str::to_string)
     })
@@ -1250,6 +1286,7 @@ fn newest_effort(lines: &[&str], kind: TranscriptKind) -> Option<String> {
             (TranscriptKind::Claude, "assistant") => value.get("effort")?.as_str()?.to_string(),
             (TranscriptKind::Claude, "user" | "system") => claude_effort_switch(&value)?,
             (TranscriptKind::Codex, "turn_context") => value.pointer("/payload/effort")?.as_str()?.to_string(),
+            (TranscriptKind::Copilot, "session.model_change") => crate::services::copilot_session::effort_in_record(&value)?.to_string(),
             _ => return None,
         };
         let effort = effort.trim().to_lowercase();
@@ -1306,11 +1343,13 @@ fn newest_context_card(lines: &[&str], kind: TranscriptKind) -> Option<String> {
 
 /// The tokens the newest record in `lines` that carries usage counts
 /// ([`AgentTranscript::tokens`]): a Claude assistant message's input, cache
-/// and output tokens together, or a Codex `token_count`'s last request.
+/// and output tokens together, a Codex `token_count`'s last request, or the
+/// context window Copilot's `session.usage_info` reports in use.
 fn newest_tokens(lines: &[&str], kind: TranscriptKind) -> Option<u64> {
     let needle = match kind {
         TranscriptKind::Claude => "\"usage\"",
         TranscriptKind::Codex => "\"token_count\"",
+        TranscriptKind::Copilot => "\"session.usage_info\"",
     };
     lines.iter().rev().filter(|line| line.contains(needle)).find_map(|line| {
         let value = serde_json::from_str::<Value>(line).ok()?;
@@ -1330,6 +1369,7 @@ fn newest_tokens(lines: &[&str], kind: TranscriptKind) -> Option<u64> {
                 .filter(|p| p.get("type").and_then(Value::as_str) == Some("token_count"))?
                 .pointer("/info/last_token_usage/total_tokens")?
                 .as_u64(),
+            TranscriptKind::Copilot => crate::services::copilot_session::tokens_in_record(&value),
         }
     })
 }
@@ -1555,12 +1595,18 @@ fn parse_entries<'a>(
         let records = match kind {
             TranscriptKind::Claude => claude_records(&value),
             TranscriptKind::Codex => codex_entry(&value).map(|(role, raw)| Record::Turn(role, raw)).into_iter().collect(),
+            TranscriptKind::Copilot => copilot_records(&value),
         };
         let at = value
             .get("timestamp")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let typed = value.get("type").and_then(Value::as_str) == Some("user");
+        let typed = matches!(value.get("type").and_then(Value::as_str), Some("user" | "user.message"));
+        if kind == TranscriptKind::Copilot {
+            if let Some(call) = crate::services::copilot_session::finished_call(&value) {
+                returned.insert(call.to_string());
+            }
+        }
         for record in records {
             match record {
                 Record::Turn(role, raw) => {
@@ -2015,6 +2061,32 @@ fn claude_records(value: &Value) -> Vec<Record> {
         }
         _ => Vec::new(),
     }
+}
+
+/// What one Copilot event adds to the conversation: a prompt, an answer, a
+/// shell it started (`bash`) or a subagent it spawned (`task`).
+fn copilot_records(value: &Value) -> Vec<Record> {
+    use crate::services::copilot_session as copilot;
+    if let Some(text) = copilot::prompt_in_record(value) {
+        return vec![Record::Turn("prompt", text)];
+    }
+    if let Some(text) = copilot::answer_in_record(value) {
+        return vec![Record::Turn("answer", text)];
+    }
+    if let Some((call, task, kind)) = copilot::spawn_in_record(value) {
+        return vec![Record::Spawn { call, task, kind: Some(kind.unwrap_or_else(|| "general-purpose".to_string())) }];
+    }
+    if let Some((call, command, description)) = copilot::shell_in_record(value) {
+        let Some(raw) = clean_text(&command) else { return Vec::new() };
+        let cut = raw.chars().count() > MAX_SHELL_CHARS;
+        let command = if cut { raw.chars().take(MAX_SHELL_CHARS).collect() } else { raw };
+        let description = description
+            .as_deref()
+            .and_then(clean_text)
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_SHELL_DESCRIPTION_CHARS).collect());
+        return vec![Record::Shell { call, shell: RunningShell { command, description, cut, ..Default::default() } }];
+    }
+    Vec::new()
 }
 
 /// An `ExitPlanMode` `tool_use` block: the plan Claude put up for approval.
@@ -3327,5 +3399,69 @@ mod tests {
         let at = folder.clone();
         let spawned = within_deadline(move || claude_spawned(&at).into_keys().collect::<Vec<_>>());
         assert_eq!(spawned, vec!["toolu_A".to_string()]);
+    }
+    /// A Copilot 1.0.102/1.0.103 session as `events.jsonl` records it (a BYOK
+    /// stub model driving `apply_patch`, `bash`, `task` and `edit`; paths shortened).
+    fn copilot_log() -> Vec<String> {
+        let at = |n: u32| format!("2026-10-24T06:37:25.{n:03}Z");
+        let rec = |kind: &str, n: u32, data: serde_json::Value| serde_json::json!({ "type": kind, "data": data, "id": format!("e{n}"), "timestamp": at(n) }).to_string();
+        let patch_one = "\ndiff --git a/work/a.txt b/work/a.txt\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/work/a.txt\n@@ -1,0 +1,3 @@\n+alpha\n+beta\n+\n\n\n\ndiff --git a/work/b.txt b/work/b.txt\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/work/b.txt\n@@ -1,0 +1,2 @@\n+bee\n+\n\n";
+        let patch_two = "\ndiff --git a/work/a.txt b/work/a.txt\nindex 0000000..0000000 100644\n--- a/work/a.txt\n+++ b/work/a.txt\n@@ -1,3 +1,4 @@\n alpha\n-beta\n+gamma\n+delta\n \n\n\ndiff --git a/work/b.txt b/dev/null\nindex 0000000..0000000 100644\n--- a/work/b.txt\n+++ b/dev/null\n@@ -1,2 +0,0 @@\n-bee\n-\n\n";
+        let edit = "\ndiff --git a/work/c.txt b/work/c.txt\nindex 0000000..0000000 100644\n--- a/work/c.txt\n+++ b/work/c.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+three\n \n\n";
+        vec![
+            rec("session.start", 1, serde_json::json!({ "sessionId": "c4196d1f-a396-42a7-8384-d0783bd09cc7", "copilotVersion": "1.0.103", "context": { "cwd": "/work" } })),
+            rec("session.model_change", 2, serde_json::json!({ "newModel": "gpt-5.4", "reasoningEffort": "medium" })),
+            rec("user.message", 3, serde_json::json!({ "content": "patch it", "interactionId": "i1", "turnId": "0" })),
+            rec("assistant.message", 4, serde_json::json!({ "content": "", "model": "gpt-5.4", "toolRequests": [{ "toolCallId": "call_p1", "name": "apply_patch", "arguments": "*** Begin Patch\n*** End Patch\n", "type": "custom" }] })),
+            rec("tool.execution_start", 5, serde_json::json!({ "toolCallId": "call_p1", "toolName": "apply_patch", "arguments": "*** Begin Patch\n*** End Patch\n" })),
+            rec("tool.execution_complete", 6, serde_json::json!({ "toolCallId": "call_p1", "success": true, "fileEdits": [{ "path": "/work/a.txt", "kind": "create" }, { "path": "/work/b.txt", "kind": "create" }], "result": { "content": "Added 2 file(s)", "detailedContent": patch_one } })),
+            rec("tool.execution_start", 7, serde_json::json!({ "toolCallId": "call_p2", "toolName": "apply_patch", "arguments": "" })),
+            rec("tool.execution_complete", 8, serde_json::json!({ "toolCallId": "call_p2", "success": true, "fileEdits": [{ "path": "/work/a.txt", "kind": "edit" }, { "path": "/work/b.txt", "kind": "delete" }], "result": { "content": "Modified 1 file(s)", "detailedContent": patch_two } })),
+            rec("tool.execution_complete", 9, serde_json::json!({ "toolCallId": "call_e1", "success": true, "fileEdits": [{ "path": "/work/c.txt", "kind": "edit" }], "result": { "content": "updated", "detailedContent": edit } })),
+            rec("tool.execution_complete", 10, serde_json::json!({ "toolCallId": "call_e2", "success": false, "fileEdits": [{ "path": "/work/d.txt", "kind": "edit" }], "result": { "content": "no match" } })),
+            rec("assistant.message", 11, serde_json::json!({ "content": "Done.", "model": "gpt-5.4", "toolRequests": [] })),
+            rec("session.usage_info", 12, serde_json::json!({ "currentTokens": 18664, "tokenLimit": 272000 })),
+        ]
+    }
+
+    #[test]
+    fn a_copilot_log_reads_as_prompts_answers_model_and_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut lines = copilot_log();
+        // A shell still running and a subagent still at work, then one that finished.
+        let rec = |kind: &str, data: serde_json::Value| serde_json::json!({ "type": kind, "data": data, "timestamp": "2026-10-24T06:38:00.000Z" }).to_string();
+        lines.push(rec("tool.execution_start", serde_json::json!({ "toolCallId": "b1", "toolName": "bash", "arguments": { "command": "sleep 60", "description": "Wait" } })));
+        lines.push(rec("tool.execution_start", serde_json::json!({ "toolCallId": "t1", "toolName": "task", "arguments": { "description": "Explore the repo", "agent_type": "explore" } })));
+        lines.push(rec("assistant.message", serde_json::json!({ "content": "inside the subagent", "parentToolCallId": "t1" })));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let read = read_transcript(&path, TranscriptKind::Copilot, None, DEFAULT_LIMIT).unwrap();
+        let shown: Vec<_> = read.entries.iter().map(|e| (e.kind.as_str(), e.text.as_str())).collect();
+        assert_eq!(shown, vec![("prompt", "patch it"), ("answer", "Done."), ("agent", "Explore the repo")]);
+        assert!(read.entries[2].running && read.entries[2].role.as_deref() == Some("explore"));
+        assert_eq!(read.running_agents, 1);
+        assert_eq!(read.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(read.effort.as_deref(), Some("medium"));
+        assert_eq!(read.tokens, Some(18664));
+        assert_eq!(read.cwd.as_deref(), Some("/work"));
+        assert_eq!(read.shells.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), vec!["sleep 60"]);
+        assert_eq!(read.shells[0].description.as_deref(), Some("Wait"));
+    }
+
+    #[test]
+    fn a_copilot_prompt_is_found_by_the_chat_menu_and_the_prompt_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut lines = copilot_log();
+        lines.push(serde_json::json!({ "type": "user.message", "data": { "content": "and now?" }, "timestamp": "2026-10-24T06:40:00.000Z" }).to_string());
+        lines.push(serde_json::json!({ "type": "user.message", "data": { "content": "hidden", "source": "skill-pdf" }, "timestamp": "2026-10-24T06:41:00.000Z" }).to_string());
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let (first, last) = agent_session::chat_prompts(&path, TranscriptKind::Copilot);
+        assert_eq!(first.unwrap().text, "patch it");
+        assert_eq!(last.as_deref(), Some("and now?"));
+        let recent = agent_session::recent_prompts_in_transcript(&path, TranscriptKind::Copilot).unwrap();
+        assert_eq!(recent.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), vec!["patch it", "and now?"]);
+        assert_eq!(agent_session::last_model_in_transcript(&path, TranscriptKind::Copilot).as_deref(), Some("gpt-5.4"));
     }
 }

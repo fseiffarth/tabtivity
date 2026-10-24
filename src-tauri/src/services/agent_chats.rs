@@ -3,7 +3,9 @@
 //! folder the tab runs in, newest first, each named by its first prompt, to
 //! read in the Reader and resume in the tab.
 //!
-//! Claude and Codex keep a file per conversation, found and resumed by id.
+//! Claude, Codex and Copilot keep a file per conversation, found and resumed
+//! by id (Copilot's: a folder per session, `copilot_session`, named for its
+//! `workspace.yaml` `cwd` and held to a session a prompt went into).
 //! OpenCode and Antigravity keep theirs in SQLite stores read by folder
 //! (`opencode_store::folder_chats`, `google_chat::antigravity_chats`): a
 //! listed id is checked to be one of the folder's top-level conversations
@@ -113,6 +115,10 @@ pub fn list_chats(
     let Some(kind) = kind_of(cmd) else {
         return ChatList::default();
     };
+    // Copilot's store is on the far host for a remote tab.
+    if kind == TranscriptKind::Copilot && project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return ChatList::default();
+    }
     let current = current_chat(cmd, project_id, launch_id);
     let candidates = candidates(cmd, project_id, dir.as_deref(), launch_id);
     let mut chats = Vec::new();
@@ -121,7 +127,7 @@ pub fn list_chats(
         let candidate = &candidates[at];
         at += 1;
         let id = match kind {
-            TranscriptKind::Claude => candidate.id.clone(),
+            TranscriptKind::Claude | TranscriptKind::Copilot => candidate.id.clone(),
             TranscriptKind::Codex => dir.as_deref().and_then(|dir| rollout_chat(&candidate.path, dir)),
         };
         let Some(id) = id else { continue };
@@ -161,6 +167,10 @@ pub fn chat_file(
             let path = agent_session::codex_session_log(&agent_session::codex_sessions_root(project_id), chat)?;
             let regular = std::fs::symlink_metadata(&path).ok()?.is_file();
             (regular && rollout_chat(&path, dir.as_deref()?).as_deref() == Some(chat)).then_some(path)
+        }
+        TranscriptKind::Copilot => {
+            let local = project_id.is_none_or(|id| crate::services::remote::remote_target_for(id).is_none());
+            if local { crate::services::copilot_session::folder_chat_file(project_id, dir.as_deref()?, chat) } else { None }
         }
     }
 }
@@ -241,6 +251,7 @@ fn kind_of(cmd: &str) -> Option<TranscriptKind> {
     match cmd {
         "claude" => Some(TranscriptKind::Claude),
         "codex" => Some(TranscriptKind::Codex),
+        "copilot" => Some(TranscriptKind::Copilot),
         _ => None,
     }
 }
@@ -248,6 +259,9 @@ fn kind_of(cmd: &str) -> Option<TranscriptKind> {
 /// The conversation the tab is in now: the id its hook recorded, else (Claude,
 /// before any) its launch id.
 fn current_chat(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Option<String> {
+    if cmd == "copilot" {
+        return crate::services::copilot_session::live_id(project_id, launch_id);
+    }
     agent_session::read_live_session_for(project_id, launch_id)
         .or_else(|| (cmd == "claude" && agent_session::is_uuid_shaped(launch_id)).then(|| launch_id.to_string()))
 }
@@ -265,6 +279,14 @@ fn candidates(cmd: &str, project_id: Option<&str>, dir: Option<&str>, launch_id:
             .iter()
             .flat_map(|folder| claude_candidates(folder))
             .collect(),
+        "copilot" => dir
+            .map(|dir| {
+                crate::services::copilot_session::folder_sessions(project_id, dir)
+                    .into_iter()
+                    .map(|(id, path, updated)| Candidate { path, id: Some(id), updated })
+                    .collect()
+            })
+            .unwrap_or_default(),
         _ if dir.is_some() => {
             let mut out = Vec::new();
             rollouts_in(&agent_session::codex_sessions_root(project_id), 0, &mut out);

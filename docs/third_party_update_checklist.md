@@ -823,7 +823,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 |-------|-------------|---------|---------|
 | Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh` |
 | OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` / `npm i -g @opencode/cli` |
-| Copilot | `--continue` | `-p` | `npm i -g @github/copilot` |
+| Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
 | Antigravity (`agy`) | `--continue` | — | `curl … antigravity.google/cli/install.sh` |
@@ -847,6 +847,11 @@ and still defaults the login to `$XDG_CONFIG_HOME` or `~/.config/muse/auth.json`
 Copilot's row is 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
+Re-checked live on **1.0.102 and 1.0.103** (2026-10-24) for the Reader, Diffs
+and Resume (next section): `-p`, `--session-id`, `--resume`, `--continue`,
+`--connect`, `login --device-code` all unchanged; `--version` still prints
+`GitHub Copilot CLI 1.0.102.`; the 102→103 event schema differs only by an
+added `instruction.update` event and a compaction progress field.
 
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
@@ -876,12 +881,59 @@ layout: a `/login` with `storeTokenPlaintext` on writes the token to
 `~/.copilot/config.json` under `authTokens` (earlier 1.0.88 runtimes:
 `copilotTokens`; 0.0.x: `copilot_tokens`), keyed
 `"<host>:<login>"`, beside `lastLoggedInUser`; Copilot reads
-`COPILOT_GITHUB_TOKEN` before any stored login. Checked against 1.0.88. If a
+`COPILOT_GITHUB_TOKEN` before any stored login. Checked against 1.0.88; the
+`authTokens` / `storeTokenPlaintext` markers are in the 1.0.102 and 1.0.103
+runtimes too (`strings … runtime.node`, 2026-10-24). If a
 release moves the token, fenced tabs go back to asking for a login each time
 (nothing breaks). Check with `strings` on
 `~/.cache/copilot/pkg/linux-x64/<ver>/prebuilds/linux-x64/runtime.node | grep
 -E 'authTokens|storeTokenPlaintext'` and
 `cargo test --manifest-path src-tauri/Cargo.toml copilot_auth`.
+
+**Copilot's session store and the Reader** (`services/copilot_session.rs`,
+`agent_changes` `Store::Copilot`, `agent_chats`, the hook in `agent_hint.rs`;
+desktop only). Run `python3 scripts/copilot-events-probe.py` after an update:
+it drives `copilot -p` against a local stub model (BYOK, isolated HOME, no
+login, no quota) and fails on any of the following, which is what the code
+assumes (1.0.102 and 1.0.103 both pass, 2026-10-24):
+
+- `--session-id <uuid>` creates the session on first use and resumes it after
+  (a `session.resume` record in the same `events.jsonl`), so every Copilot tab
+  is spawned with its own tab uuid instead of `--continue`; the log appears
+  with the first prompt, not at start. `~/.copilot/session-state/<uuid>/` holds
+  `events.jsonl` and `workspace.yaml` (`cwd: <path>`, plain or quoted).
+- `user.message.data.content`, `assistant.message.data.{content,model,
+  toolRequests}`, `session.model_change.data.{newModel,reasoningEffort}`,
+  `session.usage_info.data.currentTokens`; a subagent's events carry
+  `data.parentToolCallId` and are left out of the chat. `bash` and `task`
+  `tool.execution_start` give the running-shell and subagent cards until their
+  `tool.execution_complete`.
+- Diffs: `tool.execution_complete` with `success`, `fileEdits[{path,kind:
+  create|edit|delete}]` and `result.detailedContent`, a git-style diff with one
+  `diff --git a/<path-without-leading-slash> b/…` section per file, in
+  `fileEdits` order. Claude-family models edit with `create`/`edit`, GPT-family
+  ones with the freeform `apply_patch` (several files per call); both record
+  the same way. Shell-made changes are not in any of it.
+- The `sessionStart` hook (`~/.copilot/hooks/*.json`) gets `{sessionId, source:
+  new|resume, cwd, initialPrompt, timestamp}` — once per session, with its
+  first prompt. The hint script records `sessionId` under the tab's key, so a
+  `/new` or an in-CLI `/resume` is followed on the next spawn. A `copilot` run
+  nested under a Copilot tab inherits the tab's variables and would move the
+  record: probes unset `TABTIVITY_TAB_UID` (and the old-prefix one).
+- Screen (1.0.103 drawn through xterm from a pty capture, alt screen, a
+  `[Current] Sessions Issues Pull requests Gists` tab row on top): echoed
+  prompt `❯ text  HH:MM`, a boxed `❯` input between two rules, the footer
+  `← open sidebar · Interactive · Manual Approval · …` with the model at its
+  right end; while working the footer's first cell is a cycling glyph, the verb
+  and `esc esc edit prompt` (`agentBusy.BUSY_HINT`); an approval is a rounded
+  box with `Do you want to run this command?` and `❯ 1. Yes / 2. … / 3. No, and
+  tell Copilot what to do differently`, read by the generic dialog reader. The
+  composer's Ctrl-A Ctrl-K, bracketed paste and Enter work as they do for the
+  other CLIs. The footer's model and mode are not read off the screen (the
+  facts row takes the model from the log).
+- A cached update is used when `COPILOT_AUTO_UPDATE` is not `false`
+  (`agent_install` sets it for installs), so a probe HOME that auto-updates runs
+  a newer release than `--version` prints.
 
 **OpenCode's session plugin** (`services/opencode_session.rs`) assumes, of
 the V1 plugin API (`@opencode-ai/plugin` 1.18.32 types, not run live): a
@@ -1054,7 +1106,8 @@ is the way to see type 15 without an account.
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an
-*opportunity*, not a break. Copilot has been alt-screen unconditionally since 1.0.12 (its
+*opportunity*, not a break. The desktop Reader reads Copilot from its event log
+and its screen (next section). Copilot has been alt-screen unconditionally since 1.0.12 (its
 `--alt-screen` flag was removed). Copilot 1.0.81–1.0.82 also offered to restore
 interrupted sessions at startup, a prompt a restored tab would open on; 1.0.83
 turned it off by default. Vibe 2.25.4 still has `-c/--continue` and

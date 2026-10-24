@@ -22,9 +22,11 @@ const BUSY_WINDOW = 24;
  * further over (`⬝⬝■■ esc interrupt    12.3K (5%)  ctrl+p commands`), and
  * `esc again to interrupt` after one press. A bare "esc to cancel" is a
  * dialog's footer — a question, not work — so the cancel form needs its
- * elapsed time. */
+ * elapsed time. Copilot CLI's footer row while it works is a cycling glyph,
+ * the verb and its own key hint (`◎ Working  esc esc edit prompt`, 1.0.102 and
+ * 1.0.103); idle, the same row reads `← open sidebar · Interactive · …`. */
 const BUSY_HINT =
-  /\((?:[^()]*[·•,]\s*)?esc to interrupt\b[^()]*\)|\(esc to cancel, \d+s\)|(?:^|\s)esc (?:again to |to )?interrupt(?:\s*$|\s{2,})/iu;
+  /\((?:[^()]*[·•,]\s*)?esc to interrupt\b[^()]*\)|\(esc to cancel, \d+s\)|(?:^|\s)esc (?:again to |to )?interrupt(?:\s*$|\s{2,})|^\s*[○◌●◉◎]\s+\S.*?\s+esc esc edit prompt\b/iu;
 
 /** Claude Code's spinner row without the hint: a spinner glyph, the verb with
  * its ellipsis, then the elapsed time opening the parentheses. The finished

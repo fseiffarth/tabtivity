@@ -157,6 +157,10 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
         // (1.19, 2.1): run in the fence, its installer writes into the agent
         // home, which a restart never runs ahead of the install home.
         "opencode" => &[("OPENCODE_DISABLE_AUTOUPDATE", "1")],
+        // It downloads each release into `~/.cache/copilot/pkg`, which is a
+        // tmpfs in the fence: "restart to update" then restarted on the old
+        // version, every time.
+        "copilot" => &[("COPILOT_AUTO_UPDATE", "false")],
         _ => &[],
     }
 }
@@ -248,6 +252,9 @@ mod tests {
         let mut env = std::collections::HashMap::from([("DISABLE_AUTOUPDATER".to_string(), "0".to_string())]);
         apply_fence_env("claude.exe", &mut env);
         assert_eq!(env.get("DISABLE_AUTOUPDATER").map(String::as_str), Some("0"));
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("/s/agents/install/npm/bin/copilot", &mut env);
+        assert_eq!(env.get("COPILOT_AUTO_UPDATE").map(String::as_str), Some("false"));
         let mut env = std::collections::HashMap::new();
         apply_fence_env("codex", &mut env);
         assert!(env.is_empty());

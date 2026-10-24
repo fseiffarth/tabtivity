@@ -83,6 +83,9 @@ pub mod ai_switch;
 // keyring entry (the fence hides the keyring) and hands it to each fenced
 // Copilot as COPILOT_GITHUB_TOKEN.
 pub mod copilot_auth;
+// Copilot CLI's own session store: the tab's pinned session, its events, its
+// folder's chats (the Reader's chat, Diffs and Resume menu).
+pub mod copilot_session;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
