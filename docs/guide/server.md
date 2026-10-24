@@ -295,6 +295,18 @@ done
 Agents keep running during the restart: their tabs live in tmux, which is
 not restarted.
 
+## Proxies and remote images
+
+Tabtivity checks where a fetch is going before it connects, and a web proxy
+would resolve the name itself and skip that check. So a markdown image from
+the web (after "Load images"), the assistant's web tools, and a reader page or
+calendar feed fetched by the server for a client never use `HTTP_PROXY` /
+`HTTPS_PROXY`; a server also refuses a client's reader or calendar URL that
+points at the server itself or its private network. If the server (or a
+desktop) reaches the internet only through a proxy, those remote markdown
+images do not load; pages you type into a reader tab on a desktop still use the
+proxy.
+
 ## More
 
 - [Signing in with your organisation's account](../../DOCUMENTATION.md#hosted-server-signing-in-with-your-organisations-account):

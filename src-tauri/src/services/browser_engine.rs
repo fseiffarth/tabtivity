@@ -735,7 +735,19 @@ pub fn extract_title(raw: &str) -> String {
 /// pins the connection to the addresses it checked. Neither is sufficient alone:
 /// this one bounds the spelling, that one bounds the resolution.
 pub fn reader_hop_allowed(url: &Url, previous: Option<&Url>, hop: usize) -> Result<(), String> {
-    hop_allowed(url, previous, hop, FetchOrigin::User)
+    hop_allowed(url, previous, hop, user_origin())
+}
+
+/// The origin of a reader or ICS fetch the user asked for. On a desktop that
+/// is [`FetchOrigin::User`]. On a server the *client* asked, from another
+/// machine, and the server's own network is not the client's to aim at, so
+/// hop 0 is judged like a document's ([`FetchOrigin::Client`]).
+fn user_origin() -> FetchOrigin {
+    if crate::services::server::is_server() {
+        FetchOrigin::Client
+    } else {
+        FetchOrigin::User
+    }
 }
 
 /// Who chose the first URL of a backend fetch, which decides how far into the
@@ -756,6 +768,10 @@ enum FetchOrigin {
     /// be globally routable — but `http` is allowed as well as `https`, and a
     /// URL carrying userinfo is refused on every hop.
     Agent,
+    /// A reader or ICS URL a client typed, fetched by a server
+    /// ([`user_origin`]): the address rule of [`FetchOrigin::Document`] on hop
+    /// 0 and no proxy, but `http` is allowed, as for [`FetchOrigin::User`].
+    Client,
 }
 
 fn hop_allowed(url: &Url, previous: Option<&Url>, hop: usize, origin: FetchOrigin) -> Result<(), String> {
@@ -780,7 +796,7 @@ fn hop_allowed(url: &Url, previous: Option<&Url>, hop: usize, origin: FetchOrigi
         NavDecision::Block(r) => Err(r.token()),
         NavDecision::Confirm(r) => match (origin, hop) {
             (FetchOrigin::User, 0) => Ok(()),
-            (FetchOrigin::Document | FetchOrigin::Agent, 0) => Err(r.token().to_string()),
+            (FetchOrigin::Document | FetchOrigin::Agent | FetchOrigin::Client, 0) => Err(r.token().to_string()),
             _ => Err(format!("redirect-to-{}", r.token())),
         },
     }
@@ -793,7 +809,7 @@ fn hop_allowed(url: &Url, previous: Option<&Url>, hop: usize, origin: FetchOrigi
 /// which both need the same "may this backend touch this URL" answer and would
 /// otherwise carry two copies of the SSRF defence to keep in sync.
 async fn fetch_raw(raw: &str) -> Result<(Vec<u8>, String, Url, bool), String> {
-    fetch_raw_from(raw, FetchOrigin::User).await
+    fetch_raw_from(raw, user_origin()).await
 }
 
 async fn fetch_raw_from(raw: &str, origin: FetchOrigin) -> Result<(Vec<u8>, String, Url, bool), String> {
@@ -872,7 +888,7 @@ async fn fetch_raw_from(raw: &str, origin: FetchOrigin) -> Result<(Vec<u8>, Stri
 /// surrounding code — a stray log, a devtools hook, a refactor that renders
 /// before it sanitizes — is app-origin XSS with a live IPC bridge.
 pub async fn fetch_reader(raw: &str) -> Result<FetchedPage, String> {
-    fetch_page(raw, FetchOrigin::User).await
+    fetch_page(raw, user_origin()).await
 }
 
 /// The reason token for a URL with a user name or password, on any hop of an
@@ -1025,12 +1041,14 @@ pub async fn fetch_document_image(raw: &str) -> Result<DocumentImage, String> {
 }
 
 /// Whether a fetch of this origin goes through the environment's proxy
-/// (`HTTP(S)_PROXY`). An agent's fetch never does (`docs/assistant_plan.md`,
-/// decision 15): a proxy resolves the name itself, past the address check and
-/// the pin of [`resolve_hop`]. The user's own reader and document fetches keep
-/// honouring it.
+/// (`HTTP(S)_PROXY`). Only a URL the user typed on this machine does. A
+/// proxy resolves the name itself, past the address check and the pin of
+/// [`resolve_hop`], so an address a model, a document (a markdown image) or a
+/// remote client chose never uses one (`docs/assistant_plan.md`, decision 15;
+/// threat-model gap 63). A machine that reaches the internet only through a
+/// proxy therefore loads no remote markdown images.
 fn honours_proxy_env(origin: FetchOrigin) -> bool {
-    origin != FetchOrigin::Agent
+    origin == FetchOrigin::User
 }
 
 /// Build the reader's HTTP client.
@@ -1722,24 +1740,49 @@ mod tests {
         assert!(reader_client(Some(&pin), FetchOrigin::Agent).is_ok());
     }
 
-    /// Decision 15: an agent's fetch never uses `HTTP(S)_PROXY` (the proxy
-    /// would resolve the name past the address check and the pin); the user's
-    /// own fetches still do. `Client`'s `Debug` lists the proxies it holds, so
-    /// the built clients are inspected, not just the choice function.
+    /// Decision 15 and D12 (gap 63): only a URL the user typed on this machine
+    /// uses `HTTP(S)_PROXY`; a proxy would resolve a model's, a document's or a
+    /// remote client's name past the address check and the pin. `Client`'s
+    /// `Debug` lists the proxies it holds, so the built clients are inspected,
+    /// not just the choice function.
     #[test]
-    fn the_agent_client_ignores_proxies_even_when_the_environment_sets_one() {
-        assert!(!honours_proxy_env(FetchOrigin::Agent));
-        assert!(honours_proxy_env(FetchOrigin::User) && honours_proxy_env(FetchOrigin::Document));
+    fn only_the_users_own_client_uses_the_environments_proxy() {
+        assert!(honours_proxy_env(FetchOrigin::User));
+        for origin in [FetchOrigin::Agent, FetchOrigin::Document, FetchOrigin::Client] {
+            assert!(!honours_proxy_env(origin), "{origin:?}");
+        }
         let before = std::env::var_os("HTTPS_PROXY");
         std::env::set_var("HTTPS_PROXY", "http://proxy.invalid:3128");
         let held = |origin| format!("{:?}", reader_client(None, origin).unwrap()).contains("proxies");
-        let (agent, user, document) = (held(FetchOrigin::Agent), held(FetchOrigin::User), held(FetchOrigin::Document));
+        let held_by = [FetchOrigin::User, FetchOrigin::Agent, FetchOrigin::Document, FetchOrigin::Client].map(held);
         match before {
             Some(v) => std::env::set_var("HTTPS_PROXY", v),
             None => std::env::remove_var("HTTPS_PROXY"),
         }
-        assert!(!agent, "the agent client holds a proxy");
-        assert!(user && document, "the user's and the document client keep the environment's proxy");
+        assert_eq!(held_by, [true, false, false, false], "user, agent, document, client");
+    }
+
+    /// On a server a client's reader/ICS hop 0 is judged like a document's
+    /// address-wise (it must not aim the server at its own network), yet `http`
+    /// stays allowed and a desktop's own typed URL keeps its hop-0 allowance.
+    #[test]
+    fn a_clients_first_hop_on_a_server_may_not_reach_the_servers_network() {
+        let client = FetchOrigin::Client;
+        assert_eq!(hop_allowed(&u("http://127.0.0.1:3000/"), None, 0, client), Err("loopback".into()));
+        assert_eq!(hop_allowed(&u("https://169.254.169.254/"), None, 0, client), Err("link-local".into()));
+        assert_eq!(hop_allowed(&u("http://192.168.1.5/"), None, 0, client), Err("private-network".into())); // privacy-check: ok — address literal in an SSRF test/rule
+        assert!(hop_allowed(&u("http://example.com/feed.ics"), None, 0, client).is_ok());
+        assert_eq!(
+            hop_allowed(&u("http://127.0.0.1/"), Some(&u("https://example.com/")), 1, client),
+            Err("redirect-to-loopback".into())
+        );
+        let public = [SocketAddr::from(([203, 0, 113, 10], 443))];
+        let private = [SocketAddr::from(([10, 0, 0, 1], 443))];
+        assert!(judge_resolved_with(&public, 0, client, |_| false).is_ok());
+        assert!(judge_resolved_with(&private, 0, client, |_| false).is_err());
+        assert!(judge_resolved_with(&public, 0, client, |_| true).is_err(), "the server's own address");
+        assert!(judge_resolved_with(&private, 0, FetchOrigin::User, |_| true).is_ok());
+        assert_eq!(user_origin(), FetchOrigin::User, "a desktop test process is not a server");
     }
 
     /// The address half of disclosed gap (c). These are the judgements
