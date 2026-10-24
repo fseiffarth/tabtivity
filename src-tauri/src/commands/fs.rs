@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::schema::boxes::BoxesList;
 use crate::schema::projects::{ProjectEntry, ProjectsList};
+use crate::services::tree_copy::{copy_tree, CopyReport};
 use crate::storage;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
@@ -1089,13 +1090,15 @@ pub fn create_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 /// to their respective project roots (which may be the same project, enabling an
 /// in-project copy/paste, or two box-co-accessible projects). The destination
 /// must not already exist, and a directory may not be copied into itself.
+/// Links below the copied folder are recreated as links and never followed;
+/// what could not be copied (pipes, sockets, devices) comes back in the report.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_path(
     src_project_dir: String,
     src_rel: String,
     dest_project_dir: String,
     dest_rel: String,
-) -> Result<(), String> {
+) -> Result<CopyReport, String> {
     app_core::rt::try_blocking("fs", move || copy_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
         .await
 }
@@ -1105,12 +1108,12 @@ pub fn copy_path_blocking(
     src_rel: String,
     dest_project_dir: String,
     dest_rel: String,
-) -> Result<(), String> {
+) -> Result<CopyReport, String> {
     let (src, dest) = resolve_transfer(&src_project_dir, &src_rel, &dest_project_dir, &dest_rel)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    copy_recursive(&src, &dest).map_err(|e| e.to_string())
+    copy_tree(&src, &dest).map_err(|e| e.to_string())
 }
 
 /// Move (cut/paste) a file or directory tree into another location. Same
@@ -1149,7 +1152,16 @@ pub fn move_path_blocking(
         }
         Err(_) => {}
     }
-    copy_recursive(&src, &dest).map_err(|e| e.to_string())?;
+    let report = copy_tree(&src, &dest).map_err(|e| e.to_string())?;
+    if report.skipped_count > 0 {
+        // The original holds what the copy left out: removing it would lose that.
+        crate::services::tree_copy::discard(&dest);
+        return Err(format!(
+            "could not move across drives: {} item(s) cannot be copied ({}); the original was left in place",
+            report.skipped_count,
+            report.summary()
+        ));
+    }
     let remove = if src.is_dir() {
         fs::remove_dir_all(&src)
     } else {
@@ -1252,7 +1264,10 @@ pub fn import_external_file_blocking(
             fs::remove_file(&dest).map_err(|e| e.to_string())?;
         }
     }
-    copy_recursive(&src, &dest).map_err(|e| e.to_string())?;
+    let report = copy_tree(&src, &dest).map_err(|e| e.to_string())?;
+    if report.skipped_count > 0 {
+        eprintln!("import: {} item(s) not copied from the dropped folder: {}", report.skipped_count, report.summary());
+    }
 
     Ok(dest
         .strip_prefix(&root)
@@ -1415,22 +1430,6 @@ fn resolve_transfer(
         return Err("cannot copy a folder into itself".to_string());
     }
     Ok((src, dest))
-}
-
-/// Recursively copy `src` to `dest`. Directories are recreated and their
-/// contents copied entry by entry; symlinks are not followed (copied as their
-/// target's contents via the recursive descent on the resolved metadata).
-fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    if src.is_dir() {
-        fs::create_dir_all(dest)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
-        }
-    } else {
-        fs::copy(src, dest)?;
-    }
-    Ok(())
 }
 
 // ── MIME detection (magic bytes) ──────────────────────────────────────────
@@ -3210,6 +3209,27 @@ mod tests {
             "fn main() {}"
         );
         assert!(tmp.path().join("src/main.rs").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_path_keeps_a_planted_link_a_link_and_reports_a_pipe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_string_lossy().to_string();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("src/planted")).unwrap();
+        let fifo = std::ffi::CString::new(tmp.path().join("src/pipe").to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+        let report = copy_path_blocking(dir.clone(), "src".into(), dir.clone(), "src2".into()).unwrap();
+
+        assert_eq!(report.skipped, vec!["pipe".to_string()]);
+        let copied = tmp.path().join("src2/planted");
+        assert!(std::fs::symlink_metadata(&copied).unwrap().file_type().is_symlink());
+        assert!(!tmp.path().join("src2/pipe").exists());
     }
 
     #[test]

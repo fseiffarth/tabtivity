@@ -7216,6 +7216,7 @@ export const enSource = {
   "fileTree.errRemoteList": "Couldn't list this folder on the remote host. Check the connection and try again.",
   "fileTree.errOpenFolder": "Couldn't open this folder.",
   "fileTree.alreadyExistsIn": "“{name}” already exists in {folder}",
+  "fileTree.copySkipped": "Copied, but {count} item(s) could not be copied (pipes, sockets, devices or unreadable): {names}",
   "fileTree.projectRootFolder": "the project root",
   "fileTree.runFailedOutsideTree": "Run failed: {path} is outside the current project tree",
   "fileTree.runFailed": "Run failed: {error}",

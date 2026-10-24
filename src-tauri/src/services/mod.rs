@@ -130,6 +130,9 @@ pub mod git_peer;
 // Directory-handle-relative I/O inside agent-writable homes: what every
 // unfenced write into a scope home goes through.
 pub mod home_io;
+// Folder copy for the file tree: no link below the top level is followed, no
+// special file is read, and bytes and entries are bounded.
+pub mod tree_copy;
 pub mod hpc_mode;
 // Which IDE a project tree belongs to (`.idea/`, `.vs/` + `*.sln`, `.vscode/`)
 // and which installed program opens it — never one named inside the tree.

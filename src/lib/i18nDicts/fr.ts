@@ -6871,6 +6871,7 @@ export const dict: Dict = {
   "fileTree.errRemoteList": "Impossible de lister ce dossier sur l'hôte distant. Vérifiez la connexion et réessayez.",
   "fileTree.errOpenFolder": "Impossible d'ouvrir ce dossier.",
   "fileTree.alreadyExistsIn": "« {name} » existe déjà dans {folder}",
+  "fileTree.copySkipped": "Copié, mais {count} élément(s) n’ont pas pu être copiés (tubes, sockets, périphériques ou illisibles) : {names}",
   "fileTree.projectRootFolder": "la racine du projet",
   "fileTree.runFailedOutsideTree": "Échec de l'exécution : {path} est en dehors de l'arborescence du projet actuel",
   "fileTree.runFailed": "Échec de l'exécution : {error}",

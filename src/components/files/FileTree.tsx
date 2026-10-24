@@ -250,6 +250,9 @@ type DeleteConfirm = { entries: FileEntry[] } | null;
  *  clipboard, a system-clipboard image (screenshot) or a file/folder a file
  *  manager copied (`system`); `name` is the name being chosen for the pasted
  *  result in the current folder. */
+/** What `copy_path` left out of a copied folder (pipes, sockets, devices). */
+type CopyReport = { skipped: string[]; skippedCount: number };
+
 type PastePrompt = { kind: "file" | "image" | "system"; name: string; error: string | null };
 /** A file or folder on the OS clipboard (`clipboard_file_paths`). */
 type SystemClipboardFile = { path: string; name: string; isDir: boolean };
@@ -3456,6 +3459,10 @@ export function FileTree({
     }
   }
 
+  function copySkippedNote(count: number, names: string[]): string {
+    return t("fileTree.copySkipped", { count, names: names.join(", ") });
+  }
+
   // Paste a multi-item clipboard into the current folder in one go — no per-file
   // rename prompt; each collision is auto-resolved with " copy". The single-item
   // paste keeps its rename prompt (openPastePrompt / confirmPaste).
@@ -3465,17 +3472,23 @@ export function FileTree({
     setLoading(true);
     setError(null);
     const claimed = new Set<string>();
+    let skippedCount = 0;
+    const skippedNames: string[] = [];
     try {
       for (const cb of clipboardEntries) {
         const newName = suggestPasteName(cb.name, claimed);
         claimed.add(newName);
         const destRel = relPath ? `${relPath}/${newName}` : newName;
-        await invoke(cb.op === "cut" ? "move_path" : "copy_path", {
+        const done = await invoke<CopyReport | null | undefined>(cb.op === "cut" ? "move_path" : "copy_path", {
           srcProjectDir: cb.projectDir,
           srcRel: cb.relPath,
           destProjectDir: projectDir,
           destRel,
         });
+        if (done?.skippedCount) {
+          skippedCount += done.skippedCount;
+          skippedNames.push(...done.skipped.map((n) => `${newName}/${n}`));
+        }
         // Same-project cut relocates within this tree → retarget any open viewer
         // tab of the moved file (mirrors confirmPaste's single-item handling).
         if (cb.op === "cut" && cb.projectDir === projectDir) {
@@ -3486,6 +3499,7 @@ export function FileTree({
       }
       if (clipboardEntries.some((c) => c.op === "cut")) clearClipboard();
       await load(relPath);
+      if (skippedCount > 0) setError(copySkippedNote(skippedCount, skippedNames));
     } catch (err) {
       setError(String(err));
       setLoading(false);
@@ -3501,6 +3515,7 @@ export function FileTree({
     }
     const destRel = relPath ? `${relPath}/${newName}` : newName;
     setPasteBusy(true);
+    let skippedNote: string | null = null;
     try {
       if (pastePrompt.kind === "image") {
         await invoke("save_clipboard_image", { projectDir, relPath: destRel });
@@ -3516,12 +3531,13 @@ export function FileTree({
         });
       } else {
         if (!clipboard) return;
-        await invoke(clipboard.op === "cut" ? "move_path" : "copy_path", {
+        const done = await invoke<CopyReport | null | undefined>(clipboard.op === "cut" ? "move_path" : "copy_path", {
           srcProjectDir: clipboard.projectDir,
           srcRel: clipboard.relPath,
           destProjectDir: projectDir,
           destRel,
         });
+        if (done?.skippedCount) skippedNote = copySkippedNote(done.skippedCount, done.skipped);
         if (clipboard.op === "cut") {
           // A same-project cut relocates within this scope's tree, so retarget any
           // open viewer tab of the moved file (main + detached). A cross-project
@@ -3537,6 +3553,7 @@ export function FileTree({
       }
       setPastePrompt(null);
       await load(relPath);
+      if (skippedNote) setError(skippedNote);
     } catch (err) {
       setPastePrompt({ ...pastePrompt, error: String(err) });
     } finally {
