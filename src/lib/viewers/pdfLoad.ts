@@ -45,7 +45,12 @@ export async function loadPdf(
    *  spawns a Worker of its own, which the document's task then owns. */
   worker?: PDFWorker,
 ): Promise<PDFDocumentProxy> {
-  const task = pdfjs.getDocument(worker ? { data, worker } : { data });
+  // `disableFontFace`: pdf.js draws glyphs itself from the font's outlines
+  // instead of handing the embedded font programs to WebKit's `FontFace` — the
+  // window that renders this holds the whole IPC bridge and, on Linux, its
+  // WebKit process is not sandboxed (docs/browser_plan_b.md), so a PDF's font
+  // bytes never reach WebKit's font parser.
+  const task = pdfjs.getDocument(worker ? { data, worker, disableFontFace: true } : { data, disableFontFace: true });
   try {
     return await task.promise;
   } catch (e) {

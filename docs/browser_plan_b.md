@@ -1079,6 +1079,16 @@ own sandbox provides — on WebView2 the browser sandbox, outside our control.
 > separate helper process on `webkitgtk-6.0`, inside Tabtivity's own bubblewrap with no
 > home or project mounts and no Tauri IPC in it — which also removes the §2.1–§2.4 bridge
 > risk instead of guarding it. Tauri's own GTK4 port (tauri#12561) is unreleased.
+>
+> **Documented limitation (2026-10-24, recheck gap 51): the app's own windows are in
+> the same position.** `main`, `detached-*` and `present-*` hold the full IPC bridge and
+> render hostile bytes (pictures, PDFs, SVG, media, the HTML preview — including what an
+> agent's reply names in the desktop chat) in that unsandboxed Linux renderer. Mitigation
+> shipped: the desktop pdf.js loader passes `disableFontFace: true` (`pdfLoad.ts`), so
+> pdf.js draws glyphs itself and WebKit's font parser never sees a PDF's embedded fonts.
+> Not mitigated: WebKit's image, SVG and media decoders. **The real fix is the sandboxed
+> `webkitgtk-6.0` route above** (hostile-content rendering moved to a helper process
+> with no home, project mounts or IPC) — tracked, not built.
 
 What this plan does about it:
 
