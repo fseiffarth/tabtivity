@@ -41,7 +41,7 @@ use tokio::time::MissedTickBehavior;
 use crate::schema::net_usage;
 use crate::services::remote::{pooled_sftp, remote_target_for, RemotePoolState, RemoteTarget};
 use crate::services::remote_sync::{
-    self, ensure_loaded, mirror_dir, mirror_local_path, Manifest, PushDecision, SyncManifestState,
+    self, ensure_loaded, mirror_dir, Manifest, PushDecision, SyncManifestState,
 };
 use crate::services::sftp;
 
@@ -62,15 +62,16 @@ const RECONCILE_FILE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Await a transfer future under [`RECONCILE_FILE_TIMEOUT`], folding a stall into the
 /// same `Err(String)` the transfer itself returns — so the caller's existing
 /// error arm skips the file instead of the whole pass hanging on the pooled session.
-async fn run_bounded<T>(
-    fut: impl std::future::Future<Output = Result<T, String>>,
-) -> Result<T, String> {
+async fn run_bounded<T, E: From<String>>(
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, E> {
     match tokio::time::timeout(RECONCILE_FILE_TIMEOUT, fut).await {
         Ok(r) => r,
         Err(_) => Err(format!(
             "transfer stalled after {}s (remote connection may have dropped)",
             RECONCILE_FILE_TIMEOUT.as_secs()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -132,6 +133,9 @@ struct AutoSyncEvent {
     pulled: usize,
     pushed: usize,
     skipped_amber: usize,
+    /// Mirror files left out of pushes (a link, a FIFO, a giant): the project's
+    /// whole current notice, so the UI replaces what it shows.
+    skipped_unsafe: remote_sync::MirrorSkips,
 }
 
 /// Start the per-project auto-sync task (idempotent; no-op for a local project).
@@ -629,6 +633,7 @@ async fn reconcile_pass(
     let mut pulled = 0usize;
     let mut pushed = 0usize;
     let mut skipped = 0usize;
+    let mut notice_changed = false;
     for rel in candidates {
         if stopping.load(Ordering::SeqCst) {
             break; // stopped: end after the file in flight, not after the whole tree
@@ -651,11 +656,28 @@ async fn reconcile_pass(
                 }
             },
         };
-        let local_path = mirror_local_path(project_id, &rel);
-        // Same for the mirror: only NotFound is gone.
-        let local = match std::fs::metadata(&local_path) {
-            Ok(m) => Some(remote_sync::local_meta(&m)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        // Same for the mirror, by lstat: only NotFound is gone, and a link (the
+        // file, or a folder above it) or a special file is never read as the
+        // regular file it replaced — it is left alone and reported.
+        let local = match remote_sync::mirror_lstat(&mirror_root, &rel) {
+            Ok(remote_sync::MirrorStat::File(m)) => {
+                if m.len() <= remote_sync::MAX_SYNC_FILE_BYTES {
+                    notice_changed |= remote_sync::clear_mirror_skip(project_id, &rel);
+                }
+                Some(remote_sync::local_meta(&m))
+            }
+            Ok(remote_sync::MirrorStat::Missing) => {
+                notice_changed |= remote_sync::clear_mirror_skip(project_id, &rel);
+                None
+            }
+            Ok(remote_sync::MirrorStat::Skip(kind)) => {
+                eprintln!("auto-sync: skip '{rel}': not a regular mirror file ({kind:?})");
+                notice_changed |= remote_sync::note_mirror_skip(
+                    project_id,
+                    remote_sync::MirrorSkip { rel: rel.clone(), kind, size: None },
+                );
+                continue;
+            }
             Err(e) => {
                 eprintln!("auto-sync: skip '{rel}': {e}");
                 continue;
@@ -724,12 +746,12 @@ async fn reconcile_pass(
                     host
                 };
                 if remote_sync::push_decision(&entry, host_now) == PushDecision::Safe {
-                    match run_bounded(remote_sync::push_file_atomic(&sftp, &local_path, &host_abs))
+                    match run_bounded(remote_sync::push_file_atomic(&sftp, &mirror_root, &rel, &host_abs))
                         .await
                     {
-                        Ok((hs, hm)) => {
-                            let (ls, lm) =
-                                remote_sync::local_size_mtime(std::fs::metadata(&local_path).ok());
+                        Ok(done) => {
+                            let (hs, hm) = done.host;
+                            let (ls, lm) = done.local;
                             let mut g = manifest.lock().await;
                             let m = ensure_loaded(&mut g, project_id);
                             remote_sync::record_push(m, &rel, hs, hm, ls, lm);
@@ -743,6 +765,10 @@ async fn reconcile_pass(
                             net_usage::record_files(project_id, 0, 1);
                             pushed += 1;
                         }
+                        Err(remote_sync::PushError::Skipped(skip)) => {
+                            eprintln!("auto-sync: push skip {skip}");
+                            notice_changed |= remote_sync::note_mirror_skip(project_id, skip);
+                        }
                         Err(e) => eprintln!("auto-sync: push skip '{rel}': {e}"),
                     }
                 } else {
@@ -753,7 +779,7 @@ async fn reconcile_pass(
         }
     }
 
-    if pulled + pushed > 0 {
+    if pulled + pushed > 0 || notice_changed {
         if let Some(ctx) = ctx {
             ctx.emit(
                 "auto-sync",
@@ -762,6 +788,7 @@ async fn reconcile_pass(
                     pulled,
                     pushed,
                     skipped_amber: skipped,
+                    skipped_unsafe: remote_sync::mirror_skips(project_id),
                 },
             );
         }

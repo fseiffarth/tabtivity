@@ -83,6 +83,7 @@ import { FileTreeSearch } from "./FileTreeSearch";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
+import { SyncMirrorSkips } from "./SyncMirrorSkips";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor } from "../../lib/shortcuts/shortcuts";
 import { IdeMenuItems } from "../projects/IdeMenuItems";
@@ -4337,6 +4338,7 @@ export function FileTree({
           </button>
         </div>
       )}
+      <SyncMirrorSkips projectId={projectId ?? undefined} />
       {searching && (
         <FileTreeSearch
           projectDir={projectDir}

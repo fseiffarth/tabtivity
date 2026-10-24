@@ -31,6 +31,36 @@ use crate::services::sftp;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
 
+/// The mirror copy's metadata when it is a regular file, by lstat: a link (at
+/// the file or a folder above it), a special file, a missing file and an error
+/// are all `None`, so a planted link never reads as the file it replaced.
+fn mirror_file_meta(project_id: &str, rel: &str) -> Option<std::fs::Metadata> {
+    match remote_sync::mirror_lstat(&remote_sync::mirror_dir(project_id), rel) {
+        Ok(remote_sync::MirrorStat::File(m)) => Some(m),
+        _ => None,
+    }
+}
+
+/// [`mirror_file_meta`] keeping "gone" apart from "could not look": only a
+/// positive `Ok(None)` is gone, and a link or special file is an `Err`.
+fn mirror_file_tristate(project_id: &str, rel: &str) -> Result<Option<std::fs::Metadata>, String> {
+    match remote_sync::mirror_lstat(&remote_sync::mirror_dir(project_id), rel)? {
+        remote_sync::MirrorStat::File(m) => Ok(Some(m)),
+        remote_sync::MirrorStat::Missing => Ok(None),
+        remote_sync::MirrorStat::Skip(kind) => Err(format!("'{rel}' is not a regular file in the mirror ({kind:?})")),
+    }
+}
+
+/// The mirror copy's bytes through the held-handle reader, off the runtime
+/// thread; `None` for anything but a readable regular file within the cap.
+async fn read_mirror_bytes(project_id: &str, rel: &str) -> Option<Vec<u8>> {
+    let (root, rel) = (remote_sync::mirror_dir(project_id), rel.to_string());
+    match app_core::rt::spawn_blocking(move || remote_sync::read_mirror_file(&root, &rel)).await {
+        Ok(Ok(remote_sync::MirrorRead::File { bytes, .. })) => Some(bytes),
+        _ => None,
+    }
+}
+
 /// Max concurrent host re-stats during a `sync_status` refresh. The SFTP client
 /// pipelines these over the one pooled channel; this bounds the in-flight count
 /// so a large selection can't flood it.
@@ -110,7 +140,7 @@ fn apply_status_heal(
 async fn verify_amber_identical(
     sftp: &Sftp,
     host_abs: &str,
-    mirror_path: &std::path::Path,
+    project_id: &str,
     rel: &str,
     entry: &crate::services::remote_sync::SyncEntry,
     host: (u64, Option<u64>),
@@ -124,7 +154,7 @@ async fn verify_amber_identical(
         return None;
     }
     let host_bytes = sftp::read_file_on(sftp, host_abs).await.ok()?;
-    let local_bytes = std::fs::read(mirror_path).ok()?;
+    let local_bytes = read_mirror_bytes(project_id, rel).await?;
     (host_bytes == local_bytes).then(|| ContentRebase {
         rel: rel.to_string(),
         entry: entry.clone(),
@@ -692,9 +722,7 @@ pub async fn sync_status(
             // Cold pool: the host can't be re-stat'd, but the local mirror still
             // can (no network) — so a local-only edit made while disconnected
             // still surfaces as amber instead of a stale green.
-            let local = std::fs::metadata(mirror_local_path(&project_id, &rel))
-                .ok()
-                .map(|m| local_meta(&m));
+            let local = mirror_file_meta(&project_id, &rel).map(|m| local_meta(&m));
             let state = remote_sync::compute_state(&entry, None, local, excluded_eff);
             // Host side is never flagged on a cold pool (nothing was checked).
             let (hd, ld) = remote_sync::divergence(&entry, None, local);
@@ -746,16 +774,11 @@ pub async fn sync_status(
                     .flatten()
                     .unwrap_or((0, None));
                 let host_for_compute = Some((size, mtime));
-                let mirror_path = mirror_local_path(&project_id, &rel);
-                // Same tri-state for the local mirror: only io NotFound is
-                // "gone"; any other error (permissions, an I/O fault) must not
-                // license a prune.
+                // Same tri-state for the local mirror, by lstat: only a positive
+                // NotFound is "gone"; any other error (permissions, an I/O fault)
+                // or a link / special file must not license a prune.
                 let local_stat: Result<Option<(u64, Option<u64>)>, String> =
-                    match std::fs::metadata(&mirror_path) {
-                        Ok(m) => Ok(Some(local_meta(&m))),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                        Err(e) => Err(e.to_string()),
-                    };
+                    mirror_file_tristate(&project_id, &rel).map(|m| m.map(|m| local_meta(&m)));
                 // For state/divergence, keep today's semantics exactly: any
                 // unreadable mirror file (gone OR erroring) reads as absent.
                 let local = local_stat.as_ref().ok().copied().flatten();
@@ -786,7 +809,7 @@ pub async fn sync_status(
                         if let Some(rb) = verify_amber_identical(
                             &sftp,
                             &host_abs,
-                            &mirror_path,
+                            &project_id,
                             &rel,
                             &entry,
                             (size, mtime),
@@ -889,7 +912,7 @@ pub async fn sync_status(
                 .filter_map(|rel| {
                     // Stat for the row's mtime; a file that vanished between the
                     // listing and here is simply not new any more.
-                    let meta = std::fs::metadata(mirror_local_path(&pid, &rel)).ok()?;
+                    let meta = mirror_file_meta(&pid, &rel)?;
                     let (_, mtime) = local_meta(&meta);
                     let auto = remote_sync::is_auto(&snapshot_for_new, &rel);
                     Some(SyncStatusEntry {
@@ -968,9 +991,8 @@ pub async fn sync_file_meta(
             mtime: None,
         },
     };
-    let local_path = mirror_local_path(&project_id, &rel_path);
-    let local = match std::fs::metadata(&local_path) {
-        Ok(m) => {
+    let local = match mirror_file_meta(&project_id, &rel_path) {
+        Some(m) => {
             let (size, mtime) = local_size_mtime(Some(m));
             SideMeta {
                 exists: true,
@@ -978,7 +1000,7 @@ pub async fn sync_file_meta(
                 mtime,
             }
         }
-        Err(_) => SideMeta {
+        None => SideMeta {
             exists: false,
             size: 0,
             mtime: None,
@@ -1035,8 +1057,7 @@ pub async fn sync_resolve_if_identical(
     let Ok(host_bytes) = sftp::read_file_on(&sftp, &host_abs).await else {
         return Ok(false);
     };
-    let mirror_path = mirror_local_path(&project_id, &rel_path);
-    let Ok(local_bytes) = std::fs::read(&mirror_path) else {
+    let Some(local_bytes) = read_mirror_bytes(&project_id, &rel_path).await else {
         return Ok(false);
     };
     if host_bytes != local_bytes {
@@ -1047,7 +1068,7 @@ pub async fn sync_resolve_if_identical(
     let (host_size, host_mtime) = sftp::metadata_on(&sftp, &host_abs)
         .await
         .unwrap_or((host_bytes.len() as u64, None));
-    let (ls, lm) = local_size_mtime(std::fs::metadata(&mirror_path).ok());
+    let (ls, lm) = local_size_mtime(mirror_file_meta(&project_id, &rel_path));
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
     remote_sync::record_pull(m, &rel_path, host_size, host_mtime, ls, lm);
@@ -1116,9 +1137,10 @@ pub async fn sync_apply_delete(
     };
     // Tri-state host stat: present / positively gone / could not check.
     let host_stat = sftp::metadata_opt_on(&sftp, &host_abs).await;
-    let local_exists = match std::fs::metadata(&mirror_path) {
+    // By lstat: a link (even a dangling one) is something there, not "deleted".
+    let local_exists = match remote_sync::mirror_lstat(&remote_sync::mirror_dir(&project_id), &rel_path) {
+        Ok(remote_sync::MirrorStat::Missing) => false,
         Ok(_) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(format!("could not check the local mirror copy: {e}")),
     };
     if side == "host" {
@@ -1427,7 +1449,7 @@ async fn preview_push(
     let (files, tracked) = drop_lockstep_tracked(project_id, files, String::as_str)?;
     let bytes = files
         .iter()
-        .filter_map(|r| std::fs::metadata(mirror_local_path(project_id, r)).ok())
+        .filter_map(|r| mirror_file_meta(project_id, r))
         .map(|m| m.len())
         .sum();
 
@@ -1518,6 +1540,10 @@ pub struct SyncPushResult {
     pub skipped_excluded: usize,
     /// Files omitted because enabled git lockstep owns their tracked paths.
     pub skipped_tracked: usize,
+    /// The project's current notice of mirror files left out of pushes (a link,
+    /// a special file, one over the cap): this push's and the background
+    /// pass's, so the UI replaces what it shows.
+    pub skipped_unsafe: remote_sync::MirrorSkips,
 }
 
 /// Push a local mirror file or folder subtree to the host (the bidirectional
@@ -1586,8 +1612,9 @@ pub async fn sync_push(
     // a push carries the new host base back for the manifest).
     enum PushStep {
         Conflict,
-        Pushed((u64, Option<u64>)),
+        Pushed(remote_sync::PushedFile),
     }
+    let mirror_root = remote_sync::mirror_dir(&project_id);
     for rel in files {
         let host_abs = join_remote(&target.spec.remote_path, &rel);
         // Snapshot the base under the lock (released before the transfer).
@@ -1596,7 +1623,6 @@ pub async fn sync_push(
             let m = ensure_loaded(&mut guard, &project_id);
             m.get(&rel).cloned().unwrap_or_default()
         };
-        let local = mirror_local_path(&project_id, &rel);
         // Bound every SFTP round-trip for this file: the host re-stat AND the write
         // both ride the pooled session, and either can hang forever on a session
         // that has silently dropped (see `PUSH_FILE_TIMEOUT`). `timeout` turns that
@@ -1612,15 +1638,24 @@ pub async fn sync_push(
             if remote_sync::push_decision(&base, host) == PushDecision::Stale && !force {
                 return Ok::<PushStep, String>(PushStep::Conflict);
             }
-            let hm = remote_sync::push_file_atomic(&sftp, &local, &host_abs).await?;
-            Ok(PushStep::Pushed(hm))
+            match remote_sync::push_file_atomic(&sftp, &mirror_root, &rel, &host_abs).await {
+                Ok(done) => Ok(PushStep::Pushed(done)),
+                Err(remote_sync::PushError::Skipped(skip)) => {
+                    let msg = skip.to_string();
+                    remote_sync::note_mirror_skip(&project_id, skip);
+                    Err(msg)
+                }
+                Err(e) => Err(e.to_string()),
+            }
         })
         .await;
         let mut stalled = false;
         match outcome {
             Ok(Ok(PushStep::Conflict)) => conflicts.push(rel.clone()),
-            Ok(Ok(PushStep::Pushed((hs, hm)))) => {
-                let (ls, lm) = local_size_mtime(std::fs::metadata(&local).ok());
+            Ok(Ok(PushStep::Pushed(done))) => {
+                let (hs, hm) = done.host;
+                let (ls, lm) = done.local;
+                remote_sync::clear_mirror_skip(&project_id, &rel);
                 let mut guard = manifest.lock().await;
                 let m = ensure_loaded(&mut guard, &project_id);
                 remote_sync::record_push(m, &rel, hs, hm, ls, lm);
@@ -1695,6 +1730,7 @@ pub async fn sync_push(
         first_error,
         skipped_excluded,
         skipped_tracked,
+        skipped_unsafe: remote_sync::mirror_skips(&project_id),
     })
 }
 
@@ -1760,7 +1796,7 @@ async fn unsynced_local_edits(
             if entry.last_pull_ts.is_none() && entry.last_push_ts.is_none() {
                 return false;
             }
-            let Some(meta) = std::fs::metadata(mirror_local_path(project_id, rel)).ok() else {
+            let Some(meta) = mirror_file_meta(project_id, rel) else {
                 return false; // no mirror file → the pull only creates
             };
             let (_, local_changed) = remote_sync::divergence(entry, None, Some(local_meta(&meta)));
