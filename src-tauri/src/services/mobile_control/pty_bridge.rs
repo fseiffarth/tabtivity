@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     /// A host tab's three commands ride the master's literal socket through
-    /// `host_mux_args`: `ssh -tt` for the attach with `TERM=vt100` on the
+    /// `host_mux_args` (no ssh_config, `-F none`): `ssh -tt` for the attach with `TERM=vt100` on the
     /// ssh process, `ssh -T` for the capture and the window size, the tmux
     /// script last after `--`. A local tab's stay tmux here.
     #[test]
@@ -1153,7 +1153,7 @@ mod tests {
         assert_eq!(attach.get_env("TERM"), Some(OsStr::new("vt100")));
         let argv: Vec<String> = attach.get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert!(std::path::Path::new(&argv[0]).file_stem().is_some_and(|stem| stem == "ssh"), "{argv:?}");
-        assert_eq!(argv[1], "-tt");
+        assert_eq!(&argv[1..4], ["-F", "none", "-tt"]);
         assert!(argv.contains(&literal) && argv.contains(&"ProxyCommand=false".to_string()), "{argv:?}");
         assert_eq!(&argv[argv.len() - 2..], ["--".to_string(), crate::services::ssh_exec::host_tmux_attach_command(name).unwrap()]);
         for (probe, script) in [
@@ -1162,7 +1162,7 @@ mod tests {
         ] {
             let command = target.probe_command(probe).expect("one-shot");
             let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-            assert_eq!(args[0], "-T");
+            assert_eq!(&args[..3], ["-F", "none", "-T"]);
             assert!(args.contains(&literal));
             assert_eq!(args.last(), Some(&script));
         }
