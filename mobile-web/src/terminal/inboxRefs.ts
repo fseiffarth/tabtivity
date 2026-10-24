@@ -48,6 +48,57 @@ export function withoutInboxReferences(text: string): string {
     .trim();
 }
 
+/** A prompt read in order: its words, and between them the inbox files a
+ * run of references names (only spaces between two references keeps them in
+ * one run). */
+export type InboxSegment = { kind: "words"; text: string } | { kind: "files"; leaves: string[] };
+
+/** `text` split where its references stand, so pictures can be drawn where
+ * the words put them — a markup prompt captions each picture ("The picture
+ * with my marks drawn on it:", "Page 2:"). A leaf named a second time is
+ * left out; words that are only spaces are dropped. */
+export function inboxSegments(text: string): InboxSegment[] {
+  const segments: InboxSegment[] = [];
+  const shown = new Set<string>();
+  let words = "";
+  const flushWords = () => {
+    const clean = withoutInboxReferences(words);
+    if (clean) segments.push({ kind: "words", text: clean });
+    words = "";
+  };
+  let at = 0;
+  for (const match of text.matchAll(REFERENCE)) {
+    const start = (match.index ?? 0) + match[1].length;
+    const leaf = leafOf(match[2]);
+    const between = text.slice(at, start);
+    // Past the reference; a sentence's closing dots stay with the words.
+    at = (match.index ?? 0) + match[0].length - (match[2].length - leaf.length);
+    if (!leaf || shown.has(leaf)) {
+      words += between;
+      continue;
+    }
+    shown.add(leaf);
+    const last = segments[segments.length - 1];
+    if (last?.kind === "files" && !(words + between).trim()) {
+      last.leaves.push(leaf);
+      words = "";
+      continue;
+    }
+    words += between;
+    flushWords();
+    segments.push({ kind: "files", leaves: [leaf] });
+  }
+  words += text.slice(at);
+  flushWords();
+  return segments;
+}
+
+/** Whether `segments` put pictures between words in more than one place —
+ * then each is drawn where it stands; else the one album heads the bubble. */
+export function inboxInPlace(segments: readonly InboxSegment[]): boolean {
+  return segments.filter((segment) => segment.kind === "files").length > 1;
+}
+
 /** What the desktop said about one leaf: the file, or `null` — asked, and the
  * inbox does not hold it (deleted, or never a file the phone may read). */
 type Described = OutboxFile | null;

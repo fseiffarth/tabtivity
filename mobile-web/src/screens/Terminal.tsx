@@ -147,7 +147,7 @@ import { pullQueuedPrompts } from "../terminal/queuePull";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
-import { inboxLeaves, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
+import { inboxInPlace, inboxLeaves, inboxSegments, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
 import { afterClear, clearMark, type ClearMark } from "../terminal/clearedSession";
 import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../terminal/heldPrompts";
 import { ageLabel, sizeLabel } from "../terminal/fileLabels";
@@ -539,11 +539,21 @@ const awayMarkups = new Map<string, MarkupBack>();
 
 /** A prompt's words, with the files it sent from the phone drawn above them
  * as pictures — a messenger's picture with its caption — and their `@`
- * references left out of the words. Both follow from the text alone, so a
- * shown bubble keeps its shape. */
+ * references left out of the words. Pictures the words caption in several
+ * places (a markup prompt's marked picture, then its layer) are each drawn
+ * where they stand instead (`inboxSegments`). Both follow from the text
+ * alone, so a shown bubble keeps its shape. */
 function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers; inbox?: ChatInbox }) {
   const leaves = useMemo(() => inbox ? inboxLeaves(text) : [], [inbox, text]);
+  const segments = useMemo(() => leaves.length > 0 ? inboxSegments(text) : [], [leaves, text]);
   if (!inbox || leaves.length === 0) return <PromptText text={text} links={links} />;
+  if (inboxInPlace(segments)) {
+    // The untested note once, under the first album.
+    const first = segments.findIndex((segment) => segment.kind === "files");
+    return <>{segments.map((segment, i) => segment.kind === "words"
+      ? <PromptText key={i} text={segment.text} links={links} />
+      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
+  }
   const words = withoutInboxReferences(text);
   return <>
     <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} />

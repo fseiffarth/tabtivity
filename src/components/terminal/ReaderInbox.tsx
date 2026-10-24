@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { OutboxFile } from "../../../mobile-web/src/api";
 import { InboxAlbum, type InboxSource } from "../../../mobile-web/src/components/InboxPreview";
-import { inboxLeaves, useInboxFiles, withoutInboxReferences } from "../../../mobile-web/src/terminal/inboxRefs";
+import { inboxInPlace, inboxLeaves, inboxSegments, useInboxFiles, withoutInboxReferences } from "../../../mobile-web/src/terminal/inboxRefs";
 import { NAMES } from "../../lib/brand";
 import { resolvePath } from "../../lib/paths";
 import { internalViewerFor, type FileEntry, type InternalViewer } from "../../lib/viewers/fileUtils";
@@ -156,24 +156,42 @@ export function useDrawsInbox(text: string): boolean {
 }
 
 /**
- * A prompt's words with its inbox files drawn above them as an album. Without
- * previews (or without references) it is just `children(text)`.
+ * A prompt's words with its inbox files drawn above them as an album — or,
+ * when the words caption pictures in several places (a markup prompt), each
+ * drawn where it stands (`inboxSegments`). Without previews (or without
+ * references) it is just `children(text)`.
  */
 export function ReaderPromptBody({ text, children }: { text: string; children: (words: string) => ReactNode }) {
   const inbox = useContext(ReaderInboxContext);
   const leaves = useMemo(() => (inbox ? inboxLeaves(text) : []), [inbox, text]);
+  const segments = useMemo(() => (leaves.length > 0 ? inboxSegments(text) : []), [leaves, text]);
   if (!inbox || leaves.length === 0) return <>{children(text)}</>;
+  const album = (key: number, shown: readonly string[], tagged: boolean) => (
+    <InboxAlbum
+      key={key}
+      source={inbox.source}
+      leaves={shown}
+      files={inbox.files}
+      onOpen={inbox.open}
+      onSettle={inbox.settle}
+      tag={tagged ? <UntestedTag id="terminal.reader.inboxPreviews" /> : null}
+    />
+  );
+  if (inboxInPlace(segments)) {
+    // The untested pill once, on the first album.
+    const first = segments.findIndex((segment) => segment.kind === "files");
+    return (
+      <>
+        {segments.map((segment, i) =>
+          segment.kind === "words" ? <Fragment key={i}>{children(segment.text)}</Fragment> : album(i, segment.leaves, i === first),
+        )}
+      </>
+    );
+  }
   const words = withoutInboxReferences(text);
   return (
     <>
-      <InboxAlbum
-        source={inbox.source}
-        leaves={leaves}
-        files={inbox.files}
-        onOpen={inbox.open}
-        onSettle={inbox.settle}
-        tag={<UntestedTag id="terminal.reader.inboxPreviews" />}
-      />
+      {album(0, leaves, true)}
       {words && children(words)}
     </>
   );
