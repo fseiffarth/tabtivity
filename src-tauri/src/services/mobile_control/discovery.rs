@@ -1560,6 +1560,30 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
     Ok(sources)
 }
 
+/// Every local folder a drop box (inbox, outbox) may sit in: each project's
+/// phone folder ([`mobile_root`]), each box folder and root's work folder —
+/// whatever their Mobile switch says, since an agent fills the outbox with
+/// the phone off too. What `drop_sweep` walks; an unreadable registry lists
+/// nothing of its own. `root_dir` is `paths::root_work_dir()`.
+pub(super) fn drop_box_roots(state_dir: &Path, root_dir: &Path) -> Vec<PathBuf> {
+    fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
+        fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+    }
+    let projects: Vec<ProjectRecord> = read(&state_dir.join("projects.json"));
+    let boxes: Vec<BoxRecord> = read(&state_dir.join("boxes.json"));
+    let mut roots = vec![root_dir.to_path_buf()];
+    roots.extend(
+        projects
+            .iter()
+            .filter(|p| !is_root_scope_id(&p.id) && !is_assistant_scope_id(&p.id) && !crate::storage::is_reserved_scope(&p.id))
+            .filter_map(|p| mobile_root(state_dir, p)),
+    );
+    roots.extend(boxes.iter().filter_map(|b| b.folder.as_deref()).map(PathBuf::from));
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|root| seen.insert(root.clone()));
+    roots
+}
+
 /// Whether a scope's per-phone list (`None`: every phone) names `device_id`.
 fn device_listed(devices: Option<&[String]>, device_id: &str) -> bool {
     devices.is_none_or(|devices| devices.iter().any(|id| id == device_id))

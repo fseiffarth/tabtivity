@@ -1635,6 +1635,11 @@ pub fn run() {
             // process that died before it could. Off-thread — one `kill(pid, 0)`
             // per file, and the directory can hold thousands.
             std::thread::spawn(services::ssh_common::sweep_stale_askpass);
+            // Delete what has sat in the phone's drop boxes past its keep
+            // (outbox 30 days, project inbox 90) — nothing else prunes them.
+            // Now, then hourly, on a thread of its own (the server daemon
+            // starts its own from the host).
+            services::mobile_control::drop_sweep::start(storage::state_dir());
             // Re-adopt OpenVPN tunnels a previous run left running (a crash, an OOM
             // kill, a refused quit-time prompt): the daemon runs as root and outlives
             // the app, still rerouting the machine, but the live-tunnel registries are

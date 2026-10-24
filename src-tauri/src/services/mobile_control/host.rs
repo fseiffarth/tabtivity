@@ -7204,8 +7204,9 @@ pub fn enable_background_relays() {
 /// Start the relays [`enable_background_relays`] allowed. The turn relay
 /// only reads the hooks' records and emits to this process's own clients, so
 /// the window and the sidecar may each run one; the usage samplers write
-/// `usage_stats`/net-usage files, so only a server (no window) runs them.
-fn start_background_relays(core_ctx: &app_core::CoreCtx, browser_clients: bool, server: bool) {
+/// `usage_stats`/net-usage files, so only a server (no window) runs them —
+/// and the drop-box sweep, which the window runs otherwise.
+fn start_background_relays(core_ctx: &app_core::CoreCtx, state_dir: &std::path::Path, browser_clients: bool, server: bool) {
     if !BACKGROUND_RELAYS.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
@@ -7224,6 +7225,7 @@ fn start_background_relays(core_ctx: &app_core::CoreCtx, browser_clients: bool, 
         if let Some(watch) = core_ctx.state.try_get::<crate::services::usage_stats::UsageWatchState>() {
             crate::services::usage_stats::start(watch.clone());
         }
+        super::drop_sweep::start(state_dir.to_path_buf());
     }
 }
 
@@ -7258,7 +7260,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             auth: auth.clone(),
         });
     }
-    start_background_relays(&core_ctx, web.enabled, matches!(listen, Listen::Unix { .. }));
+    start_background_relays(&core_ctx, &config.state_dir, web.enabled, matches!(listen, Listen::Unix { .. }));
     if web.enabled {
         match (&web.bundle, web.has_token(), &listen) {
             (Some(bundle), _, Listen::Unix { .. }) => eprintln!("desktop client: serving {} at {}/desktop/ behind the gateway", bundle.label(), config.origin),

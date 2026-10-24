@@ -12,6 +12,7 @@ pub mod auth;
 pub mod chat_uncommitted;
 pub mod config;
 pub mod discovery;
+pub mod drop_sweep;
 pub mod files;
 pub mod git_overview;
 pub mod headless;
