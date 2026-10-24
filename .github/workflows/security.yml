@@ -52,8 +52,16 @@ jobs:
       #   no newer release) still pulls 8.6. It only reads entries through
       #   `ZipArchive` and never calls `extract()`. Drop these when `calamine`
       #   moves to zip 9.
+      # - RUSTSEC-2026-0387 `crypto-bigint` 0.5.5 timing variability in its
+      #   "constant-time" arithmetic (published 2026-10-23; patched in 0.7.6):
+      #   the RustCrypto 0.13 curve crates (`elliptic-curve`, `p256`, `k256`, …)
+      #   pin 0.5, as do `pgp` 0.20 and our own `p256` 0.13. The fix is a
+      #   RustCrypto generation bump (`pgp` 0.21, `p256` 0.14), which moves mail
+      #   encryption and phone pairing and needs a live check of both. A local
+      #   timing side channel on our ECC secret operations; drop this once that
+      #   bump has landed.
       - name: Audit Rust dependencies
-        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0387
 
       # The release binary, checksum pinned to the version, as for gitleaks in
       # ci-cd.yml.
