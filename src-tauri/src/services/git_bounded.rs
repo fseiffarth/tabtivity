@@ -16,8 +16,11 @@
 //!   `.gitignore`/`.gitattributes`, the git dir's and common dir's
 //!   `info/exclude`, `info/attributes`, `config`, `HEAD`, `index`,
 //!   `packed-refs`, `commondir`). A FIFO, socket or device there refuses the
-//!   call before git runs (logged once per file). Nested `.gitignore`s can't
-//!   all be checked cheaply; the timeout covers them.
+//!   call before git runs (logged once per file). The repo-local and
+//!   common-dir config is listed too, and the files its `core.excludesFile`,
+//!   `core.attributesFile`, `mailmap.file` and `blame.ignoreRevsFile` name get
+//!   the same check (the user's global values are left alone). Nested
+//!   `.gitignore`s can't all be checked cheaply; the timeout covers them.
 //! - [`run`]/[`output`]: spawn in its own process group, read both streams on
 //!   threads, and stop at a deadline — the whole child subtree is killed and
 //!   the child reaped — answering a clear error, never a fake empty output.
@@ -217,7 +220,75 @@ pub(crate) fn hazard(dir: &Path) -> Option<String> {
             files.push(d.join(name));
         }
     }
-    files.iter().find_map(|f| special(f).map(|what| refusal(f, what)))
+    if let Some(why) = files.iter().find_map(|f| special(f).map(|what| refusal(f, what))) {
+        return Some(why);
+    }
+    // The path-valued keys a repo's own config can set. The config files
+    // above are regular now, so listing them cannot block.
+    for d in &dirs {
+        for name in ["config", "config.worktree"] {
+            for value in config_path_values(&d.join(name)) {
+                let candidates = if value.is_absolute() { vec![value] } else { vec![top.join(&value), dir.join(&value)] };
+                if let Some(why) = candidates.iter().find_map(|f| special(f).map(|what| refusal(f, what))) {
+                    return Some(why);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Keys git reads as a file with a blocking open on a repo's behalf (gap 61).
+const PATH_KEYS: &[&str] = &["core.excludesfile", "core.attributesfile", "mailmap.file", "blame.ignorerevsfile"];
+
+/// The values of [`PATH_KEYS`] set in one config file, listed the way the
+/// sanitizer lists it (`config --file`, no includes — the sanitizer has
+/// stripped those), `~` expanded as git does. Empty for a missing file or one
+/// git cannot parse. Cached per file until its mtime or size changes: the
+/// switcher polls every few seconds.
+fn config_path_values(config: &Path) -> Vec<PathBuf> {
+    type Cache = std::collections::HashMap<PathBuf, ((Option<std::time::SystemTime>, u64), Vec<PathBuf>)>;
+    static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
+    let Ok(meta) = std::fs::metadata(config) else { return Vec::new() };
+    if !meta.is_file() {
+        return Vec::new();
+    }
+    let stamp = (meta.modified().ok(), meta.len());
+    if let Some((seen, values)) = CACHE.lock_ok().get_or_insert_with(Default::default).get(config) {
+        if *seen == stamp {
+            return values.clone();
+        }
+    }
+    let values = list_path_values(config);
+    let mut cache = CACHE.lock_ok();
+    let cache = cache.get_or_insert_with(Default::default);
+    if cache.len() > 256 {
+        cache.clear();
+    }
+    cache.insert(config.to_path_buf(), (stamp, values.clone()));
+    values
+}
+
+fn list_path_values(config: &Path) -> Vec<PathBuf> {
+    let Some(path) = config.to_str() else { return Vec::new() };
+    // Bare on purpose: `config --file` reads one file as plain config, no repo.
+    let mut list = crate::paths::command_no_window("git");
+    list.args(["config", "--file", path, "--list", "--no-includes", "-z"]);
+    let Ok(out) = output_within(list, READ_TIMEOUT) else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter_map(|entry| entry.split_once('\n'))
+        .filter(|(key, value)| PATH_KEYS.contains(&key.to_ascii_lowercase().as_str()) && !value.is_empty())
+        .take(64)
+        .map(|(_, value)| match value.strip_prefix("~/") {
+            Some(rest) => crate::paths::home_dir().join(rest),
+            None if value == "~" => crate::paths::home_dir(),
+            None => PathBuf::from(value),
+        })
+        .collect()
 }
 
 fn refusal(path: &Path, what: &str) -> String {
@@ -543,6 +614,69 @@ mod tests {
         let tmp = repo();
         std::os::unix::fs::symlink("/dev/null", tmp.path().join(".gitattributes")).unwrap();
         assert_eq!(hazard(tmp.path()), None, "a link to /dev/null is harmless");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_by_a_path_valued_config_key_is_refused() {
+        let cases = [
+            ("core.excludesFile", "pipe"),
+            ("core.attributesFile", "pipe"),
+            ("mailmap.file", "pipe"),
+            ("blame.ignoreRevsFile", "pipe"),
+            ("core.excludesFile", "sub/../pipe"),
+        ];
+        for (key, value) in cases {
+            let tmp = repo();
+            mkfifo(&tmp.path().join("pipe"));
+            assert_eq!(hazard(tmp.path()), None, "an unnamed pipe is harmless");
+            git(tmp.path(), &["config", "--local", key, value]);
+            let started = Instant::now();
+            let err = output(crate::commands::git::hardened_git_command_in(tmp.path(), &["status"]))
+                .expect_err(key);
+            assert!(err.contains("named pipe"), "{key}: {err}");
+            assert!(started.elapsed() < NOT_A_HANG, "{key}: took {:?}", started.elapsed());
+            assert!(hazard(&tmp.path().join("sub")).is_some(), "{key} from sub");
+            // Absolute, too; and once the value is changed the cache lets go.
+            let abs = tmp.path().join("pipe");
+            git(tmp.path(), &["config", "--local", key, abs.to_str().unwrap()]);
+            assert!(hazard(tmp.path()).is_some(), "{key} absolute");
+            git(tmp.path(), &["config", "--local", key, "regular-file"]);
+            assert_eq!(hazard(tmp.path()), None, "{key} repointed");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_by_the_common_dir_config_or_a_worktree_config_is_refused() {
+        let tmp = repo();
+        let wt = tempfile::tempdir().unwrap();
+        let wt_path = wt.path().join("wt");
+        git(tmp.path(), &["worktree", "add", "-q", "-b", "other", wt_path.to_str().unwrap()]);
+        let fifo = tmp.path().join("pipe");
+        mkfifo(&fifo);
+        assert_eq!(hazard(&wt_path), None);
+        git(tmp.path(), &["config", "--local", "core.excludesFile", fifo.to_str().unwrap()]);
+        assert!(hazard(&wt_path).is_some_and(|w| w.contains("named pipe")), "common-dir config, from a linked worktree");
+        git(tmp.path(), &["config", "--local", "--unset", "core.excludesFile"]);
+        assert_eq!(hazard(&wt_path), None);
+        git(tmp.path(), &["config", "--local", "extensions.worktreeConfig", "true"]);
+        git(&wt_path, &["config", "--worktree", "mailmap.file", fifo.to_str().unwrap()]);
+        assert!(hazard(&wt_path).is_some_and(|w| w.contains("named pipe")), "config.worktree");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_global_path_valued_key_is_left_alone() {
+        let tmp = repo();
+        let home = tempfile::tempdir().unwrap();
+        mkfifo(&home.path().join("pipe"));
+        let global = home.path().join("gitconfig");
+        std::fs::write(&global, format!("[core]\n\texcludesFile = {}\n", home.path().join("pipe").display())).unwrap();
+        assert_eq!(hazard(tmp.path()), None);
+        // Nothing but the repo's own files are listed.
+        assert_eq!(config_path_values(&global).len(), 1, "the parse itself sees it");
+        assert_eq!(hazard(tmp.path()), None);
     }
 
     #[cfg(target_os = "linux")]
