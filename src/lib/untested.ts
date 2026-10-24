@@ -569,7 +569,6 @@ export const UNTESTED = {
   "mobile.subagent.input": { area: "mobile", what: "Terminal · Reader · with a Claude subagent open, the composer says Message this subagent and Send delivers the words to that subagent through Claude's own agent list (↓ to the list, Enter on its row, the words typed, back to main); the Reader stays on the subagent; one gone from Claude's list keeps the draft and says why" },
   "mobile.subagent.working": { area: "mobile", what: "Terminal · Reader · an open subagent still at work (Claude) shows a working row under its conversation naming the subagent's own model (e.g. Haiku is working…); gone once it has reported back, or the session stops" },
   "mobile.subagent.workingFacts": { area: "mobile", what: "Terminal · Reader · an open subagent's working row shows how long it has worked (counting on each second) and the tokens its newest request carried, as the session's own row does (e.g. Haiku is working… 1m 5s · 12.3k tokens)" },
-  "mobile.focus.statusLine": { area: "mobile", what: "Terminal · Reader status-line strip", tested: "2026-09-23" },
   "mobile.focus.pinnedPrompt": { area: "mobile", what: "Terminal · Reader pins the newest prompt at the top once its bubble scrolls away; tap scrolls back to it", tested: "2026-09-23" },
   "mobile.focus.workingFacts": { area: "mobile", what: "Terminal · Reader elapsed time and tokens while the agent works", tested: "2026-09-23" },
   "mobile.model.effort": { area: "mobile", what: "Terminal · Antigravity effort step in the model sheet", tested: "2026-09-23" },

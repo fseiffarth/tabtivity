@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatTurns } from "../../../mobile-web/src/terminal/chatTurns";
-import { inputFrameStart, sessionStatus, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
+import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { currentMode, modeChoices, modeFixed } from "../../../mobile-web/src/terminal/agentModes";
 import { agentWorking } from "../../../mobile-web/src/terminal/agentBusy";
 import {
@@ -98,7 +98,6 @@ describe(`${BRAND.display} Mobile OpenCode mini status`, () => {
       " BUILD",
     );
     expect(inputFrameStart(screen, "OpenCode")).toBe(1);
-    expect(statusFrameLines(screen, "OpenCode")).toEqual([" BUILD"]);
   });
 });
 
@@ -149,10 +148,6 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
   it("cuts the box, its placeholder and the footer out of the reading view", () => {
     const screen = fullFrame(" ~/projects/app                 tab agents  ctrl+p commands");
     expect(inputFrameStart(screen, "OpenCode")).toBe(1);
-    expect(statusFrameLines(screen, "OpenCode")).toEqual([
-      " Build · Muse Spark 1.3 Free OpenCode Zen · high",
-      " ~/projects/app                 tab agents  ctrl+p commands",
-    ]);
   });
 
   it("reads the start screen's centred box above its own version footer", () => {

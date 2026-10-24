@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionStatus, shortenPath, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
+import { sessionStatus, shortenPath } from "../../../mobile-web/src/terminal/statusLine";
 import { BRAND } from "../../lib/brand";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
@@ -174,84 +174,5 @@ describe(`${BRAND.display} Mobile session status line`, () => {
     expect(shortenPath(`~/${BRAND.slug}/projects/project${BRAND.slug}`)).toBe(`…/projects/project${BRAND.slug}`);
     expect(shortenPath("~/proj")).toBe("~/proj");
     expect(shortenPath("/home/dev/work/app")).toBe("…/work/app");
-  });
-});
-
-describe(`${BRAND.display} Mobile status frame lines`, () => {
-  it("returns the rows under a Claude-style input box", () => {
-    // readableScreen has already stripped the box: the rules are gone and the
-    // labelled top edge survives only as frameText.
-    expect(statusFrameLines([
-      { text: "● Done." },
-      { text: "" },
-      { text: `Project${BRAND.display}`, frameText: `──────── Project${BRAND.display} ─` },
-      { text: ">" },
-      { text: "  ⏵⏵ accept edits on (shift+tab to cycle)   " },
-      { text: `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop) · Opus 4.1 · 85% context left` },
-    ])).toEqual([
-      "  ⏵⏵ accept edits on (shift+tab to cycle)",
-      `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop) · Opus 4.1 · 85% context left`,
-    ]);
-    expect(statusFrameLines(lines("> ", "? for shortcuts · 85% context left")))
-      .toEqual(["? for shortcuts · 85% context left"]);
-  });
-
-  it("returns a Codex-shaped footer, skipping the composer's padding", () => {
-    expect(statusFrameLines(lines(
-      "• The change is ready.",
-      "› ",
-      "",
-      "/home/dev/proj (main) · gpt-5-codex · 97% context left",
-    ))).toEqual(["/home/dev/proj (main) · gpt-5-codex · 97% context left"]);
-    expect(statusFrameLines(lines(
-      "› Summarize recent commits",
-      "",
-      "  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   97% context left",
-    ))).toEqual(["  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   97% context left"]);
-  });
-
-  it("answers [] when the bottom of the screen is not an input frame", () => {
-    expect(statusFrameLines([])).toEqual([]);
-    expect(statusFrameLines(lines("dev@host:~/proj$ npm test", "PASS 12 tests"))).toEqual([]);
-    expect(statusFrameLines(lines(
-      "> a quoted sentence from the answer",
-      ...Array.from({ length: 9 }, (_, index) => `prose line ${index}`),
-    ))).toEqual([]);
-    // An input line with nothing under it is a frame with no status.
-    expect(statusFrameLines(lines("● Done.", ">"))).toEqual([]);
-  });
-
-  it("answers [] under a select dialog, whose rows are its answers", () => {
-    expect(statusFrameLines(lines(
-      "Do you want to proceed?",
-      "❯ 1. Yes",
-      "  2. No, and tell Claude what to do differently",
-      "Esc to cancel",
-    ))).toEqual([]);
-  });
-
-  it("skips the rows of a multi-line draft", () => {
-    expect(statusFrameLines(lines(
-      "> fix the flaky test",
-      "  and add a regression case",
-      "  then run the suite",
-      "  ⏵⏵ accept edits on (shift+tab to cycle)",
-    ))).toEqual(["  ⏵⏵ accept edits on (shift+tab to cycle)"]);
-    // A labelled bottom edge right under the draft is the box, not status.
-    expect(statusFrameLines([
-      { text: "› first line" },
-      { text: "  second line" },
-      { text: "Opus 4.1", frameText: "──────── Opus 4.1 ─" },
-      { text: "~/proj (main) · 40% context left" },
-    ])).toEqual(["~/proj (main) · 40% context left"]);
-    // A row less indented than the draft is not part of it.
-    expect(statusFrameLines(lines("> one", "unrecognized footer"))).toEqual(["unrecognized footer"]);
-  });
-
-  it("keeps a custom statusline verbatim, emoji and segments included", () => {
-    const custom = `🤖 Opus 4.1 │ 📁 project${BRAND.slug} │ 🌿 develop │ 💰 $0.42 │ ⏱ 12m`;
-    expect(statusFrameLines(lines("> ", custom, "", "✨ vibes: immaculate"))).toEqual([custom, "✨ vibes: immaculate"]);
-    // Recognized even while a draft is typed: the branch marks it as status.
-    expect(statusFrameLines(lines("> draft", `  ${custom}`))).toEqual([`  ${custom}`]);
   });
 });

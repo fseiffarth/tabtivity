@@ -1035,36 +1035,12 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         left out deliberately rather than forgotten — it is the one part that
         reaches the network unasked.
 
-- [~] **31af — Mobile Focus: a swipe shows the agent's status line** (2026-09-15;
-  ✅ code-complete and automated tests passing, ⚠️ untested on a phone — and a
-  rebuild + restart first, since the phone serves the bundle baked into the
-  binary). Focus cuts the agent TUI's bottom frame (31v), and with it the rows
-  drawn under the input box: cwd, branch, model, mode, context %, and any custom
-  statusline, whose free text the composer chips have no shape for. A left→right
-  swipe across the output now opens a strip under it with those rows verbatim
-  (`statusFrameLines` in `mobile-web/src/terminal/statusLine.ts`). A right→left
-  swipe or the strip's ✕ closes it, and a screen with no frame says "No status
-  line on screen". `mobile-web/src/terminal/focusSwipe.ts` listens passively, so
-  scrolling and selection stay native. It counts only a decisively horizontal
-  swipe (≥ 56 px, ≥ 2× the vertical travel, ≤ 700 ms), and ignores one starting
-  within 16 px of a screen edge (Android back), on an input, or inside something
-  that can still scroll sideways. Swipe-only, never persisted. Tested in
-  `src/__tests__/mobile/MobileTerminalFocusStatusLine.test.tsx`.
-      - [ ] **Manual QA:** open a Claude agent tab → Focus → swipe right across
-        the output: a strip opens under it showing the status row exactly as
-        the desktop draws it (custom statusline included); swipe left, and
-        separately tap ✕, and it closes; vertical scrolling of the output still
-        works and never opens it; a wide code block still pans sideways instead
-        of opening it; a swipe starting at the screen edge triggers Android's
-        back gesture, not the strip; Terminal view shows no strip
-        - [ ] ✅ Works on Linux (X11)
-        - [ ] ❌ Doesn't work on Linux (X11)
-        - [ ] ✅ Works on Linux (Wayland)
-        - [ ] ❌ Doesn't work on Linux (Wayland)
-        - [ ] ✅ Works on Windows
-        - [ ] ❌ Doesn't work on Windows
-        - [ ] ✅ Works on macOS
-        - [ ] ❌ Doesn't work on macOS
+- [x] **31af — Mobile Focus: a swipe shows the agent's status line** (2026-09-15;
+  removed 2026-10-24 at the user's request). The strip a left→right swipe
+  opened over the Focus output is gone, with `statusFrameLines` and
+  `dedentRows`; a left→right swipe anywhere over the output now goes back, and
+  right→left still pulls the files drawer in. Swipes are tested in
+  `src/__tests__/mobile/MobileTerminalFocusFiles.test.tsx`.
 
 - [~] **31ae — Every phone section glyph asks for emoji presentation** (2026-09-14;
   ✅ code-complete, tests passing, ⚠️ phone QA pending after a PWA rebuild,
@@ -2429,7 +2405,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     the mode chip reads Build and its sheet explains it cannot switch; the model
     chip opens OpenCode's picker and a tap changes the model (the next turn's
     footer names the new one); the status chips show the context percentage; a
-    left→right swipe shows the ` BUILD …` status row; a plain `opencode` tab
+    plain `opencode` tab
     still offers the Terminal view with the `--mini` hint.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)

@@ -551,29 +551,6 @@ export function inputFrameStart(
   return start;
 }
 
-/** Hints the CLIs print under the box: keys and glyphs no draft is made of.
- * Only asked whether a row ends a draft — never used to drop one. */
-const FOOTER_HINT = /\?\s*for shortcuts|shift\s*\+\s*tab|\besc to\b|\bctrl\s*\+|[⏎⌃⏵⏸]/iu;
-/** A row of frame strokes and nothing else. `readableScreen` has already
- * dropped these; a caller handing in raw rows still gets the edge skipped. */
-const STROKES_ONLY = /^[\s─-╿▀-▟―—]+$/u;
-
-/**
- * How many of the fields `sessionStatus` reports one row carries.
- *
- * Fields, not columns: one segment can yield *two* of them, because `classify`
- * reads a branch out of the same segment as the path it follows
- * (`~/projects/app (main)`). Counting fields to recognize a columned row
- * therefore scored an ordinary sentence naming a path two, which is why
- * [`statusColumns`] exists and this is left to the callers that want a plain
- * "does this row carry any status at all".
- */
-export function statusFieldCount(text: string): number {
-  const found: SessionStatus = {};
-  for (const segment of text.trim().split(SEGMENT_SPLIT)) classify(segment.trim(), found);
-  return Object.keys(found).length;
-}
-
 /** How many of a row's columns carry a field `sessionStatus` reports.
  *
  * This is the question "is this row *columned*" — the path, model and context
@@ -598,87 +575,4 @@ export function statusColumns(text: string): number {
  * sentence that opens with the same key. */
 export function columnCount(text: string): number {
   return text.trim().split(SEGMENT_SPLIT).filter((s) => s.trim() !== "").length;
-}
-
-/** Whether a row reads as a footer rather than as a draft's next line. */
-function readsAsStatus(text: string) {
-  return FOOTER_HINT.test(text) || statusFieldCount(text) > 0;
-}
-
-/**
- * The status rows an agent TUI draws under its input box, as painted text —
- * what the Focus view's status strip shows when the reader swipes for it.
- *
- * `inputFrameStart` hides the whole bottom frame, and `sessionStatus` only
- * reports the fields it recognizes, so a custom statusline (a cost, a clock, an
- * emoji per segment) had no way onto the phone at all. This hands the rows over
- * verbatim instead: nothing is classified, only *located*, with the scoping
- * `inputFrameStart` uses — the bottom window, the input line, and the option-row
- * guard, since rows under a select dialog are its answers, not a status.
- *
- * What sits between the input line and the status is skipped. The box's edges
- * are gone already (`readableScreen` drops a stroke-only row outright and keeps
- * a labelled one only as `frameText`), so the one thing that still looks like
- * text is a draft typed on the desktop that runs over several lines. Nothing
- * marks where it stops but its indent — a continuation sits under the draft's
- * first character — and that alone is not enough, because Claude Code indents
- * its footer by the same two columns. So a row ends the draft as soon as it
- * reads as a footer (a key hint, or a field `sessionStatus` would report), and
- * a blank row ends it too (Codex pads its composer). The failure left is a
- * draft line that happens to name a model or a path, which is shown in the
- * strip — the harmless direction, where hiding a status row would not be.
- *
- * Blank rows are dropped entirely: a strip has no use for gaps. No frame, `[]`.
- */
-export function statusFrameLines(
-  lines: readonly StatusLineLike[],
-  agentLabel?: string,
-): string[] {
-  const mini = openCodeFrame(lines, agentLabel);
-  if (mini) {
-    // The frame is the box and the one status row under it; the box's blanks
-    // and its placeholder are not a status.
-    return lines.slice(mini.start)
-      .map((line) => line.text.replace(/\s+$/u, ""))
-      .filter((text) => text.trim() !== "" && !isOpenCodePlaceholder(text));
-  }
-  const antigravity = antigravityFrame(lines, agentLabel);
-  if (antigravity?.start !== undefined) {
-    // The rows under the box are the `/model` dialog's, not a status: the strip
-    // shows the one row the session keeps under it either way.
-    return [lines[antigravity.footer].text.replace(/\s+$/u, "")];
-  }
-  let inputIndex = -1;
-  for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
-    const text = lines[index].text;
-    if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index)) return [];
-    inputIndex = index;
-    break;
-  }
-  if (inputIndex < 0) return [];
-
-  const input = lines[inputIndex].text;
-  const column = /^\s*[>›❯*]\s*/u.exec(input)?.[0].length ?? 0;
-  let index = inputIndex + 1;
-  if (input.slice(column).trim()) {
-    // Only a draft with text on its first line can have a second one.
-    for (; index < lines.length; index += 1) {
-      const { text, frameText } = lines[index];
-      if (!text.trim() || frameText !== undefined) break;
-      if (text.length - text.trimStart().length < column || readsAsStatus(text)) break;
-    }
-  }
-
-  const rows: string[] = [];
-  for (; index < lines.length; index += 1) {
-    const { text, frameText } = lines[index];
-    const row = text.replace(/\s+$/u, "");
-    if (!row.trim() || STROKES_ONLY.test(row)) continue;
-    // A labelled rule directly under the box is its bottom edge; one further
-    // down is the TUI's own divider, and its label is part of the status.
-    if (rows.length === 0 && frameText !== undefined && labelledRule(frameText)) continue;
-    rows.push(row);
-  }
-  return rows;
 }

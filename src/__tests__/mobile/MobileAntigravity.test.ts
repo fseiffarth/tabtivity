@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inputFrameStart, sessionStatus, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
+import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import {
   antigravityEffortKeys,
   antigravityFooter,
@@ -188,8 +188,6 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort`, () => {
     // Not at the `>` of a model row, and not below the dialog either: the
     // whole of it is the frame the model sheet is showing.
     expect(inputFrameStart(screen, LABEL)).toBe(1);
-    expect(statusFrameLines(screen, LABEL))
-      .toEqual(["                                                       Gemini 3.6 Flash · medium"]);
     // The status the chips read is the session's, not the highlighted row's.
     expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.6 Flash", effort: "medium" });
   });

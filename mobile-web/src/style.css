@@ -1102,15 +1102,6 @@ body.terminal-open { min-height:0; overflow:hidden; }
    which Focus otherwise cuts away: swiped in from the left over the bottom of
    the reading view, above its tools. Inside `.terminal-body`, so it can never
    cover the composer. Slides by transform + opacity only. */
-.focus-statusline { position:absolute; left:8px; right:8px; bottom:46px; z-index:1; max-height:45%; overflow:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:8px 10px 9px; border:1px solid #383c4d; border-radius:9px; background:#11141c; color:#dfe3ee; font-size:.78rem; animation:focus-statusline-in .16s ease-out; }
-.focus-statusline-head { position:sticky; left:0; display:flex; align-items:center; gap:8px; min-width:0; margin-bottom:6px; }
-.focus-statusline-head strong { flex:1 1 auto; font-weight:650; }
-.focus-statusline-head strong small { margin-left:6px; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
-.focus-statusline-head button { flex:0 0 auto; padding:4px 9px; border:0; border-radius:7px; background:rgba(255,255,255,.09); color:inherit; font-size:.8rem; }
-.focus-statusline-row { width:max-content; min-width:100%; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1.45; white-space:pre; }
-.focus-statusline-empty { color:#9298aa; }
-@keyframes focus-statusline-in { from { opacity:0; transform:translateX(-14px); } to { opacity:1; transform:none; } }
-@media (prefers-reduced-motion:reduce) { .focus-statusline { animation:none; } }
 /* The newest prompt, pinned over the top of Focus once its bubble has
    scrolled away: the bubble's own colours, two lines at most, a tap scrolls
    back to the whole of it. */

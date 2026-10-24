@@ -1,9 +1,7 @@
 /**
- * The phone's sideways swipe. Left→right steps back, as Android's Back does
- * (the Focus view keeps it to the left third and reveals the agent's status
- * strip further right); right→left opens the files (`ProjectFiles`), which
- * slide in from the right, or puts the status strip away first. Over a tab
- * card on the project screen, right→left closes the card instead.
+ * The phone's sideways swipe. Left→right steps back, as Android's Back does;
+ * right→left opens the files (`ProjectFiles`), which slide in from the right.
+ * Over a tab card on the project screen, right→left closes the card instead.
  *
  * Every listener here is passive and nothing is ever prevented. The Focus view
  * is a reading surface whose vertical scroll and text selection are the
@@ -13,8 +11,8 @@
  * gesture first, which the pointer path below has to allow for.
  *
  * Three gestures are deliberately not swipes: one starting at a screen edge
- * (Android's system back gesture lives there, and toggling the strip on the
- * way out of the app would be a surprise — a host whose left→right is Back
+ * (Android's system back gesture lives there, and acting on it on the way
+ * out of the app would be a surprise — a host whose left→right is Back
  * opts that edge back in, `leftEdge`, and one whose right→left pulls in the
  * files drawer opts the right edge in, `rightEdge`), one starting in a text field (a
  * drag there moves the caret), and one over something that can still pan
@@ -166,7 +164,7 @@ export function installFocusSwipe(
 
   if ("PointerEvent" in window) {
     // A mouse stays out of it: a desktop drag over the reading view is a text
-    // selection, and the strip has its own control there. A pen (the iPad's
+    // selection, and Back has its own control there. A pen (the iPad's
     // Pencil) swipes like a finger.
     const pointerDown = (event: PointerEvent) => {
       if (event.pointerType !== "touch" && event.pointerType !== "pen") return;

@@ -586,21 +586,6 @@ export function joinProseWraps(lines: readonly ReadableLine[]): ReadableLine[] {
   return out;
 }
 
-/** `dedentLines` for rows that are already plain text — the status strip's
- * (`statusFrameLines`). A fullscreen TUI centres its box, so those rows can
- * arrive 70 columns in on a wide pane; the strip is a phone-width readout of
- * them, not a scale model of the desktop window. Rows that start at the margin
- * lose nothing. */
-export function dedentRows(rows: readonly string[]): string[] {
-  let indent = Number.POSITIVE_INFINITY;
-  for (const row of rows) {
-    if (!row.trim()) continue;
-    indent = Math.min(indent, row.length - row.trimStart().length);
-  }
-  if (!Number.isFinite(indent) || indent <= 0) return [...rows];
-  return rows.map((row) => (row.trim() ? row.slice(indent) : row));
-}
-
 /** The plain text of what the reading view is showing, for Copy. */
 export function readableText(lines: readonly ReadableLine[]) {
   return lines.map((line) => line.text).join("\n");

@@ -73,7 +73,7 @@ import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
 import { TERMINAL_PROTOCOL, TERMINAL_SIZE } from "../terminal/protocol";
-import { dedentRows, readableRange, readableScreen, readableText, type ReadableLine } from "../terminal/readableScreen";
+import { readableRange, readableScreen, readableText, type ReadableLine } from "../terminal/readableScreen";
 import {
   absorbHistory,
   emptyHistory,
@@ -86,7 +86,7 @@ import { type TerminalEvent } from "../terminal/protocol";
 import { createVisibilityReporter } from "../terminal/visibility";
 import { installTerminalTouchScroll } from "../terminal/touchScroll";
 import { installWideOutputHint, type WideOutputHint } from "../terminal/wideOutput";
-import { inputFrameStart, sessionStatus, statusFrameLines, statusModelTag, type SessionStatus } from "../terminal/statusLine";
+import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
 import { sessionLimits } from "../terminal/sessionUsage";
@@ -225,9 +225,6 @@ const TRANSCRIPT_SETTLE = 1_200;
 const STARTING_GRACE = 30_000;
 /** Turns fetched at first, and added per "Show earlier turns" tap. */
 const TRANSCRIPT_STEP = 120;
-/** A left→right swipe starting in this share of the screen, from the left,
- * goes back; one starting further right shows the status line. */
-const BACK_SWIPE_ZONE = 1 / 3;
 
 /** An agent TUI parses one stdin chunk as one key event: a chunk that opens with
  * a control byte is read as that keypress and the remainder is dropped, so
@@ -1303,16 +1300,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * Focus reads from, the stored session or the screen. A dimmed Session row
    * says why it cannot be read — a phone shows no tooltip. */
   const [focusMenu, setFocusMenu] = useState(false);
-  /** Whether Focus shows the strip with the rows the agent draws under its
-   * input box (cwd, model, mode, context…). A left→right swipe outside the
-   * left third opens it, a right→left swipe or its ✕ closes it; never
-   * persisted. */
-  const [statusStrip, setStatusStrip] = useState(false);
   /** The project's name while the desktop's "Project files on the phone"
    * switch is on for it (`detail.files`) — null while off, or unknown. */
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
   /** The files drawer, the project screen's own, opened here by a right→left
-   * swipe over the output (once the status line is put away). */
+   * swipe over the output. */
   const [filesOpen, setFilesOpen] = useState(false);
   const closeFiles = useCallback(() => setFilesOpen(false), []);
   /** Turns asked for; grows with "Show earlier turns". */
@@ -1392,7 +1384,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setUndoNote("");
     setFocusSource("session");
     setFocusMenu(false);
-    setStatusStrip(false);
     setTranscriptLimit(TRANSCRIPT_STEP);
     setLines([]);
     setClipped(false);
@@ -3926,21 +3917,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     () => (tab.kind === "agent" ? shown.slice(0, inputFrameStart(shown, agentLabel)) : shown),
     [tab.kind, shown, agentLabel],
   );
-  /** The rows the session draws under its input box — the frame `painted`
-   * cuts away — for the swipe-in status strip. From the same `shown`, so a
-   * frame frozen behind a sheet stays consistent; always the xterm screen,
-   * even while Focus reads the stored session. */
-  const frameStatus = useMemo(
-    // A fullscreen agent's rows are on its frame instead, where nothing is
-    // frozen behind a sheet: the frame is what the session is drawing now.
-    // Dedented, because a fullscreen TUI centres its box — OpenCode's sits 70
-    // columns in on a wide pane — and the strip is a phone-width readout of
-    // those rows, not a scale model of the desktop window. On the scrollback,
-    // where the rows start at the margin, this takes nothing away.
-    () => (tab.kind === "agent" ? dedentRows(statusFrameLines(altScreen ? liveScreen : shown, agentLabel)) : []),
-    [tab.kind, altScreen, liveScreen, shown, agentLabel],
-  );
-  const statusSwipe = tab.kind === "agent" && view === "focus" && (!altScreen || liveScreen.length > 0);
   useEffect(() => {
     if (!project) return;
     // Read on opening and on coming back to the page, not polled: the drawer
@@ -3967,19 +3943,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     const stream = readableHost.current;
     if (filesOpen || !stream) return;
     // Left→right goes back, as the header's ‹ does, from the left edge too;
-    // further right it shows the status line, where there is one. Right→left
-    // puts the status line away, else pulls the files in from the right.
+    // right→left pulls the files in from the right.
     return installFocusSwipe(stream, {
-      onSwipeRight: (start) => {
-        if (statusSwipe && start.x >= window.innerWidth * BACK_SWIPE_ZONE) setStatusStrip(true);
-        else backRef.current();
-      },
-      onSwipeLeft: () => {
-        if (statusStrip && statusSwipe) setStatusStrip(false);
-        else if (filesSwipe) setFilesOpen(true);
-      },
+      onSwipeRight: () => backRef.current(),
+      onSwipeLeft: () => { if (filesSwipe) setFilesOpen(true); },
     }, { leftEdge: true, rightEdge: filesSwipe });
-  }, [statusSwipe, statusStrip, filesSwipe, filesOpen, readableShown]);
+  }, [filesSwipe, filesOpen, readableShown]);
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
@@ -4707,12 +4676,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           <span className="readable-pinned-prompt-text">{pinnedPrompt}</span>
           {isUntested("mobile.focus.pinnedPrompt") && <em>{t("mobile.focus.untested")}</em>}
         </button>}
-        {statusStrip && statusSwipe && <div className="focus-statusline" role="status" aria-label={t("mobile.focus.statusLine")}>
-          <div className="focus-statusline-head"><strong>{t("mobile.focus.statusLine")} {isUntested("mobile.focus.statusLine") && <small>{t("mobile.focus.untested")}</small>}</strong><button onClick={() => setStatusStrip(false)} aria-label={t("mobile.focus.statusLineHide")}>✕</button></div>
-          {frameStatus.length
-            ? frameStatus.map((row, i) => <div key={i} className="focus-statusline-row">{row}</div>)
-            : <div className="focus-statusline-empty">{t("mobile.focus.statusLineEmpty")}</div>}
-        </div>}
         {/* A chat copies message by message and picks its source under the
             Focus button, so nothing floats over its newest lines. */}
         {!chat && lines.length > 0 && <div className="readable-tools">
