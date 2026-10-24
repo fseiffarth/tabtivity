@@ -5104,6 +5104,8 @@ export const dict: Dict = {
   "terminal.reader.unsupported": "Questo agente non salva alcuna conversazione che {app} possa leggere.",
   "terminal.reader.noSession": "Questa scheda non ha ancora un id di sessione — la conversazione appare appena l'agente l'ha iniziata.",
   "terminal.reader.missing": "La conversazione salvata non è stata ancora trovata.",
+  "terminal.reader.answerAiOff": "⏻ L'IA è disattivata, quindi questa risposta non è stata inviata. Attiva l'IA nel pannello laterale e scegli di nuovo.",
+  "terminal.reader.answerFailed": "La risposta non ha raggiunto la sessione (potrebbe essersi disconnessa). Riprova o usa la vista Terminale.",
   "terminal.reader.unreadable": "Impossibile leggere la conversazione salvata.",
   "terminal.reader.empty": "Ancora nessun turno — la conversazione appare qui appena l'agente ha risposto.",
   "terminal.reader.earlier": "Mostra i turni precedenti",

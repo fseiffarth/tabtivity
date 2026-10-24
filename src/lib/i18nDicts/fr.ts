@@ -5106,6 +5106,8 @@ export const dict: Dict = {
   "terminal.reader.unsupported": "Cet agent n'enregistre aucune conversation que {app} peut lire.",
   "terminal.reader.noSession": "Cet onglet n'a pas encore d'identifiant de session — la conversation s'affiche dès que l'agent l'a commencée.",
   "terminal.reader.missing": "La conversation enregistrée est introuvable pour l'instant.",
+  "terminal.reader.answerAiOff": "⏻ L'IA est désactivée, cette réponse n'a donc pas été envoyée. Active l'IA dans le panneau latéral et choisis à nouveau.",
+  "terminal.reader.answerFailed": "La réponse n'a pas atteint la session (elle s'est peut-être déconnectée). Réessaie ou utilise la vue Terminal.",
   "terminal.reader.unreadable": "La conversation enregistrée n'a pas pu être lue.",
   "terminal.reader.empty": "Aucun échange pour l'instant — la conversation s'affiche ici dès que l'agent a répondu.",
   "terminal.reader.earlier": "Afficher les échanges précédents",

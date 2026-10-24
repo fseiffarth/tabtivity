@@ -5104,6 +5104,8 @@ export const dict: Dict = {
   "terminal.reader.unsupported": "Este agente no guarda ninguna conversación que {app} pueda leer.",
   "terminal.reader.noSession": "Esta pestaña aún no tiene id de sesión — la conversación aparece en cuanto el agente la haya empezado.",
   "terminal.reader.missing": "Aún no se encontró la conversación guardada.",
+  "terminal.reader.answerAiOff": "⏻ La IA está desactivada, así que esta respuesta no se envió. Activa la IA en el panel lateral y elige de nuevo.",
+  "terminal.reader.answerFailed": "La respuesta no llegó a la sesión (puede que se haya desconectado). Inténtalo de nuevo o usa la vista Terminal.",
   "terminal.reader.unreadable": "No se pudo leer la conversación guardada.",
   "terminal.reader.empty": "Aún no hay turnos — la conversación aparece aquí en cuanto el agente haya respondido.",
   "terminal.reader.earlier": "Mostrar turnos anteriores",

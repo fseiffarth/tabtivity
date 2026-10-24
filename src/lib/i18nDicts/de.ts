@@ -5122,6 +5122,8 @@ export const dict: Dict = {
   "terminal.reader.unsupported": "Dieser Agent speichert keine Unterhaltung, die {app} lesen kann.",
   "terminal.reader.noSession": "Dieser Tab hat noch keine Sitzungs-ID — die Unterhaltung erscheint, sobald der Agent sie begonnen hat.",
   "terminal.reader.missing": "Die gespeicherte Unterhaltung wurde noch nicht gefunden.",
+  "terminal.reader.answerAiOff": "⏻ KI ist aus, daher wurde diese Antwort nicht gesendet. Schalte KI in der Seitenleiste ein und wähle erneut.",
+  "terminal.reader.answerFailed": "Die Antwort hat die Sitzung nicht erreicht (sie wurde evtl. getrennt). Versuche es erneut oder nutze die Terminal-Ansicht.",
   "terminal.reader.unreadable": "Die gespeicherte Unterhaltung konnte nicht gelesen werden.",
   "terminal.reader.empty": "Noch keine Beiträge — die Unterhaltung erscheint hier, sobald der Agent geantwortet hat.",
   "terminal.reader.earlier": "Frühere Beiträge zeigen",
