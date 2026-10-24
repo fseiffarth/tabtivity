@@ -285,3 +285,17 @@ clean. `scripts/privacy-check.sh 21eadf64 HEAD` was clean. `scripts/ci-local.sh
 --fast` gave rc 0 (Windows clippy/check, macOS check and daemon ldd all ran).
 Skipped: gitleaks (not installed), and test-core/test-gateway (`--fast`,
 untouched). Not run live.
+
+## Follow-up (2026-10-24): two flagged items closed
+
+- **Ended session vs host offline.** `PublicTab.host_down` (only on an
+  `on_host` tab whose host the last round found no master for). The phone's
+  card and reconnect probe say "host offline" only for `host_down`; any other
+  unavailable `on_host` tab reads "This session has ended on the host."
+  (`mobile.project.hostSessionEnded`).
+- **ssh_config on the probes.** `host_mux_args` and `master_check_args` now
+  start with `-F none`: no `Match exec` per 10 s round, no
+  `CanonicalizeHostname` lookup. The ignored real-ssh no-dial test passes
+  with it. `ssh -G` (cached 5 min) still reads the config, which it needs.
+- Still open: `TERM=vt100` through the mux client needs the live test (no
+  `sshd` in the fence).

@@ -195,7 +195,7 @@ export function TabCard({ tab, statusShown, drag, canReorder, schedulesOffered, 
     </div>}
     {/* A host tab is out of reach while the desktop is not connected to the
         host; it never restarts for the phone, so the card says what to do. */}
-    {tab.on_host && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.hostOffline")}</small></div>}
+    {tab.on_host && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t(tab.host_down ? "mobile.project.hostOffline" : "mobile.project.hostSessionEnded")}</small></div>}
     {restart?.starting && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.restarting")}</small>{isUntested("mobile.project.restartForPhone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>}
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}

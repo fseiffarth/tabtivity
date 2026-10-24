@@ -397,6 +397,11 @@ pub struct PublicTab {
     /// host, worker, path or socket.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub on_host: bool,
+    /// An `on_host` tab whose host the last round found no master for: the
+    /// desktop is not connected to it. Without it, an unavailable `on_host` tab
+    /// is one whose session ended on the host. A flag only; nothing raw.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_down: bool,
 }
 
 /// Where a listed tab's tmux session is: on this machine, or on its remote
@@ -1657,6 +1662,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         assistant_launch: None,
         worktree_movable: false,
         on_host: false,
+        host_down: false,
     };
     ResolvedProject {
         public: PublicProject {
@@ -1889,6 +1895,7 @@ fn resolve_scope(
                 && source.kind == ScopeKind::Project
                 && matches!(source.host, ProjectHost::Local | ProjectHost::Container),
             on_host: on_host.is_some(),
+            host_down: on_host.is_some() && host_reach.is_none(),
         };
         tabs.push(ResolvedTab {
             public,
@@ -3406,6 +3413,7 @@ mod tests {
         for tab in &project.tabs {
             assert!(tab.public.on_host && tab.place.on_host() && tab.cwd.is_empty(), "{}", tab.public.label);
             assert!(!tab.public.available, "no master known: {}", tab.public.label);
+            assert!(tab.public.host_down, "no master known: {}", tab.public.label);
             assert!(tab.place.host_ssh().is_none());
         }
         assert_eq!(project.public.live_sessions, 0);
@@ -3425,6 +3433,8 @@ mod tests {
         assert!(by_label("on primary").public.available);
         assert!(by_label("host shell").public.available, "a location-less shell is on the primary");
         assert!(!by_label("on the worker").public.available, "w1's tmux does not hold it");
+        // The master answers, so the session ended on the host: not host_down.
+        assert!(project.tabs.iter().all(|t| !t.public.host_down));
         let ssh = by_label("on primary").place.host_ssh().expect("rides the primary's master");
         assert_eq!((ssh.spec.host.as_str(), ssh.control_path.clone()), ("primary.example", socket));
         assert!(by_label("on the worker").place.host_ssh().is_some(), "w1's master is up; its session is not");

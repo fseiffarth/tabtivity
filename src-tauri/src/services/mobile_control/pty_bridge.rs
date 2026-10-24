@@ -963,8 +963,8 @@ mod tests {
         assert!(argv.contains(&literal) && argv.contains(&"ProxyCommand=false".to_string()), "{argv:?}");
         assert_eq!(&argv[argv.len() - 2..], ["--".to_string(), crate::services::ssh_exec::host_tmux_attach_command(name).unwrap()]);
         for (probe, script) in [
-            (Probe::Capture, format!("tmux -u capture-pane -p -e -J -S -{MOBILE_SCROLLBACK_LINES} -E -1 -t '{name}'")),
-            (Probe::WindowSize, format!("tmux -u display-message -p -t '{name}' '#{{window_width}}x#{{window_height}}'")),
+            (Probe::Capture, crate::services::ssh_exec::host_tmux_capture_command(name, MOBILE_SCROLLBACK_LINES).unwrap()),
+            (Probe::WindowSize, crate::services::ssh_exec::host_tmux_window_size_command(name).unwrap()),
         ] {
             let command = target.probe_command(probe).expect("one-shot");
             let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();

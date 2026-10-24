@@ -2045,6 +2045,7 @@ mod tests {
                 assistant_launch: None,
                 worktree_movable: false,
                 on_host: false,
+                host_down: false,
             },
             tmux_name: concat!(crate::app_slug!(), "-x").into(),
             session_id: session_id.map(str::to_string),

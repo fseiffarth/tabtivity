@@ -283,6 +283,7 @@ export const dict: Dict = {
   "mobile.project.onHost": "auf dem Host",
   "mobile.project.onHostTitle": "Läuft auf dem Remote-Host des Projekts; das Telefon erreicht ihn über die Verbindung des Desktops",
   "mobile.project.hostOffline": "Verbinde dieses Projekt am Desktop, um den Tab zu öffnen.",
+  "mobile.project.hostSessionEnded": "Diese Sitzung wurde auf dem Host beendet.",
   "mobile.project.hostContainer": "Container-Projekt: Tabs, die im Container laufen, sind noch nicht auf dem Telefon.",
   "mobile.project.hostVm": "VM-Projekt: Tabs, die in der VM laufen, sind noch nicht auf dem Telefon.",
   "mobile.project.noFolder": "Dieses Projekt hat keinen Ordner, den das Telefon erreichen kann, daher zeigt es keine Dateien.",

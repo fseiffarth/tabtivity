@@ -347,6 +347,7 @@ export const enSource = {
   "mobile.project.onHost": "on host",
   "mobile.project.onHostTitle": "Runs on the project's remote host; the phone reaches it through the desktop's connection",
   "mobile.project.hostOffline": "Connect this project on the desktop to open it.",
+  "mobile.project.hostSessionEnded": "This session has ended on the host.",
   "mobile.project.hostContainer": "Container project: tabs running inside the container are not on the phone yet.",
   "mobile.project.hostVm": "VM project: tabs running in the VM are not on the phone yet.",
   "mobile.project.noFolder": "This project has no folder the phone can reach, so it shows no files.",

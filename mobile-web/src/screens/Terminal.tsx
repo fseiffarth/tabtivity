@@ -1825,10 +1825,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       // "reconnecting…" forever. After two straight failures, ask the tab
       // endpoint; a transient network failure keeps the reconnect loop. A tab
       // on the remote host that is out of reach lost the desktop's connection
-      // to the host (its upgrade's `409 host_offline`), not its session.
+      // to the host (its upgrade's `409 host_offline`, `host_down` on the row),
+      // not its session.
       if (reconnectAttempt >= 2) {
         void api<{ tab: TabRow }>(`/api/v1/tabs/${tab.id}`)
-          .then((body) => { if (!body.tab.available) throw new ApiError(410, body.tab.on_host ? "host_offline" : "session_gone"); })
+          .then((body) => { if (!body.tab.available) throw new ApiError(410, body.tab.on_host && body.tab.host_down ? "host_offline" : "session_gone"); })
           .catch((reason) => {
             if (stopped || !(reason instanceof ApiError)) return;
             if (reason.status !== 404 && reason.status !== 410) return;

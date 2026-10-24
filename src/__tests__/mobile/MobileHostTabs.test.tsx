@@ -67,18 +67,27 @@ describe("Mobile project screen — tabs on the remote host", () => {
   });
 
   it("says to connect the project on the desktop, and never restarts an unreachable host tab", async () => {
-    const fetchMock = host(detail([hostTab({ available: false })]));
+    const fetchMock = host(detail([hostTab({ available: false, host_down: true })]));
     vi.stubGlobal("fetch", fetchMock);
     const terminal = vi.fn();
     render(<Project id="p1" back={() => {}} terminal={terminal} />);
     await screen.findByText("Host Claude");
     expect(screen.getByText("Connect this project on the desktop to open it.")).toBeTruthy();
+    expect(screen.queryByText("This session has ended on the host.")).toBeNull();
     const open = screen.getByRole("button", { name: "Open Host Claude" }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
     fireEvent.click(open);
     expect(terminal).not.toHaveBeenCalled();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/activate"))).toBe(false);
     expect(screen.queryByText("Restarting it so the phone can open it…")).toBeNull();
+  });
+
+  it("says a host tab's session has ended when the desktop still holds the host's connection", async () => {
+    vi.stubGlobal("fetch", host(detail([hostTab({ available: false })])));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Host Claude");
+    expect(screen.getByText("This session has ended on the host.")).toBeTruthy();
+    expect(screen.queryByText("Connect this project on the desktop to open it.")).toBeNull();
   });
 
   it("still restarts a local agent the desktop started before Mobile access", async () => {

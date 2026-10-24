@@ -963,9 +963,11 @@ pub fn ssh_control_check_args(remote: &RemoteSpec) -> Result<Vec<String>, String
 ///
 /// `-e none`: the phone's keystrokes pass through this client's PTY, so `~.`
 /// and `~C` must be plain text. `-q` keeps "Shared connection … closed" off
-/// the phone's screen. `RemoteCommand=none` and `ClearAllForwardings=yes` stop
-/// a user config from replacing the command or asking the master for its port
-/// forwards. `tty` picks `-tt` (the attach) or `-T` (the one-shots). `--`
+/// the phone's screen. `-F none` reads no ssh_config at all (the mux client
+/// needs nothing from it): no `Match exec` runs on the 10 s probes and
+/// `CanonicalizeHostname` resolves nothing. `RemoteCommand=none` and
+/// `ClearAllForwardings=yes` stay as a second line against a config that
+/// replaces the command or asks the master for its port forwards. `tty` picks `-tt` (the attach) or `-T` (the one-shots). `--`
 /// ends ssh's options before the host command.
 pub fn host_mux_args(
     spec: &RemoteSpec,
@@ -976,6 +978,8 @@ pub fn host_mux_args(
     let target = ssh_target(&spec.user, &spec.host)?;
     let path = literal_control_path(control_path)?;
     let mut args: Vec<String> = vec![
+        "-F".to_string(),
+        "none".to_string(),
         if tty { "-tt" } else { "-T" }.to_string(),
         "-q".to_string(),
         "-e".to_string(),
@@ -1027,6 +1031,8 @@ fn literal_control_path(control_path: &std::path::Path) -> Result<String, String
 pub fn master_check_args(control_path: &std::path::Path) -> Result<Vec<String>, String> {
     let path = literal_control_path(control_path)?;
     Ok(vec![
+        "-F".to_string(),
+        "none".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
@@ -1059,11 +1065,30 @@ pub fn master_alive(control_path: &std::path::Path, limit: std::time::Duration) 
     crate::paths::output_within(command, limit).is_ok_and(|out| out.status.success())
 }
 
+/// Sets `e` (and `c`) at the head of a host-side tmux script: `=` (and `:`)
+/// where the host's tmux has the exact-match target prefix (2.1 and later:
+/// `-t "$e"name` is then that session only, never a prefix match of a longer
+/// name of the user's own), both empty on an older one, whose bare name is the
+/// only form it knows (an HPC image with tmux 1.8). Read off `tmux -V`, so one
+/// round trip carries both; an answer that is no version at all counts as new
+/// (the commands fail on a host with no tmux either way).
+const HOST_TMUX_EXACT: &str = "case \"$(tmux -V 2>/dev/null)\" in \"tmux \"[01].*|\"tmux 2.0\"*) e=; c=;; *) e==; c=:;; esac; ";
+
+/// A host-side tmux script as one `sh -c` of its own: the remote's `$SHELL -c`
+/// may be fish or csh, which read neither `case` nor `e==`. `body` holds no
+/// single quote (the session name is validated, so it is bare in it).
+fn host_sh(body: &str) -> String {
+    debug_assert!(!body.contains('\''));
+    format!("exec sh -c '{body}'")
+}
+
 /// The host-side attach the phone's PTY runs through [`host_mux_args`]: plain
-/// `tmux` in the remote's non-login `$SHELL -c`, the way the desktop's wrap
-/// started the session ([`remote_command`]), so the same binary and server
-/// answer. No `=` exact-match prefix (an older HPC tmux lacks it): the name is
-/// validated and unique. `None` for a name that is not [`valid_tmux_session_name`].
+/// `tmux` in a `sh` of the remote's non-login `$SHELL -c`, the way the desktop's
+/// wrap started the session ([`remote_command`]), so the same binary and server
+/// answer. The target is the exact name (`=`, [`HOST_TMUX_EXACT`]) where the
+/// host's tmux has it; on an older one the bare name is validated and the
+/// `has-session` guard runs first. `None` for a name that is not
+/// [`valid_tmux_session_name`].
 ///
 /// Silent when it cannot attach: the remote PTY carries stderr to the phone's
 /// screen, and tmux's refusals name what must never cross the browser API —
@@ -1075,8 +1100,9 @@ pub fn master_alive(control_path: &std::path::Path, limit: std::time::Duration) 
 /// attach and both keep stderr off the PTY. The phone sees the stream end.
 pub fn host_tmux_attach_command(session: &str) -> Option<String> {
     valid_tmux_session_name(session).then(|| {
-        let name = shell_quote(session);
-        format!("tmux -u has-session -t {name} 2>/dev/null && exec tmux -u attach-session -t {name} 2>/dev/null")
+        host_sh(&format!(
+            "{HOST_TMUX_EXACT}tmux -u has-session -t \"$e\"{session} 2>/dev/null && exec tmux -u attach-session -t \"$e\"{session} 2>/dev/null"
+        ))
     })
 }
 
@@ -1084,20 +1110,18 @@ pub fn host_tmux_attach_command(session: &str) -> Option<String> {
 /// last `lines` of history, ending one line above the visible screen.
 pub fn host_tmux_capture_command(session: &str, lines: usize) -> Option<String> {
     valid_tmux_session_name(session).then(|| {
-        format!(
-            "tmux -u capture-pane -p -e -J -S -{lines} -E -1 -t {}",
-            shell_quote(session)
-        )
+        host_sh(&format!(
+            "{HOST_TMUX_EXACT}tmux -u capture-pane -p -e -J -S -{lines} -E -1 -t \"$e\"{session}\"$c\""
+        ))
     })
 }
 
 /// The host-side window-size probe: `<cols>x<rows>` of the session's window.
 pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
     valid_tmux_session_name(session).then(|| {
-        format!(
-            "tmux -u display-message -p -t {} '#{{window_width}}x#{{window_height}}'",
-            shell_quote(session)
-        )
+        host_sh(&format!(
+            "{HOST_TMUX_EXACT}tmux -u display-message -p -t \"$e\"{session}\"$c\" \"#{{window_width}}x#{{window_height}}\""
+        ))
     })
 }
 
@@ -2101,7 +2125,9 @@ mod tests {
         let s = spec(Some("alice"), "host.example", Some(2222), "/srv/p");
         let path = socket_path();
         let args = host_mux_args(&s, &path, false, "tmux ls").unwrap();
-        assert_eq!(&args[..4], ["-T", "-q", "-e", "none"]);
+        // No ssh_config: this lane needs nothing from it, and a `Match exec`
+        // in it would run on every probe.
+        assert_eq!(&args[..6], ["-F", "none", "-T", "-q", "-e", "none"]);
         let options: Vec<&str> = args
             .windows(2)
             .filter(|w| w[0] == "-o")
@@ -2132,7 +2158,7 @@ mod tests {
         assert_eq!(&args[target + 1..], ["--", "tmux ls"]);
 
         let attach = host_mux_args(&s, &path, true, "exec tmux").unwrap();
-        assert_eq!(attach[0], "-tt");
+        assert_eq!(attach[2], "-tt");
     }
 
     #[test]
@@ -2161,6 +2187,7 @@ mod tests {
         assert!(args.contains(&format!("ControlPath={}", path.to_string_lossy())));
         assert!(args.contains(&"ProxyCommand=false".to_string()));
         assert!(args.contains(&"ControlMaster=no".to_string()));
+        assert_eq!(&args[..2], ["-F", "none"]);
         let o = args.iter().position(|a| a == "-O").unwrap();
         assert_eq!(args[o + 1], "check");
         // Strict: a socket nobody listens on is not alive (and on Windows
@@ -2170,25 +2197,55 @@ mod tests {
     }
 
     #[test]
-    fn host_tmux_commands_quote_a_validated_name_and_refuse_any_other() {
+    fn host_tmux_commands_embed_a_validated_name_and_refuse_any_other() {
         let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
+        let attach = host_tmux_attach_command(name).unwrap();
         assert_eq!(
-            host_tmux_attach_command(name).unwrap(),
-            format!("tmux -u has-session -t '{name}' 2>/dev/null && exec tmux -u attach-session -t '{name}' 2>/dev/null")
+            attach,
+            format!("exec sh -c '{HOST_TMUX_EXACT}tmux -u has-session -t \"$e\"{name} 2>/dev/null && exec tmux -u attach-session -t \"$e\"{name} 2>/dev/null'")
         );
+        let capture = host_tmux_capture_command(name, 10_000).unwrap();
         assert_eq!(
-            host_tmux_capture_command(name, 10_000).unwrap(),
-            format!("tmux -u capture-pane -p -e -J -S -10000 -E -1 -t '{name}'")
+            capture,
+            format!("exec sh -c '{HOST_TMUX_EXACT}tmux -u capture-pane -p -e -J -S -10000 -E -1 -t \"$e\"{name}\"$c\"'")
         );
+        let size = host_tmux_window_size_command(name).unwrap();
         assert_eq!(
-            host_tmux_window_size_command(name).unwrap(),
-            format!("tmux -u display-message -p -t '{name}' '#{{window_width}}x#{{window_height}}'")
+            size,
+            format!("exec sh -c '{HOST_TMUX_EXACT}tmux -u display-message -p -t \"$e\"{name}\"$c\" \"#{{window_width}}x#{{window_height}}\"'")
         );
+        // One shell word the remote `$SHELL -c` cannot split or expand: the body
+        // holds no single quote of its own.
+        for script in [&attach, &capture, &size] {
+            assert_eq!(script.matches('\'').count(), 2, "{script}");
+        }
         for hostile in ["x'; rm -rf ~; '", "a b", "a:1", "a.b", "$(id)", ""] {
             assert!(host_tmux_attach_command(hostile).is_none(), "{hostile}");
             assert!(host_tmux_capture_command(hostile, 10).is_none(), "{hostile}");
             assert!(host_tmux_window_size_command(hostile).is_none(), "{hostile}");
         }
+    }
+
+    /// A stub `tmux` on a private PATH (plus an `sh`), the script run through a
+    /// real `/bin/sh -c` as the remote's `$SHELL -c` would. `body` runs after
+    /// the `-V` answer `version` (none: no stub at all).
+    #[cfg(unix)]
+    fn run_host_script(script: &str, stub: Option<(&str, &str)>) -> std::process::Output {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/bin/sh", dir.path().join("sh")).unwrap();
+        if let Some((version, body)) = stub {
+            let tmux = dir.path().join("tmux");
+            let source = format!("#!/bin/sh\n[ \"$1\" = -V ] && {{ echo 'tmux {version}'; exit 0; }}\n{body}\n");
+            std::fs::write(&tmux, source).unwrap();
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .env("PATH", dir.path())
+            .output()
+            .unwrap()
     }
 
     /// The host attach runs in the remote's `$SHELL -c` and its output is the
@@ -2199,34 +2256,61 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn host_tmux_attach_says_nothing_when_it_cannot_attach() {
-        use std::os::unix::fs::PermissionsExt;
         let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
         let script = host_tmux_attach_command(name).unwrap();
-        let run = |stub: Option<&str>| {
-            let dir = tempfile::tempdir().unwrap();
-            if let Some(body) = stub {
-                let tmux = dir.path().join("tmux");
-                std::fs::write(&tmux, format!("#!/bin/sh\n{body}\n")).unwrap();
-                std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            std::process::Command::new("/bin/sh")
-                .arg("-c")
-                .arg(&script)
-                .env("PATH", dir.path())
-                .output()
-                .unwrap()
-        };
-        let gone = run(Some(r#"echo "can't find session: $4" >&2; exit 1"#));
-        let no_server = run(Some(r#"echo "no server running on /tmp/tmux-1000/default" >&2; exit 1"#));
-        let no_tmux = run(None);
+        let gone = run_host_script(&script, Some(("3.4", r#"echo "can't find session: $4" >&2; exit 1"#)));
+        let no_server = run_host_script(&script, Some(("3.4", r#"echo "no server running on /tmp/tmux-1000/default" >&2; exit 1"#)));
+        let no_tmux = run_host_script(&script, None);
         for (what, out) in [("gone", gone), ("no server", no_server), ("no tmux", no_tmux)] {
             assert!(!out.status.success(), "{what}");
             assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{what}: {out:?}");
         }
         // A live session attaches: the client's screen is its stdout.
-        let live = run(Some(r#"[ "$2" = has-session ] && exit 0; echo "attached $4""#));
+        let live = run_host_script(&script, Some(("3.4", r#"[ "$2" = has-session ] && exit 0; echo "attached $4""#)));
         assert!(live.status.success());
-        assert_eq!(String::from_utf8_lossy(&live.stdout).trim(), format!("attached {name}"));
+        assert_eq!(String::from_utf8_lossy(&live.stdout).trim(), format!("attached ={name}"));
+    }
+
+    /// B12: a host whose tmux has the exact-match prefix (2.1 and later) is
+    /// asked for the exact session — a longer name of the user's own is never
+    /// attached to by prefix — and one without it (an HPC image's 1.8) for the
+    /// bare name. Every one-shot carries the same rule.
+    #[cfg(unix)]
+    #[test]
+    fn host_tmux_targets_are_exact_where_the_host_tmux_has_it() {
+        let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
+        let echo_target = r#"for a; do t=$a; done; echo "$t""#;
+        for (version, exact) in [
+            ("3.6", true),
+            ("3.3a", true),
+            ("2.1", true),
+            ("next-3.4", true),
+            ("master", true),
+            ("2.0", false),
+            ("1.9a", false),
+            ("1.8", false),
+        ] {
+            let target = |script: &str, stub_body: &str| {
+                let out = run_host_script(script, Some((version, stub_body)));
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            };
+            let attach = target(
+                &host_tmux_attach_command(name).unwrap(),
+                r#"[ "$2" = has-session ] && exit 0; for a; do t=$a; done; echo "$t""#,
+            );
+            let capture = target(&host_tmux_capture_command(name, 10).unwrap(), echo_target);
+            let (session, window) = if exact { (format!("={name}"), format!("={name}:")) } else { (name.to_string(), name.to_string()) };
+            assert_eq!(attach, session, "{version}");
+            assert_eq!(capture, window, "{version}");
+        }
+        // The size probe's target is the argument after `-t`.
+        let probe = |version: &str| {
+            let body = r#"while [ $# -gt 0 ]; do [ "$1" = -t ] && { echo "$2"; exit 0; }; shift; done"#;
+            let out = run_host_script(&host_tmux_window_size_command(name).unwrap(), Some((version, body)));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(probe("3.6"), format!("={name}:"));
+        assert_eq!(probe("1.8"), name);
     }
 
     /// The no-dial claim against the real `ssh` (run with `--ignored`): with
@@ -2240,12 +2324,7 @@ mod tests {
         let s = spec(None, "no-such-host.invalid", None, "/p");
         let mut args = host_mux_args(&s, &dir.path().join("cm-none"), false, "true").unwrap();
         args.retain(|a| a != "-q");
-        // An empty config file stands in for the machine's (a fenced tab's
-        // `/etc/ssh` is not readable as ssh wants it); the user's own
-        // ProxyJump/ProxyCommand lose to the command line either way.
-        let config = dir.path().join("config");
-        std::fs::write(&config, "").unwrap();
-        args.splice(0..0, ["-v".to_string(), "-F".to_string(), config.to_string_lossy().into_owned()]);
+        args.insert(0, "-v".to_string());
         let started = std::time::Instant::now();
         let out = std::process::Command::new("ssh").args(&args).output().expect("ssh runs");
         let stderr = String::from_utf8_lossy(&out.stderr);

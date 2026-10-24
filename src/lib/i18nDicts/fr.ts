@@ -283,6 +283,7 @@ export const dict: Dict = {
   "mobile.project.onHost": "sur l'hôte",
   "mobile.project.onHostTitle": "S'exécute sur l'hôte distant du projet ; le téléphone l'atteint par la connexion de l'ordinateur",
   "mobile.project.hostOffline": "Connectez ce projet sur l’ordinateur pour l’ouvrir.",
+  "mobile.project.hostSessionEnded": "Cette session s’est terminée sur l’hôte.",
   "mobile.project.hostContainer": "Projet de conteneur : les onglets qui s'exécutent dans le conteneur ne sont pas encore sur le téléphone.",
   "mobile.project.hostVm": "Projet de VM : les onglets qui s'exécutent dans la VM ne sont pas encore sur le téléphone.",
   "mobile.project.noFolder": "Ce projet n'a pas de dossier que le téléphone puisse atteindre, il n'affiche donc aucun fichier.",
