@@ -77,7 +77,15 @@ pub fn guard_paths(roots: &[PathBuf], cwd: Option<&Path>) -> GuardPaths {
     for root in &roots {
         for app_dir in std::iter::once(WORKTREES_DIR[0]).chain(legacy_dir.as_deref()) {
             if let Ok(entries) = std::fs::read_dir(root.join(app_dir).join(WORKTREES_DIR[1])) {
-                starts.extend(entries.flatten().map(|e| e.path()));
+                // An entry is a worktree only as a real folder (the project is
+                // the agent's to write: a link here can name any folder).
+                starts.extend(
+                    entries
+                        .flatten()
+                        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                        .filter(|e| e.path().canonicalize().is_ok_and(|p| inside(&p)))
+                        .map(|e| e.path()),
+                );
             }
         }
     }
@@ -86,6 +94,10 @@ pub fn guard_paths(roots: &[PathBuf], cwd: Option<&Path>) -> GuardPaths {
     let mut git_dirs: Vec<PathBuf> = Vec::new();
     for dir in starts {
         let dot_git = dir.join(".git");
+        // A `.git` entry is bound only where it lies in a writable root.
+        if !inside(&dot_git) {
+            continue;
+        }
         let Ok(meta) = std::fs::symlink_metadata(&dot_git) else { continue };
         if meta.is_dir() {
             git_dirs.push(dot_git);
@@ -328,6 +340,32 @@ mod tests {
         let wt_git = root.join(".git").join("worktrees").join("feat");
         assert!(g.read_only.contains(&wt_git.join("commondir")), "{g:?}");
         assert!(g.read_only.contains(&root.join(".git").join("config")));
+        assert_eq!(g.pinned, vec![root.join(".git")]);
+    }
+
+    /// Gap 56: an entry of the worktrees folder that is a link (to a folder
+    /// outside the roots, or inside them) is not a worktree: its `.git` is not
+    /// bound.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_worktree_entry_is_skipped() {
+        let (tmp, root) = repo();
+        let worktrees = root.join(WORKTREES_DIR[0]).join(WORKTREES_DIR[1]);
+        fs::create_dir_all(&worktrees).unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join(".git"), "gitdir: /nowhere\n").unwrap();
+        std::os::unix::fs::symlink(&outside, worktrees.join("out")).unwrap();
+        let inner = root.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(inner.join(".git"), "gitdir: /nowhere\n").unwrap();
+        std::os::unix::fs::symlink(&inner, worktrees.join("in")).unwrap();
+        let g = guard_paths(std::slice::from_ref(&root), None);
+        for linked in ["out", "in"] {
+            assert!(!g.read_only.contains(&worktrees.join(linked).join(".git")), "{linked}: {g:?}");
+        }
+        assert!(!g.read_only.contains(&outside.join(".git")));
+        assert!(!g.read_only.contains(&inner.join(".git")));
         assert_eq!(g.pinned, vec![root.join(".git")]);
     }
 

@@ -482,7 +482,22 @@ fn assemble_assistant_launch_with(
 }
 
 fn cwd_within(cwd: &str, allowed: &std::path::Path) -> bool {
-    std::path::Path::new(cwd).starts_with(allowed)
+    let path = std::path::Path::new(cwd);
+    // `..` and `.` make the lexical compare lie (`<root>/../elsewhere`).
+    if crate::services::sandbox::has_dot_segment(cwd) {
+        return false;
+    }
+    if !path.starts_with(allowed) {
+        return false;
+    }
+    // A link inside the project (agent-writable) can lead anywhere: where both
+    // exist, the resolved paths must agree too.
+    // A cwd not made yet is judged by its deepest folder that exists.
+    let real = path.ancestors().find_map(|a| a.canonicalize().ok());
+    match (real, allowed.canonicalize()) {
+        (Some(real), Ok(root)) => real.starts_with(root),
+        _ => true,
+    }
 }
 
 /// Select the scope's root independently of a tab's working subdirectory.
@@ -1705,6 +1720,32 @@ mod tests {
     fn cwd_within_rejects_sibling_and_unrelated_paths() {
         assert!(!cwd_within("/home/u/proj2", Path::new("/home/u/proj")));
         assert!(!cwd_within("/etc", Path::new("/home/u/proj")));
+    }
+
+    #[test]
+    fn cwd_within_refuses_dot_components() {
+        assert!(!cwd_within("/home/u/proj/../other", Path::new("/home/u/proj")));
+        assert!(!cwd_within("/home/u/proj/./sub", Path::new("/home/u/proj")));
+        assert!(!cwd_within("/home/u/proj/..", Path::new("/home/u/proj")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cwd_within_compares_resolved_paths_for_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let s = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+        assert!(cwd_within(&s(root.join("sub")), &root));
+        assert!(!cwd_within(&s(root.join("link")), &root));
+        assert!(!cwd_within(&s(root.join("link").join("x")), &root));
+        // The root itself reached through a link is still inside.
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        assert!(cwd_within(&s(alias.join("sub")), &alias));
     }
 
     #[test]

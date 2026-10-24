@@ -32,12 +32,13 @@
 //!
 //! AppHandle-free.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::services::agent_history::{claude_folder_name, md5_hex, sha256_hex};
 use crate::services::agent_session::{is_uuid_shaped, read_live_session_for};
+use crate::services::git_bounded::BoundedOutput;
 use crate::services::home_io::{HomeDir, HomeFile};
 
 /// Whether the conversation comes along.
@@ -102,8 +103,8 @@ pub fn move_session(cmd: &str, project_id: &str, uid: &str, from: &str, to: &str
     if !is_agent_folder(&root, &from) || !is_agent_folder(&root, &to) {
         return Err("not the project folder or one of its worktrees".into());
     }
-    if !Path::new(&to).is_dir() {
-        return Err("the worktree folder is gone".into());
+    if !is_live_folder(&root, &to) {
+        return Err("the worktree folder is gone, or git does not list it as a worktree".into());
     }
     if from == to {
         return Ok(Moved::Carried);
@@ -233,7 +234,7 @@ fn normal(dir: &str) -> String {
 fn is_agent_folder(root: &str, dir: &str) -> bool {
     let root = PathBuf::from(normal(root));
     let dir = Path::new(dir);
-    if !dir.is_absolute() || dir.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
+    if !dir.is_absolute() || crate::services::sandbox::has_dot_segment(&dir.to_string_lossy()) {
         return false;
     }
     if dir == root {
@@ -242,6 +243,42 @@ fn is_agent_folder(root: &str, dir: &str) -> bool {
     let worktrees = crate::brand::WORKTREES_DIR.split('/').fold(root, |path, seg| path.join(seg));
     dir.parent() == Some(worktrees.as_path())
         && matches!(dir.file_name(), Some(name) if !name.is_empty())
+}
+
+/// Whether `dir` (already an [`is_agent_folder`]) is a real folder to move a
+/// conversation into: the project root, or a worktree that is a plain directory
+/// (the project folder is the agent's to write, so a link there proves
+/// nothing) inside the root and a live entry of the root's `git worktree list`.
+fn is_live_folder(root: &str, dir: &str) -> bool {
+    let root = normal(root);
+    if dir == root {
+        return Path::new(dir).is_dir();
+    }
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return false;
+    }
+    let (Ok(real), Ok(real_root)) = (Path::new(dir).canonicalize(), Path::new(&root).canonicalize()) else {
+        return false;
+    };
+    if !real.starts_with(&real_root) {
+        return false;
+    }
+    // Background-grade (hookless) and bounded: the repo is untrusted.
+    let listing = crate::commands::git::hookless_git_command_in(&root, &["worktree", "list", "--porcelain"])
+        .bounded_output();
+    match listing {
+        Ok(out) if out.status.success() => listed_worktree(&String::from_utf8_lossy(&out.stdout), &real),
+        _ => false,
+    }
+}
+
+/// Whether `real` (canonical) is a linked worktree in `git worktree list
+/// --porcelain` output. The main worktree is not one: it is the root, handled
+/// by the caller.
+fn listed_worktree(porcelain: &str, real: &Path) -> bool {
+    crate::commands::git::parse_worktree_porcelain(porcelain)
+        .iter()
+        .any(|w| !w.is_main && Path::new(&w.path).canonicalize().is_ok_and(|p| p == real))
 }
 
 #[cfg(test)]
@@ -269,8 +306,76 @@ mod tests {
         assert!(!is_agent_folder(&r, &root.join("src").to_string_lossy()));
         assert!(!is_agent_folder(&r, &worktree(&root, "a").join("b").to_string_lossy()));
         assert!(!is_agent_folder(&r, &worktree(&root, "..").to_string_lossy()));
+        assert!(!is_agent_folder(&r, &worktree(&root, ".").to_string_lossy()));
         assert!(!is_agent_folder(&r, &abs(&["home", "me", "other"]).to_string_lossy()));
         assert!(!is_agent_folder(&r, "relative"));
+    }
+
+    #[test]
+    fn only_a_listed_linked_worktree_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let linked = tmp.path().join("linked");
+        let stray = tmp.path().join("stray");
+        for d in [&main, &linked, &stray] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let listing = format!(
+            "worktree {}\nHEAD aaa\nbranch refs/heads/main\n\nworktree {}\nHEAD bbb\ndetached\n",
+            main.display(),
+            linked.display()
+        );
+        assert!(listed_worktree(&listing, &linked.canonicalize().unwrap()));
+        assert!(!listed_worktree(&listing, &main.canonicalize().unwrap()));
+        assert!(!listed_worktree(&listing, &stray.canonicalize().unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_or_an_unlisted_folder_is_not_a_worktree_to_move_into() {
+        let git = |dir: &Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+        };
+        if git(Path::new("."), &["--version"]).is_err() {
+            eprintln!("git not on PATH — skipping");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(git(&root, &["init", "-q"]).unwrap().status.success());
+        assert!(git(&root, &["commit", "-q", "--allow-empty", "-m", "x"]).unwrap().status.success());
+        let wt = worktree(&root, "real");
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        let added = git(&root, &["worktree", "add", "-q", "--detach", &wt.to_string_lossy()]).unwrap();
+        assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stderr));
+        let r = root.to_string_lossy().to_string();
+
+        assert!(is_live_folder(&r, &r));
+        assert!(is_live_folder(&r, &wt.to_string_lossy()));
+
+        // A plain folder git does not list.
+        let plain = worktree(&root, "plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(!is_live_folder(&r, &plain.to_string_lossy()));
+
+        // A link at the worktree's name, to the real one or to a stranger.
+        let alias = worktree(&root, "alias");
+        std::os::unix::fs::symlink(&wt, &alias).unwrap();
+        assert!(!is_live_folder(&r, &alias.to_string_lossy()));
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let out_link = worktree(&root, "out");
+        std::os::unix::fs::symlink(&outside, &out_link).unwrap();
+        assert!(!is_live_folder(&r, &out_link.to_string_lossy()));
+
+        // A removed worktree is gone.
+        assert!(git(&root, &["worktree", "remove", "--force", &wt.to_string_lossy()]).unwrap().status.success());
+        assert!(!is_live_folder(&r, &wt.to_string_lossy()));
     }
 
     #[test]
