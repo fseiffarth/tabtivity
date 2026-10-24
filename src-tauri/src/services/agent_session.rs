@@ -1647,7 +1647,7 @@ pub fn undo_clear_plan(agent: &str, project_id: Option<&str>, uid: &str) -> Opti
 /// Point `uid`'s record back at `cleared` and call its start a resume, so the
 /// relaunch resumes that conversation and no second undo is offered for it.
 fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::io::Result<()> {
-    std::fs::write(dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}")), "resume")?;
+    write_live_record(dir, &format!("{uid}{LIVE_SOURCE_SUFFIX}"), "resume")?;
     write_live_session_in(dir, uid, cleared)
 }
 
@@ -1857,11 +1857,19 @@ pub fn write_live_session_in(dir: &std::path::Path, uid: &str, id: &str) -> std:
             "live-session keys must be uuid-ish",
         ));
     }
+    write_live_record(dir, uid, id)
+}
+
+/// Write `<dir>/<name>` in a live-session folder. A project's slice is mounted
+/// read-write into its fence and container, so the agent can plant a link at
+/// the name or at a predictable temporary beside it: the write goes through a
+/// handle on `dir` (`home_io`), an exclusive temporary renamed into place,
+/// which replaces such a link instead of writing through it.
+pub(crate) fn write_live_record(dir: &std::path::Path, name: &str, text: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{uid}.tmp"));
-    std::fs::write(&tmp, id)?;
-    std::fs::rename(&tmp, dir.join(uid))?;
-    Ok(())
+    crate::services::home_io::HomeFile::open_below(&dir.join(name), 1)
+        .ok_or_else(|| std::io::Error::other("the live-session folder is not a plain folder"))?
+        .write(text.as_bytes())
 }
 
 // ── Codex hook trust state ──────────────────────────────────────────────────
@@ -4749,6 +4757,28 @@ mod tests {
         assert_eq!(read_live_session_in(&tmp, uid).as_deref(), Some(id));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A project's slice is the agent's to write: links it plants at the
+    /// record, the old fixed temporary or the source record are replaced, and
+    /// the user's file they point at keeps its bytes.
+    #[cfg(unix)]
+    #[test]
+    fn live_records_replace_a_planted_link_and_never_write_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let slice = dir.path().join("slice");
+        std::fs::create_dir_all(&slice).unwrap();
+        let users = dir.path().join("bashrc");
+        std::fs::write(&users, "keep").unwrap();
+        let uid = "11111111-2222-3333-4444-555555555555";
+        let id = "019ea7c8-b7d5-7a13-80e2-1ad6608db5e6";
+        for name in [uid.to_string(), format!(".{uid}.tmp"), format!("{uid}{LIVE_SOURCE_SUFFIX}")] {
+            std::os::unix::fs::symlink(&users, slice.join(name)).unwrap();
+        }
+        restore_cleared_in(&slice, uid, id).unwrap();
+        assert_eq!(std::fs::read_to_string(&users).unwrap(), "keep");
+        assert_eq!(read_live_session_in(&slice, uid).as_deref(), Some(id));
+        assert_eq!(std::fs::read_to_string(slice.join(format!("{uid}{LIVE_SOURCE_SUFFIX}"))).unwrap(), "resume");
     }
 
     #[test]

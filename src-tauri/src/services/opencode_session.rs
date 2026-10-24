@@ -297,10 +297,7 @@ pub fn record_session_in(dir: &Path, uid: &str, id: &str) -> std::io::Result<()>
     if !is_uuid_shaped(uid) || !is_session_id(id) {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a tab key and an OpenCode session"));
     }
-    std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{uid}.tmp"));
-    std::fs::write(&tmp, id)?;
-    std::fs::rename(&tmp, dir.join(uid))
+    crate::services::agent_session::write_live_record(dir, uid, id)
 }
 
 /// How a tab's last launch began, from its launch note.
