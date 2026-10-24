@@ -37,7 +37,7 @@ export type MarkupTarget = {
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
   /** Tucks the markup view away behind the chat, kept mounted; the chat's
    * bar brings it back (`MarkupView` `toChat`). */
-  toChat?: (name: string) => void;
+  toChat?: (back: MarkupBack) => void;
   /** The question line of a dialog the tab's CLI waits on (a permission
    * prompt, its own question picker), for the pill — shown, answered in the
    * chat (`dialogLine`). */

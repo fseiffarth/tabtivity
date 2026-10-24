@@ -26,7 +26,7 @@ import { readMarkupOpen } from "../markupOpen";
 import { keepMarkupTab, type FileTabFile } from "../filesPlace";
 import { sizeLabel } from "../terminal/fileLabels";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
-import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
+import type { MarkupBack, MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
 import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
@@ -401,8 +401,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * while the project file has none of its own — never merged into some. */
   adoptFrom?: string;
   /** Tucks the view away behind the host tab's chat, still mounted, with the
-   * file's name for the chat's way back (`Terminal`'s `markupAway`). */
-  toChat?: (name: string) => void;
+   * file for the chat's way back (`Terminal`'s `markupAway`) — kept past the
+   * tab being left, so the way back is there when it opens again. */
+  toChat?: (back: MarkupBack) => void;
   /** The reader opens marking whatever this phone's "PDFs open in" says — the
    * files library's **Mark up** asked for it. */
   startMarking?: boolean;
@@ -2196,7 +2197,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <span className="markup-round-words">{roundWords}</span>
         {roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         {asking && dialog && <span className="markup-round-dialog">{t("mobile.markup.round.dialog", { line: dialog })}</span>}
-        {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat(sentName(file))}
+        {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat({ scope, file, place, folder })}
           title={t(asking ? "mobile.markup.answerInChatTitle" : "mobile.markup.toChatTitle")}>
           {t(asking ? "mobile.markup.answerInChat" : "mobile.markup.toChat")}
           {(asking ? isUntested("mobile.markup.tabDialog") : isUntested("mobile.markup.chatLink")) && <span className="untested">{t("mobile.outbox.untested")}</span>}

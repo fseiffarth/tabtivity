@@ -531,6 +531,12 @@ interface ChatInbox {
   onSettle?: () => void;
 }
 
+/** Per tab, the markup view tucked away behind its chat (`markupAway`): the
+ * chat's way back to the file outlives the tab being left, and the tab opens
+ * again with the view tucked away under the same bar. For as long as the
+ * app runs. */
+const awayMarkups = new Map<string, MarkupBack>();
+
 /** A prompt's words, with the files it sent from the phone drawn above them
  * as pictures — a messenger's picture with its caption — and their `@`
  * references left out of the words. Both follow from the text alone, so a
@@ -1213,13 +1219,22 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** A project file the agent's markup question is about, opened from the
    * Focus banner: its row, its folder trail (the layer's key) and its
    * folder's token (Reload lists it again). */
+  /** The markup view this tab opens with tucked away: the one whose Open tab
+   * showed it, else the one tucked away here when the tab was last left. */
+  const [markupReturn] = useState(() => markupBack ?? awayMarkups.get(tab.id));
   const [askedFile, setAskedFile] = useState<{ file: OutboxFile; place?: string; folder?: string; scope?: ViewerScope; marking?: boolean } | null>(
-    () => (markupBack ? { ...markupBack, marking: true } : null),
+    () => (markupReturn ? { ...markupReturn, marking: true } : null),
   );
   /** The markup view tucked away behind the chat (its **Chat** button, while a
    * round is with this tab): still mounted — layer, round pill, scroll — and
    * brought back by the bar over the composer. Holds the file's name. */
-  const [markupAway, setMarkupAway] = useState<string | null>(() => (markupBack ? sentName(markupBack.file) : null));
+  const [markupAway, setMarkupAway] = useState<string | null>(() => (markupReturn ? sentName(markupReturn.file) : null));
+  // Brought back, closed or swapped for another file: the tab no longer
+  // reopens with it.
+  useEffect(() => {
+    if (markupAway === null) awayMarkups.delete(tab.id);
+    else if (markupReturn && !awayMarkups.has(tab.id)) awayMarkups.set(tab.id, markupReturn);
+  }, [markupAway, markupReturn, tab.id]);
   /** The stored session behind an agent tab (`getTranscript`): `null` until
    * the first read answers. Focus reads from it whenever it is available and
    * the reader has not switched the view to the screen. */
@@ -4184,10 +4199,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       model: workingModel,
       pickModel: tab.local_model ? undefined : markupPickModel,
       // The gallery the viewer may have opened from would cover the chat.
-      toChat: (name: string) => { setGallery(false); setMarkupAway(name); },
+      toChat: (back: MarkupBack) => {
+        setGallery(false);
+        setMarkupAway(sentName(back.file));
+        awayMarkups.set(tab.id, back);
+      },
       dialog: markupDialog,
     },
-    [markupTarget, workingModel, markupDialog, tab.local_model, markupPickModel],
+    [markupTarget, workingModel, markupDialog, tab.local_model, markupPickModel, tab.id],
   );
   /** The screen's lines as the reading view shows them: the revealed history,
    * the open chunk, then the live tail. */
