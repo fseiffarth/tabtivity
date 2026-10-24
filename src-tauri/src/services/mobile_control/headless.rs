@@ -1313,9 +1313,7 @@ pub fn attach_desktop_image(state_dir: &Path, root: &Path, image_id: &str) -> Re
     if image_id == desktop_images::CLIPBOARD_ID {
         return Err("desktop_unavailable".into());
     }
-    let path = desktop_images::resolve(&desktop_images::default_folders(state_dir), image_id).ok_or_else(|| "image_not_found".to_string())?;
-    let bytes = std::fs::read(&path).map_err(|_| "image_not_found".to_string())?;
-    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "image".into());
+    let (name, bytes) = desktop_images::read_listed(&desktop_images::default_folders(state_dir), image_id).ok_or_else(|| "image_not_found".to_string())?;
     super::inbox::store(root, &name, &bytes)
         .map(|stored| super::protocol::MobileInboxAttachment { name: stored.name, reference: stored.reference, size: stored.size })
         .map_err(|error| error.code().to_string())

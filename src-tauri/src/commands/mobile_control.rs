@@ -160,14 +160,8 @@ pub async fn mobile_attach_desktop_image(
         let (name, bytes) = if image_id == desktop_images::CLIPBOARD_ID {
             ("clipboard.png".to_string(), clipboard_png()?)
         } else {
-            let path = desktop_images::resolve(&desktop_image_folders(), &image_id)
-                .ok_or_else(|| "image_not_found".to_string())?;
-            let bytes = std::fs::read(&path).map_err(|_| "image_not_found".to_string())?;
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "image".into());
-            (name, bytes)
+            desktop_images::read_listed(&desktop_image_folders(), &image_id)
+                .ok_or_else(|| "image_not_found".to_string())?
         };
         inbox::store(&root, &name, &bytes)
             .map(|stored| MobileInboxAttachment {
