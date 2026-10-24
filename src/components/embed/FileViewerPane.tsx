@@ -5934,9 +5934,10 @@ export function ModeToggle<T extends string>({
 
 /** Rendered-preview pane for HTML/SVG/CSS — a fully sandboxed (`sandbox=""`,
  *  no scripts) iframe so even a hostile file is inert. CSS is applied to a small
- *  sample document; HTML/SVG render their own source (HTML with a
- *  `<base href="about:srcdoc">` added, so its `#anchor` links scroll instead of
- *  navigating the frame away — see `SRCDOC_BASE_TAG`). */
+ *  sample document; HTML renders its own source, SVG as an image. Every
+ *  document carries its own CSP (`PREVIEW_CSP`), and an HTML file's `#anchor`
+ *  links are made absolute so they scroll instead of navigating the frame away
+ *  — see `withPreviewGuards`. */
 function RenderedPreview({
   kind,
   content,

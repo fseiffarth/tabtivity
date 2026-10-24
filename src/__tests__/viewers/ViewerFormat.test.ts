@@ -15,8 +15,9 @@ import {
   previewKindForPath,
   formatJsonText,
   buildPreviewDoc,
-  SRCDOC_BASE_TAG,
-  withSrcdocBase,
+  PREVIEW_CSP,
+  PREVIEW_CSP_TAG,
+  withPreviewGuards,
 } from "../../lib/viewers/format";
 import {
   toggleInline,
@@ -73,12 +74,26 @@ describe("formatJsonText", () => {
 });
 
 describe("buildPreviewDoc", () => {
-  it("returns SVG source verbatim", () => {
-    expect(buildPreviewDoc("svg", "<svg/>")).toBe("<svg/>");
+  it("wraps SVG in an HTML page as a data: image, behind the policy", () => {
+    const doc = buildPreviewDoc("svg", "<svg>é</svg>");
+    expect(doc).toContain(PREVIEW_CSP_TAG);
+    expect(doc).toContain(`src="data:image/svg+xml;base64,${btoa("<svg>\u00c3\u00a9</svg>")}"`);
+    expect(doc).not.toContain("<svg");
   });
 
-  it("adds only the srcdoc base to HTML source", () => {
-    expect(buildPreviewDoc("html", "<h1>hi</h1>")).toBe(`${SRCDOC_BASE_TAG}<h1>hi</h1>`);
+  it("puts the policy in front of HTML source", () => {
+    expect(buildPreviewDoc("html", "<h1>hi</h1>")).toBe(`${PREVIEW_CSP_TAG}<h1>hi</h1>`);
+  });
+
+  it("gives the CSS sample the policy too", () => {
+    expect(buildPreviewDoc("css", "h1{}")).toContain(PREVIEW_CSP_TAG);
+  });
+
+  it("allows nothing remote and no <base>", () => {
+    expect(PREVIEW_CSP).toContain("default-src 'none'");
+    expect(PREVIEW_CSP).toContain("base-uri 'none'");
+    expect(PREVIEW_CSP).toContain("form-action 'none'");
+    expect(PREVIEW_CSP).not.toMatch(/https?:|\*/);
   });
 
   it("injects CSS into a sample document", () => {
@@ -140,31 +155,41 @@ describe("table of contents", () => {
   });
 });
 
-/** In-page anchors in the HTML preview: `#x` resolves against the *embedder's*
- *  URL in a srcdoc frame, so without a base of `about:srcdoc` a click is a full
- *  navigation of the frame, not a scroll (`format.ts` has the measurements). */
-describe("withSrcdocBase", () => {
-  it("goes first in an existing <head>", () => {
-    const doc = withSrcdocBase('<!DOCTYPE html><html lang="en"><head>\n<meta charset="utf-8"><title>t</title></head><body></body></html>');
-    expect(doc).toBe(`<!DOCTYPE html><html lang="en"><head>${SRCDOC_BASE_TAG}\n<meta charset="utf-8"><title>t</title></head><body></body></html>`);
+/** The policy `<meta>` must precede the file's own markup, and in-page anchors
+ *  must not need a `<base>` (the policy forbids one). */
+describe("withPreviewGuards", () => {
+  it("goes after a leading doctype, before everything else", () => {
+    const doc = withPreviewGuards('<!DOCTYPE html><html lang="en"><head><title>t</title></head><body></body></html>');
+    expect(doc).toBe(`<!DOCTYPE html>${PREVIEW_CSP_TAG}<html lang="en"><head><title>t</title></head><body></body></html>`);
   });
 
-  it("does not mistake <header> for <head>", () => {
-    const doc = withSrcdocBase("<html><body><header>x</header></body></html>");
-    expect(doc).toBe(`<html>${SRCDOC_BASE_TAG}<body><header>x</header></body></html>`);
+  it("goes at the very top when there is no doctype", () => {
+    expect(withPreviewGuards("<p>x</p>")).toBe(`${PREVIEW_CSP_TAG}<p>x</p>`);
   });
 
-  it("keeps the doctype first when there is no <head> or <html>", () => {
-    expect(withSrcdocBase("<!doctype html>\n<p>x</p>")).toBe(`<!doctype html>${SRCDOC_BASE_TAG}\n<p>x</p>`);
-    expect(withSrcdocBase("<p>x</p>")).toBe(`${SRCDOC_BASE_TAG}<p>x</p>`);
+  it("cannot be pushed into a comment by a <head> the file hides", () => {
+    const doc = withPreviewGuards("<!-- <head> --><p>x</p>");
+    expect(doc.startsWith(PREVIEW_CSP_TAG)).toBe(true);
+    expect(withPreviewGuards("<title><head></title>").startsWith(PREVIEW_CSP_TAG)).toBe(true);
   });
 
-  it("wins over a base the file brings along", () => {
-    const doc = withSrcdocBase('<head><base href="https://evil.example/"></head>');
-    expect(doc.indexOf(SRCDOC_BASE_TAG)).toBeLessThan(doc.indexOf("evil.example"));
+  it("keeps a doctype that follows a closed comment", () => {
+    expect(withPreviewGuards("<!-- c --><!doctype html><p>")).toBe(`<!-- c --><!doctype html>${PREVIEW_CSP_TAG}<p>`);
   });
 
-  it("is case-insensitive", () => {
-    expect(withSrcdocBase("<HTML><HEAD></HEAD></HTML>")).toBe(`<HTML><HEAD>${SRCDOC_BASE_TAG}</HEAD></HTML>`);
+  it("is case-insensitive about the doctype", () => {
+    expect(withPreviewGuards("<!DocType HTML>\n<p>")).toBe(`<!DocType HTML>${PREVIEW_CSP_TAG}\n<p>`);
+  });
+
+  it("makes fragment links point at the document itself", () => {
+    expect(withPreviewGuards('<a href="#top">up</a>')).toContain('<a href="about:srcdoc#top">');
+    expect(withPreviewGuards("<a class=x href='#a'>")).toContain("href='about:srcdoc#a'");
+    expect(withPreviewGuards("<a href=#a>")).toContain("href=about:srcdoc#a");
+    expect(withPreviewGuards('<svg><use xlink:href="#g"/></svg>')).toContain('xlink:href="about:srcdoc#g"');
+  });
+
+  it("leaves other links and text alone", () => {
+    expect(withPreviewGuards('<a href="page.html#a">x</a>')).toContain('<a href="page.html#a">');
+    expect(withPreviewGuards("<p>href=\"#x\"</p>")).toContain('<p>href="#x"</p>');
   });
 });
