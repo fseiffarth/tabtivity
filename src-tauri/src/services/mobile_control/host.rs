@@ -689,7 +689,8 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
         header::STRICT_TRANSPORT_SECURITY,
         HeaderValue::from_static("max-age=31536000"),
     );
-    if sensitive {
+    // A handler that chose its own policy (`inbox_file`) keeps it.
+    if sensitive && !headers.contains_key(header::CACHE_CONTROL) {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     headers.insert(
@@ -5871,8 +5872,19 @@ async fn inbox_file(
     let read = tokio::task::spawn_blocking(move || inbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
-    file_response(read, &filename, download)
+    let mut response = file_response(read, &filename, download);
+    // A leaf carries its arrival stamp and is never rewritten, so the phone
+    // may keep its picture: without this every API answer is `no-store` and
+    // each remount of the chat pulled the whole original down the link again.
+    if response.status() == StatusCode::OK && !download {
+        response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(INBOX_FILE_CACHE));
+    }
+    response
 }
+
+/// How long the phone may keep an inbox picture (`inbox_file`): this device
+/// only, a day.
+const INBOX_FILE_CACHE: &str = "private, max-age=86400, immutable";
 
 /// `POST /api/v1/tabs/{tab_id}/markup` — the markup view's **Submit**
 /// (`markup.rs`): the marks of a PDF or picture the phone marked up, whose
@@ -11484,7 +11496,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "answered: {body}");
         assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "image/png");
         assert_eq!(headers.get(header::CONTENT_DISPOSITION).unwrap(), "inline");
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), INBOX_FILE_CACHE, "a stamped leaf is cacheable on the phone");
         assert!(body.ends_with("IHDR-body"), "{body:?}");
+        let (_, headers, _) = host.send(get_as(&format!("{base}/{}?download=1", photo.name), &cookie)).await;
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store", "a download is not kept");
 
         for refused in ["..%2F..%2Fproject.json", "gone.png", ".hidden.png"] {
             let (status, _, body) = host.send(get_as(&format!("{base}/{refused}"), &cookie)).await;
