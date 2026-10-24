@@ -7148,7 +7148,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
         web_events,
         &config.control_dir,
         config.host.port,
-        web_client::bundle_dir(&config.control_dir),
+        web_client::bundle_source(&config.control_dir),
     );
     if let Listen::Unix { content_origin, .. } = &listen {
         web = web.behind_gateway(web_client::ServerLink {
@@ -7160,10 +7160,10 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     start_background_relays(&core_ctx, web.enabled, matches!(listen, Listen::Unix { .. }));
     if web.enabled {
         match (&web.bundle, web.has_token(), &listen) {
-            (Some(bundle), _, Listen::Unix { .. }) => eprintln!("desktop client: serving {} at {}/desktop/ behind the gateway", bundle.display(), config.origin),
+            (Some(bundle), _, Listen::Unix { .. }) => eprintln!("desktop client: serving {} at {}/desktop/ behind the gateway", bundle.label(), config.origin),
             (Some(bundle), true, Listen::Loopback { port }) => eprintln!(
                 "desktop client: serving {} at http://127.0.0.1:{port}/desktop/ (sign in with the link in Settings → Mobile → Browser access, or the token in {})",
-                bundle.display(),
+                bundle.label(),
                 config.control_dir.join(web_client::TOKEN_FILE).display()
             ),
             (None, _, _) => eprintln!("desktop client: on, but no web bundle was found (npm run web:bundle)"),
