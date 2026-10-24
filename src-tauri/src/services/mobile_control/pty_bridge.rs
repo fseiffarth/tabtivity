@@ -888,8 +888,9 @@ pub async fn attach(
 /// far — the cache carries its last answer forward — so a tab the catalog no
 /// longer lists for this phone (its switch off, or a per-phone list narrowed
 /// past it) is the catalog saying no. A host tab it still lists, on the same
-/// session, that has gone unavailable is its host gone from reach — the
-/// desktop's master ended — and closes as `host_offline`.
+/// session, that has gone unavailable closes as `host_offline` when the last
+/// round found no master for its host, and as `session_gone` when it found
+/// the master but the host's tmux no longer lists the session.
 fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
     let Some(catalog) = loaded.map(|catalog| catalog.for_device(device)) else {
         return Err("catalog_unavailable");
@@ -898,7 +899,9 @@ fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str)
         return Ok(());
     }
     match catalog.tab(tab_id) {
-        Some((_, tab)) if tab.place.on_host() && tab.tmux_name == tmux_name => Err("host_offline"),
+        Some((_, tab)) if tab.place.on_host() && tab.tmux_name == tmux_name => {
+            Err(if tab.place.host_ssh().is_some() { "session_gone" } else { "host_offline" })
+        }
         _ => Err("access_revoked"),
     }
 }
@@ -1051,6 +1054,14 @@ mod tests {
         assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-t"), Err("host_offline"));
         assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-other"), Err("access_revoked"));
         assert!(!closing_retries("host_offline"));
+        // The master is there, but the host's tmux no longer lists the
+        // session: it ended, the host did not go away.
+        let mut ended = host(false);
+        ended.projects[0].tabs[0].place = TabPlace::Host {
+            spec: Box::new(serde_json::from_value(serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" })).unwrap()),
+            control_path: Some(std::env::temp_dir().join("cm-h")),
+        };
+        assert_eq!(super::recheck(Some(ended), "d1", "t", "tmux-t"), Err("session_gone"));
         let mut local = fixture_scope("t", "tmux-t", None);
         local.tabs[0].public.available = false;
         assert_eq!(super::recheck(Some(Catalog { projects: vec![local] }), "d1", "t", "tmux-t"), Err("access_revoked"));
