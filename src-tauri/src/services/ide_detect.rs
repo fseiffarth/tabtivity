@@ -331,10 +331,10 @@ pub fn project_window_names(dir: &Path, target: &Path) -> Vec<String> {
     if let Some(name) = dir.file_name() {
         push(&name.to_string_lossy());
     }
-    let mut idea_name = String::new();
-    if let Ok(file) = fs::File::open(dir.join(".idea").join(".name")) {
-        let _ = file.take(256).read_to_string(&mut idea_name);
-        push(&idea_name);
+    if let Some(file) = super::home_io::open_regular(&dir.join(".idea").join(".name")) {
+        let mut bytes = Vec::new();
+        let _ = file.take(256).read_to_end(&mut bytes);
+        push(&String::from_utf8_lossy(&bytes));
     }
     if has_ext(target, "code-workspace") {
         if let Some(stem) = target.file_stem() {
@@ -494,9 +494,15 @@ fn scan_top_level(dir: &Path) -> TopLevel {
     top
 }
 
+/// The most `.iml` files read for one project, and the most of each.
+const MAX_IMLS: usize = 32;
+const IML_CAP: u64 = 64 * 1024;
+
 /// The `type="…"` of the first `<module …>` tag in an `.iml`, upper-cased.
+/// The file is project content, read on every panel render: never through a
+/// link, never blocking on a FIFO, never past [`IML_CAP`].
 fn iml_module_type(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+    let text = super::home_io::read_record_capped(path, IML_CAP)?;
     let module = text.find("<module")?;
     let rest = &text[module..];
     let end = rest.find('>').unwrap_or(rest.len());
@@ -531,6 +537,7 @@ fn jetbrains_product(dir: &Path, top: &TopLevel) -> IdeId {
         );
     }
     imls.sort();
+    imls.truncate(MAX_IMLS);
     for iml in &imls {
         match iml_module_type(iml).as_deref() {
             Some("PYTHON_MODULE") => return IdeId::PyCharm,
@@ -1033,6 +1040,53 @@ mod tests {
         let p = project();
         touch(p.path(), ".idea/app.iml", "<module type=\"RUBY_MODULE\" />");
         assert_eq!(ids(&detect(p.path())), vec![IdeId::RubyMine]);
+    }
+
+    #[test]
+    fn an_oversize_iml_is_not_read() {
+        let p = project();
+        let body = format!("{}<module type=\"PYTHON_MODULE\" />", " ".repeat(70 * 1024));
+        touch(p.path(), ".idea/app.iml", &body);
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::Idea]);
+    }
+
+    #[test]
+    fn only_the_first_imls_are_read() {
+        let p = project();
+        fs::create_dir(p.path().join(".idea")).unwrap();
+        for i in 0..MAX_IMLS {
+            touch(p.path(), &format!(".idea/a{i:02}.iml"), "<module />");
+        }
+        touch(p.path(), ".idea/z.iml", "<module type=\"PYTHON_MODULE\" />");
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::Idea]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_iml_that_is_a_device_link_or_a_fifo_is_not_opened() {
+        let p = project();
+        fs::create_dir(p.path().join(".idea")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", p.path().join(".idea/a.iml")).unwrap();
+        super::super::home_io::mkfifo(&p.path().join(".idea/b.iml"));
+        let dir = p.path().to_path_buf();
+        let found = super::super::home_io::within_deadline(move || ids(&detect(&dir)));
+        assert_eq!(found, vec![IdeId::Idea]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_idea_name_that_is_a_device_link_or_a_fifo_is_not_opened() {
+        let p = project();
+        fs::create_dir(p.path().join(".idea")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", p.path().join(".idea/.name")).unwrap();
+        let dir = p.path().to_path_buf();
+        let names = super::super::home_io::within_deadline(move || project_window_names(&dir, &dir));
+        assert_eq!(names.len(), 1);
+        fs::remove_file(p.path().join(".idea/.name")).unwrap();
+        super::super::home_io::mkfifo(&p.path().join(".idea/.name"));
+        let dir = p.path().to_path_buf();
+        let names = super::super::home_io::within_deadline(move || project_window_names(&dir, &dir));
+        assert_eq!(names.len(), 1);
     }
 
     #[test]
