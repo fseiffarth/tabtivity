@@ -90,7 +90,7 @@ desktop state.
 ```bash
 # Tauri system dependencies (Debian / Ubuntu)
 sudo apt install libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev \
-    libayatana-appindicator3-dev librsvg2-dev
+    libayatana-appindicator3-dev librsvg2-dev libasound2-dev cmake
 
 # Install JS dependencies
 npm install

@@ -209,7 +209,7 @@ On Linux, also the Tauri system packages:
 
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev \
-    libayatana-appindicator3-dev librsvg2-dev
+    libayatana-appindicator3-dev librsvg2-dev libasound2-dev cmake
 npm install
 npm run tauri:dev
 ```
