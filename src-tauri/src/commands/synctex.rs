@@ -616,13 +616,19 @@ fn is_network_path(s: &str) -> bool {
     !verbatim_drive
 }
 
-/// `p` cleaned of `.` and `..` without touching the disk.
+/// `p` cleaned of `.` and `..` without touching the disk, and of Windows'
+/// verbatim drive prefix (`\\?\C:` is spelled `C:`), so a canonical path and
+/// a plain one compare component by component.
 fn lexical_clean(p: &Path) -> PathBuf {
-    use std::path::Component;
+    use std::path::{Component, Prefix};
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
             Component::CurDir => {}
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => out.push(format!("{}:", char::from(drive))),
+                _ => out.push(c.as_os_str()),
+            },
             Component::ParentDir => {
                 if !out.pop() {
                     out.push("..");
@@ -693,7 +699,7 @@ impl Spelling {
         }
         self.roots.iter().any(|(spelled, canonical)| {
             root.strip_prefix(spelled)
-                .is_ok_and(|rest| abs.starts_with(canonical.join(rest)))
+                .is_ok_and(|rest| abs.starts_with(lexical_clean(&canonical.join(rest))))
         })
     }
 }
@@ -2108,6 +2114,16 @@ x1,33:3834000,3637000
         // The PDF rebuilt without a map: the map is the older build's.
         set(&pdf, t0 + Duration::from_secs(120));
         assert!(status(&pdf).pdf_newer_than_map);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_drive_compares_as_the_plain_one() {
+        assert_eq!(lexical_clean(Path::new(r"\\?\C:\a\..\b")), PathBuf::from(r"C:\b"));
+        let spelling = Spelling::new(Path::new(r"\\?\C:\proj"));
+        assert!(spelling.lexically_within(r"\\?\C:\proj\a.tex", Path::new(r"C:\proj")));
+        assert!(spelling.lexically_within(r"C:\proj\a.tex", Path::new(r"\\?\C:\proj")));
+        assert!(!spelling.lexically_within(r"\\?\C:\other\a.tex", Path::new(r"C:\proj")));
     }
 
     #[test]
