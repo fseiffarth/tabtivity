@@ -217,6 +217,12 @@ fn unseal_with(salt: &str, host_key: &[u8], raw_id: &str, token: &str) -> Option
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
+    // A project folder reached through a link planted inside another registered
+    // root is not the user's root (the rule `commands::fs` applies to every
+    // registry): refused, not followed to where the link now points.
+    if crate::commands::fs::is_planted_root(root) {
+        return Err(FilesError::Unavailable);
+    }
     let canonical = root.canonicalize().map_err(|_| FilesError::Unavailable)?;
     if !canonical.is_dir() {
         return Err(FilesError::Unavailable);
@@ -334,6 +340,23 @@ impl ProjectDir {
     pub(crate) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
         let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         self.openat(name, flags, 0o666)
+    }
+
+    /// A new symbolic link `name` here pointing at `target`, written as it is
+    /// (`symlinkat` never follows a link at the name, and refuses an existing
+    /// one with `AlreadyExists`). Unix only: the Windows twin has none.
+    pub(crate) fn create_symlink(&self, name: &str, target: &Path) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        let c_name = segment_cstr(name)?;
+        let c_target = std::ffi::CString::new(target.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        // SAFETY: two NUL-terminated strings and a live directory descriptor.
+        if unsafe { libc::symlinkat(c_target.as_ptr(), self.0.as_raw_fd(), c_name.as_ptr()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
     }
 
     /// The held folder's own handle, for its metadata.

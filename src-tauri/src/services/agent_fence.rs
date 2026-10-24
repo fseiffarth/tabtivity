@@ -288,7 +288,8 @@ pub fn compute_fence_roots(
     }
     if let Some(box_id) = crate::commands::boxes::box_id_of_scope(scope_id) {
         return crate::commands::boxes::compute_box_allowed_roots(boxes, projects, box_id)
-            .map(dedupe_paths);
+            .map(dedupe_paths)
+            .map(|roots| drop_planted(roots, boxes, projects));
     }
 
     let project = projects.iter().find(|p| p.id == scope_id)?;
@@ -298,7 +299,7 @@ pub fn compute_fence_roots(
     } else {
         entry_directory(project)?
     };
-    let mut roots = vec![own];
+    let mut roots = vec![own.clone()];
     for b in boxes
         .iter()
         .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
@@ -309,7 +310,20 @@ pub fn compute_fence_roots(
             roots.extend(box_roots);
         }
     }
-    Some(dedupe_paths(roots))
+    let roots = drop_planted(dedupe_paths(roots), boxes, projects);
+    // Callers take the first root to be the project's own: without it, no roots.
+    roots.first().is_some_and(|first| *first == own).then_some(roots)
+}
+
+/// `roots` without any reached through a link planted inside a registered
+/// root: the fence binds a root at its own path, so such a root would bind
+/// wherever the link was pointed. Dropped, never rewritten to its real path.
+fn drop_planted(roots: Vec<PathBuf>, boxes: &BoxesList, projects: &ProjectsList) -> Vec<PathBuf> {
+    crate::commands::fs::drop_planted_roots(
+        roots,
+        &crate::commands::fs::registered_roots(projects, boxes),
+        &crate::commands::fs::keep_clear_roots(),
+    )
 }
 
 /// The roots a fenced `local_only` tab of project `id` works in, from lists —
@@ -571,7 +585,7 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
             roots.extend(crate::commands::boxes::box_allowed_roots(&b.id)?);
         }
     }
-    Some(dedupe_paths(roots))
+    Some(drop_planted(dedupe_paths(roots), &boxes, &projects))
 }
 
 fn settings() -> crate::schema::Settings {
@@ -3177,6 +3191,40 @@ mod tests {
             decide(&custom, roots, false, true, true, true),
             FenceDecision::Fenced { .. }
         ));
+    }
+
+    /// A member that is really a link an agent planted inside the box folder
+    /// is no root: bubblewrap binds a root at its own path, so it would bind
+    /// wherever the link now points. Dropped, not rewritten; the project's own
+    /// root being the planted one leaves it no roots at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_root_through_a_planted_link_is_not_bound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let at = |rel: &str| base.join(rel);
+        std::fs::create_dir_all(at("box/real")).unwrap();
+        std::fs::create_dir_all(at("secret")).unwrap();
+        std::os::unix::fs::symlink(at("secret"), at("box/planted")).unwrap();
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let projects = vec![project("real", &dir("box/real")), project("planted", &dir("box/planted"))];
+        let boxes = vec![ProjectBox {
+            id: "b".into(),
+            name: "B".into(),
+            member_ids: vec!["real".into(), "planted".into()],
+            folder: Some(dir("box")),
+            ..ProjectBox::default()
+        }];
+
+        let real = compute_fence_roots(&boxes, &projects, "real", false).unwrap();
+        assert_eq!(real, vec![at("box/real"), at("box")]);
+        let boxed = compute_fence_roots(&boxes, &projects, "box:b", false).unwrap();
+        assert_eq!(boxed, vec![at("box"), at("box/real")]);
+        assert!(compute_fence_roots(&boxes, &projects, "planted", false).is_none(), "its own root is the planted one");
+        // A link spelled outside every root is the user's own and is followed.
+        std::os::unix::fs::symlink(at("box/real"), at("user-link")).unwrap();
+        let outside = vec![project("u", &dir("user-link"))];
+        assert_eq!(compute_fence_roots(&Vec::new(), &outside, "u", false).unwrap(), vec![at("user-link")]);
     }
 
     #[test]
