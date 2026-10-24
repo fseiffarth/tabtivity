@@ -5817,7 +5817,6 @@ filename note.txt
         ("commands/git.rs", "git_available", "`--version`, no repo"),
         ("commands/git.rs", "git_clone_blocking", "network clone into a new empty dir"),
         ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),
-        ("commands/sync.rs", "diff_mirror_vs_host", "`diff --no-index` of two files"),
         ("services/dev_build.rs", "commits_behind", "the app's own checkout"),
         ("services/dev_build.rs", "head_sha", "the app's own checkout"),
         ("services/skills.rs", "refresh_source", "the skills cache clone in the state dir"),

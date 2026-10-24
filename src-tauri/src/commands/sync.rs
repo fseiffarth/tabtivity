@@ -1753,12 +1753,12 @@ pub async fn sync_diff(
     let host_bytes = sftp::read_file_on(&sftp, &host_abs)
         .await
         .unwrap_or_default();
-    let mirror_path = mirror_local_path(&project_id, &rel_path);
+    let mirror_root = remote_sync::mirror_dir(&project_id);
     // Compute the diff LOCALLY (never over SSH — the mirror is on disk and the
     // host bytes are already in memory). Off the async thread: git spawns a
     // subprocess.
     let rel = rel_path.clone();
-    app_core::rt::try_blocking("sync_diff", move || diff_mirror_vs_host(&mirror_path, &host_bytes, &rel))
+    app_core::rt::try_blocking("sync_diff", move || diff_mirror_vs_host(&mirror_root, &host_bytes, &rel))
         .await
 }
 
@@ -2015,43 +2015,55 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
     .unwrap_or(false)
 }
 
-/// Produce a unified diff of `mirror_path` (old / "local") vs `host_bytes`
-/// (new / "host") using local `git diff --no-index`. `git` is a hard dependency
-/// and `--no-index` works outside any repo, exiting non-zero when the files
-/// differ (the normal case) — so non-empty stdout is treated as success,
-/// mirroring `git_diff_file_blocking`. The host bytes are staged in a temp file;
-/// an absent mirror (never pulled) diffs against an empty temp file so it shows
-/// as all-additions. The temp/abs paths in the header lines are rewritten to
-/// friendly `local/<rel>` / `host/<rel>` labels. Returns "" when identical.
+/// `git diff --no-index <old> <new>` through the hardened builder (config
+/// pinned, `--no-ext-diff --no-textconv`, hooks off), run from an empty temp
+/// directory that git may not search upward from, with no system config: it
+/// compares two files outside any repo, so nothing it finds around the app's
+/// own working directory may steer it.
+fn diff_no_index_command(cwd: &std::path::Path, old: &std::path::Path, new: &std::path::Path) -> std::process::Command {
+    let args = ["diff", "--no-index", "--", &old.to_string_lossy(), &new.to_string_lossy()];
+    let mut cmd = crate::commands::git::hardened_git_command_in(cwd, &args);
+    let ceiling = cwd.parent().map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+    cmd.env("GIT_CEILING_DIRECTORIES", ceiling.unwrap_or_else(|| cwd.to_path_buf()));
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd
+}
+
+/// Produce a unified diff of the mirror copy `rel` (old / "local") vs
+/// `host_bytes` (new / "host") using local `git diff --no-index`. `git` is a
+/// hard dependency and `--no-index` works outside any repo, exiting non-zero
+/// when the files differ (the normal case) — so non-empty stdout is treated as
+/// success, mirroring `git_diff_file_blocking`. Both sides are staged in temp
+/// files: the host bytes, and the mirror's through [`remote_sync::read_mirror_file`]
+/// (a link, special file or giant there is refused, never handed to git by
+/// path); an absent mirror (never pulled) diffs against an empty temp file so
+/// it shows as all-additions. The temp paths in the header lines are rewritten
+/// to friendly `local/<rel>` / `host/<rel>` labels. Returns "" when identical.
 fn diff_mirror_vs_host(
-    mirror_path: &std::path::Path,
+    mirror_root: &std::path::Path,
     host_bytes: &[u8],
     rel: &str,
 ) -> Result<String, String> {
     use std::io::Write;
-    let mut host_tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
-    host_tmp.write_all(host_bytes).map_err(|e| e.to_string())?;
-    host_tmp.flush().map_err(|e| e.to_string())?;
-    let host_tmp_path = host_tmp.path().to_string_lossy().into_owned();
-
-    // Old side: the mirror file if present, else an empty temp stand-in for
-    // /dev/null (portable across platforms). Both temps stay alive until the git
-    // call returns below.
-    let empty_tmp = if mirror_path.exists() {
-        None
-    } else {
-        Some(tempfile::NamedTempFile::new().map_err(|e| e.to_string())?)
+    let stage = |bytes: &[u8]| -> Result<tempfile::NamedTempFile, String> {
+        let mut tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+        tmp.write_all(bytes).map_err(|e| e.to_string())?;
+        tmp.flush().map_err(|e| e.to_string())?;
+        Ok(tmp)
     };
-    let mirror_arg = match &empty_tmp {
-        Some(t) => t.path().to_string_lossy().into_owned(),
-        None => mirror_path.to_string_lossy().into_owned(),
+    let host_tmp = stage(host_bytes)?;
+    let local_tmp = match remote_sync::read_mirror_file(mirror_root, rel)? {
+        remote_sync::MirrorRead::File { bytes, .. } => stage(&bytes)?,
+        remote_sync::MirrorRead::Missing => stage(&[])?,
+        remote_sync::MirrorRead::Skip(kind, size) => {
+            return Err(remote_sync::MirrorSkip { rel: rel.to_string(), kind, size }.to_string());
+        }
     };
-
-    // Bare on purpose: `diff --no-index` compares two files, outside any repo.
-    let out = crate::paths::command_no_window("git")
-        .args(["diff", "--no-index", "--", &mirror_arg, &host_tmp_path])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let cwd = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let out = crate::services::git_bounded::output_within(
+        diff_no_index_command(cwd.path(), local_tmp.path(), host_tmp.path()),
+        crate::services::git_bounded::READ_TIMEOUT,
+    )?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.is_empty() {
         // Zero exit + no output = identical. Non-zero + no output = a real error.
@@ -2109,7 +2121,10 @@ fn emit(ctx: &CoreCtx, project_id: &str, phase: &str, rel_path: &str, done: usiz
 mod tests {
     use std::collections::HashSet;
 
-    use super::{apply_status_heal, drop_tracked_files, rewrite_diff_labels, ContentRebase};
+    use super::{
+        apply_status_heal, diff_mirror_vs_host, diff_no_index_command, drop_tracked_files, rewrite_diff_labels,
+        ContentRebase,
+    };
 
     /// A status pass judged `f` against its old base; a push recorded a new base
     /// before the pass took the lock. The heal (and a prune) must leave the push's
@@ -2220,5 +2235,41 @@ index 3367afd..3e75765 100644
             out.contains("Binary files a/local/data/img.png and b/host/data/img.png differ"),
             "got: {out}"
         );
+    }
+    #[test]
+    fn the_mirror_diff_runs_hardened_from_an_empty_temp_dir() {
+        let cwd = tempfile::tempdir().unwrap();
+        let cmd = diff_no_index_command(cwd.path(), std::path::Path::new("old"), std::path::Path::new("new"));
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let at = args.iter().position(|a| a == "diff").expect("the diff subcommand");
+        assert_eq!(&args[at + 1..at + 3], ["--no-ext-diff", "--no-textconv"]);
+        assert_eq!(args[at + 3..], ["--no-index", "--", "old", "new"]);
+        assert_eq!(cmd.get_current_dir(), Some(cwd.path()));
+        let env = |key: &str| cmd.get_envs().find(|(k, _)| *k == key).and_then(|(_, v)| v.map(|v| v.to_owned()));
+        assert_eq!(env("GIT_CONFIG_NOSYSTEM").as_deref(), Some(std::ffi::OsStr::new("1")));
+        assert!(env("GIT_CEILING_DIRECTORIES").is_some());
+    }
+
+    #[test]
+    fn the_mirror_diff_compares_the_mirror_copy_with_the_host_bytes() {
+        let mirror = tempfile::tempdir().unwrap();
+        std::fs::write(mirror.path().join("a.txt"), "old\n").unwrap();
+        let out = diff_mirror_vs_host(mirror.path(), b"new\n", "a.txt").unwrap();
+        assert!(out.contains("--- a/local/a.txt") && out.contains("+++ b/host/a.txt"), "{out}");
+        assert!(out.contains("-old") && out.contains("+new"), "{out}");
+        assert_eq!(diff_mirror_vs_host(mirror.path(), b"old\n", "a.txt").unwrap(), "");
+        let none = diff_mirror_vs_host(mirror.path(), b"x\n", "gone.txt").unwrap();
+        assert!(none.contains("+x"), "{none}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_mirror_diff_never_hands_a_link_to_git() {
+        let mirror = tempfile::tempdir().unwrap();
+        let secret = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(secret.path(), b"secret\n").unwrap();
+        std::os::unix::fs::symlink(secret.path(), mirror.path().join("l.txt")).unwrap();
+        let err = diff_mirror_vs_host(mirror.path(), b"x\n", "l.txt").unwrap_err();
+        assert!(err.contains("symlink"), "{err}");
     }
 }
