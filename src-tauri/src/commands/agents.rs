@@ -2439,6 +2439,20 @@ pub async fn agent_api_keys_status() -> Result<crate::services::agent_api_keys::
     app_core::rt::blocking("agent", crate::services::agent_api_keys::status).await
 }
 
+/// The pending "the API proxy's remembered port is taken" notice
+/// (`services::api_proxy_port`), if the last start left one. Cheap: one small
+/// file, no keychain.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn api_proxy_port_notice() -> Option<crate::services::api_proxy_port::PortNotice> {
+    crate::services::api_proxy_port::read_notice()
+}
+
+/// The user saw the notice: forget it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn api_proxy_port_notice_ack() {
+    crate::services::api_proxy_port::ack_notice();
+}
+
 fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::Provider, String> {
     crate::services::agent_api_keys::Provider::from_id(provider)
         .ok_or_else(|| format!("unknown API key provider: {provider}"))

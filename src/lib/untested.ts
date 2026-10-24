@@ -115,6 +115,7 @@ export const UNTESTED = {
   "openExternalConfirm": { area: "common", what: "OpenExternalHost · \"Open <file> with the system's default app?\" before any file goes to the OS (no-viewer files, Shift+double-click, Downloads, terminal path links, Reader change cards, the phone inbox, disk usage); launchers and executables refused with a note instead (gap 21, C2)" },
   "hpcGuardDialog.1": { area: "common", what: "HpcGuardDialog · {t(copy.title)}" },
   "unfencedPlatformDialog.1": { area: "common", what: "UnfencedPlatformDialog · Windows: accept once that agents run with full rights, then the tab starts" },
+  "apiProxyPortDialog.1": { area: "common", what: "ApiProxyPortDialog · after a crash, when another process holds the API proxy's remembered port: who held it, and which keyed agent sessions that named it were ended" },
   "projectSwitcher.stopTitle": { area: "common", what: "StopProjectDialog · Stop this project's terminals?" },
   "syncConfirmDialog.1": { area: "common", what: "SyncConfirmDialog · {t(host ? \"syncConfirm.deleteHostTitle\" : \"syncConfirm.deleteLocalTitle\")}{\" \"}" },
   "syncConfirmDialog.2": { area: "common", what: "SyncConfirmDialog · {t(pull ? \"syncConfirm.pullTitle\" : \"syncConfirm.pushTitle\")}" },

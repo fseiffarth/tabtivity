@@ -61,6 +61,15 @@ fn cloud_model_reason(model: &str) -> String {
     )
 }
 
+/// The reason a listener that is not Ollama's is refused (gap 50a): whoever
+/// binds the port while Ollama is down would be handed the mail and answer for
+/// the model.
+fn listener_refused_reason(addr: &str) -> String {
+    let why = ollama::owner_gate(addr).err().unwrap_or_default();
+    let why = why.strip_prefix(ollama::LISTENER_REFUSED).map(|r| r.trim_start_matches(": ")).unwrap_or(&why);
+    format!("the local mail assistant refused the Ollama endpoint: {why} Nothing about your mail was sent.")
+}
+
 /// The reason a model the local Ollama does not list (or whose list could not
 /// be read) is refused: nothing proves it runs here, so it fails closed.
 fn unlisted_model_reason(model: &str) -> String {
@@ -246,6 +255,7 @@ fn preflight(settings: &Settings) -> Result<(String, String), String> {
     match ollama::model_is_local_at(&addr, &model) {
         Ok(()) => Ok((model, addr)),
         Err(ollama::MODEL_NOT_RUNNING) => Err(NOT_RUNNING.to_string()),
+        Err(ollama::LISTENER_REFUSED) => Err(listener_refused_reason(&addr)),
         Err("model_not_local") => Err(cloud_model_reason(&model)),
         Err(_) => Err(unlisted_model_reason(&model)),
     }

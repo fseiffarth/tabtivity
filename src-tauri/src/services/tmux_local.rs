@@ -953,6 +953,12 @@ pub fn remove_launcher(session: &str) {
     let _ = std::fs::remove_file(launcher_path(session));
 }
 
+/// The text of a session's launcher script, if one is still on disk: where a
+/// tmux without `new-session -e` keeps the session's plain environment.
+pub(crate) fn launcher_text(session: &str) -> Option<String> {
+    std::fs::read_to_string(launcher_path(session)).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::brand::SLUG;

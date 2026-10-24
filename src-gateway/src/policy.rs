@@ -52,11 +52,17 @@ pub struct Policy {
     /// only these (a bare name matches its `:latest`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ollama_allowed_models: Option<Vec<String>>,
+    /// The uid the shared Ollama's listener runs as, when it is not root or a
+    /// system account (below `SYS_UID_MAX`): a daemon sends private content
+    /// only to a loopback listener owned by root, a system account or this
+    /// uid. Unset: root and system accounts only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ollama_listener_uid: Option<u32>,
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Self { schema: 1, features: Features::default(), ollama_allowed_models: None }
+        Self { schema: 1, features: Features::default(), ollama_allowed_models: None, ollama_listener_uid: None }
     }
 }
 
@@ -78,6 +84,7 @@ impl Policy {
             schema: 1,
             features: Features { mail: false, calendar: false, todo: false, calendar_sharing: false, project_sharing: false, containers: false },
             ollama_allowed_models: Some(Vec::new()),
+            ollama_listener_uid: None,
         }
     }
 

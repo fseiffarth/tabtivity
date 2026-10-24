@@ -252,6 +252,40 @@ pub(crate) fn host_is_loopback(host: &str) -> bool {
     }
 }
 
+// ── Whose listener it is ──────────────────────────────────────────────────
+
+/// The error (prefix) of a loopback listener nobody here vouches for. Judged by
+/// [`owner_gate`] before a byte is sent, and told apart from "not running" by
+/// [`model_is_local_in`]: the answer would have been another process's.
+pub(crate) const LISTENER_REFUSED: &str = "ollama_listener_refused";
+
+/// The uid the user (`Settings::ollama_listener_uid`) or, on a hosted server,
+/// the administrator (the server policy file) names as running Ollama.
+fn named_listener_uid() -> Option<u32> {
+    if crate::services::server::is_server() {
+        return crate::services::server::server_policy().and_then(|p| p.ollama_listener_uid);
+    }
+    crate::storage::load_settings().and_then(|s| s.ollama_listener_uid)
+}
+
+/// Refuse a loopback `addr` whose listening socket belongs to someone Ollama
+/// would not be: another account, a fenced agent's process, or one that cannot
+/// be identified (`services::loopback_owner`, gap 50a). Asked after the
+/// connection and before anything is written, and by every "is it local?" gate,
+/// so a squatter on the port gets neither prompts, mail nor a say in whether
+/// the model is local. No listener, or an address on another machine: nothing
+/// to judge. Linux only; elsewhere address-only trust remains.
+pub(crate) fn owner_gate(addr: &str) -> Result<(), String> {
+    let Some((host, port)) = split_host_port(addr).filter(|(host, _)| host_is_loopback(host)) else { return Ok(()) };
+    let policy = crate::services::loopback_owner::Policy::current(named_listener_uid());
+    let ours: Vec<u32> = match OWNED_SERVER.lock().ok().as_deref() {
+        Some(Some(OwnedServer::Process(pid))) => vec![*pid],
+        _ => Vec::new(),
+    };
+    crate::services::loopback_owner::check(host, port, &policy, &ours)
+        .map_err(|refusal| format!("{LISTENER_REFUSED}: {}", refusal.describe(addr)))
+}
+
 // ── HTTP helper ───────────────────────────────────────────────────────────
 
 /// Send a request to the local Ollama REST API and return the response body.
@@ -291,6 +325,7 @@ pub(crate) fn ollama_http_at(
         return answer;
     }
     let mut stream = connect_ollama(addr)?;
+    owner_gate(addr)?;
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
@@ -1035,6 +1070,7 @@ pub(crate) fn model_is_local_in(
         // timed out mid-read — is "not running", never "not installed": the
         // list was not read, so nothing is known about the model (step 5
         // review). An error the server answered (`HTTP 500`) still is.
+        Err(e) if e.starts_with(LISTENER_REFUSED) => Err(LISTENER_REFUSED),
         Err(e) if is_transport_failure(e) => Err(MODEL_NOT_RUNNING),
         Err(_) => Err("model_not_installed"),
     }
@@ -1138,6 +1174,11 @@ fn locality_at(addr: &str, model: &str, tab: bool) -> Result<(), &'static str> {
     #[cfg(test)]
     if let Some(tags) = test_tags::current() {
         return judge(tags.as_deref().map_err(String::as_str), model);
+    }
+    // Before the cache, which would otherwise vouch for a listener that has
+    // since been replaced.
+    if owner_gate(addr).is_err() {
+        return Err(LISTENER_REFUSED);
     }
     let now = Instant::now();
     if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, tab, now) {
@@ -1780,6 +1821,7 @@ pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
 
     let addr = ollama_addr()?;
     let stream = connect_ollama(&addr)?;
+    owner_gate(&addr)?;
     // 10-minute read timeout accommodates large model pulls between chunks.
     stream
         .set_read_timeout(Some(Duration::from_secs(600)))
@@ -3029,7 +3071,7 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
         .lock_ok();
 
     if ollama_listening() {
-        return Ok(());
+        return owner_gate(&addr);
     }
 
     // A server on another machine is not ours to start, and starting a local one
@@ -3064,7 +3106,7 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
                 if !was_active {
                     record_owned_server(OwnedServer::SystemdUnit);
                 }
-                return Ok(());
+                return owner_gate(&addr);
             }
         }
     }
@@ -3122,7 +3164,8 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
 
     let deadline = Instant::now() + Duration::from_secs(8);
     if wait_for_ollama(deadline) {
-        return Ok(());
+        // Ours may have lost the port to whoever held it first.
+        return owner_gate(&addr);
     }
 
     Err("ollama serve started but did not become reachable within 8 s".to_string())
@@ -6490,6 +6533,27 @@ mod phone_control_tests {
         assert_eq!(tab_model_is_local_at("127.0.0.1:11434", "a:b-c"), Err(MODEL_ALIAS_SHARED));
         assert_eq!(model_is_local_at("127.0.0.1:11434", "a:b-c"), Ok(()));
         test_tags::set(None);
+    }
+
+    #[test]
+    fn a_listener_nobody_vouches_for_is_not_a_server_that_is_not_running() {
+        let refused = format!("{LISTENER_REFUSED}: another account (uid 1002) is listening");
+        assert_eq!(model_is_local_in(Err(&refused), "llama3"), Err(LISTENER_REFUSED));
+        assert_eq!(tab_model_is_local_in(Err(&refused), "llama3"), Err(LISTENER_REFUSED));
+        assert!(!is_transport_failure(&refused));
+    }
+
+    #[test]
+    fn the_owner_gate_judges_loopback_listeners_only() {
+        // Another machine, and a port nobody listens on: nothing to judge.
+        assert_eq!(owner_gate("gpu-box.example:11434"), Ok(()));
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        assert_eq!(owner_gate(&format!("127.0.0.1:{port}")), Ok(()));
+        // This test process's own listener, in its own namespace, passes.
+        let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        assert_eq!(owner_gate(&format!("127.0.0.1:{}", own.local_addr().unwrap().port())), Ok(()));
     }
 
     #[test]

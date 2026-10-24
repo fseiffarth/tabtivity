@@ -2442,6 +2442,8 @@ pub fn run() {
             commands::shared_calendar::shared_calendar_unshare,
             commands::shared_calendar::shared_calendar_wait,
             commands::agents::agent_api_keys_status,
+            commands::agents::api_proxy_port_notice,
+            commands::agents::api_proxy_port_notice_ack,
             commands::agents::agent_api_key_set,
             commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,

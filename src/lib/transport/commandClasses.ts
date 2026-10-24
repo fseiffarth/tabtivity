@@ -49,6 +49,8 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_api_key_clear", "core"],
   ["agent_api_key_set", "core"],
   ["agent_api_keys_status", "core"],
+  ["api_proxy_port_notice", "core"],
+  ["api_proxy_port_notice_ack", "core"],
   ["share_list", "core"],
   ["share_create", "core"],
   ["share_grant", "core"],

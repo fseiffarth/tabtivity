@@ -27,6 +27,7 @@ interface Policy {
   schema: number;
   features: { mail: boolean; calendar: boolean; todo: boolean; calendar_sharing: boolean; project_sharing?: boolean; containers?: boolean };
   ollama_allowed_models?: string[];
+  ollama_listener_uid?: number;
 }
 
 const POLICY_URL = "/gateway/v1/policy";

@@ -54,6 +54,10 @@ pub const TOOLS: &[&str] = &[
 /// local-model tab with local reads on (`Policy::reads_mail`).
 pub const READ_TOOLS: &[&str] = &["mail_folders", "mail_search", "mail_read", "mail_thread"];
 
+/// A loopback listener that is neither this account's, root's nor a system
+/// service's answers where the model should (gap 50a).
+pub const LOCAL_READ_LISTENER: &str = concat!("mail is read only by a model on this machine, and ", crate::app_name!(), " could not confirm that the Ollama port is held by this account, root or a system service (another account or a sandboxed process is listening on it)");
+
 pub const LOCKED: &str = concat!("mail is locked, unlock it in ", crate::app_name!(), " first");
 pub const UNKNOWN_ACCOUNT: &str = "unknown account";
 /// A local-model tab's read while `ollama_host` names another machine: what it
@@ -1157,7 +1161,9 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
         // model (or no session) is not proof of one, and an unreadable list
         // fails closed.
         let model = stores.session.and_then(|s| s.identity.model.as_deref()).ok_or_else(|| LOCAL_READ_CLOUD.to_string())?;
-        crate::commands::ollama::tab_model_is_local_at(&addr, model).map_err(|_| LOCAL_READ_CLOUD.to_string())?;
+        crate::commands::ollama::tab_model_is_local_at(&addr, model).map_err(|e| {
+            if e == crate::commands::ollama::LISTENER_REFUSED { LOCAL_READ_LISTENER } else { LOCAL_READ_CLOUD }.to_string()
+        })?;
         // Latched before the read, not after it: a result that fails halfway
         // may already be in the model's context. On disk too, per tab and per
         // model, for the next spawn (`root_mcp::spawn_read_mail`) — and a

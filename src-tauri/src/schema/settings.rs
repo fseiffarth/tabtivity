@@ -436,6 +436,17 @@ pub struct Settings {
     /// they wrote rather than what DNS answered today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_allow_remote_host: Option<bool>,
+    /// The uid of the account that runs the Ollama listening on loopback, when
+    /// it is neither this account, root nor a system account (below
+    /// `SYS_UID_MAX`, which already covers the usual `ollama` service user).
+    /// Every request that sends private content to a loopback Ollama first
+    /// looks up who owns the listening socket (`services::loopback_owner`,
+    /// Linux) and refuses an unnamed owner: whoever binds the port while Ollama
+    /// is down — another account, a fenced agent — would otherwise be answered
+    /// as Ollama. Unset: only those owners. Ignored on a hosted server, where
+    /// the administrator names it in the server policy file instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_listener_uid: Option<u32>,
     /// Where Ollama saves the models it downloads — its `OLLAMA_MODELS`
     /// directory. `None`/empty means Ollama's own default (`~/.ollama/models`,
     /// or the system-service dir when one holds models).

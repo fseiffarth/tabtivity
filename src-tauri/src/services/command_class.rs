@@ -220,6 +220,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_api_key_clear", Core),
     ("agent_api_key_set", Core),
     ("agent_api_keys_status", Core),
+    ("api_proxy_port_notice", Core),
+    ("api_proxy_port_notice_ack", Core),
     ("share_list", Core),
     ("share_create", Core),
     ("share_grant", Core),

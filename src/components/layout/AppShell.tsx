@@ -72,6 +72,7 @@ import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
 import { HostKeyConfirmDialog } from "../common/HostKeyConfirmDialog";
 import { HpcGuardDialog } from "../common/HpcGuardDialog";
 import { UnfencedPlatformDialog } from "../common/UnfencedPlatformDialog";
+import { ApiProxyPortDialog } from "../common/ApiProxyPortDialog";
 import { StopProjectDialog } from "../common/StopProjectDialog";
 import { SyncConfirmDialog } from "../common/SyncConfirmDialog";
 import { RemoteUsageWarningDialog } from "../common/RemoteUsageWarningDialog";
@@ -1588,6 +1589,7 @@ export function AppShell() {
       {/* Windows: the once-per-machine "agents run with your full rights"
           acceptance a refused agent spawn asks for; same host rule as above. */}
       <UnfencedPlatformDialog />
+      <ApiProxyPortDialog />
       <StopProjectDialog />
       {/* "This will overwrite that side" — the confirmation every byte-sync
           transfer asks for. Here for the same reason as the two above: a pull or

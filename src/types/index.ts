@@ -557,6 +557,10 @@ export interface Settings {
    *  machine — the opposite of what the local-model feature is for. Judged on
    *  the literal that was typed, never on what it resolves to. */
   ollama_allow_remote_host?: boolean;
+  /** The uid of the account that runs the loopback Ollama, when it is not
+   *  this account, root or a system account (those pass already). Set it in
+   *  settings.json; a listener owned by anyone else is refused. Linux only. */
+  ollama_listener_uid?: number;
   /** Where Ollama saves the models it downloads — its `OLLAMA_MODELS`
    *  directory. Unset/empty means Ollama's own default (`~/.ollama/models`, or a
    *  system-service dir when one holds models). It reaches only a server Tabtivity

@@ -858,6 +858,12 @@ pub fn start() {
     let Ok(addr) = listener.local_addr() else { return };
     let port = addr.port();
     if preferred != Some(port) {
+        // The remembered port was taken (or never existed): a keyed agent
+        // that outlived a crash still names it, and would hand its
+        // conversation to whoever holds it (gap 50b). Said, never silent.
+        if let Some(taken) = preferred.filter(|p| *p != 0) {
+            super::api_proxy_port::on_fallback(taken, port);
+        }
         let _ = std::fs::write(port_file(), port.to_string());
     }
     PORT.store(port, Ordering::Release);

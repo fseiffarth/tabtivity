@@ -141,6 +141,13 @@ pub mod hpc_mode;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Who owns a loopback listener (`/proc/net/tcp{,6}`, Linux): Ollama, the API
+// proxy's remembered port and the phone's sign-in relay judge the owner, not
+// the address.
+pub mod loopback_owner;
+// The API proxy's remembered port when someone else holds it: who, which keyed
+// tmux agents name it (ended), and the notice the window shows once.
+pub mod api_proxy_port;
 // Hosted plan §3.3: every registered Tauri command's class (core / client /
 // admin / off) and the test that fails when one is added without a row.
 pub mod command_class;
