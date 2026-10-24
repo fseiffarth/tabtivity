@@ -123,6 +123,8 @@ does not have to ship a phone app for the agent you are running.
   screen reaches the whole gallery from its header as well as from the shelf
   under its tab cards. Share is available where the phone browser supports
   file sharing; stdin works with `command | tabtivity-send -n tests.log`.
+  Sent files are deleted after 30 days, and files you send from the phone into
+  a project after 90; save anything you want to keep.
 - **Project files, read-only** (opt-in, off by default): a left→right swipe on
   the phone's project screen, or from the left third of a tab's Focus view,
   opens a drawer that walks the project's folders
