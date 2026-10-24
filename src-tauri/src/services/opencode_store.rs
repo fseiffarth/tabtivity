@@ -117,6 +117,30 @@ fn db_in_home(home: &Path) -> PathBuf {
     home.join(".local").join("share").join("opencode").join("opencode.db")
 }
 
+/// The `wellknown` sources `home`'s OpenCode 2 database holds: the origins
+/// whose remote configuration (MCP servers, plugins, permissions) OpenCode
+/// fetches and loads at every start. They are one JSON array of strings under
+/// the `wellknown:sources` key of the `kv` table, put there by the legacy
+/// `auth.json` import or by `integration.wellknown.add`. `None` when there is
+/// no database, none can be read, or no source is recorded; at most a few
+/// origins, each cut short, for display. Read-only through `agent_sqlite`.
+pub fn wellknown_sources_in(home: &Path) -> Option<Vec<String>> {
+    let conn = crate::services::agent_sqlite::open_below(&db_in_home(home), DB_DEPTH, &["kv"])?;
+    let value: String = conn
+        .query_row("SELECT value FROM kv WHERE key = 'wellknown:sources'", [], |row| row.get(0))
+        .optional()
+        .ok()??;
+    let Value::Array(sources) = serde_json::from_str(&value).ok()? else { return None };
+    let origins: Vec<String> = sources
+        .iter()
+        .filter_map(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .take(8)
+        .map(|s| s.chars().take(200).collect())
+        .collect();
+    (!origins.is_empty()).then_some(origins)
+}
+
 /// The conversation of the tab's `own` session (its plugin's record) while
 /// the store has it, else of the newest top-level, unarchived session
 /// OpenCode ran in `directory` — created at or after `since` (epoch ms) when

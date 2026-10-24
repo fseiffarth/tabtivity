@@ -7080,6 +7080,9 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     let config = HostConfig::load(&state_dir)?;
     verify_tailscale_serve(&config.origin, config.host.port)?;
     let port = config.host.port;
+    // The sidecar launches agents headlessly with no window to have run the
+    // startup sweep of login files that fail their CLI's content check.
+    crate::services::agent_auth::sweep_unadmissible();
     enable_background_relays();
     run_with(config, Listen::Loopback { port }).await
 }

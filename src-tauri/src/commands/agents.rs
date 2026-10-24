@@ -2503,6 +2503,13 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
     app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out(&id)).await
 }
 
+/// Sign OpenCode out of one scope whose database the startup sweep flagged as
+/// holding a `wellknown` source (`agent_auth::sign_out_scope`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_login_scope_sign_out(scope: String) -> Result<(), String> {
+    app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out_scope(&scope)).await
+}
+
 /// On a hosted server: run `id`'s agents on the administrator's API key
 /// (`on`) or on the user's own login (hosted plan §5.2). The user's own
 /// choice, per CLI; refused off a server, for a CLI that takes no key by

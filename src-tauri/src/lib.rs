@@ -1603,6 +1603,9 @@ pub fn run() {
             // files, Cline's provider config) from the store and the Host
             // home, so neither the import nor the keeper sees them again.
             services::agent_auth::retire_shared_paths();
+            // Login files that fail their CLI's content check (OpenCode's
+            // `wellknown` entries) go aside, before the import and the keeper.
+            services::agent_auth::sweep_unadmissible();
             services::agent_auth::import_once();
             services::agent_global::import_once();
             services::agent_auth::start();
@@ -2415,6 +2418,7 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::agent_login_scope_sign_out,
             commands::agents::agent_login_use_admin_key,
             commands::share::share_list,
             commands::share::share_create,

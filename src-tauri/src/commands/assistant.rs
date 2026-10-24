@@ -589,6 +589,7 @@ mod tests {
             api_key: false,
             api_budget_reached: false,
             api_key_saved: false,
+            wellknown_homes: Vec::new(),
         };
         let options = cli_options(&[login("claude", true), login("codex", false)], true);
         let ids: Vec<&str> = options.iter().map(|o| o.id.as_str()).collect();

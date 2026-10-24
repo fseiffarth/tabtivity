@@ -41,7 +41,18 @@
 //! file can itself name a command — Pi runs an API key that starts with `!`
 //! through a shell on every read — a file that does is not adopted either
 //! ([`names_command`]): adopted, it would run in every other scope's fence
-//! and unfenced in the Host session. AppHandle-free and unit-testable.
+//! and unfenced in the Host session.
+//!
+//! OpenCode's `auth.json` is not credential-only either (threat recheck
+//! 2026-10-24, gap 42): a `wellknown` entry makes OpenCode fetch and load a
+//! remote configuration (MCP servers, plugins). So its file must pass
+//! [`admissible`] at adopt *and* at place (the store's copy before it goes
+//! into a home, the home's copy before it is left there), and a tab's copy is
+//! adopted only as a token rotation of an `oauth` entry the store already
+//! holds ([`opencode_adoption`]) — never a new entry, a changed key, type,
+//! `enterpriseUrl` or `accountId`. [`sweep_unadmissible_in`] moves failing
+//! copies aside at startup and flags a V2 database that already took a
+//! `wellknown` source. AppHandle-free and unit-testable.
 
 use std::collections::BTreeSet;
 use app_core::sync::LockExt;
@@ -249,12 +260,15 @@ fn read_sidecar(dir: &Path, name: &str) -> Option<String> {
 
 /// Why an adoption was refused, recorded per CLI for the Agents view:
 /// either the file signed in as `account` while the store holds `stored`,
-/// or it named a `command` where a credential belongs.
+/// it named a `command` where a credential belongs, or it carried `config`
+/// (an entry or field a CLI's login file may not bring, [`admissible`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Blocked {
     pub account: Option<String>,
     pub stored: Option<String>,
     pub command: Option<String>,
+    #[serde(default)]
+    pub config: Option<String>,
 }
 
 /// Where `bytes` would make `cli` run a command, if anywhere: the field, for
@@ -272,6 +286,153 @@ pub fn names_command(cli: &str, bytes: &[u8]) -> Option<String> {
         let key = cred.get("key")?.as_str()?;
         (key.starts_with('!') || key.contains('$')).then(|| format!("{provider}.key"))
     })
+}
+
+/// A name from a file an agent wrote, short enough for the Agents view.
+fn short(name: &str) -> String {
+    name.chars().take(60).collect()
+}
+
+/// One OpenCode `auth.json` entry (`Auth.Info`): `api` (`key`, optional
+/// string `metadata`) or `oauth` (`refresh`, `access`, `expires`, optional
+/// `accountId`, `enterpriseUrl`). Anything else — `wellknown` above all, and
+/// any field the two shapes do not have — is refused, naming `entry.field`.
+fn opencode_entry_admissible(name: &str, entry: &serde_json::Value) -> Result<(), String> {
+    let fail = |field: &str| Err(format!("{}.{field}", short(name)));
+    let Some(fields) = entry.as_object() else { return fail("type") };
+    let (known, strings): (&[&str], &[&str]) = match fields.get("type").and_then(|t| t.as_str()) {
+        Some("api") => (&["type", "key", "metadata"], &["key"]),
+        Some("oauth") => (
+            &["type", "refresh", "access", "expires", "accountId", "enterpriseUrl"],
+            &["refresh", "access", "accountId", "enterpriseUrl"],
+        ),
+        _ => return fail("type"),
+    };
+    if let Some(unknown) = fields.keys().find(|k| !known.contains(&k.as_str())) {
+        return fail(unknown);
+    }
+    let required: &[&str] = if known.contains(&"key") { &["key"] } else { &["refresh", "access", "expires"] };
+    if let Some(missing) = required.iter().find(|k| !fields.contains_key(**k)) {
+        return fail(missing);
+    }
+    if let Some(bad) = strings.iter().find(|k| fields.get(**k).is_some_and(|v| !v.is_string())) {
+        return fail(bad);
+    }
+    if fields.get("expires").is_some_and(|v| !v.is_number()) {
+        return fail("expires");
+    }
+    if fields
+        .get("metadata")
+        .is_some_and(|m| m.as_object().is_none_or(|o| o.values().any(|v| !v.is_string())))
+    {
+        return fail("metadata");
+    }
+    Ok(())
+}
+
+/// The entries of an OpenCode `auth.json`: a JSON object, each entry
+/// [`opencode_entry_admissible`]. Bytes that do not parse are refused too —
+/// OpenCode would not load them, but a file that is not a login is not
+/// ours to share.
+fn opencode_entries(bytes: &[u8]) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "auth.json".to_string())?;
+    let serde_json::Value::Object(entries) = value else { return Err("auth.json".to_string()) };
+    for (name, entry) in &entries {
+        opencode_entry_admissible(name, entry)?;
+    }
+    Ok(entries)
+}
+
+/// Whether `bytes` may be shared as `cli`'s login: where a CLI's login file
+/// can carry more than a credential, the first field that does. Only
+/// OpenCode's has a check (the Goose and Qoder files were surveyed and
+/// nothing in them is loaded as configuration; see the plan's step 1).
+pub fn admissible(cli: &str, bytes: &[u8]) -> Result<(), String> {
+    match cli {
+        "opencode" => opencode_entries(bytes).map(|_| ()),
+        _ => Ok(()),
+    }
+}
+
+/// What taking a tab's copy of a login into the store comes to: the bytes
+/// the store should hold afterwards (`None`: nothing to take), and the first
+/// thing in the copy that is not taken, for the Agents view.
+struct Adoption {
+    bytes: Option<Vec<u8>>,
+    refused: Option<String>,
+}
+
+/// [`Adoption`] of `home` (a tab's copy) over `stored` (the store's file).
+/// Every CLI but OpenCode takes the copy as it is. OpenCode takes only a
+/// rotation of the tokens of an `oauth` entry the store already holds: the
+/// store's own entries, with `refresh`, `access` and `expires` from the copy.
+/// A new entry, a changed `api` entry, and a changed `type`, `accountId` or
+/// `enterpriseUrl` are not taken; a copy that is not [`admissible`] in the
+/// first place is taken in no part.
+fn opencode_adoption(stored: Option<&[u8]>, home: &[u8]) -> Adoption {
+    let refuse = |field: String| Adoption { bytes: None, refused: Some(field) };
+    let copy = match opencode_entries(home) {
+        Ok(copy) => copy,
+        Err(field) => return refuse(field),
+    };
+    let Some(stored) = stored.and_then(|s| opencode_entries(s).ok()) else {
+        return refuse(copy.keys().next().map(|n| short(n)).unwrap_or_else(|| "auth.json".to_string()));
+    };
+    let mut merged = stored.clone();
+    let mut refused = None;
+    for (name, entry) in &copy {
+        let Some(held) = stored.get(name) else {
+            refused.get_or_insert_with(|| short(name));
+            continue;
+        };
+        let oauth = held.get("type").and_then(|t| t.as_str()) == Some("oauth");
+        let fixed = ["type", "accountId", "enterpriseUrl"];
+        if !oauth || fixed.iter().any(|f| held.get(f) != entry.get(f)) {
+            if held != entry {
+                refused.get_or_insert_with(|| short(name));
+            }
+            continue;
+        }
+        if let Some(target) = merged.get_mut(name).and_then(|m| m.as_object_mut()) {
+            for token in ["refresh", "access", "expires"] {
+                if let Some(value) = entry.get(token) {
+                    target.insert(token.to_string(), value.clone());
+                }
+            }
+        }
+    }
+    let bytes = (merged != stored).then(|| serde_json::to_vec_pretty(&merged).ok()).flatten();
+    Adoption { bytes, refused }
+}
+
+fn adoption_of(cli: &str, stored: Option<&[u8]>, home: &[u8]) -> Adoption {
+    match cli {
+        "opencode" => opencode_adoption(stored, home),
+        _ => Adoption { bytes: Some(home.to_vec()), refused: None },
+    }
+}
+
+/// `bytes`, the user's own login file for `cli`, as the store may take it at
+/// an import. OpenCode's keeps the entries that pass [`admissible`] (the
+/// user's own `wellknown` entry stays on this computer); nothing left is an
+/// error. Other CLIs are taken as they are.
+fn importable(cli: &str, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    if cli != "opencode" {
+        return Ok(bytes);
+    }
+    let serde_json::Value::Object(entries) = serde_json::from_slice(&bytes).map_err(|_| "that file is not a JSON object".to_string())? else {
+        return Err("that file is not a JSON object".to_string());
+    };
+    let total = entries.len();
+    let kept: serde_json::Map<String, serde_json::Value> =
+        entries.into_iter().filter(|(name, entry)| opencode_entry_admissible(name, entry).is_ok()).collect();
+    if kept.is_empty() {
+        return Err("that file holds no plain api or oauth login entry (an entry that names a remote configuration is not shared)".to_string());
+    }
+    if kept.len() == total {
+        return Ok(bytes);
+    }
+    serde_json::to_vec_pretty(&kept).map_err(|e| e.to_string())
 }
 
 fn write_blocked(store_dir: &Path, blocked: &Blocked) {
@@ -304,7 +465,15 @@ fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -
         write_blocked(store_dir, &Blocked { command: Some(field), ..Blocked::default() });
         return false;
     }
-    if let Err(e) = write_store(store, bytes) {
+    let Adoption { bytes: taken, refused } = adoption_of(cli, content(std::fs::read(store).ok()).as_deref(), bytes);
+    let Some(taken) = taken else {
+        if let Some(field) = refused {
+            eprintln!("agent_auth: {cli}: a tab's login brings more than a token refresh at {field}; not adopted");
+            write_blocked(store_dir, &Blocked { config: Some(field), ..Blocked::default() });
+        }
+        return false;
+    };
+    if let Err(e) = write_store(store, &taken) {
         eprintln!("agent_auth: {cli}: store {}: {e}", store.display());
         return false;
     }
@@ -312,6 +481,10 @@ fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -
         let _ = std::fs::write(store_dir.join(ACCOUNT_FILE), account);
     }
     let _ = std::fs::remove_file(store_dir.join(BLOCKED_FILE));
+    if let Some(field) = refused {
+        eprintln!("agent_auth: {cli}: a tab's login brings more than a token refresh at {field}; only the refresh was adopted");
+        write_blocked(store_dir, &Blocked { config: Some(field), ..Blocked::default() });
+    }
     true
 }
 
@@ -367,7 +540,8 @@ fn reconcile_file_now(
     #[cfg(test)]
     FULL_PASSES.with(|n| n.set(n.get() + 1));
     let home_bytes = content(copy.read());
-    let store_bytes = content(std::fs::read(store).ok());
+    // A store file that fails its CLI's content check is never placed.
+    let store_bytes = content(std::fs::read(store).ok()).filter(|b| admissible(cli, b).is_ok());
     let receive_only = crate::services::agent_home::is_local_model_home(home);
     if receive_only
         && home_bytes.as_ref().is_some_and(|b| {
@@ -390,7 +564,15 @@ fn reconcile_file_now(
     if !step.places() {
         return home_bytes == store_bytes;
     }
-    let Some(bytes) = store_bytes else { return home_bytes.is_none() };
+    let Some(bytes) = store_bytes else {
+        // Nothing to put over a copy that fails the content check: move it
+        // aside, so the CLI never loads it.
+        if !receive_only && home_bytes.as_ref().is_some_and(|b| admissible(cli, b).is_err()) {
+            move_aside(cli, copy);
+            return false;
+        }
+        return home_bytes.is_none();
+    };
     let hash = digest(&bytes);
     let linked = copy.metadata().and_then(|m| m.ino).is_some_and(|ino| {
         #[cfg(unix)]
@@ -779,6 +961,23 @@ pub struct LoginStatus {
     /// ＋ menu's API section offers it (`agent_api_keys::keyable_clis`).
     /// Filled by the `agent_logins` command.
     pub api_key_saved: bool,
+    /// Of OpenCode: the scopes whose own database holds a `wellknown` source
+    /// the startup sweep found ([`sweep_unadmissible_in`]); each can be
+    /// signed out ([`sign_out_scope_in`]). Empty for every other CLI.
+    pub wellknown_homes: Vec<WellknownHome>,
+}
+
+/// A home whose OpenCode database took a `wellknown` source: it fetches that
+/// origin's remote configuration at every start.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WellknownHome {
+    /// The home's directory name (a scope's key; `host` for the Host session).
+    pub key: String,
+    /// The scope's project name, filled where the registry names it.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The origins it took, as written (at most a few).
+    pub origins: Vec<String>,
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
@@ -810,7 +1009,7 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
             let blocked = std::fs::read(store_dir.join(BLOCKED_FILE))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<Blocked>(&b).ok())
-                .filter(|b| b.account.is_some() || b.command.is_some());
+                .filter(|b| b.account.is_some() || b.command.is_some() || b.config.is_some());
             LoginStatus {
                 id: cli.to_string(),
                 signed_in,
@@ -825,6 +1024,7 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 api_key: false,
                 api_budget_reached: false,
                 api_key_saved: false,
+                wellknown_homes: if cli == "opencode" { read_wellknown_homes(&store_dir) } else { Vec::new() },
             }
         })
         .collect()
@@ -834,7 +1034,16 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
 /// key is in the API-key status (`agent_api_keys::status`), beside the one
 /// credential choice per CLI (#2389).
 pub fn status() -> Vec<LoginStatus> {
-    status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered())
+    let mut logins =
+        status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered());
+    if logins.iter().any(|l| !l.wellknown_homes.is_empty()) {
+        let projects: crate::schema::projects::ProjectsList =
+            storage::read_json(&storage::projects_path()).unwrap_or_default();
+        for home in logins.iter_mut().flat_map(|l| l.wellknown_homes.iter_mut()) {
+            home.label = projects.iter().find(|p| storage::project_key(&p.id) == home.key).map(|p| p.name.clone());
+        }
+    }
+    logins
 }
 
 /// Remove a home's copies of `cli`'s login paths.
@@ -883,6 +1092,7 @@ pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path, cli: &str) -
         match path.kind {
             AuthKind::File if src.is_file() => {
                 let bytes = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+                let bytes = importable(cli, bytes).map_err(|e| format!("{}: {e}", src.display()))?;
                 write_store(&store, &bytes).map_err(|e| format!("{}: {e}", store.display()))?;
                 if let Some(account) = account_of(cli, &bytes) {
                     let _ = std::fs::write(store_dir.join(ACCOUNT_FILE), account);
@@ -1051,6 +1261,157 @@ fn move_aside(cli: &str, copy: &HomeFile) -> bool {
 
 pub fn retire_shared_paths() {
     retire_shared_paths_in(&storage::state_dir());
+}
+
+/// The CLIs whose login file has a content check ([`admissible`]).
+const CHECKED: &[&str] = &["opencode"];
+
+/// The most of a login file the sweep reads: more is not a login.
+const LOGIN_FILE_CAP: u64 = 1 << 20;
+
+/// Sidecar in OpenCode's store dir naming the homes whose database holds a
+/// `wellknown` source ([`WellknownHome`]s, as JSON).
+const WELLKNOWN_FILE: &str = ".wellknown";
+
+fn read_for_check(file: &HomeFile) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    file.open_read()?.take(LOGIN_FILE_CAP + 1).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// Move a store file aside to `<name>.pre-scope` (`.1`, `.2`, … when taken).
+fn move_store_aside(path: &Path) -> io::Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    for n in 0..1000u32 {
+        let aside = if n == 0 { format!("{name}{PRE_SCOPE_SUFFIX}") } else { format!("{name}{PRE_SCOPE_SUFFIX}.{n}") };
+        let to = path.with_file_name(aside);
+        if std::fs::symlink_metadata(&to).is_err() {
+            return std::fs::rename(path, to);
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name to move the file aside to"))
+}
+
+/// At startup (window and sidecar, before the keeper and any spawn): every
+/// login file of a CLI with a content check ([`CHECKED`]) that fails it is
+/// moved aside to `<name>.pre-scope` — the store's copy and every home's, the
+/// Host and assistant homes and the local-model homes included. Nothing is
+/// deleted. A moved-aside store means signed out until the user imports
+/// again; a home's copy is then replaced by the store's. Idempotent. The database half is [`flag_wellknown_databases_in`].
+pub fn sweep_unadmissible_in(state_dir: &Path) {
+    let _one_at_a_time = match storage::FileLock::exclusive(&store_root_in(state_dir)) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("agent_auth: lock {}: {e}; skipping the content sweep", store_root_in(state_dir).display());
+            return;
+        }
+    };
+    let homes = crate::services::agent_home::existing_homes_in(state_dir);
+    for (cli, paths) in registry().into_iter().filter(|(cli, _)| CHECKED.contains(cli)) {
+        for path in paths.iter().filter(|p| p.kind == AuthKind::File) {
+            let store = store_path_in(state_dir, cli, path);
+            if std::fs::read(&store).ok().and_then(|b| content(Some(b))).is_some_and(|b| admissible(cli, &b).is_err()) {
+                match move_store_aside(&store) {
+                    Ok(()) => eprintln!("agent_auth: {cli}: the stored login fails its content check; moved {} aside", store.display()),
+                    Err(e) => eprintln!("agent_auth: {cli}: move {} aside: {e}", store.display()),
+                }
+            }
+            for home in &homes {
+                let Some(copy) = HomeFile::open_existing(home, path.rel) else { continue };
+                if read_for_check(&copy).and_then(|b| content(Some(b))).is_some_and(|b| admissible(cli, &b).is_err()) {
+                    move_aside(cli, &copy);
+                }
+            }
+        }
+    }
+}
+
+/// [`sweep_unadmissible_in`] against the real state dir, then — off the
+/// calling thread, since a database can be large — [`flag_wellknown_databases_in`].
+pub fn sweep_unadmissible() {
+    let state_dir = storage::state_dir();
+    sweep_unadmissible_in(&state_dir);
+    if let Err(e) = std::thread::Builder::new()
+        .name("agent-auth-wellknown".into())
+        .spawn(move || flag_wellknown_databases_in(&state_dir))
+    {
+        eprintln!("agent_auth: spawn the wellknown scan: {e}");
+    }
+}
+
+/// The homes whose OpenCode database holds a `wellknown` source, as the
+/// last scan left them ([`WELLKNOWN_FILE`]).
+fn read_wellknown_homes(store_dir: &Path) -> Vec<WellknownHome> {
+    std::fs::read(store_dir.join(WELLKNOWN_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn write_wellknown_homes(store_dir: &Path, homes: &[WellknownHome]) {
+    let path = store_dir.join(WELLKNOWN_FILE);
+    if homes.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else if let Ok(body) = serde_json::to_vec(homes) {
+        let _ = write_store(&path, &body);
+    }
+}
+
+/// Scan every home's OpenCode database for a `wellknown` source (OpenCode 2
+/// imports one from a legacy `auth.json` once, then loads that origin's
+/// remote configuration at every start) and record the homes that hold one,
+/// for the Agents view to offer [`sign_out_scope_in`]. Reads each database
+/// strictly read-only through `agent_sqlite`.
+pub fn flag_wellknown_databases_in(state_dir: &Path) {
+    let flagged: Vec<WellknownHome> = crate::services::agent_home::existing_homes_in(state_dir)
+        .into_iter()
+        .filter_map(|home| {
+            let origins = crate::services::opencode_store::wellknown_sources_in(&home)?;
+            Some(WellknownHome { key: home_key(&home), label: None, origins })
+        })
+        .collect();
+    let store_dir = store_dir_in(state_dir, "opencode");
+    if flagged.is_empty() && !store_dir.join(WELLKNOWN_FILE).exists() {
+        return;
+    }
+    if !flagged.is_empty() {
+        eprintln!("agent_auth: opencode: {} home(s) hold a wellknown source (remote configuration)", flagged.len());
+    }
+    write_wellknown_homes(&store_dir, &flagged);
+}
+
+/// Sign OpenCode out of one scope the sweep flagged: that home's database
+/// (with its write-ahead log) is moved aside to `<name>.pre-scope`, so the
+/// next OpenCode there starts clean — no `wellknown` source, no cached remote
+/// configuration — and its session list starts empty. The shared login
+/// reaches it again from the store. Refused for a scope the sweep did not flag.
+pub fn sign_out_scope_in(state_dir: &Path, key: &str) -> Result<(), String> {
+    let store_dir = store_dir_in(state_dir, "opencode");
+    let mut flagged = read_wellknown_homes(&store_dir);
+    if !flagged.iter().any(|h| h.key == key) {
+        return Err("that scope's OpenCode is not flagged".to_string());
+    }
+    let home = crate::services::agent_home::existing_homes_in(state_dir)
+        .into_iter()
+        .find(|h| home_key(h) == key)
+        .ok_or_else(|| "that scope has no home".to_string())?;
+    // The log and the shared-memory file first: a database moved away from
+    // its log would let a new database inherit it.
+    for name in ["opencode.db-wal", "opencode.db-shm", "opencode.db"] {
+        let rel = format!(".local/share/opencode/{name}");
+        let Some(file) = HomeFile::open_existing(&home, &rel) else { continue };
+        if file.metadata().is_some() {
+            file.rename_aside(PRE_SCOPE_SUFFIX).map_err(|e| format!("{name}: {e}"))?;
+        }
+    }
+    flagged.retain(|h| h.key != key);
+    write_wellknown_homes(&store_dir, &flagged);
+    Ok(())
+}
+
+pub fn sign_out_scope(key: &str) -> Result<(), String> {
+    sign_out_scope_in(&storage::state_dir(), key)
 }
 
 /// The login-directory half of [`retire_shared_paths_in`] for one folder.
@@ -1617,6 +1978,223 @@ mod tests {
         assert!(status.iter().find(|s| s.id == "pi").unwrap().blocked.is_none());
         assert_eq!(names_command("pi", b"not json"), None);
         assert_eq!(names_command("codex", br#"{"tokens":{"access_token":"!x"}}"#), None);
+    }
+
+    const OC: &str = ".local/share/opencode/auth.json";
+
+    fn oauth(refresh: &str, extra: &str) -> String {
+        format!(r#"{{"type":"oauth","refresh":"{refresh}","access":"a-{refresh}","expires":1{extra}}}"#)
+    }
+
+    fn oc_homes(state: &Path, names: &[&str]) -> Vec<PathBuf> {
+        let mut homes: Vec<PathBuf> = names
+            .iter()
+            .map(|n| crate::services::agent_home::scope_home_in(state, n))
+            .collect();
+        homes.push(crate::services::agent_home::host_home_in(state));
+        for home in &homes {
+            std::fs::create_dir_all(home.join(".local/share/opencode")).unwrap();
+        }
+        homes
+    }
+
+    #[test]
+    fn opencode_admits_only_plain_api_and_oauth_entries() {
+        let ok = |s: &str| admissible("opencode", s.as_bytes()).is_ok();
+        assert!(ok(&format!(r#"{{"openai":{},"x":{{"type":"api","key":"k","metadata":{{"a":"b"}}}}}}"#, oauth("r", r#","accountId":"acc""#))));
+        assert!(ok("{}"));
+        for bad in [
+            r#"{"https://evil.invalid":{"type":"wellknown","key":"X","token":"t"}}"#,
+            r#"{"a":{"type":"api","key":"k","baseURL":"https://evil.invalid"}}"#,
+            r#"{"a":{"type":"api"}}"#,
+            r#"{"a":{"type":"api","key":1}}"#,
+            r#"{"a":{"type":"api","key":"k","metadata":{"a":1}}}"#,
+            r#"{"a":{"type":"oauth","refresh":"r","access":"a"}}"#,
+            r#"{"a":{"type":"oauth","refresh":"r","access":"a","expires":"1"}}"#,
+            r#"{"a":{"type":"oauth","refresh":"r","access":"a","expires":1,"command":"x"}}"#,
+            r#"{"a":"oauth"}"#,
+            r#"[]"#,
+            "not json",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
+        assert_eq!(
+            admissible("opencode", br#"{"https://evil.invalid":{"type":"wellknown","key":"X","token":"t"}}"#),
+            Err("https://evil.invalid.type".to_string())
+        );
+        assert!(admissible("codex", b"anything").is_ok());
+    }
+
+    /// The gap-42 plant: a tab writes a `wellknown` entry next to the login.
+    /// Nothing of it reaches the store, the other scope or the Host home.
+    #[test]
+    fn an_opencode_wellknown_entry_is_never_shared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let homes = oc_homes(state, &["a", "b"]);
+        let (a, b, host) = (&homes[0], &homes[1], &homes[2]);
+        let good = format!(r#"{{"openai":{}}}"#, oauth("r1", ""));
+        write_store(&store_of(state, "opencode", OC), good.as_bytes()).unwrap();
+        reconcile_all_in(state);
+        let holds = |p: &Path, needle: &str| std::fs::read_to_string(p).unwrap().contains(needle);
+        assert!(holds(&host.join(OC), "r1") && holds(&a.join(OC), "r1") && holds(&b.join(OC), "r1"));
+
+        let planted = format!(
+            r#"{{"openai":{},"https://evil.invalid":{{"type":"wellknown","key":"X","token":"t"}}}}"#,
+            oauth("r1", "")
+        );
+        write_in_place(&b.join(OC), &planted);
+        reconcile_all_in(state);
+        for home in [a, b, host] {
+            assert!(!holds(&home.join(OC), "evil"), "{}", home.display());
+        }
+        assert!(!holds(&store_of(state, "opencode", OC), "evil"));
+        let status = status_in(state, tmp.path());
+        let blocked = status.iter().find(|s| s.id == "opencode").unwrap().blocked.clone().unwrap();
+        assert_eq!(blocked.config.as_deref(), Some("https://evil.invalid.type"));
+    }
+
+    #[test]
+    fn opencode_adopts_only_a_token_rotation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let homes = oc_homes(state, &["a", "b"]);
+        let (a, b, host) = (&homes[0], &homes[1], &homes[2]);
+        let held = format!(r#"{{"openai":{},"keyed":{{"type":"api","key":"k1"}}}}"#, oauth("r1", r#","accountId":"acc""#));
+        write_store(&store_of(state, "opencode", OC), held.as_bytes()).unwrap();
+        reconcile_all_in(state);
+        let store = store_of(state, "opencode", OC);
+        let stored = || -> serde_json::Value { serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap() };
+
+        // A refresh: new tokens, same account. Adopted, and it reaches the others.
+        let rotated = format!(r#"{{"openai":{},"keyed":{{"type":"api","key":"k1"}}}}"#, oauth("r2", r#","accountId":"acc""#));
+        write_in_place(&a.join(OC), &rotated);
+        reconcile_all_in(state);
+        assert_eq!(stored()["openai"]["refresh"], "r2");
+        for home in [a, b, host] {
+            assert!(std::fs::read_to_string(home.join(OC)).unwrap().contains("r2"));
+        }
+        assert!(status_in(state, tmp.path()).iter().find(|s| s.id == "opencode").unwrap().blocked.is_none());
+
+        // A rotation that also brings a new entry: the rotation is taken, the entry is not.
+        let more = format!(
+            r#"{{"openai":{},"keyed":{{"type":"api","key":"k1"}},"extra":{{"type":"api","key":"new"}}}}"#,
+            oauth("r3", r#","accountId":"acc""#)
+        );
+        write_in_place(&b.join(OC), &more);
+        reconcile_all_in(state);
+        assert_eq!(stored()["openai"]["refresh"], "r3");
+        assert!(stored().get("extra").is_none());
+        assert!(!std::fs::read_to_string(host.join(OC)).unwrap().contains("extra"));
+        let blocked = status_in(state, tmp.path()).iter().find(|s| s.id == "opencode").unwrap().blocked.clone();
+        assert_eq!(blocked.and_then(|b| b.config).as_deref(), Some("extra"));
+
+        // A changed account, endpoint, or api key is not taken at all.
+        for changed in [
+            format!(r#"{{"openai":{}}}"#, oauth("r9", r#","accountId":"other""#)),
+            format!(r#"{{"openai":{}}}"#, oauth("r9", r#","accountId":"acc","enterpriseUrl":"https://evil.invalid""#)),
+            r#"{"keyed":{"type":"api","key":"stolen"}}"#.to_string(),
+        ] {
+            write_in_place(&a.join(OC), &changed);
+            reconcile_all_in(state);
+            assert_eq!(stored()["openai"]["refresh"], "r3", "{changed}");
+            assert_eq!(stored()["keyed"]["key"], "k1", "{changed}");
+            assert!(std::fs::read_to_string(a.join(OC)).unwrap().contains("r3"), "the copy is put back");
+        }
+    }
+
+    #[test]
+    fn a_new_opencode_login_in_a_tab_is_not_adopted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let homes = oc_homes(state, &["a", "b"]);
+        std::fs::write(homes[0].join(OC), r#"{"keyed":{"type":"api","key":"k1"}}"#).unwrap();
+        reconcile_all_in(state);
+        assert!(!store_of(state, "opencode", OC).exists());
+        assert!(!homes[1].join(OC).exists());
+        assert!(!homes[2].join(OC).exists());
+    }
+
+    #[test]
+    fn a_poisoned_opencode_store_is_not_placed_and_its_copies_go_aside() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let homes = oc_homes(state, &["a"]);
+        let poisoned = r#"{"https://evil.invalid":{"type":"wellknown","key":"X","token":"t"}}"#;
+        write_store(&store_of(state, "opencode", OC), poisoned.as_bytes()).unwrap();
+        std::fs::write(homes[0].join(OC), poisoned).unwrap();
+        reconcile_all_in(state);
+        assert!(!homes[1].join(OC).exists(), "never placed in the Host home");
+        assert!(!homes[0].join(OC).exists(), "the copy a home already held went aside");
+        assert!(homes[0].join(".local/share/opencode/auth.json.pre-scope").is_file());
+
+        // The startup sweep does the same for the store and for every home.
+        std::fs::write(homes[1].join(OC), poisoned).unwrap();
+        sweep_unadmissible_in(state);
+        assert!(!store_of(state, "opencode", OC).exists());
+        assert!(store_dir_in(state, "opencode").join(".local_share_opencode_auth.json.pre-scope").is_file());
+        assert!(!homes[1].join(OC).exists());
+        assert!(homes[1].join(".local/share/opencode/auth.json.pre-scope").is_file());
+        assert!(!status_in(state, tmp.path()).iter().find(|s| s.id == "opencode").unwrap().signed_in);
+
+        // A plain login is left where it is.
+        let good = r#"{"keyed":{"type":"api","key":"k1"}}"#;
+        std::fs::write(homes[0].join(OC), good).unwrap();
+        sweep_unadmissible_in(state);
+        assert_eq!(std::fs::read_to_string(homes[0].join(OC)).unwrap(), good);
+    }
+
+    #[test]
+    fn an_opencode_import_leaves_a_wellknown_entry_on_this_computer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, user) = (tmp.path().join("state"), tmp.path().join("user"));
+        std::fs::create_dir_all(user.join(".local/share/opencode")).unwrap();
+        let mixed = format!(r#"{{"openai":{},"https://corp.invalid":{{"type":"wellknown","key":"X","token":"t"}}}}"#, oauth("r1", ""));
+        std::fs::write(user.join(OC), mixed).unwrap();
+        assert_eq!(import_from_user_home_in(&state, &user, "opencode"), Ok(1));
+        let stored = std::fs::read_to_string(store_of(&state, "opencode", OC)).unwrap();
+        assert!(stored.contains("openai") && !stored.contains("corp.invalid"));
+
+        std::fs::write(user.join(OC), r#"{"https://corp.invalid":{"type":"wellknown","key":"X","token":"t"}}"#).unwrap();
+        assert!(import_from_user_home_in(&state, &user, "opencode").is_err());
+    }
+
+    fn v2_database(home: &Path, sources: Option<&str>) {
+        let db = home.join(".local/share/opencode/opencode.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.execute_batch("CREATE TABLE kv (key text PRIMARY KEY, value text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL)").unwrap();
+        if let Some(sources) = sources {
+            conn.execute("INSERT INTO kv VALUES ('wellknown:sources', ?1, 0, 0)", [sources]).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_v2_database_with_a_wellknown_source_is_flagged_and_can_be_signed_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let homes = oc_homes(state, &["a", "b"]);
+        v2_database(&homes[0], Some(r#"["https://evil.invalid"]"#));
+        v2_database(&homes[1], Some("[]"));
+        flag_wellknown_databases_in(state);
+        let status = status_in(state, tmp.path());
+        let flagged = &status.iter().find(|s| s.id == "opencode").unwrap().wellknown_homes;
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(flagged[0].key, home_key(&homes[0]));
+        assert_eq!(flagged[0].origins, ["https://evil.invalid"]);
+
+        assert!(sign_out_scope_in(state, &home_key(&homes[1])).is_err(), "only a flagged scope");
+        assert!(sign_out_scope_in(state, "../x").is_err());
+        sign_out_scope_in(state, &home_key(&homes[0])).unwrap();
+        let dir = homes[0].join(".local/share/opencode");
+        assert!(!dir.join("opencode.db").exists());
+        assert!(dir.join("opencode.db.pre-scope").is_file());
+        assert!(homes[1].join(".local/share/opencode/opencode.db").is_file());
+        assert!(status_in(state, tmp.path()).iter().all(|s| s.wellknown_homes.is_empty()));
+
+        // A later scan with nothing flagged leaves no record.
+        flag_wellknown_databases_in(state);
+        assert!(!store_dir_in(state, "opencode").join(WELLKNOWN_FILE).exists());
     }
 
     /// A home linked by an older Tabtivity to the store's inode gets a copy of

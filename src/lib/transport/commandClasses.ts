@@ -44,6 +44,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_login_import", "off"],
   ["agent_logins", "core"],
   ["agent_login_sign_out", "core"],
+  ["agent_login_scope_sign_out", "core"],
   ["agent_login_use_admin_key", "core"],
   ["agent_api_key_clear", "core"],
   ["agent_api_key_set", "core"],
