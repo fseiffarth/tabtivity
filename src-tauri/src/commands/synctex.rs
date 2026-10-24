@@ -596,10 +596,49 @@ struct Spelling {
     roots: Vec<(PathBuf, PathBuf)>,
 }
 
+/// A path that names another machine: two leading separators of either kind
+/// (`\\server\share`, `//server/share`, `\\.\` devices, `\\?\UNC\`). A
+/// verbatim *local* path (`\\?\C:\…`) is not one. Lexical on purpose: the
+/// map is project content, and resolving a hostile path it names would
+/// contact that host on Windows with the user's sign-in (gap 53).
+fn is_network_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    if b.len() < 2 || !sep(b[0]) || !sep(b[1]) {
+        return false;
+    }
+    // `\\?\C:\…` / `//?/C:/…`: a drive, not a host.
+    let verbatim_drive = b.len() >= 6
+        && b[2] == b'?'
+        && sep(b[3])
+        && b[4].is_ascii_alphabetic()
+        && b[5] == b':';
+    !verbatim_drive
+}
+
+/// `p` cleaned of `.` and `..` without touching the disk.
+fn lexical_clean(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 impl Spelling {
     fn new(base: &Path) -> Self {
         let roots = base
             .ancestors()
+            .filter(|a| !is_network_path(&a.to_string_lossy()))
             .filter_map(|a| std::fs::canonicalize(a).ok().map(|c| (a.to_path_buf(), c)))
             .collect();
         Spelling {
@@ -613,6 +652,9 @@ impl Spelling {
     /// A path that does not exist (a moved tree) comes back absolutised only.
     /// Never carries Windows' `\\?\` verbatim prefix.
     fn absolutise(&self, input: &str) -> String {
+        if is_network_path(input) {
+            return input.to_string();
+        }
         let p = Path::new(input);
         let abs: PathBuf = if p.is_absolute() {
             p.to_path_buf()
@@ -633,6 +675,26 @@ impl Spelling {
             }
         }
         crate::commands::fs::display_path(&canonical)
+    }
+
+    /// Whether an `Input:` path lies under `root` by its *spelling* alone, no
+    /// disk access: the recorded physical spelling or the caller's, whichever
+    /// `root` is in. Run before [`Self::absolutise`], so a path outside the
+    /// document's tree (or on another machine) is never resolved.
+    fn lexically_within(&self, input: &str, root: &Path) -> bool {
+        if is_network_path(input) || is_network_path(&root.to_string_lossy()) {
+            return false;
+        }
+        let p = Path::new(input);
+        let abs = lexical_clean(&if p.is_absolute() { p.to_path_buf() } else { self.base.join(p) });
+        let root = lexical_clean(root);
+        if abs.starts_with(&root) {
+            return true;
+        }
+        self.roots.iter().any(|(spelled, canonical)| {
+            root.strip_prefix(spelled)
+                .is_ok_and(|rest| abs.starts_with(canonical.join(rest)))
+        })
     }
 }
 
@@ -658,6 +720,9 @@ struct Map {
 /// write. None when there is none — an imported PDF, or one built without
 /// `-synctex=1`, simply has no SyncTeX.
 fn map_path(pdf: &Path) -> Option<PathBuf> {
+    if is_network_path(&pdf.to_string_lossy()) {
+        return None;
+    }
     let stem = pdf.file_stem()?.to_str()?;
     let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
     let gz = dir.join(format!("{stem}.synctex.gz"));
@@ -718,6 +783,7 @@ fn stale_inputs(
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| SOURCE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         })
+        .filter(|p| spelling.lexically_within(p, root))
         .map(|p| spelling.absolutise(p))
         .filter(|abs| Path::new(abs).starts_with(root))
         .filter(|abs| mtime_of(Path::new(abs)).is_some_and(|m| m > threshold))
@@ -753,6 +819,7 @@ pub fn status(pdf: &Path) -> MapStatus {
                 .inputs
                 .iter()
                 .min_by_key(|(tag, _)| **tag)
+                .filter(|(_, p)| !is_network_path(p))
                 .map(|(_, p)| PathBuf::from(spelling.absolutise(p)))
                 .and_then(|main| main.parent().map(Path::to_path_buf))
                 .unwrap_or_else(|| pdf_dir.to_path_buf());
@@ -817,7 +884,11 @@ fn resolve_point(map: &Map, spelling: &Spelling, boxes: &[HBox], x: f64, y: f64)
     if line == 0 {
         return None;
     }
-    Some((spelling.absolutise(map.pre.inputs.get(&tag)?), line))
+    let input = map.pre.inputs.get(&tag)?;
+    if is_network_path(input) {
+        return None;
+    }
+    Some((spelling.absolutise(input), line))
 }
 
 /// Reverse search `(page, x, y)` (big points from the page's top-left) in the
@@ -875,6 +946,9 @@ pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTr
 /// longer exists. Two recorded files sharing the name is an honest miss — never
 /// the other file's line.
 fn input_tags(pre: &Preamble, input: &str, spelling: &Spelling) -> BTreeSet<u32> {
+    if is_network_path(input) {
+        return BTreeSet::new();
+    }
     // Compared as paths, component by component, so `/` and `\` agree.
     let target = PathBuf::from(spelling.absolutise(input));
     let Some(name) = target.file_name() else {
@@ -886,6 +960,7 @@ fn input_tags(pre: &Preamble, input: &str, spelling: &Spelling) -> BTreeSet<u32>
         .inputs
         .iter()
         .filter(|(_, path)| Path::new(path).file_name() == Some(name))
+        .filter(|(_, path)| !is_network_path(path))
         .map(|(tag, path)| (*tag, PathBuf::from(spelling.absolutise(path))))
         .collect();
     let exact: BTreeSet<u32> = recorded
@@ -1852,6 +1927,98 @@ x1,33:3834000,3637000
         let boxes = page_hboxes(CHROME, 1, &pre);
         let bx = pick_hbox(&boxes, bp(3000000.0), bp(3637000.0)).expect("an hbox");
         assert_eq!(resolve_in_hbox(bx, bp(3000000.0)), (1, 33));
+    }
+
+    #[test]
+    fn network_paths_are_told_by_their_spelling() {
+        for net in [
+            r"\\server\share\a.tex",
+            "//server/share/a.tex",
+            r"\\?\UNC\server\share\a.tex",
+            "//?/UNC/server/share/a.tex",
+            r"\\.\pipe\x",
+            r"\/server/share",
+        ] {
+            assert!(is_network_path(net), "{net}");
+        }
+        for local in [
+            "/proj/a.tex",
+            "a.tex",
+            r"C:\proj\a.tex",
+            r"\\?\C:\proj\a.tex",
+            "//?/D:/proj/a.tex",
+            r"\proj\a.tex",
+            "",
+            "/",
+        ] {
+            assert!(!is_network_path(local), "{local}");
+        }
+    }
+
+    #[test]
+    fn a_path_is_judged_under_the_root_without_touching_the_disk() {
+        let spelling = Spelling::new(Path::new("/no/such/proj"));
+        let root = Path::new("/no/such/proj");
+        assert!(spelling.lexically_within("/no/such/proj/./a/b.tex", root));
+        assert!(spelling.lexically_within("a/b.tex", root));
+        assert!(!spelling.lexically_within("/no/such/proj/../other/b.tex", root));
+        assert!(!spelling.lexically_within("../b.tex", root));
+        assert!(!spelling.lexically_within("/usr/share/texmf/x.cls", root));
+        assert!(!spelling.lexically_within(r"\\server\share\b.tex", root));
+        assert!(!spelling.lexically_within("//server/share/no/such/proj/b.tex", root));
+        assert!(!spelling.lexically_within("/no/such/proj/b.tex", Path::new("//server/share")));
+    }
+
+    #[test]
+    fn a_network_input_is_neither_resolved_nor_reported() {
+        let spelling = Spelling::new(Path::new("/no/such/proj"));
+        for net in [r"\\192.0.2.1\share\evil.tex", r"\\?\UNC\192.0.2.1\share\evil.tex", "//192.0.2.1/share/evil.tex"] {
+            // Spelled back as it came: no canonicalize, no stat.
+            assert_eq!(spelling.absolutise(net), net);
+            let mut inputs = HashMap::new();
+            inputs.insert(1, "/no/such/proj/main.tex".to_string());
+            inputs.insert(2, net.to_string());
+            let got = stale_inputs(&inputs, &spelling, Path::new("/no/such/proj"), SystemTime::UNIX_EPOCH, |p| {
+                assert!(!is_network_path(&p.to_string_lossy()), "stat of {}", p.display());
+                None
+            });
+            assert!(got.is_empty());
+            // Reverse search never answers with it, forward search never matches it.
+            let pre = parse_preamble(&format!("Input:1:{net}\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n"));
+            assert!(input_tags(&pre, net, &spelling).is_empty());
+            assert!(input_tags(&pre, "/no/such/proj/evil.tex", &spelling).is_empty());
+            let text = format!(
+                "Input:1:{net}\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n[1,33:0,0:23146168,12000000,0\n\
+                 (1,33:1857863,3637000:26011770,544000,150000\nx1,33:2457000,3637000\n)\n]\n}}1\n"
+            );
+            let pre = parse_preamble(&text);
+            let boxes = page_hboxes(&text, 1, &pre);
+            let map = Map { text, pre };
+            assert_eq!(resolve_point(&map, &spelling, &boxes, bp(3000000.0), bp(3637000.0)), None);
+        }
+    }
+
+    #[test]
+    fn a_pdf_on_a_network_path_has_no_map_and_no_status() {
+        for net in [r"\\192.0.2.1\share\main.pdf", "//192.0.2.1/share/main.pdf"] {
+            assert_eq!(map_path(Path::new(net)), None);
+            assert_eq!(status(Path::new(net)), MapStatus::default());
+            assert!(resolve(Path::new(net), 1, 1.0, 1.0).is_none());
+            assert!(view(Path::new(net), "a.tex", 1).is_empty());
+            assert!(page_lines(Path::new(net), 1024).is_empty());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_unc_input_is_not_canonicalized_on_windows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spelling = Spelling::new(dir.path());
+        let started = std::time::Instant::now();
+        let unc = r"\\192.0.2.1\share\evil.tex";
+        assert_eq!(spelling.absolutise(unc), unc);
+        assert_eq!(spelling.absolutise(r"\\?\UNC\192.0.2.1\share\evil.tex"), r"\\?\UNC\192.0.2.1\share\evil.tex");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "a network host was contacted");
     }
 
     #[test]
