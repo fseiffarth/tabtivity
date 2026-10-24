@@ -7133,6 +7133,8 @@ export const enSource = {
   "projectFilesView.takeRemoteAllTitle": "Take the remote copy for every diverged file (overwrite the local mirror)",
   "projectFilesView.keepLocalAllAria": "Keep the local copy for all",
   "projectFilesView.keepLocalAllTitle": "Keep the local copy for every diverged file (force-push over the host)",
+  "projectFilesView.takeNewerAllAria": "Take the newer copy for all",
+  "projectFilesView.takeNewerAllTitle": "Take the newer copy for every diverged file (remote where the host is newer, local where the mirror is newer; files deleted on one side are skipped)",
   "projectFilesView.openFileTitle": "Open {rel}",
   "projectFilesView.takeRemoteAria": "Take the remote copy",
   "projectFilesView.noRemoteCopyTitle": "No remote copy to take",

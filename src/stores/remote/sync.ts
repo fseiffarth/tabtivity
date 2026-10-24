@@ -417,6 +417,32 @@ export function amberPaths(
 }
 
 /**
+ * Splits diverged files by which side holds the newer copy, for the orange
+ * view's "take the newer one for all". The backend's per-side direction wins
+ * (only the host moved from its recorded base → host; only the mirror → local),
+ * so clock skew cannot flip it; a file both sides changed falls back to the
+ * mtime comparison. A file with a side missing (a deletion), one with equal
+ * mtimes, and one not in the map are left out — nothing says which copy is newer.
+ */
+export function splitByNewerSide(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): { host: string[]; local: string[] } {
+  const host: string[] = [];
+  const local: string[] = [];
+  for (const rel of relPaths) {
+    const e = byPath?.[rel];
+    if (!e || e.hostMtime == null || e.localMtime == null) continue;
+    if (e.hostDiverged !== e.localDiverged) {
+      (e.hostDiverged ? host : local).push(rel);
+    } else if (e.hostMtime !== e.localMtime) {
+      (e.hostMtime > e.localMtime ? host : local).push(rel);
+    }
+  }
+  return { host, local };
+}
+
+/**
  * All NEW local-only paths (state `localnew`) — files the mirror holds that
  * were never synced, so the host has no copy. Deliberately a separate list
  * from `amberPaths`: an amber row has content on BOTH sides (merge / pick a

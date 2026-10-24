@@ -19,7 +19,7 @@ import { useImportDrop } from "./importDrop";
 import { logoutRemote, useProjectsStore } from "../../stores/projects";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
-import { useSyncStore, amberPaths, localNewPaths, type SyncSkippedFile } from "../../stores/remote/sync";
+import { useSyncStore, amberPaths, localNewPaths, splitByNewerSide, type SyncSkippedFile } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
@@ -86,7 +86,7 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -704,6 +704,7 @@ export function ProjectFilesView({
   // need a human to pick a side.
   const syncMap = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
   const orangeFiles = useMemo(() => amberPaths(syncMap), [syncMap]);
+  const newerSplit = useMemo(() => splitByNewerSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // NEW local-only files (never synced — the host has no copy). A separate list
   // from the amber one on purpose: these have nothing to merge and no remote
   // side to take, so their whole vocabulary is "upload" or "leave local".
@@ -2160,6 +2161,52 @@ export function ProjectFilesView({
                   >
                     <ArrowUpIcon />
                   </button>
+                  <button
+                    type="button"
+                    className="orange-file-act orange-file-act--icon"
+                    aria-label={t("projectFilesView.takeNewerAllAria")}
+                    title={t("projectFilesView.takeNewerAllTitle")}
+                    disabled={remoteBlocked || newerSplit.host.length + newerSplit.local.length === 0}
+                    onClick={() => {
+                      if (!projectId) return;
+                      void (async () => {
+                        // One confirmation per direction, each naming the files
+                        // that side's copy would overwrite.
+                        setOrangeSkipped(null);
+                        if (newerSplit.host.length > 0) {
+                          const ok = await confirmSyncTransfer({
+                            projectId,
+                            direction: "pull",
+                            relPath: "",
+                            isDir: true,
+                            label: project?.name ?? projectId,
+                            relPaths: newerSplit.host,
+                            force: true,
+                          });
+                          if (ok) {
+                            setOrangeSkipped(
+                              await useSyncStore.getState().resolveAll(projectId, newerSplit.host, "host"),
+                            );
+                          }
+                        }
+                        if (newerSplit.local.length > 0) {
+                          const ok = await confirmSyncTransfer({
+                            projectId,
+                            direction: "push",
+                            relPath: "",
+                            isDir: true,
+                            label: project?.name ?? projectId,
+                            relPaths: newerSplit.local,
+                            force: true,
+                          });
+                          if (ok) await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local");
+                        }
+                      })();
+                    }}
+                  >
+                    <ArrowsHorizontalIcon />
+                  </button>
+                  <UntestedTag id="projectFilesView.takeNewerAll" />
                 </div>
               </div>
               )}

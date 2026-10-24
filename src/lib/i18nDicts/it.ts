@@ -6784,6 +6784,8 @@ export const dict: Dict = {
   "projectFilesView.takeRemoteAllTitle": "Prendi la copia remota per ogni file divergente (sovrascrive il mirror locale)",
   "projectFilesView.keepLocalAllAria": "Mantieni la copia locale per tutti",
   "projectFilesView.keepLocalAllTitle": "Mantieni la copia locale per ogni file divergente (force-push sull'host)",
+  "projectFilesView.takeNewerAllAria": "Prendi la copia più recente per tutti",
+  "projectFilesView.takeNewerAllTitle": "Prendi la copia più recente per ogni file divergente (remota dove l'host è più recente, locale dove lo è il mirror; i file eliminati su un lato vengono saltati)",
   "projectFilesView.openFileTitle": "Apri {rel}",
   "projectFilesView.takeRemoteAria": "Prendi la copia remota",
   "projectFilesView.noRemoteCopyTitle": "Nessuna copia remota da prendere",

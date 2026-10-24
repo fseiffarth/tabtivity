@@ -214,6 +214,7 @@ export const UNTESTED = {
   "projectFilesView.1": { area: "files", what: "ProjectFilesView · Files" },
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },
   "projectFilesView.3": { area: "files", what: "ProjectFilesView · {count} diverged" },
+  "projectFilesView.takeNewerAll": { area: "files", what: "ProjectFilesView · diverged view, take the newer copy for all (each file by its newer side; one confirmation per direction)" },
   "projectFilesView.4": { area: "files", what: "ProjectFilesView · {count} new local (not on the host)" },
   "projectFilesView.5": { area: "files", what: "ProjectFilesView · {s.name}" },
   "projectFilesView.6": { area: "files", what: "ProjectFilesView · Side panel, Jobs view" },

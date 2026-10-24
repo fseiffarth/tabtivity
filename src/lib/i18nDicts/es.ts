@@ -6784,6 +6784,8 @@ export const dict: Dict = {
   "projectFilesView.takeRemoteAllTitle": "Tomar la copia remota para cada archivo divergente (sobrescribe el espejo local)",
   "projectFilesView.keepLocalAllAria": "Conservar la copia local para todos",
   "projectFilesView.keepLocalAllTitle": "Conservar la copia local para cada archivo divergente (force-push sobre el host)",
+  "projectFilesView.takeNewerAllAria": "Tomar la copia más reciente para todos",
+  "projectFilesView.takeNewerAllTitle": "Tomar la copia más reciente de cada archivo divergente (la remota donde el host es más reciente, la local donde lo es el espejo; se omiten los archivos borrados en un lado)",
   "projectFilesView.openFileTitle": "Abrir {rel}",
   "projectFilesView.takeRemoteAria": "Tomar la copia remota",
   "projectFilesView.noRemoteCopyTitle": "No hay copia remota que tomar",
