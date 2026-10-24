@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readSelectPrompt, answerRowKeys, freeTextRow, freeTextWrites, questionTabKeys, selectSignature, dialogFooterShown } from "../../../mobile-web/src/terminal/selectPrompt";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
-import type { ReadableBufferLike, ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import type { ReadableBufferLike, ReadableLine, ReadableSpan } from "../../../mobile-web/src/terminal/readableScreen";
 import { answerKeys, answerTextKeys, readReaderLive } from "../../lib/agents/readerLive";
 
 const line = (text: string, background?: string): ReadableLine => ({ key: text, text, spans: [{ text, background }] });
@@ -127,6 +127,66 @@ describe("OpenCode live questions shared by phone Chat and desktop Reader", () =
     expect(live.ask).toEqual(["Proceed?"]);
     expect(live.question?.source).toBe("opencode");
     expect(answerKeys(live.question!, live.question!.options[0])).toEqual(["1"]);
+  });
+
+  it("reads 2.1.3's barred Questions form beside a wide pane's sidebar", () => {
+    // Captured at 200×50 (2026-10-24): the box's bar at column 1, the
+    // sidebar's words from column 160 — its title beside the prompt, its
+    // folder and branch under the footer.
+    const boxed = (text = "", sidebar?: string) => line(sidebar ? ` ┃  ${text}`.padEnd(160) + sidebar : ` ┃  ${text}`);
+    const screen = [
+      boxed("Call the question tool once.", "Question tool fruit selection"), line(""),
+      line("     → Asked 1 question"), line(""),
+      boxed(), boxed("Questions"), boxed(), boxed("Which fruit do you want?"), boxed(),
+      boxed("1. Apple"), boxed("   red and crisp"), boxed("2. Banana"), boxed("3. Type your own answer"), boxed(),
+      boxed("↑↓ select  enter submit  esc dismiss"), boxed("", "/…/scratchpad/ocq/proj:master"),
+    ];
+    const live = readReaderLive(bufferFor(screen), "OpenCode", 200);
+    expect(live.question?.source).toBe("opencode");
+    expect(live.ask).toEqual(["Which fruit do you want?"]);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["Apple", "Banana", "Type your own answer"]);
+    expect(live.question?.options[0].description).toBe("red and crisp");
+    expect(live.question?.options[2].input).toBe("opencode");
+  });
+
+  it("reads 2.1.3's two-question form: bold step, accent row and the bare Submit summary", () => {
+    // As readableScreen leaves the capture of 2026-10-24: the barred box's
+    // empty rows are gone, `afterRule` stands on the row under each, and
+    // nothing has a background of its own.
+    const [muted, text, accent] = ["#808080", "#eeeeee", "#fab283"];
+    const span = (value: string, color: string, className?: string): ReadableSpan => ({ text: value, color, ...(className && { className }) });
+    const row = (spans: ReadableSpan[], afterRule = false): ReadableLine => {
+      const value = spans.map((part) => part.text).join("");
+      return { key: value, text: value, spans, ...(afterRule && { afterRule }) };
+    };
+    const form = (focus: number, current: number): ReadableLine[] => [
+      row([span("Questions", muted)], true),
+      row(["Fruit", "Drink", "Submit"].flatMap((label, index) => [
+        ...(index > 0 ? [span("  ", text)] : []),
+        span(label, index === focus ? text : muted, index === focus ? "b" : undefined),
+      ]), true),
+      ...(focus === 2
+        ? [row([span("Fruit: Apple", text)], true), row([span("Drink: Coffee", text)])]
+        : [row([span("Which fruit do you want?", text)], true),
+          ...["Apple", "Banana", "Type your own answer"].map((label, index) => row(
+            [span(`${index + 1}.`, index === current ? accent : muted), span(" ", text), span(label, index === current ? accent : text)],
+            index === 0,
+          ))]),
+      row([span(focus === 2 ? "⇆ tab  enter submit  esc dismiss" : "⇆ tab  ↑↓ select  enter confirm  esc dismiss", text)], true),
+    ];
+
+    const question = read(form(0, 1));
+    expect(question).toMatchObject({ title: "Which fruit do you want?", current: 1 });
+    expect(questionParts(form(0, 1), question)).toMatchObject({
+      ask: [{ text: "Which fruit do you want?" }], tabs: [{ label: "Fruit" }, { label: "Drink" }], tabFocus: 0, tabSubmit: true,
+    });
+    expect(read(form(1, 0)).navigation?.focus).toBe(1);
+
+    const review = read(form(2, 0));
+    expect(review.review).toBe(true);
+    expect(questionParts(form(2, 0), review).tabFocus).toBe(2);
+    expect(questionParts(form(2, 0), review).ask.map((line) => line.text).join(" ")).toContain("Drink: Coffee");
+    expect(answerRowKeys(review, review.options[0])).toEqual(["\r"]);
   });
 
   it("ignores earlier numbered prose and refuses ordinary lists, other agents and stale dialogs", () => {

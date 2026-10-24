@@ -86,7 +86,7 @@ export interface SelectStep {
   options: SelectOption[];
 }
 
-interface SelectLineLike { text: string; afterRule?: boolean; spans?: readonly ReadableSpanLike[] }
+interface SelectLineLike { text: string; afterRule?: boolean; edge?: number; spans?: readonly ReadableSpanLike[] }
 
 /** How far up from the bottom a dialog may sit. Below it the TUI still draws
  * its footer ("Esc to cancel") and, in Codex, the input box — and at phone

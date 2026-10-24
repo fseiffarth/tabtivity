@@ -228,9 +228,9 @@ describe("the agent pane's Reader", () => {
     const term = fakeTerminal(rows);
     const draw = () => {
       const lines = box ? box.split("\n") : [queue.length ? "Press up to edit queued messages" : ""];
-      rows.splice(4, rows.length - 6, ...lines.map((line, index) => `${index ? "  " : "❯ "}${line}`));
+      rows.splice(4, rows.length - 6, ...lines.map((line, index) => `${index ? "  " : "❯\u00a0"}${line}`));
     };
-    // Claude 2.1.303 as probed: ↑ moves the queue into the box, Ctrl+U
+    // Claude 2.1.303 as probed (2.1.310 draws the ❯'s space as a no-break one): ↑ moves the queue into the box, Ctrl+U
     // deletes back to the line's start, or the break before it.
     const hear = (text: string) => {
       if (text === "\u001b[A" && !box) box = queue.splice(0).join("\n");

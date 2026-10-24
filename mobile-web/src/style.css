@@ -1479,7 +1479,10 @@ span.files-close { background:transparent; }
    to-do editor's add row — a field and its button side by side. */
 .question-type { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px 0 4px; }
 .question-type textarea { grid-column:1 / -1; min-width:0; min-height:6.5em; resize:vertical; border:1px solid #3a3e50; border-radius:12px; padding:11px 13px; background:#171a24; color:#fff; font:inherit; font-size:1rem; line-height:1.4; }
+/* Send is a `.primary` inside `.option-list`, whose row-button rule outranks
+   `.primary`: restate the accent fill so it is not a washed-out row. */
 .question-type > button { grid-column:2; }
+.question-type > button.primary { justify-content:center; width:auto; min-height:44px; padding:10px 20px; border:1px solid #8c7df4; border-radius:11px; background:#6c5ce7; color:#fff; font-weight:700; }
 .question-type em { grid-column:1 / -1; color:#98a0b4; font-size:.78rem; }
 /* A question kept in the chat once answered (`AskedCard`): the live card's
    rows, no longer buttons — the ones the answer took lit as the highlighted
