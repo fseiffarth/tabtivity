@@ -290,10 +290,23 @@ GIT_INDEX_FILE="$bump_index" git -C "$repo_root" add -- "${bump_files[@]}" \
 # TABTIVITY_VERSION_BUMP tells post-commit this is the push's own bump: its
 # phone-staleness advisory has nothing to do with pushing, and git routes a
 # hook's output to stderr, where it read as the push's error.
+# The identity comes from git config, never the caller's environment: an agent
+# session that exports GIT_AUTHOR_*/GIT_COMMITTER_* would otherwise stamp the
+# bump with a non-noreply address and fail the privacy scan in CI.
+bump_name="$(git -C "$repo_root" config user.name)"
+bump_email="$(git -C "$repo_root" config user.email)"
 GIT_INDEX_FILE="$bump_index" TABTIVITY_VERSION_BUMP=1 \
+  GIT_AUTHOR_NAME="$bump_name" GIT_AUTHOR_EMAIL="$bump_email" \
+  GIT_COMMITTER_NAME="$bump_name" GIT_COMMITTER_EMAIL="$bump_email" \
   git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null \
   || bump_failed "the bump commit"
 bump_sha="$(git -C "$repo_root" rev-parse HEAD)"
+# The scan above ran before this commit existed, so CI would be the first to
+# see it: scan the bump itself and take it back if it would fail there.
+if [ -z "$(app_var SKIP_PRIVACY_CHECK)" ] \
+  && ! (cd "$repo_root" && scripts/privacy-check.sh "$bump_sha~1" "$bump_sha") </dev/null; then
+  bump_failed "the privacy scan of the bump commit"
+fi
 # The shared index still holds the pre-bump version files: point those five
 # entries at the bump commit. Anything else staged there stays staged.
 git -C "$repo_root" reset -q -- "${bump_files[@]}" \
