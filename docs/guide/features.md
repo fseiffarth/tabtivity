@@ -117,7 +117,10 @@ does not have to ship a phone app for the agent you are running.
   available from the phone.
 - **Files from the agent to the phone**: a picture the agent wants you to see —
   a screenshot it took, a plot it rendered — it runs `tabtivity-send <file>`, and
-  the phone shows it. Local and container tabs can send any file up to 24 MiB:
+  it lands on the screen you last typed into that tab from: the phone shows it,
+  or on the desktop the agent names the file and the Chat draws it. Before you
+  have typed into the tab it goes to both; `--phone` or `--desktop` picks one
+  when you name it ("send it to my phone"). Local and container tabs can send any file up to 24 MiB:
   images open full screen, text opens a preview, PDFs open a browser tab, and
   other files download. Every tile offers Save and Delete, and the project
   screen reaches the whole gallery from its header as well as from the shelf

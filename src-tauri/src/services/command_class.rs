@@ -961,6 +961,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),
     ("pty_drop_files", Client),
+    ("pty_input_from", Core),
     ("pty_kill", Core),
     ("pty_kill_scope", Core),
     ("pty_paste_clipboard_image", Client),

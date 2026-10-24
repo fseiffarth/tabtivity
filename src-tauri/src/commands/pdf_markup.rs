@@ -477,7 +477,7 @@ mod tests {
         assert!(text.contains(concat!("more layers, beside these in `.", crate::app_slug!(), "/inbox/`, named `…-p<page>-layer.png`")));
         assert!(text.contains("- p1: blue note \"note on page 1:"));
         assert!(text.contains("more notes — read them in the marked copy."));
-        assert!(text.ends_with(concat!("send it to me with `", crate::app_slug!(), "-send <file>`.")));
+        assert!(text.ends_with(concat!("send it to me with `", crate::app_slug!(), "-send --phone <file>`.")));
     }
 
     #[test]

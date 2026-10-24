@@ -483,6 +483,17 @@ pub async fn pty_resize(
     crate::terminal::resize_pty(registry, &id, cols, rows)
 }
 
+/// The user typed into PTY `id` from `from` (`"phone"` or `"desktop"`):
+/// recorded beside the tab's turn record, where `tabtivity-send` reads which
+/// screen a file goes to (`agent_turn::note_input_from`). The window reports
+/// a change of screen, not every keystroke.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_input_from(ctx: Ctx, id: String, from: String) -> Result<(), String> {
+    let from = crate::services::agent_turn::InputFrom::parse(&from).ok_or_else(|| format!("unknown input source '{from}'"))?;
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
+    app_core::rt::blocking("terminal", move || crate::services::agent_turn::note_input_from(&id, from).map_err(|e| e.to_string())).await?
+}
+
 /// A pane's visibility report (visible-only streaming): a hidden pane's PTY
 /// stops emitting `terminal-output` over IPC entirely — the backend buffers it
 /// and condenses throttled digests (`terminal-activity-batch`) for the pill

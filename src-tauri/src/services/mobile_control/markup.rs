@@ -1196,8 +1196,10 @@ pub fn prompt(parts: &Prompt) -> String {
     if let Some(round) = parts.round.filter(|_| !marks.is_empty()) {
         tail.push(tick_line(round, parts.picture));
     }
+    // Asked from the phone, answered there: the send would otherwise follow
+    // wherever the user last typed into the tab.
     if parts.send_back {
-        tail.push(format!("Once you have rebuilt the {what}, send it to me with `{SLUG}-send <file>`."));
+        tail.push(format!("Once you have rebuilt the {what}, send it to me with `{SLUG}-send --phone <file>`."));
     }
     // The page list and the marks share what the fixed lines leave of the
     // budget; the marks are promised up to half of it, so a 300-page round
@@ -1547,7 +1549,7 @@ mod tests {
              Page 7: @.", crate::app_slug!(), "/inbox/b.png\n\
              Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.\n\
              Ask me only about a mark you cannot read or that leaves a real choice where a wrong guess would change what the text says — with the `markup_ask` tool if you have it, giving the page and the words the mark is on. For every other mark, take the obvious reading and say which one you took.\n\
-             Once you have rebuilt the PDF, send it to me with `", crate::app_slug!(), "-send <file>`.")
+             Once you have rebuilt the PDF, send it to me with `", crate::app_slug!(), "-send --phone <file>`.")
         );
     }
 

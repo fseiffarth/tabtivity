@@ -28,6 +28,7 @@ import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry";
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
+import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
@@ -666,6 +667,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }
     setSending(true);
     setSendError("");
+    noteInputFrom(ptyId, "desktop");
     try {
       // A prefix the CLI's popup completes (`/clea`) runs that command.
       const command = completedSlashCommand(text, cli, usedSlash) ?? text;

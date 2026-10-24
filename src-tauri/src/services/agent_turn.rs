@@ -49,6 +49,11 @@ pub const TURN_SUFFIX: &str = ".turn";
 /// hook writes it on a `PostToolUse` whose result names a `backgroundTaskId`.
 const BG_SUFFIX: &str = ".bg";
 
+/// Suffix of the per-tab record of where the user last typed into the tab
+/// (`<uid>.from`): `phone` or `desktop`, written by [`note_input_from`] and
+/// read by `tabtivity-send`, which sends a file to that screen.
+pub const FROM_SUFFIX: &str = ".from";
+
 /// The most task ids [`note_background_tasks`] takes from a record.
 const BG_TASKS_MAX: usize = 32;
 
@@ -102,6 +107,13 @@ fn bindings() -> &'static Mutex<HashMap<String, String>> {
     B.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// uid → project id, for the bound tabs that have one: where their records
+/// live inside a fence or container (`project_live_sessions_dir`).
+fn bound_projects() -> &'static Mutex<HashMap<String, String>> {
+    static P: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    P.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// What the turn record an earlier run of a tab left behind said, read by
 /// [`bind_tab`] before it clears it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -132,6 +144,10 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     // pointing at this PTY, nor its turn state and job flag behind it.
     on_tab_gone(pty_id);
     bindings().lock_ok().insert(uid.to_string(), pty_id.to_string());
+    match project_id {
+        Some(pid) => bound_projects().lock_ok().insert(uid.to_string(), pid.to_string()),
+        None => bound_projects().lock_ok().remove(uid),
+    };
     states().lock_ok().remove(uid);
     jobs().lock_ok().remove(uid);
     settled().lock_ok().remove(uid);
@@ -176,7 +192,9 @@ pub fn on_tab_gone(pty_id: &str) {
     let mut settled = settled().lock_ok();
     let mut ends = turn_ends().lock_ok();
     let mut bg = bg_tasks().lock_ok();
+    let mut projects = bound_projects().lock_ok();
     for uid in gone {
+        projects.remove(&uid);
         states.remove(&uid);
         jobs.remove(&uid);
         settled.remove(&uid);
@@ -188,6 +206,59 @@ pub fn on_tab_gone(pty_id: &str) {
 /// The PTY id bound to `uid`, if any.
 pub fn pty_for(uid: &str) -> Option<String> {
     bindings().lock_ok().get(uid).cloned()
+}
+
+/// Where the user typed into a tab from — the screen `tabtivity-send` puts a
+/// file on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputFrom {
+    Phone,
+    Desktop,
+}
+
+impl InputFrom {
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "phone" => Some(InputFrom::Phone),
+            "desktop" => Some(InputFrom::Desktop),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            InputFrom::Phone => "phone",
+            InputFrom::Desktop => "desktop",
+        }
+    }
+}
+
+/// Record that the user last typed into PTY `pty_id` from `from`, as
+/// `<uid>.from` beside the tab's turn record: in the shared root, and in its
+/// project's slice, which is what a fence or container sees at the root's path.
+/// The slice is agent-writable, so the write goes through a directory handle
+/// (`home_io`): a link planted at the name is replaced, never followed. A PTY
+/// with no bound uid (a plain shell) records nothing.
+pub fn note_input_from(pty_id: &str, from: InputFrom) -> std::io::Result<()> {
+    note_input_from_in(&live_sessions_dir(), pty_id, from)
+}
+
+fn note_input_from_in(live_root: &Path, pty_id: &str, from: InputFrom) -> std::io::Result<()> {
+    let uids: Vec<String> =
+        bindings().lock_ok().iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
+    for uid in uids {
+        let name = format!("{uid}{FROM_SUFFIX}");
+        let mut rels = vec![name.clone()];
+        if let Some(pid) = bound_projects().lock_ok().get(&uid) {
+            rels.push(format!("{}/{name}", crate::storage::project_key(pid)));
+        }
+        for rel in rels {
+            home_io::HomeFile::open(live_root, &rel)
+                .ok_or_else(|| std::io::Error::other(format!("{rel}: not a plain folder")))?
+                .write(from.as_str().as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
@@ -902,6 +973,44 @@ mod tests {
         std::fs::write(&rec, "done").unwrap();
         assert_eq!(resolve_event(&rec), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `tabtivity-send` reads `<uid>.from` in the root a host tab sees and in
+    /// the project slice a fence or container sees at the root's path. The
+    /// slice is the agent's to write: a link planted at the name is replaced,
+    /// and the file it pointed at keeps its bytes.
+    #[test]
+    fn input_from_lands_in_the_root_and_the_slice_and_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("live_sessions");
+        let uid = "from-test-uid-1";
+        let pty = "proj-from:agent-from-1";
+        bindings().lock().unwrap().insert(uid.to_string(), pty.to_string());
+        bound_projects().lock().unwrap().insert(uid.to_string(), "proj/from".to_string());
+        let name = format!("{uid}{FROM_SUFFIX}");
+        let slice = root.join(crate::storage::project_key("proj/from"));
+        note_input_from_in(&root, pty, InputFrom::Phone).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join(&name)).unwrap(), "phone");
+        assert_eq!(std::fs::read_to_string(slice.join(&name)).unwrap(), "phone");
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::fs::write(&target, "keep").unwrap();
+            std::fs::remove_file(slice.join(&name)).unwrap();
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            note_input_from_in(&root, pty, InputFrom::Desktop).unwrap();
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+            assert!(!std::fs::symlink_metadata(slice.join(&name)).unwrap().file_type().is_symlink());
+            assert_eq!(std::fs::read_to_string(slice.join(&name)).unwrap(), "desktop");
+        }
+        // An unbound PTY (a plain shell) records nothing.
+        on_tab_gone(pty);
+        assert!(bound_projects().lock().unwrap().get(uid).is_none());
+        std::fs::remove_file(root.join(&name)).unwrap();
+        note_input_from_in(&root, pty, InputFrom::Phone).unwrap();
+        assert!(!root.join(&name).exists());
+        assert_eq!(InputFrom::parse("phone"), Some(InputFrom::Phone));
+        assert_eq!(InputFrom::parse("tablet"), None);
     }
 
     #[test]

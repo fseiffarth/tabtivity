@@ -2280,6 +2280,7 @@ pub fn run() {
             commands::terminal::pty_kill,
             commands::terminal::pty_kill_scope,
             commands::terminal::pty_set_visible,
+            commands::terminal::pty_input_from,
             commands::terminal::pty_remove_view,
             commands::terminal::pty_scrollback,
             commands::terminal::pty_watch,

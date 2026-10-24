@@ -1082,6 +1082,29 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
      composer shows only in the Terminal view.
   Windows PowerShell and macOS runtime behavior also require platform QA.
 
+- [ ] **31ck — `tabtivity-send` goes to the screen you typed from** (2026-10-24;
+  implemented, never live; the backend needs a restart, the phone none).
+  The window records per tab where the user last typed into it — desktop keys,
+  the Reader or steering, or the phone's typing and held prompts; never a
+  scheduled prompt — as `<uid>.from` beside the turn record
+  (`agent_turn::note_input_from`, `pty_input_from`). The send script reads it:
+  desktop → it prints `→ desktop: name <path> in your reply` and copies
+  nothing; phone → the outbox as before; nothing recorded → both.
+  `--phone`/`--desktop` override it; `-n` (stdin) always goes to the phone;
+  phone markup's send-back line says `--phone`. The agent hint says all this.
+  - [ ] 🖐️ In a fenced Claude tab, type "render a plot and send it to me" on the
+    desktop: the answer names the file and the Chat draws it; nothing new in
+    the phone gallery. Then ask the same from the phone's Focus chat: the plot
+    arrives on the phone. Repeat once from a container tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] **31bs — Every agent CLI learns `tabtivity-send` from Tabtivity, not the
   project** (2026-10-01; implemented, never live; the backend needs a restart).
   The hint left the scaffold's `AGENTS.md`. Codex now gets it from the session

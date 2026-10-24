@@ -27,6 +27,7 @@ import {
   submitScheduledAgentMessage,
 } from "../agents/scheduledAgentInput";
 import { noteSentPrompt } from "../agents/sentPrompts";
+import { noteInputFrom } from "../agents/inputFrom";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { noteTypedClear } from "../../stores/agents/agentClearUndo";
@@ -151,4 +152,6 @@ export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<v
   }
   await submitScheduledAgentMessage(target, text, { whileBusy: true });
   noteSentPrompt(target, text);
+  const ptyId = scheduledAgentInput(target)?.ptyId;
+  if (ptyId) noteInputFrom(ptyId, "desktop");
 }

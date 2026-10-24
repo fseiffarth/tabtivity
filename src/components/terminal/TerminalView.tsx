@@ -14,6 +14,7 @@ import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting,
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
+import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { ROOT_SCOPE, bumpUsage, markAgentActive } from "../../stores/usage";
 import {
@@ -1019,6 +1020,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // Read before the keystroke retires the agent's decision verdict.
         const deciding = useActivityStore.getState().attentionByTab[id] === "decision";
         noteUserInput(id, isInterruptInput(data));
+        noteInputFrom(id, "desktop");
         if (noteInput(id, data) > 0) countSubmit();
         // A typed `/clear` (or `/new`) offers "Undo clear" and empties the
         // Reader — the one way the window learns of it at once (Codex's hook
@@ -1670,6 +1672,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // about the previous occupant of this id, so a reopened project's resume
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
+      forgetInputFrom(id);
       // A shell tab Tabtivity opened to run something — a program of its own
       // (`git clone`, an install's `bash`) or a line it types (a script's Run)
       // — was asked for by whoever opened it, so it is commanded from its spawn,

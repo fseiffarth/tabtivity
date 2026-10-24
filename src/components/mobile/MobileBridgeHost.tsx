@@ -25,6 +25,7 @@ import { agentTabState, agentTurnStartedAt, lastTabReadAt, noteUserInput, useAct
 import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
+import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
@@ -2489,6 +2490,7 @@ async function holdTabPrompt(projectId: string, tmuxSession: string, message: st
   if (!text || isSessionCommand(text)) return { status: "error", code: "invalid_prompt", message: "Only prompts are held" };
   const { id } = await queuePromptForTab(scope.id, tab.scheduleTargetId, text, { phoneDevice });
   holdPhonePrompt(id);
+  noteInputFrom(`${scope.id}:${tab.key}`, "phone");
   return { status: "held", held_id: id };
 }
 
@@ -2771,7 +2773,11 @@ function markTabInput(projectId: string, tmuxSession: string): DesktopResponse {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
-  if (tab) noteUserInput(`${scope.id}:${tab.key}`);
+  if (tab) {
+    noteUserInput(`${scope.id}:${tab.key}`);
+    // `tabtivity-send` from this tab now puts files on the phone.
+    noteInputFrom(`${scope.id}:${tab.key}`, "phone");
+  }
   return { status: "seen" };
 }
 
