@@ -421,6 +421,19 @@ impl ProjectDir {
         }
     }
 
+    /// Removes the empty folder `name` in this one (`AT_REMOVEDIR` refuses a
+    /// link at the name and a folder with anything in it).
+    pub(super) fn remove_empty_dir(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c_name = segment_cstr(name)?;
+        // SAFETY: a live directory descriptor and a NUL-terminated name.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), c_name.as_ptr(), libc::AT_REMOVEDIR) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
     fn child_dir_meta(&self, name: &str) -> Option<fs::Metadata> {
         self.child_dir(name)?.0.metadata().ok()
     }

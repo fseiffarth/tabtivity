@@ -32,7 +32,7 @@ pub const OUTBOX_DIR: &str = crate::brand::OUTBOX_DIR;
 /// a screenshot or a plot is a few MiB; a raw camera dump is not a message.
 pub const MAX_OUTBOX_FILE: u64 = 24 * 1024 * 1024;
 /// How many files the listing returns, newest first — a strip on a phone,
-/// not a gallery, and a folder nobody prunes must stay cheap to list.
+/// not a gallery, and a folder holding a month of sends must stay cheap to list.
 pub const MAX_LISTED: usize = 40;
 /// The longest leaf that crosses.
 const MAX_NAME: usize = 120;
@@ -347,9 +347,9 @@ pub fn exists(root: &Path, name: &str) -> bool {
 /// such here too — the difference between dropping a file the agent published
 /// and unlinking whatever it pointed at.
 ///
-/// The folder is the one place in a project Tabtivity publishes *for* the phone,
-/// and nothing pruned it: a picture the reader is done with could only be
-/// cleared from a shell on the desktop.
+/// The folder is the one place in a project Tabtivity publishes *for* the phone;
+/// a picture the reader is done with goes from here at once, the rest with
+/// [`sweep`] after 30 days.
 pub fn remove(root: &Path, name: &str) -> Result<(), OutboxError> {
     let Some(dir) = outbox_dir(root)? else {
         return Err(OutboxError::NotFound);
@@ -375,7 +375,7 @@ pub struct Cleared {
 }
 
 /// Delete every file the outbox would serve — the phone's "Delete all", to
-/// free the space a folder nobody prunes keeps taking. Not bounded by
+/// free the space before [`sweep`] would. Not bounded by
 /// `MAX_LISTED`: the files past the listing's strip take space too. Each leaf
 /// goes exactly as [`remove`] takes one (re-proved by `probe` in the held
 /// folder, markers with it); anything the phone could not see — a link, a
@@ -412,6 +412,89 @@ pub fn remove_all(root: &Path) -> Result<Cleared, OutboxError> {
         Some(error) if cleared.files == 0 => Err(OutboxError::Io(error)),
         _ => Ok(cleared),
     }
+}
+
+/// `tabtivity-send`'s mutex, a folder in the outbox.
+const SEND_LOCK: &str = ".send-lock";
+/// What a send stages a file in: a folder (`data`, `tab`, `src` inside) in
+/// the sh twin, one file in the PowerShell twin.
+const SEND_STAGE: &str = ".send-";
+
+/// The leaf a sender or origin marker belongs to.
+fn marker_leaf(name: &str) -> Option<&str> {
+    let inner = name.strip_prefix('.')?;
+    let leaf = inner.strip_suffix(".tab").or_else(|| inner.strip_suffix(".src"))?;
+    valid_name(leaf).then_some(leaf)
+}
+
+fn older_than(meta: &fs::Metadata, cutoff: std::time::SystemTime) -> bool {
+    meta.modified().is_ok_and(|modified| modified < cutoff)
+}
+
+/// The background sweep of the outbox (`drop_sweep`): every
+/// file the outbox would serve that was last written before `cutoff` goes,
+/// exactly as [`remove`] takes one (markers with it), as do markers whose file
+/// is gone and that are as old. A send killed before its own cleanup (a
+/// SIGKILL, a power cut) leaves its lock and stage behind; older than
+/// `stale` they go too, or that lock refuses every later send. Anything else
+/// — a link, a folder of the agent's, a file the phone could not see — stays.
+pub fn sweep(root: &Path, cutoff: std::time::SystemTime, stale: std::time::SystemTime) -> Result<Cleared, OutboxError> {
+    let Some(dir) = outbox_dir(root)? else {
+        return Ok(Cleared::default());
+    };
+    let entries = dir.entries().map_err(|e| match e {
+        super::files::FilesError::Io(e) => OutboxError::Io(e),
+        _ => OutboxError::Unavailable,
+    })?;
+    let mut cleared = Cleared::default();
+    for (name, is_dir) in &entries {
+        if *is_dir {
+            if name == SEND_LOCK || name.starts_with(SEND_STAGE) {
+                sweep_send_folder(&dir, name, stale);
+            }
+            continue;
+        }
+        if let Some((_file, meta, _kind)) = probe(&dir, name) {
+            if older_than(&meta, cutoff) && dir.remove_file(name).is_ok() {
+                let _ = dir.remove_file(&marker_name(name));
+                let _ = dir.remove_file(&source_name(name));
+                cleared.files += 1;
+                cleared.bytes += meta.len();
+            }
+            continue;
+        }
+        let limit = match marker_leaf(name) {
+            Some(leaf) if !entries.iter().any(|(other, _)| other == leaf) => cutoff,
+            Some(_) => continue,
+            None if name.starts_with(SEND_STAGE) => stale,
+            None => continue,
+        };
+        if dir.open_file(name).is_some_and(|(_, meta)| older_than(&meta, limit)) {
+            let _ = dir.remove_file(name);
+        }
+    }
+    Ok(cleared)
+}
+
+/// Removes a send's lock or stage folder `name` last touched before `stale`:
+/// the files a send puts there, then the folder, which stays if anything
+/// else is in it.
+fn sweep_send_folder(dir: &ProjectDir, name: &str, stale: std::time::SystemTime) {
+    let held = |dir: &ProjectDir| dir.lookup_dir(name).ok().flatten();
+    let Some(meta) = held(dir).and_then(|folder| folder.into_file().metadata().ok()) else {
+        return;
+    };
+    if !older_than(&meta, stale) {
+        return;
+    }
+    if let Some(folder) = held(dir) {
+        for leaf in ["data", "tab", "src"] {
+            if folder.open_file(leaf).is_some() {
+                let _ = folder.remove_file(leaf);
+            }
+        }
+    }
+    let _ = dir.remove_empty_dir(name);
 }
 
 #[cfg(test)]
@@ -700,6 +783,88 @@ mod tests {
         let empty = tempfile::tempdir().unwrap();
         assert_eq!(remove_all(empty.path()), Ok(Cleared::default()));
         assert_eq!(remove_all(&empty.path().join("missing")), Err(OutboxError::Unavailable));
+    }
+
+    #[test]
+    fn the_sweep_takes_only_old_servable_files_and_their_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let box_dir = outbox(dir.path());
+        let day = Duration::from_secs(86_400);
+        touch(&box_dir, "old.png", PNG, day * 31);
+        fs::write(box_dir.join(".old.png.tab"), "aaaa-1").unwrap();
+        fs::write(box_dir.join(".old.png.src"), "docs/old.png").unwrap();
+        touch(&box_dir, "new.png", PNG, day);
+        touch(&box_dir, ".new.png.tab", b"aaaa-1", day * 31);
+        // A marker whose file is gone: old goes, young stays (a send in flight
+        // writes its markers before the file).
+        touch(&box_dir, ".gone.png.tab", b"aaaa-1", day * 31);
+        touch(&box_dir, ".soon.png.tab", b"aaaa-1", Duration::from_secs(5));
+        // Not the phone's: an empty file is never served, so never swept.
+        touch(&box_dir, "empty.png", b"", day * 31);
+
+        let now = std::time::SystemTime::now();
+        let cleared = sweep(dir.path(), now - day * 30, now - Duration::from_secs(3_600)).unwrap();
+        assert_eq!(cleared, Cleared { files: 1, bytes: PNG.len() as u64 });
+        let left: std::collections::BTreeSet<String> =
+            fs::read_dir(&box_dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert_eq!(left, [".new.png.tab", ".soon.png.tab", "empty.png", "new.png"].map(String::from).into());
+
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(sweep(empty.path(), now, now), Ok(Cleared::default()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_clears_a_dead_sends_lock_and_stage_but_not_a_live_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let box_dir = outbox(dir.path());
+        let hour = Duration::from_secs(3_600);
+        let age = |path: &Path, by: Duration| {
+            fs::File::open(path).unwrap().set_modified(std::time::SystemTime::now() - by).unwrap();
+        };
+        let stage = box_dir.join(".send-AbCd1234");
+        fs::create_dir(&stage).unwrap();
+        fs::write(stage.join("data"), PNG).unwrap();
+        fs::write(stage.join("tab"), "aaaa-1").unwrap();
+        age(&stage, hour * 2);
+        fs::create_dir(box_dir.join(SEND_LOCK)).unwrap();
+        age(&box_dir.join(SEND_LOCK), hour * 2);
+        touch(&box_dir, ".send-0123456789abcdef", PNG, hour * 2);
+        // A stage holding something a send never writes stays whole.
+        let foreign = box_dir.join(".send-Other123");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("keep.txt"), "x").unwrap();
+        age(&foreign, hour * 2);
+
+        let now = std::time::SystemTime::now();
+        let past = now - Duration::from_secs(86_400 * 30);
+        // A send that took the lock a minute ago keeps it.
+        let young = tempfile::tempdir().unwrap();
+        fs::create_dir(outbox(young.path()).join(SEND_LOCK)).unwrap();
+        sweep(young.path(), past, now - hour).unwrap();
+        assert!(young.path().join(OUTBOX_DIR).join(SEND_LOCK).is_dir());
+
+        sweep(dir.path(), past, now - hour).unwrap();
+        assert!(!stage.exists() && !box_dir.join(SEND_LOCK).exists());
+        assert!(!box_dir.join(".send-0123456789abcdef").exists());
+        assert!(foreign.join("keep.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_never_follows_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let day = Duration::from_secs(86_400);
+        touch(outside.path(), "private.png", PNG, day * 60);
+        fs::create_dir(outside.path().join("lockish")).unwrap();
+        let box_dir = outbox(dir.path());
+        std::os::unix::fs::symlink(outside.path().join("private.png"), box_dir.join("leak.png")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("lockish"), box_dir.join(SEND_LOCK)).unwrap();
+        let now = std::time::SystemTime::now();
+        sweep(dir.path(), now, now).unwrap();
+        assert!(outside.path().join("private.png").exists() && outside.path().join("lockish").is_dir());
+        assert!(box_dir.join("leak.png").symlink_metadata().is_ok());
     }
 
     #[test]
