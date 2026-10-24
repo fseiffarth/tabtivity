@@ -2632,7 +2632,7 @@ mod tests {
             native.map(i64::from),
             [libc::SYS_add_key, libc::SYS_request_key, libc::SYS_keyctl].map(i64::from)
         );
-        assert_eq!(i64::from(ioctl), i64::from(libc::SYS_ioctl));
+        assert_eq!([ioctl].map(i64::from), [libc::SYS_ioctl].map(i64::from));
         assert_eq!([libc::TIOCSTI as u32, libc::TIOCLINUX as u32], [0x5412, 0x541C]);
     }
 
