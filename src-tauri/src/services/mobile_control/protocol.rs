@@ -1288,6 +1288,25 @@ pub enum DesktopRequest {
         tmux_session: String,
         worktree: String,
     },
+    /// The models this Tabby chat can be switched to — the model chip's sheet,
+    /// as on the desktop Reader (`assistantModelChoices`): Claude's aliases,
+    /// Codex's catalog or the installed Ollama models, for the CLI the chat
+    /// runs. Answered with `AssistantModels`; `not_assistant_chat` for any
+    /// other tab (their `/model` is the CLI's own).
+    AssistantModels {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+    },
+    /// Switch this Tabby chat to `model` (a name `AssistantModels` listed): the
+    /// desktop's `switchAssistantModel` — the same chat, its CLI restarted on
+    /// the new model and the conversation resumed. Answered with `Seen`.
+    SwitchAssistantModel {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        model: String,
+    },
     /// What one agent tab is doing, and what its CLI says about its own quota.
     /// Addressed by the same `project_id` + `tmux_session` pair the schedule and
     /// rename requests use, so no key, path or command crosses the boundary.
@@ -1440,6 +1459,8 @@ impl DesktopRequest {
             | Self::UndoClear { request_id, .. }
             | Self::TabWorktrees { request_id, .. }
             | Self::MoveWorktree { request_id, .. }
+            | Self::AssistantModels { request_id, .. }
+            | Self::SwitchAssistantModel { request_id, .. }
             | Self::AgentStatus { request_id, .. }
             | Self::AgentTranscript { request_id, .. }
             | Self::DesktopImages { request_id, .. }
@@ -1469,6 +1490,9 @@ impl DesktopRequest {
             // Waits for the old CLI to exit (`switchAgentWorktree`, up to
             // 3 s) before the move and the respawn.
             Self::MoveWorktree { .. } => 20,
+            // Waits for the old CLI to exit (`switchAssistantModel`, up to
+            // 3 s) before the respawn on the new model.
+            Self::SwitchAssistantModel { .. } => 20,
             // Rides on the project list, which answers without the desktop:
             // a wedged window must not hold that list up for long.
             Self::GitStates { .. } => 3,
@@ -1487,7 +1511,7 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } => 20,
-            Self::MoveWorktree { .. } => 15,
+            Self::MoveWorktree { .. } | Self::SwitchAssistantModel { .. } => 15,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
         })
@@ -1521,6 +1545,7 @@ impl DesktopRequest {
             | Self::MarkupAnswer { .. }
             | Self::MarkupDismiss { .. }
             | Self::MoveWorktree { .. }
+            | Self::SwitchAssistantModel { .. }
             | Self::LocalModelMutate { .. } => true,
             Self::Catalog { .. }
             | Self::Activity { .. }
@@ -1539,6 +1564,7 @@ impl DesktopRequest {
             | Self::TabPrompt { .. }
             | Self::UndoClear { .. }
             | Self::TabWorktrees { .. }
+            | Self::AssistantModels { .. }
             | Self::AgentStatus { .. }
             | Self::AgentTranscript { .. }
             | Self::DesktopImages { .. }
@@ -1950,6 +1976,15 @@ pub enum DesktopResponse {
     /// `move_failed`.
     WorktreeMoved {
         moved: String,
+    },
+    /// Answers [`DesktopRequest::AssistantModels`]: the model names the chat's
+    /// CLI can run (each one the desktop's own list names, a safe CLI
+    /// argument) and the one it runs now. A switch is acknowledged with `Seen`.
+    AssistantModels {
+        #[serde(default)]
+        models: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
     },
     /// A desktop image copied into the project inbox: the same three fields
     /// the phone's own upload gets back.
@@ -2388,6 +2423,38 @@ mod tests {
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize prompt report");
         assert!(matches!(restored, DesktopRequest::TabPrompt { .. }));
+    }
+
+    #[test]
+    fn a_tabby_model_switch_names_the_tab_pair_and_a_model_name_only() {
+        let switch = DesktopRequest::SwitchAssistantModel {
+            request_id: "request-switch".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            model: "opus".into(),
+        };
+        assert_eq!(switch.request_id(), "request-switch");
+        assert!(switch.is_mutation());
+        assert!(switch.desktop_timeout() < switch.response_timeout());
+        let json = serde_json::to_value(&switch).expect("serialize switch");
+        assert_eq!(json["type"], "switch_assistant_model");
+        let mut hostile = json.clone();
+        hostile["argv"] = "--evil".into();
+        assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+        let list = DesktopRequest::AssistantModels {
+            request_id: "request-models".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+        };
+        assert!(!list.is_mutation());
+        assert_eq!(serde_json::to_value(&list).expect("serialize list")["type"], "assistant_models");
+        let listed: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "assistant_models",
+            "models": ["opus", "sonnet"],
+            "current": "opus",
+        }))
+        .expect("deserialize models");
+        assert!(matches!(listed, DesktopResponse::AssistantModels { ref models, current: Some(_) } if models.len() == 2));
     }
 
     #[test]

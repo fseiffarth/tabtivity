@@ -238,6 +238,14 @@ waits for the old CLI's exit, and respawns the same tab. The backend resumes
 the conversation on the new `--model`. The effort chip and Claude's Status
 button only show what they read.
 
+On the phone the Focus facts row's model chip does the same: `GET
+/tabs/{id}/assistant-models` and `POST /tabs/{id}/assistant-model` ride the
+`AssistantModels` / `SwitchAssistantModel` desktop requests, answered by the
+window (`MobileBridgeHost`: `assistantChat`) from the same
+`assistantModelChoices` and `switchAssistantModel`. Only model names cross; a
+name the window did not list is `model_not_found`, a chat at work `tab_busy`.
+With no window open there is nobody to restart the chat: `desktop_unavailable`.
+
 ## The phone
 
 `ScopeKind::Assistant` is a phone scope behind `discovery::assistant_open`: the

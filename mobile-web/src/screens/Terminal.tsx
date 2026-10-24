@@ -52,6 +52,8 @@ import {
   undoClear,
   getTabWorktrees,
   moveTabWorktree,
+  getAssistantModels,
+  switchAssistantModel,
   uploadToInbox,
   type DesktopImage,
   type OutboxFile,
@@ -62,6 +64,7 @@ import {
   type AskedQuestion,
   type TabRow,
   type TabWorktrees,
+  type AssistantModels,
   type TranscriptEntry,
 } from "../api";
 import { describeFailure } from "../connection";
@@ -1144,6 +1147,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [worktreeChoices, setWorktreeChoices] = useState<TabWorktrees | null>(null);
   const [worktreeMoving, setWorktreeMoving] = useState("");
   const [worktreeNote, setWorktreeNote] = useState<TranslationKey | "">("");
+  /** A Tabby chat's model chip: its `/model` is off, so the sheet lists what
+   * the desktop's own chip lists and a pick restarts the chat on it. */
+  const [assistantSheet, setAssistantSheet] = useState(false);
+  const [assistantModels, setAssistantModels] = useState<AssistantModels | null>(null);
+  const [assistantSwitching, setAssistantSwitching] = useState("");
+  const [assistantNote, setAssistantNote] = useState<TranslationKey | "">("");
   /** The status chip's sheet: the session's state and the CLI's own usage
    * panel. Opening it asks the desktop, which may run the CLI once. */
   const [statusSheet, setStatusSheet] = useState(false);
@@ -1399,6 +1408,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setCtrl(false);
     setSendFailed(false);
     setModelSheet(false);
+    setAssistantSheet(false);
+    setAssistantModels(null);
     setModeSheet(false);
     setStatusSheet(false);
     setLimits({});
@@ -3763,7 +3774,48 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setSwitching("");
     setSwitchFailed(value);
   };
-  const sheetUp = modelSheet || modeSheet || worktreeSheet || statusSheet || desktopSheet || gallery
+  const openAssistantSheet = () => {
+    setAssistantNote("");
+    setAssistantModels(null);
+    setAssistantSheet(true);
+    getAssistantModels(tab.id).then(setAssistantModels, (error) => {
+      const code = error instanceof ApiError ? error.code : "";
+      setAssistantModels({ models: [] });
+      setAssistantNote(code === "desktop_unavailable" ? "mobile.assistantModel.offline" : "terminal.reader.assistantModelFailed");
+    });
+  };
+  const chooseAssistantModel = (model: string) => {
+    if (assistantSwitching) return;
+    if (model === assistantModels?.current) {
+      setAssistantSheet(false);
+      return;
+    }
+    setAssistantNote("");
+    setAssistantSwitching(model);
+    switchAssistantModel(tab.id, model)
+      .then(() => {
+        setAssistantSwitching("");
+        setAssistantSheet(false);
+        // The chat restarted on the new model: show it on the chip at once and
+        // read its conversation afresh while it comes up, as after a move.
+        setAssistantModels((now) => (now ? { ...now, current: model } : now));
+        commandSentAt.current = Date.now();
+        for (const delay of [0, ...UNDO_RELOADS]) {
+          window.setTimeout(() => {
+            transcriptVersion.current = undefined;
+            setTranscriptReload((count) => count + 1);
+          }, delay);
+        }
+      })
+      .catch((error) => {
+        const code = error instanceof ApiError ? error.code : "";
+        setAssistantSwitching("");
+        setAssistantNote(code === "tab_busy" ? "mobile.assistantModel.busy"
+          : code === "desktop_unavailable" ? "mobile.assistantModel.offline"
+          : "terminal.reader.assistantModelFailed");
+      });
+  };
+  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -4335,6 +4387,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     pending: choice.value === switching,
   }));
   const failedMode = modes.find((choice) => choice.value === switchFailed);
+  const assistantOptionRows: SheetOption[] = (assistantModels?.models ?? []).map((model) => ({
+    key: model,
+    label: model,
+    current: model === assistantModels?.current,
+    pending: model === assistantSwitching,
+  }));
   const worktreeOptions: SheetOption[] = (worktreeChoices?.worktrees ?? []).map((row) => ({
     key: row.id,
     ...worktreeChoiceText({ branch: row.branch, name: row.label, main: row.main }, t),
@@ -4744,8 +4802,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               driver's list would only offer to move it off. A chat of the
               assistant scope runs with its slash commands off, so `/model`
               cannot reach it (the desktop switches its model by restarting it). */}
-          {tab.local_model || bare
+          {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
+            : bare
+            ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openAssistantSheet} aria-haspopup="dialog" aria-expanded={assistantSheet} title={t("terminal.reader.assistantModelHint")}><span className="fact-action-label">{assistantModels?.current ?? modelChip}</span></button>
             : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
@@ -4913,6 +4973,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       busy={switching !== "" || fixedMode}
       onPick={(key) => void applyMode(key)}
       onClose={() => { if (!switching) setModeSheet(false); }}
+    />}
+    {assistantSheet && <OptionSheet
+      title={t("terminal.reader.modelTitle")}
+      note={assistantNote
+        ? { text: t(assistantNote), error: true }
+        : assistantModels && assistantModels.models.length > 0
+          ? { text: t("terminal.reader.assistantModelNote") + (isUntested("mobile.facts.assistantModel") ? ` · ${t("mobile.focus.untested")}` : "") }
+          : undefined}
+      options={assistantOptionRows}
+      waiting={t(assistantModels === null ? "terminal.reader.assistantModelLoading" : "terminal.reader.assistantModelNone")}
+      busy={assistantSwitching !== ""}
+      onPick={chooseAssistantModel}
+      onClose={() => { if (!assistantSwitching) setAssistantSheet(false); }}
     />}
     {worktreeSheet && <OptionSheet
       title={t("terminal.reader.worktreeTitle")}

@@ -4822,8 +4822,8 @@ fn worktree_desktop_error(response: Result<DesktopResponse, String>) -> (StatusC
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             match code.as_str() {
                 "desktop_unavailable" | "tab_not_ready" => StatusCode::SERVICE_UNAVAILABLE,
-                "tab_not_found" | "worktree_not_found" => StatusCode::NOT_FOUND,
-                "not_movable" | "tab_busy" | "move_failed" => StatusCode::CONFLICT,
+                "tab_not_found" | "worktree_not_found" | "model_not_found" => StatusCode::NOT_FOUND,
+                "not_movable" | "tab_busy" | "move_failed" | "not_assistant_chat" | "switch_failed" => StatusCode::CONFLICT,
                 _ => StatusCode::BAD_REQUEST,
             },
             &code,
@@ -4916,6 +4916,93 @@ async fn move_tab_worktree(
     .await;
     match response {
         Ok(DesktopResponse::WorktreeMoved { moved }) => (StatusCode::OK, Json(json!({ "moved": moved }))),
+        other => worktree_desktop_error(other),
+    }
+}
+
+/// `GET /api/v1/tabs/{id}/assistant-models` — the models a Tabby chat can be
+/// switched to (`DesktopRequest::AssistantModels`) and the one it runs, for the
+/// facts row's model chip. Names only; `409 not_assistant_chat` for a tab of
+/// any other scope, where the CLI's own `/model` does it.
+async fn assistant_models(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::AssistantModels {
+            request_id: new_request_id(),
+            project_id,
+            tmux_session,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::AssistantModels { models, current }) => {
+            (StatusCode::OK, Json(json!({ "models": models, "current": current })))
+        }
+        other => worktree_desktop_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SwitchModelBody {
+    model: String,
+}
+
+/// `POST /api/v1/tabs/{id}/assistant-model` with `{ "model": "<name>" }` —
+/// switch a Tabby chat to that model (`DesktopRequest::SwitchAssistantModel`):
+/// the desktop restarts the chat's CLI on it and resumes the conversation.
+/// Answers `{ "switched": true }`; `409 tab_busy` while the chat is at work,
+/// `404 model_not_found` for a name the desktop did not list.
+async fn switch_assistant_model(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The switch respawns the chat's CLI.
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
+    let Ok(SwitchModelBody { model }) = serde_json::from_slice::<SwitchModelBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if model.is_empty() || model.len() > 128 || !crate::commands::ollama::model_name_ok(&model) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SwitchAssistantModel {
+            request_id: new_request_id(),
+            project_id,
+            tmux_session,
+            model,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "switched": true }))),
         other => worktree_desktop_error(other),
     }
 }
@@ -6879,6 +6966,8 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/undo-clear", post(undo_clear))
         .route("/api/v1/tabs/{tab_id}/worktrees", get(tab_worktrees))
         .route("/api/v1/tabs/{tab_id}/worktree", post(move_tab_worktree))
+        .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
+        .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
         .route("/api/v1/tabs/{tab_id}/teleport", post(teleport_tab))
         .route("/api/v1/tabs/{tab_id}/sign-in-callback", post(sign_in_callback))

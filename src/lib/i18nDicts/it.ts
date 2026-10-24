@@ -135,6 +135,8 @@ export const dict: Dict = {
   "mobile.worktree.offline": "{app} deve essere aperto sul desktop per spostare l’agente in un altro worktree.",
   "mobile.worktree.unreadable": "Impossibile leggere i worktree. {app} è aperto sul desktop con questa scheda?",
   "mobile.worktree.busy": "L’agente sta lavorando o attende una risposta: spostalo quando ha finito.",
+  "mobile.assistantModel.offline": "{app} deve essere aperto sul desktop per cambiare il modello della chat.",
+  "mobile.assistantModel.busy": "La chat sta lavorando o attende una risposta: cambia il modello quando ha finito.",
   "mobile.worktree.retry": "Chiudi qui e tocca di nuovo il branch per riprovare.",
   "mobile.composer.undoRemote": "Questa scheda gira su un host remoto; da qui la cancellazione non si può annullare.",
   "mobile.composer.heldNote": "L’agente sta lavorando: il tuo prompt entra nella sua coda e verrà preso quando l’agente ci arriva.",

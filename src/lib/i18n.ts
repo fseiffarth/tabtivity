@@ -154,6 +154,8 @@ export const enSource = {
   "mobile.worktree.offline": "Desktop {app} has to be open to move the agent to another worktree.",
   "mobile.worktree.unreadable": "The worktrees couldn't be read. Is desktop {app} open with this tab?",
   "mobile.worktree.busy": "The agent is at work or waiting for an answer — move it once it is done.",
+  "mobile.assistantModel.offline": "Desktop {app} has to be open to switch the chat's model.",
+  "mobile.assistantModel.busy": "The chat is at work or waiting for an answer — switch its model once it is done.",
   "mobile.worktree.retry": "Close this and tap the branch again to retry.",
   "mobile.composer.undoRemote": "This tab runs on a remote host, where the clear cannot be undone from here.",
   "mobile.composer.heldNote": "The agent is working: your prompt joins its queue and is taken in when the agent gets to it.",

@@ -624,6 +624,27 @@ export function moveTabWorktree(tabId: string, worktree: string): Promise<{ move
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
 }
 
+/** The models a Tabby chat's model chip can switch it to (names the desktop's
+ * own chip lists) and the one it runs now. */
+export interface AssistantModels { models: string[]; current?: string }
+
+/** `GET /api/v1/tabs/{id}/assistant-models` — asked when the chip's sheet opens
+ * on a chat of the assistant scope, whose `/model` is off. */
+export async function getAssistantModels(tabId: string): Promise<AssistantModels> {
+  const body = await api<{ models?: unknown; current?: unknown }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-models`);
+  return {
+    models: Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [],
+    ...(typeof body.current === "string" && body.current ? { current: body.current } : {}),
+  };
+}
+
+/** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
+ * the desktop restarts its CLI on it and resumes the conversation (so the wait
+ * is `WORKTREE_MOVE_TIMEOUT`'s). `409 tab_busy` while the chat is at work. */
+export function switchAssistantModel(tabId: string, model: string): Promise<{ switched: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-model`, { method: "POST", body: JSON.stringify({ model }) }, WORKTREE_MOVE_TIMEOUT);
+}
+
 /** Past the sidecar's own 20 s wait on the desktop's move
  * (`DesktopRequest::response_timeout`), which stops the old CLI first. */
 const WORKTREE_MOVE_TIMEOUT = 25_000;

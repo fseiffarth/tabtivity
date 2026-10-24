@@ -167,6 +167,8 @@ describe("Mobile bridge — remote, container and VM projects", () => {
       { type: "undo_clear" },
       { type: "tab_worktrees" },
       { type: "move_worktree", worktree: "w1" },
+      { type: "assistant_models" },
+      { type: "switch_assistant_model", model: "opus" },
     ];
     for (const target of gone) {
       for (const handler of handlers) {
