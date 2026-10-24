@@ -1065,6 +1065,14 @@ enum Refusal {
     TooLarge,
     BodyTimeout,
     BadBody,
+    /// A metered OpenAI request whose body is not one JSON object the meter
+    /// can read (gap 48).
+    Unmeterable,
+    /// A metered OpenAI request with `background: true`: billed after it
+    /// returns, past the monthly limit (gap 48).
+    Background,
+    /// A metered OpenAI request for a priced `service_tier` (gap 48).
+    ServiceTier,
     /// The token is good, but no key is saved (removed, or the keyring is
     /// locked).
     NoKey,
@@ -1102,7 +1110,7 @@ impl Refusal {
             Refusal::NotFound => StatusCode::NOT_FOUND,
             Refusal::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Refusal::BodyTimeout => StatusCode::REQUEST_TIMEOUT,
-            Refusal::BadBody | Refusal::NoWorkspace => StatusCode::BAD_REQUEST,
+            Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
             Refusal::Busy | Refusal::AdminUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
@@ -1157,6 +1165,22 @@ impl Refusal {
             Refusal::TooLarge => concat!(crate::app_name!(), " API proxy: request body too large"),
             Refusal::BodyTimeout => concat!(crate::app_name!(), " API proxy: request body took too long"),
             Refusal::BadBody => concat!(crate::app_name!(), " API proxy: request body could not be read"),
+            Refusal::Unmeterable => concat!(
+                crate::app_name!(),
+                " API proxy: the request body is not one JSON object whose model, max_output_tokens, max_tool_calls,",
+                " background and service_tier fields the monthly API budget can read (none repeated or of the wrong type)"
+            ),
+            Refusal::Background => concat!(
+                crate::app_name!(),
+                " API proxy: background responses are refused — they are billed after the request returns, which the",
+                " monthly API budget cannot meter; send the request without \"background\": true"
+            ),
+            Refusal::ServiceTier => concat!(
+                crate::app_name!(),
+                " API proxy: this service_tier (Fast/priority, Ultrafast or unknown) bills at a rate the monthly API",
+                " budget does not track; use \"auto\", \"default\" or \"flex\", or leave service_tier out (in Codex,",
+                " turn Fast mode off)"
+            ),
             Refusal::NoKey => concat!(
                 crate::app_name!(),
                 " has no API key saved for this provider (or its key store is locked): add one in Manage CLIs → API keys"
@@ -1206,7 +1230,9 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
                 Refusal::Forbidden => "PERMISSION_DENIED",
                 Refusal::NotFound => "NOT_FOUND",
-                Refusal::TooLarge | Refusal::BadBody | Refusal::NoWorkspace => "INVALID_ARGUMENT",
+                Refusal::TooLarge | Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier => {
+                    "INVALID_ARGUMENT"
+                }
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "UNAVAILABLE",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
@@ -1220,7 +1246,12 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::Forbidden => "permission_error",
                 Refusal::NotFound => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
-                Refusal::BodyTimeout | Refusal::BadBody | Refusal::NoWorkspace => "invalid_request_error",
+                Refusal::BodyTimeout
+                | Refusal::BadBody
+                | Refusal::NoWorkspace
+                | Refusal::Unmeterable
+                | Refusal::Background
+                | Refusal::ServiceTier => "invalid_request_error",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "api_error",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
@@ -1386,6 +1417,10 @@ const DROP_REQUEST: &[&str] = &[
     "x-forwarded-host",
     "x-forwarded-proto",
     "x-real-ip",
+    // Which organization or project OpenAI bills is the saved key's own;
+    // a header could point the request at another one the key can reach.
+    "openai-organization",
+    "openai-project",
     // Google honours these in place of the method, which would step around
     // the per-path method allowlist.
     "x-http-method-override",
@@ -1504,6 +1539,17 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     // was read.
     let mut reservation = None;
     if let Some(meter) = meter.as_mut() {
+        // OpenAI spend the meter cannot see is refused, not forwarded
+        // (gap 48): a background response, a priced tier, a body it cannot
+        // read.
+        if provider == Provider::OpenAi {
+            match super::api_meter::openai_refusal(&body) {
+                Some(super::api_meter::OpenAiRefusal::Unparsable) => return refuse(Some(provider), Refusal::Unmeterable),
+                Some(super::api_meter::OpenAiRefusal::Background) => return refuse(Some(provider), Refusal::Background),
+                Some(super::api_meter::OpenAiRefusal::ServiceTier) => return refuse(Some(provider), Refusal::ServiceTier),
+                None => {}
+            }
+        }
         meter.request(&body);
         let worst = meter.worst_case_billed(&super::api_usage::month_of(chrono::Utc::now()));
         match state.budget.reserve(provider, worst) {
@@ -2504,6 +2550,68 @@ mod tests {
         assert!(path_allowed(Provider::OpenAi, &Method::POST, "/v1/responses/compact"));
         on_tab_gone("e2e:openai");
         assert_eq!(client.post(&url).bearer_auth(&token).body("{}").send().await.unwrap().status(), 401);
+    }
+
+    #[tokio::test]
+    async fn openai_requests_the_meter_cannot_see_are_refused_in_openais_error_shape_and_never_sent() {
+        let seen = Arc::new(Seen::default());
+        let upstream = openai_stub(seen.clone()).await;
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::OpenAi, "e2e:openai-unmetered", None)).unwrap();
+        let url = format!("{}/v1/responses", base_url_on(port, Provider::OpenAi));
+        let client = plain_client();
+        let refused = [
+            (r#"{"model":"gpt-6.1-sol","background":true}"#, "background responses are refused"),
+            (r#"{"model":"gpt-6.1-sol","service_tier":"priority"}"#, "service_tier"),
+            (r#"{"model":"gpt-6.1-sol","service_tier":"ultrafast"}"#, "service_tier"),
+            ("this is not json", "not one JSON object"),
+            (r#"{"background":true,"background":false}"#, "not one JSON object"),
+            ("[]", "not one JSON object"),
+        ];
+        for (body, says) in refused {
+            let response = client.post(&url).bearer_auth(&token).body(body).send().await.unwrap();
+            assert_eq!(response.status(), 400, "{body}");
+            assert_eq!(response.headers()["x-should-retry"], "false");
+            let json: serde_json::Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+            assert_eq!(json["error"]["type"], "invalid_request_error", "{body}");
+            let message = json["error"]["message"].as_str().unwrap();
+            assert!(message.contains(says), "{body}: {message}");
+        }
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 0, "nothing reached OpenAI");
+        assert_eq!(book.reserved(Provider::OpenAi), 0, "a refusal holds nothing");
+        // Compaction is metered the same way.
+        let compact = format!("{}/v1/responses/compact", base_url_on(port, Provider::OpenAi));
+        let response = client.post(&compact).bearer_auth(&token).body(r#"{"background":true}"#).send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        // Requests the meter can read go through, with the organization and
+        // project headers dropped.
+        for body in [
+            r#"{"model":"gpt-6.1-sol","stream":true,"background":false}"#,
+            r#"{"model":"gpt-6.1-sol","stream":true,"service_tier":"flex"}"#,
+            r#"{"model":"gpt-6.1-sol","stream":true,"service_tier":"auto"}"#,
+        ] {
+            let response = client
+                .post(&url)
+                .bearer_auth(&token)
+                .header("OpenAI-Organization", "org_elsewhere")
+                .header("openai-project", "proj_elsewhere")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200, "{body}");
+            let _ = response.bytes().await.unwrap();
+        }
+        let requests = seen.requests.lock_ok();
+        assert_eq!(requests.len(), 3);
+        for (_, _, headers, _) in requests.iter() {
+            assert!(headers.get("openai-organization").is_none() && headers.get("openai-project").is_none());
+            assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+        }
+        drop(requests);
+        on_tab_gone("e2e:openai-unmetered");
     }
 
     /// Isolated real-CLI check, with a scratch home and a loopback fake

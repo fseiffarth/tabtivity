@@ -579,7 +579,7 @@ mod tests {
 
     /// A charge of `billed` billed tokens (all output) costing `usd`.
     fn charge(model: &str, usd: f64, known: bool) -> Charge {
-        Charge { model: model.into(), known, input: 10, output: 20, cache_write: 3, cache_read: 40, web_searches: 1, usd }
+        Charge { model: model.into(), known, input: 10, output: 20, cache_write: 3, cache_read: 40, web_searches: 1, usd, ..Charge::default() }
     }
 
     /// [`charge`]'s billed tokens: 10 + 3 + 20 + 40 / 10.

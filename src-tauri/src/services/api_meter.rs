@@ -20,6 +20,17 @@
 //! - **OpenAI:** Responses `usage` and `model` at the root (JSON/compaction)
 //!   or in an SSE event's `response`; input includes cached input and output
 //!   includes reasoning. A stream without final usage is estimated as above.
+//!   Hosted-tool calls (web search, file search, code interpreter, image
+//!   generation) are read from the answer's output items — an `output` entry,
+//!   an SSE `response.output_item.*` `item` — told apart by their `id` (a code
+//!   interpreter session by its `container_id`) so an item repeated by the
+//!   stream and by its final `response.completed` counts once; each is
+//!   charged its per-call fee (`api_prices`) and the request's worst case
+//!   (the tools its body lists, `max_tool_calls` or an assumed count) is held
+//!   before it is sent. A request the fees or the bill could escape is
+//!   refused before it is sent ([`openai_refusal`]): `background: true`
+//!   (billed after the answer, unbounded), a priced `service_tier`, or a body
+//!   that does not parse as one JSON object.
 //!
 //! A key of that name anywhere else — inside a tool call's arguments, in the
 //! text of an answer (escaped in a string) — is not read. Usage counts are
@@ -69,7 +80,7 @@
 //! `AppHandle`-free and pure.
 
 use std::collections::hash_map::{DefaultHasher, RandomState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
 use super::agent_api_keys::Provider;
@@ -108,6 +119,20 @@ const MAX_DISTINCT_QUERIES: usize = 256;
 /// ASCII lowercase with `_` dropped (Gemini reads both spellings).
 const GROUNDING_TOOLS: &[&str] = &["googlesearch", "googlesearchretrieval", "googlemaps", "enterprisewebsearch"];
 
+/// Hosted-tool calls an OpenAI request may make, held before it is sent when
+/// its body lists the tool and names no `max_tool_calls`. Assumptions above
+/// a turn's usual count, like [`GROUNDING_QUERIES_ESTIMATE`]; a container is
+/// one session, however many calls run in it.
+const WEB_SEARCH_CALLS_ESTIMATE: u64 = 10;
+const FILE_SEARCH_CALLS_ESTIMATE: u64 = 10;
+const CONTAINERS_ESTIMATE: u64 = 1;
+const IMAGE_CALLS_ESTIMATE: u64 = 4;
+/// `max_tool_calls` is trusted up to this.
+const MAX_TOOL_CALLS: u64 = 1000;
+/// Distinct tool items told apart per answer; past this every further one
+/// counts as new.
+const MAX_DISTINCT_TOOLS: usize = 1024;
+
 /// Keys the scanner cares about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Key {
@@ -120,6 +145,11 @@ enum Key {
     Candidates,
     GroundingMetadata,
     WebSearchQueries,
+    Output,
+    Item,
+    Type,
+    Id,
+    ContainerId,
     Other,
 }
 
@@ -134,6 +164,11 @@ fn classify(s: &[u8]) -> Key {
         b"candidates" => Key::Candidates,
         b"groundingMetadata" => Key::GroundingMetadata,
         b"webSearchQueries" => Key::WebSearchQueries,
+        b"output" => Key::Output,
+        b"item" => Key::Item,
+        b"type" => Key::Type,
+        b"id" => Key::Id,
+        b"container_id" => Key::ContainerId,
         _ => Key::Other,
     }
 }
@@ -163,9 +198,41 @@ struct GroundingOpen {
     had_key: bool,
 }
 
+/// An OpenAI hosted tool whose per-call fee is charged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ToolKind {
+    WebSearch,
+    FileSearch,
+    CodeInterpreter,
+    ImageGeneration,
+}
+
+fn tool_kind(item_type: &[u8]) -> Option<ToolKind> {
+    match item_type {
+        b"web_search_call" => Some(ToolKind::WebSearch),
+        b"file_search_call" => Some(ToolKind::FileSearch),
+        b"code_interpreter_call" => Some(ToolKind::CodeInterpreter),
+        b"image_generation_call" => Some(ToolKind::ImageGeneration),
+        _ => None,
+    }
+}
+
+/// An OpenAI output item being read.
+#[derive(Debug)]
+struct ItemOpen {
+    /// Its frame's index in the stack.
+    depth: usize,
+    kind: Option<ToolKind>,
+    /// Keyed hashes of its `id` and `container_id`.
+    id: Option<u64>,
+    container: Option<u64>,
+}
+
 /// What the scanner found.
 #[derive(Debug, PartialEq)]
 enum Found {
+    /// A hosted-tool call item (OpenAI).
+    Tool { kind: ToolKind, id: Option<u64>, container: Option<u64> },
     /// A usage object's raw bytes, and whether it sits at the answer's root
     /// (Anthropic: a `message_delta` or a whole message — the final count).
     Usage(Vec<u8>, bool),
@@ -204,6 +271,11 @@ struct Scanner {
     capture: Option<(Vec<u8>, usize, bool)>,
     /// The grounding metadata being read.
     grounding: Option<GroundingOpen>,
+    /// The OpenAI output item being read.
+    item: Option<ItemOpen>,
+    /// The current string is an output item's `id` or `container_id`: its
+    /// hash so far.
+    id_hash: Option<DefaultHasher>,
     /// The current string is a search query: its hash so far.
     query_hash: Option<DefaultHasher>,
     /// Hash keys for search queries, random per answer (an answer cannot
@@ -248,6 +320,12 @@ impl Scanner {
     /// Whether `key`'s value, starting now, is one `provider` reports usage
     /// or the model in.
     fn wanted(&self, provider: Provider, key: Key) -> bool {
+        if matches!(key, Key::Type | Key::Id | Key::ContainerId) {
+            // A direct child of the open output item.
+            return provider == Provider::OpenAi
+                && self.deeper == 0
+                && self.item.as_ref().is_some_and(|i| self.stack.len() == i.depth + 1);
+        }
         let Some(rest) = self.below_root() else { return false };
         match provider {
             Provider::OpenAi => matches!(key, Key::Usage | Key::Model)
@@ -263,7 +341,7 @@ impl Scanner {
     fn feed(&mut self, provider: Provider, sse: bool, bytes: &[u8], found: &mut Vec<Found>) {
         for &b in bytes {
             if sse && (b == b'\n' || b == b'\r') {
-                if self.capture.is_some() || self.grounding.is_some() {
+                if self.capture.is_some() || self.grounding.is_some() || self.item.is_some() {
                     found.push(Found::Lost);
                 }
                 self.reset();
@@ -295,6 +373,9 @@ impl Scanner {
             if let Some(h) = self.query_hash.as_mut() {
                 h.write_u8(b);
             }
+            if let Some(h) = self.id_hash.as_mut() {
+                h.write_u8(b);
+            }
             if self.string.len() < MAX_STRING {
                 self.string.push(b);
             } else {
@@ -322,6 +403,7 @@ impl Scanner {
                     self.pending.take().filter(|k| self.wanted(provider, *k))
                 };
                 self.query_hash = (!self.string_is_key && self.at_query()).then(|| self.keys.build_hasher());
+                self.id_hash = matches!(self.string_value_of, Some(Key::Id | Key::ContainerId)).then(|| self.keys.build_hasher());
             }
             b':' => {
                 if self.stack.last().is_some_and(|f| f.object) {
@@ -366,6 +448,19 @@ impl Scanner {
                         });
                     }
                 }
+                // An output item of an OpenAI answer: `output[i]`,
+                // `response.output[i]` or an event's `item`.
+                if object && provider == Provider::OpenAi && self.item.is_none() {
+                    let at_item = match self.below_root() {
+                        Some([]) => key == Key::Item,
+                        Some([list]) => !list.object && list.key == Key::Output,
+                        Some([resp, list]) => resp.object && resp.key == Key::Response && !list.object && list.key == Key::Output,
+                        _ => false,
+                    };
+                    if at_item {
+                        self.item = Some(ItemOpen { depth: self.stack.len(), kind: None, id: None, container: None });
+                    }
+                }
                 if self.stack.len() < MAX_DEPTH {
                     self.stack.push(Frame { object, key, items: 0 });
                 } else {
@@ -392,6 +487,12 @@ impl Scanner {
                     if let Some(g) = self.grounding.take() {
                         found.push(Found::Grounding { candidate: g.candidate, queries: g.queries, extra: g.extra, had_key: g.had_key });
                     }
+                }
+                if self.deeper == 0 && self.item.as_ref().is_some_and(|i| i.depth == self.stack.len()) {
+                    if let Some(ItemOpen { kind: Some(kind), id, container, .. }) = self.item.take() {
+                        found.push(Found::Tool { kind, id, container });
+                    }
+                    self.item = None;
                 }
                 if self.stack.is_empty() && self.deeper == 0 {
                     self.reset();
@@ -426,7 +527,18 @@ impl Scanner {
             if !self.string_long && !self.string_escaped && !self.string.is_empty() {
                 found.push(Found::Model(String::from_utf8_lossy(&self.string).into_owned()));
             }
+        } else if let Some(key @ (Key::Type | Key::Id | Key::ContainerId)) = self.string_value_of {
+            let hash = self.id_hash.take().map(|h| h.finish());
+            if let Some(item) = self.item.as_mut() {
+                match key {
+                    Key::Type if !self.string_long && !self.string_escaped => item.kind = tool_kind(&self.string),
+                    Key::Id => item.id = hash,
+                    Key::ContainerId => item.container = hash,
+                    _ => {}
+                }
+            }
         }
+        self.id_hash = None;
         self.string_value_of = None;
         self.pending = None;
     }
@@ -493,6 +605,17 @@ struct RequestFacts {
     may_ground: bool,
     /// The request names input by reference ([`names_input_by_reference`]).
     by_reference: bool,
+    /// OpenAI: the hosted-tool calls the body's tools may make.
+    tools: ToolCalls,
+}
+
+/// OpenAI hosted-tool call counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ToolCalls {
+    web_search: u64,
+    file_search: u64,
+    containers: u64,
+    images: u64,
 }
 
 /// Whether a Gemini request body may ask for Search or Maps grounding: one
@@ -679,10 +802,141 @@ struct AnthropicRequest {
     inference_geo: Option<String>,
 }
 
+/// The fields of an OpenAI request body the meter reads. A body that does
+/// not parse as one object, or repeats or mistypes one of these, is refused
+/// ([`openai_refusal`]).
 #[derive(serde::Deserialize)]
 struct OpenAiRequest {
     model: Option<String>,
     max_output_tokens: Option<u64>,
+    max_tool_calls: Option<u64>,
+    background: Option<serde_json::Value>,
+    service_tier: Option<serde_json::Value>,
+}
+
+/// Why a metered OpenAI request is not forwarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiRefusal {
+    /// The body is not one JSON object with well-formed meter fields.
+    Unparsable,
+    /// `background: true`: the answer returns before any usage exists and is
+    /// billed in full later, past the monthly limit.
+    Background,
+    /// A `service_tier` other than `auto`, `default` or `flex`: Fast
+    /// (`priority`) and Ultrafast bill at a multiple of standard, which
+    /// differs by model and is not in the price table.
+    ServiceTier,
+}
+
+/// Whether a metered OpenAI request must be refused before it is sent.
+pub fn openai_refusal(body: &[u8]) -> Option<OpenAiRefusal> {
+    let Ok(r) = serde_json::from_slice::<OpenAiRequest>(body) else {
+        return Some(OpenAiRefusal::Unparsable);
+    };
+    if !matches!(r.background, None | Some(serde_json::Value::Bool(false))) {
+        return Some(OpenAiRefusal::Background);
+    }
+    match r.service_tier {
+        None => None,
+        Some(serde_json::Value::String(tier)) if matches!(tier.to_ascii_lowercase().as_str(), "auto" | "default" | "flex") => None,
+        Some(_) => Some(OpenAiRefusal::ServiceTier),
+    }
+}
+
+/// The hosted tools a request body lists: a `type` of `web_search*`,
+/// `file_search`, `code_interpreter` or `image_generation` anywhere in it
+/// (every occurrence seen, as [`names_input_by_reference`]; more than the
+/// tools array can only overcount).
+#[derive(Debug, Clone, Copy, Default)]
+struct ToolFlags {
+    web_search: bool,
+    file_search: bool,
+    code_interpreter: bool,
+    image_generation: bool,
+}
+
+struct ToolScan<'a> {
+    flags: &'a mut ToolFlags,
+    type_value: bool,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for ToolScan<'_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for ToolScan<'_> {
+    type Value = ();
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E>(self, value: &str) -> Result<(), E> {
+        if self.type_value {
+            let value = value.to_ascii_lowercase();
+            if value.starts_with("web_search") {
+                self.flags.web_search = true;
+            }
+            match value.as_str() {
+                "file_search" => self.flags.file_search = true,
+                "code_interpreter" => self.flags.code_interpreter = true,
+                "image_generation" => self.flags.image_generation = true,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let flags = self.flags;
+        while seq.next_element_seed(ToolScan { flags: &mut *flags, type_value: false })?.is_some() {}
+        Ok(())
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let flags = self.flags;
+        while let Some(key) = map.next_key::<String>()? {
+            map.next_value_seed(ToolScan { flags: &mut *flags, type_value: key == "type" })?;
+        }
+        Ok(())
+    }
+}
+
+/// The most hosted-tool calls an OpenAI request body may make: what its
+/// tools list, up to its `max_tool_calls` or the assumed counts.
+fn openai_tool_calls(body: &[u8], max_tool_calls: Option<u64>) -> ToolCalls {
+    use serde::de::DeserializeSeed;
+    let mut flags = ToolFlags::default();
+    let mut de = serde_json::Deserializer::from_slice(body);
+    let parsed = ToolScan { flags: &mut flags, type_value: false }.deserialize(&mut de).and_then(|()| de.end()).is_ok();
+    if !parsed {
+        flags = ToolFlags { web_search: true, file_search: true, code_interpreter: true, image_generation: true };
+    }
+    let calls = |on: bool, assumed: u64| match (on, max_tool_calls) {
+        (false, _) => 0,
+        (true, Some(max)) => max.min(MAX_TOOL_CALLS),
+        (true, None) => assumed,
+    };
+    ToolCalls {
+        web_search: calls(flags.web_search, WEB_SEARCH_CALLS_ESTIMATE),
+        file_search: calls(flags.file_search, FILE_SEARCH_CALLS_ESTIMATE),
+        containers: calls(flags.code_interpreter, CONTAINERS_ESTIMATE).min(CONTAINERS_ESTIMATE),
+        images: calls(flags.image_generation, IMAGE_CALLS_ESTIMATE),
+    }
 }
 
 /// One relayed answer's meter.
@@ -709,6 +963,11 @@ pub struct Meter {
     extra_queries: u64,
     /// Grounding metadata arrived (with or without queries).
     grounded: bool,
+    /// OpenAI hosted-tool items by (kind, keyed id): one per distinct item
+    /// however often the stream repeats it.
+    tool_items: HashSet<(ToolKind, u64)>,
+    /// Items with no id, or past [`MAX_DISTINCT_TOOLS`], each counted.
+    tool_extra: HashMap<ToolKind, u64>,
     /// The answer's status arrived.
     answered: bool,
     /// The answer's status is 2xx (an error answer costs nothing).
@@ -733,6 +992,8 @@ impl Meter {
             queries: HashMap::new(),
             extra_queries: 0,
             grounded: false,
+            tool_items: HashSet::new(),
+            tool_extra: HashMap::new(),
             answered: false,
             success: true,
             request: RequestFacts::default(),
@@ -760,6 +1021,9 @@ impl Meter {
             if let Ok(r) = serde_json::from_slice::<OpenAiRequest>(body) {
                 self.request.model = r.model.filter(|m| !m.is_empty() && m.len() <= MAX_STRING);
                 self.request.max_output = r.max_output_tokens;
+                self.request.tools = openai_tool_calls(body, r.max_tool_calls);
+            } else {
+                self.request.tools = openai_tool_calls(body, None);
             }
         }
         if self.provider == Provider::Gemini && matches!(self.billing, Billing::Usage { .. }) {
@@ -804,6 +1068,15 @@ impl Meter {
                     Err(_) => self.lost = true,
                 },
                 Found::Lost => self.lost = true,
+                Found::Tool { kind, id, container } => {
+                    let key = if kind == ToolKind::CodeInterpreter { container.or(id) } else { id };
+                    match key {
+                        Some(key) if self.tool_items.len() < MAX_DISTINCT_TOOLS => {
+                            self.tool_items.insert((kind, key));
+                        }
+                        _ => *self.tool_extra.entry(kind).or_default() += 1,
+                    }
+                }
                 Found::Grounding { candidate, queries, extra, had_key } => {
                     self.grounded |= had_key || !queries.is_empty() || extra > 0;
                     let mut listed: HashMap<u64, u64> = HashMap::new();
@@ -823,6 +1096,20 @@ impl Meter {
                     self.extra_queries = self.extra_queries.saturating_add(extra);
                 }
             }
+        }
+    }
+
+    /// Hosted-tool calls the answer's output items listed.
+    fn tool_calls(&self) -> ToolCalls {
+        let count = |kind: ToolKind| {
+            let distinct = self.tool_items.iter().filter(|(k, _)| *k == kind).count() as u64;
+            distinct.saturating_add(self.tool_extra.get(&kind).copied().unwrap_or(0))
+        };
+        ToolCalls {
+            web_search: count(ToolKind::WebSearch),
+            file_search: count(ToolKind::FileSearch),
+            containers: count(ToolKind::CodeInterpreter),
+            images: count(ToolKind::ImageGeneration),
         }
     }
 
@@ -969,10 +1256,24 @@ impl Meter {
         let charge = match self.provider {
             Provider::OpenAi => {
                 let mut u = self.openai.clone();
+                let mut tools = self.tool_calls();
                 if !settled {
                     if u.input == 0 { u.input = input_estimate; }
                     u.output = u.output.max(output_estimate);
+                    // Calls the answer did not deliver (cut off, or not yet
+                    // sent): what the body's tools may make.
+                    let may = self.request.tools;
+                    tools = ToolCalls {
+                        web_search: tools.web_search.max(may.web_search),
+                        file_search: tools.file_search.max(may.file_search),
+                        containers: tools.containers.max(may.containers),
+                        images: tools.images.max(may.images),
+                    };
                 }
+                u.web_search_calls = tools.web_search;
+                u.file_search_calls = tools.file_search;
+                u.containers = tools.containers;
+                u.image_generation_calls = tools.images;
                 super::api_prices::price_openai(model, &u)
             }
             Provider::Anthropic => {
@@ -1028,7 +1329,7 @@ mod tests {
     fn openai_responses_usage_survives_every_stream_split_without_double_counting() {
         let usage = r#"{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},"output_tokens":300,"output_tokens_details":{"reasoning_tokens":200}}"#;
         let response = format!(r#"{{"model":"gpt-6.1-sol","output":[{{"usage":{{"input_tokens":999999}},"model":"fake"}}],"usage":{usage}}}"#);
-        let expected = super::super::api_prices::price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1000, cached: 800, output: 300 });
+        let expected = super::super::api_prices::price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1000, cached: 800, output: 300, ..OpenAiUsage::default() });
         every_split(Provider::OpenAi, Billing::Usage { model: None }, "application/json", response.as_bytes(), &expected);
         let sse = format!("event: response.created\ndata: {{\"response\":{{\"usage\":null}}}}\n\nevent: response.completed\ndata: {{\"response\":{response}}}\n\n");
         every_split(Provider::OpenAi, Billing::Usage { model: None }, "text/event-stream", sse.as_bytes(), &expected);
@@ -1053,6 +1354,172 @@ mod tests {
         assert!(!names_input_by_reference(Provider::OpenAi, br#"{"tools":[{"type":"function","name":"shell"}]}"#));
         assert!(names_input_by_reference(Provider::OpenAi, br#"{"tools":[{"type":"web_search"}]}"#));
     }
+    fn openai_item(id: &str, kind: &str, extra: &str) -> String {
+        format!(r#"{{"id":"{id}","type":"{kind}","status":"completed"{extra}}}"#)
+    }
+
+    /// Hosted-tool items: a web search, a file search, two code interpreter
+    /// calls in one container, an image — and look-alikes that are not items
+    /// (nested in a message, escaped in its text).
+    fn openai_tool_items() -> Vec<String> {
+        vec![
+            openai_item("ws_1", "web_search_call", r#","action":{"type":"search","query":"x"}"#),
+            openai_item("fs_1", "file_search_call", r#","queries":["a"]"#),
+            openai_item("ci_1", "code_interpreter_call", r#","container_id":"cntr_1","code":"1""#),
+            openai_item("ci_2", "code_interpreter_call", r#","container_id":"cntr_1","code":"2""#),
+            openai_item("ig_1", "image_generation_call", r#","result":"AAAA""#),
+            openai_item(
+                "msg_1",
+                "message",
+                r#","content":[{"type":"web_search_call","id":"fake"},{"type":"output_text","text":"{\"type\":\"image_generation_call\",\"id\":\"fake2\"}"}]"#,
+            ),
+        ]
+    }
+
+    fn openai_tool_expected() -> Charge {
+        super::super::api_prices::price_openai(
+            "gpt-6.1-sol",
+            &OpenAiUsage {
+                input: 1000,
+                cached: 800,
+                output: 300,
+                web_search_calls: 1,
+                file_search_calls: 1,
+                containers: 1,
+                image_generation_calls: 1,
+            },
+        )
+    }
+
+    const OPENAI_USAGE: &str = r#""usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},"output_tokens":300}"#;
+
+    #[test]
+    fn openai_tool_calls_are_charged_once_however_the_stream_repeats_and_splits_them() {
+        let items = openai_tool_items();
+        let expected = openai_tool_expected();
+        assert!(expected.tool_tokens > 0 && expected.usd > 2.5);
+        // SSE: each item added, done, then again inside `response.completed`.
+        let mut sse = String::new();
+        for (i, item) in items.iter().enumerate() {
+            sse.push_str(&format!("event: response.output_item.added\ndata: {{\"type\":\"response.output_item.added\",\"output_index\":{i},\"item\":{item}}}\n\n"));
+            sse.push_str(&format!("event: response.output_item.done\ndata: {{\"type\":\"response.output_item.done\",\"output_index\":{i},\"item\":{item}}}\n\n"));
+        }
+        sse.push_str(&format!(
+            "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"model\":\"gpt-6.1-sol\",\"output\":[{}],{OPENAI_USAGE}}}}}\n\n",
+            items.join(",")
+        ));
+        every_split(Provider::OpenAi, Billing::Usage { model: None }, "text/event-stream", sse.as_bytes(), &expected);
+        // Plain JSON.
+        let json = format!(r#"{{"model":"gpt-6.1-sol","output":[{}],{OPENAI_USAGE}}}"#, items.join(","));
+        every_split(Provider::OpenAi, Billing::Usage { model: None }, "application/json", json.as_bytes(), &expected);
+        // The type after the id, and a line break cutting an item off.
+        let late = r#"{"model":"gpt-6.1-sol","output":[{"status":"completed","id":"ws_9","type":"web_search_call"}],"usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let m = metered(Provider::OpenAi, Billing::Usage { model: None }, "application/json", &[late.as_bytes()]);
+        assert_eq!(m.charge(MONTH, DONE).unwrap().web_searches, 1);
+        let mut cut_item = Meter::new(Provider::OpenAi, Billing::Usage { model: None });
+        cut_item.answer(200, Some("text/event-stream"));
+        cut_item.feed(b"data: {\"item\":{\"id\":\"ws_1\",\"ty\n");
+        assert!(cut_item.lost, "an item cut by a line break leaves the count unknown");
+    }
+
+    #[test]
+    fn openai_tool_items_without_an_id_are_each_counted() {
+        let body = r#"{"output":[{"type":"web_search_call"},{"type":"web_search_call"}],"usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let m = metered(Provider::OpenAi, Billing::Usage { model: None }, "application/json", &[body.as_bytes()]);
+        assert_eq!(m.charge(MONTH, DONE).unwrap().web_searches, 2);
+    }
+
+    #[test]
+    fn openai_tool_calls_the_body_allows_are_held_before_it_is_sent() {
+        let worst = |body: &str| {
+            let mut m = Meter::new(Provider::OpenAi, Billing::Usage { model: None });
+            m.request(body.as_bytes());
+            m.worst_case_billed(MONTH)
+        };
+        // Code interpreter and image generation also name input by reference
+        // (a whole context window held): the same tools with no calls allowed
+        // are the base, so only the fees differ. gpt-6.1-sol output is $10
+        // per million: a dollar of fees is 100,000 tokens.
+        let with = |tools: &str, max: Option<u64>| {
+            let max = max.map_or(String::new(), |m| format!(r#""max_tool_calls":{m},"#));
+            worst(&format!(r#"{{"model":"gpt-6.1-sol","max_output_tokens":1000,{max}"tools":{tools}}}"#))
+        };
+        let fees = |tools: &str, max: Option<u64>| with(tools, max) - with(tools, Some(0));
+        let code = r#"[{"type":"code_interpreter","container":{"type":"auto"}}]"#;
+        let image = r#"[{"type":"image_generation"}]"#;
+        assert_eq!(fees(code, None), 192_000);
+        assert_eq!(fees(image, None), 4 * 60_000);
+        assert_eq!((fees(image, Some(1)), fees(image, Some(7))), (60_000, 420_000));
+        // Never more than one container, however many calls are allowed.
+        assert_eq!(fees(code, Some(50)), 192_000);
+        // The tool's `type` is read wherever it sits, whichever of two it is.
+        assert_eq!(fees(r#"[{"name":"f","type":"function","type":"image_generation"}]"#, None), 4 * 60_000);
+        // A function tool holds nothing.
+        let function = r#"[{"type":"function","name":"f"}]"#;
+        assert!(with(function, Some(0)).abs_diff(with(function, None)) < 100, "only the body's few extra bytes differ");
+        // A body that is no JSON may hold any of them.
+        assert!(worst("not json") >= with(function, None) + 192_000 + 240_000);
+        assert_eq!(
+            openai_tool_calls(br#"{"tools":[{"type":"web_search_preview"},{"type":"file_search"}]}"#, None),
+            ToolCalls { web_search: 10, file_search: 10, containers: 0, images: 0 }
+        );
+        assert_eq!(openai_tool_calls(br#"{"tools":[{"type":"function"}]}"#, None), ToolCalls::default());
+    }
+
+    #[test]
+    fn an_openai_answer_cut_off_is_charged_the_tool_calls_its_request_may_have_made() {
+        let mut m = Meter::new(Provider::OpenAi, Billing::Usage { model: None });
+        m.request(br#"{"model":"gpt-6.1-sol","tools":[{"type":"web_search"}]}"#);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(b"data: {\"response\":{\"usage\":null}}\n\n");
+        assert_eq!(m.charge(MONTH, cut(1)).unwrap().web_searches, WEB_SEARCH_CALLS_ESTIMATE);
+        // A settled answer is charged the calls it made, not the ceiling.
+        let done = metered(Provider::OpenAi, Billing::Usage { model: None }, "application/json", &[
+            br#"{"model":"gpt-6.1-sol","output":[{"id":"ws_1","type":"web_search_call"}],"usage":{"input_tokens":1,"output_tokens":1}}"#,
+        ]);
+        let mut done = done;
+        done.request(br#"{"model":"gpt-6.1-sol","tools":[{"type":"web_search"}]}"#);
+        assert_eq!(done.charge(MONTH, DONE).unwrap().web_searches, 1);
+    }
+
+    #[test]
+    fn openai_requests_the_meter_cannot_see_are_refused() {
+        let refusal = |body: &str| openai_refusal(body.as_bytes());
+        assert_eq!(refusal(r#"{"model":"gpt-6.1-sol","stream":true}"#), None);
+        assert_eq!(refusal("{}"), None);
+        assert_eq!(refusal(r#"{"background":false,"service_tier":null,"max_output_tokens":null}"#), None);
+        for tier in ["auto", "default", "flex", "FLEX"] {
+            assert_eq!(refusal(&format!(r#"{{"service_tier":"{tier}"}}"#)), None, "{tier}");
+        }
+        for background in ["true", r#""true""#, "1", "{}"] {
+            assert_eq!(refusal(&format!(r#"{{"model":"m","background":{background}}}"#)), Some(OpenAiRefusal::Background), "{background}");
+        }
+        for tier in [r#""priority""#, r#""Priority""#, r#""fast""#, r#""ultrafast""#, r#""scale""#, r#""""#, "1", "true"] {
+            assert_eq!(refusal(&format!(r#"{{"service_tier":{tier}}}"#)), Some(OpenAiRefusal::ServiceTier), "{tier}");
+        }
+        // A body the meter cannot read: not JSON, not an object, trailing bytes,
+        // a field repeated (the provider may read the first or the last), a
+        // field of the wrong type.
+        for body in [
+            "",
+            "not json",
+            "[]",
+            "null",
+            r#"{"model":"m"} x"#,
+            r#"{"background":true,"background":false}"#,
+            r#"{"background":false,"background":true}"#,
+            r#"{"service_tier":"auto","service_tier":"priority"}"#,
+            r#"{"model":"a","model":"b"}"#,
+            r#"{"model":3}"#,
+            r#"{"max_output_tokens":-1}"#,
+            r#"{"max_tool_calls":"many"}"#,
+            r#"{"backgr\u006fund":true,"background":false}"#,
+        ] {
+            assert_eq!(refusal(body), Some(OpenAiRefusal::Unparsable), "{body}");
+        }
+        assert_eq!(refusal(r#"{"backgr\u006fund":true}"#), Some(OpenAiRefusal::Background));
+    }
+
     /// A clean end.
     const DONE: End = End { complete: true, elapsed: Duration::ZERO };
 

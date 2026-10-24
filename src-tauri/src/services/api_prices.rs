@@ -55,8 +55,11 @@ pub const PRICES_DATE: &str = "2026-10-22";
 /// OpenAI standard text rates, fetched 2026-10-22:
 /// https://developers.openai.com/api/docs/pricing . USD remains an estimate;
 /// monthly enforcement uses billed tokens, independent of these rates.
-/// Cache-write surcharges, service tiers, long-context surcharges and hosted
-/// tool fees are not included in this initial OpenAI dollar estimate.
+/// Cache-write surcharges and long-context surcharges are not included in
+/// this OpenAI dollar estimate. The proxy refuses requests for a priced
+/// service tier (`api_meter::openai_refusal`: Fast/priority, Ultrafast), so
+/// no tier rate is needed; hosted-tool fees are charged per call
+/// ([`price_openai`]).
 /// (model, input, cached input, output), USD per million tokens.
 const OPENAI: &[(&str, f64, f64, f64)] = &[
     ("gpt-6-astra", 10.0, 1.0, 50.0),
@@ -73,6 +76,37 @@ pub struct OpenAiUsage {
     pub input: u64,
     pub cached: u64,
     pub output: u64,
+    /// Hosted-tool calls the answer's output items listed, each billed on
+    /// top of the tokens.
+    pub web_search_calls: u64,
+    pub file_search_calls: u64,
+    /// Code interpreter container sessions.
+    pub containers: u64,
+    pub image_generation_calls: u64,
+}
+
+/// OpenAI hosted-tool fees, USD per call, read off
+/// <https://developers.openai.com/api/docs/pricing> ("Tools") on 2026-10-24.
+/// Web search is the dearer preview rate ($25 per 1,000, non-reasoning
+/// models; $10 otherwise) because an output item does not say which applies.
+const OPENAI_WEB_SEARCH_USD: f64 = 25.0 / 1000.0;
+const OPENAI_FILE_SEARCH_USD: f64 = 2.5 / 1000.0;
+/// A code interpreter container session at the dearest size (64 GB, per
+/// 20-minute session); the output item does not say which size ran.
+const OPENAI_CONTAINER_USD: f64 = 1.92;
+/// One image generation call. OpenAI prices images in tokens of the image
+/// model (gpt-image-2 output $30 per million); this is an assumption above
+/// a large high-quality image (about 20,000 tokens), so it can only
+/// overcount, and a usage object that already holds those tokens is charged
+/// them twice.
+const OPENAI_IMAGE_USD: f64 = 0.60;
+
+/// What a request's hosted tools can add to its bill, for `u`'s counts.
+pub fn openai_tool_usd(u: &OpenAiUsage) -> f64 {
+    u.web_search_calls as f64 * OPENAI_WEB_SEARCH_USD
+        + u.file_search_calls as f64 * OPENAI_FILE_SEARCH_USD
+        + u.containers as f64 * OPENAI_CONTAINER_USD
+        + u.image_generation_calls as f64 * OPENAI_IMAGE_USD
 }
 
 fn openai_rates(model: &str) -> (f64, f64, f64, bool) {
@@ -88,9 +122,15 @@ pub fn price_openai(model: &str, u: &OpenAiUsage) -> Charge {
     let (input_rate, cache_rate, output_rate, known) = openai_rates(model);
     let cache_read = u.cached.min(u.input);
     let input = u.input.saturating_sub(cache_read);
+    let tools_usd = openai_tool_usd(u);
+    // The limit counts billed tokens: a tool's fee counts as the output
+    // tokens it would buy at this model's output rate.
+    let tool_tokens = if tools_usd > 0.0 && output_rate > 0.0 { (tools_usd / output_rate * 1e6).round() as u64 } else { 0 };
     Charge {
         model: model.to_string(), known, input, cache_read, output: u.output,
-        usd: (input as f64 * input_rate + cache_read as f64 * cache_rate + u.output as f64 * output_rate) / 1e6,
+        web_searches: u.web_search_calls,
+        tool_tokens,
+        usd: (input as f64 * input_rate + cache_read as f64 * cache_rate + u.output as f64 * output_rate) / 1e6 + tools_usd,
         ..Charge::default()
     }
 }
@@ -535,6 +575,9 @@ pub struct Charge {
     pub cache_write: u64,
     pub cache_read: u64,
     pub web_searches: u64,
+    /// Hosted-tool fees (OpenAI) as billed-token equivalents, counted by the
+    /// limit but not shown as any kind of token.
+    pub tool_tokens: u64,
     pub usd: f64,
 }
 
@@ -543,6 +586,7 @@ impl Charge {
     /// (`keys_wire::billed_tokens`); the USD figure is an estimate beside it.
     pub fn billed(&self) -> u64 {
         crate::services::server::keys_wire::billed_tokens(self.input, self.cache_write, self.output, self.cache_read)
+            .saturating_add(self.tool_tokens)
     }
 }
 
@@ -583,6 +627,7 @@ pub fn price_anthropic(model: &str, u: &AnthropicUsage) -> Charge {
         cache_read: u.cache_read_input_tokens,
         web_searches: u.web_search_requests,
         usd: tokens * PER_TOKEN * mult + u.web_search_requests as f64 * WEB_SEARCH_USD,
+        ..Charge::default()
     }
 }
 
@@ -621,6 +666,7 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
         cache_read: cached,
         web_searches: searches,
         usd,
+        ..Charge::default()
     }
 }
 
@@ -630,13 +676,30 @@ mod tests {
 
     #[test]
     fn openai_cache_is_part_of_input_and_reasoning_is_part_of_output() {
-        let charge = price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1_000, cached: 800, output: 300 });
+        let charge = price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1_000, cached: 800, output: 300, ..OpenAiUsage::default() });
         assert_eq!((charge.input, charge.cache_read, charge.output, charge.billed()), (200, 800, 300, 580));
         assert!(charge.known);
         assert!((charge.usd - 0.00348).abs() < 1e-12);
         assert_eq!(normalize(Provider::OpenAi, "gpt-6.1-sol-2026-10-01"), "gpt-6.1-sol");
         assert!(!price_openai("unknown", &OpenAiUsage::default()).known);
         let _ = normalize(Provider::OpenAi, "abcdef💡abcdef");
+    }
+
+    #[test]
+    fn openai_hosted_tool_calls_are_charged_per_call_and_count_toward_the_limit() {
+        let tokens = OpenAiUsage { input: 1_000, output: 300, ..OpenAiUsage::default() };
+        let plain = price_openai("gpt-6.1-sol", &tokens);
+        assert_eq!((plain.tool_tokens, plain.web_searches), (0, 0));
+        let tools = OpenAiUsage { web_search_calls: 2, file_search_calls: 4, containers: 1, image_generation_calls: 1, ..tokens };
+        let charge = price_openai("gpt-6.1-sol", &tools);
+        let fees = 2.0 * 0.025 + 4.0 * 0.0025 + 1.92 + 0.60;
+        assert!((charge.usd - plain.usd - fees).abs() < 1e-9);
+        assert_eq!(charge.web_searches, 2);
+        // gpt-6.1-sol output is $10 per million: a dollar of fees is 100,000 tokens.
+        assert!(charge.tool_tokens.abs_diff((fees * 100_000.0).round() as u64) <= 1);
+        assert_eq!(charge.billed(), plain.billed() + charge.tool_tokens);
+        // An unknown model pays at its dearest output rate: fewer tokens per dollar.
+        assert!(price_openai("unknown", &tools).tool_tokens < charge.tool_tokens);
     }
 
     fn close(a: f64, b: f64) -> bool {
