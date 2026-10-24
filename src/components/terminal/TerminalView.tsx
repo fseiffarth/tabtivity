@@ -312,6 +312,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const openWatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silentStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstOutputAt = useRef<number | null>(null);
+  // When the PTY's size last changed (`noteFit`). An auto-typed command line
+  // waits for it to settle: bash redraws its line on SIGWINCH from the OLD width
+  // while xterm has already reflowed the wrapped text, so a long command typed
+  // just before the open-time refits is left on screen twice.
+  const ptySizeAt = useRef({ cols: 0, rows: 0, at: 0 });
+  const noteFit = (cols: number, rows: number) => {
+    const last = ptySizeAt.current;
+    if (last.cols !== cols || last.rows !== rows) ptySizeAt.current = { cols, rows, at: Date.now() };
+  };
   const scheduledReady = useRef(false);
   const terminalReadySeen = useRef(false);
   const scheduledSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -847,6 +856,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       built.options.theme = terminalTheme(colorSchemeRef.current);
       fitRef.current?.fit();
       flushPending();
+      noteFit(built.cols, built.rows);
       invoke("pty_resize", { id, cols: built.cols, rows: built.rows }).catch(() => {});
       if (focusedRef.current) built.focus();
       // The pane may keep growing right after open — the startup fullscreen
@@ -1439,13 +1449,19 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // bracketed-paste/buffered input handling.
         const READY_CUSHION_MS = 1200;
         const MAX_WAIT_MS = 5000;
+        // Longer than the resize debounce (`PTY_RESIZE_DEBOUNCE_MS`), so a refit
+        // still on its way to the PTY holds the typing back.
+        const SIZE_SETTLE_MS = 400;
         const scheduledAt = Date.now();
         const typeWhenReady = () => {
           if (cancelled) return;
           const elapsed = Date.now() - scheduledAt;
           const firstOut = firstOutputAt.current;
           const ready =
-            launchNamed !== null && firstOut !== null && Date.now() - firstOut >= READY_CUSHION_MS;
+            launchNamed !== null &&
+            firstOut !== null &&
+            Date.now() - firstOut >= READY_CUSHION_MS &&
+            Date.now() - ptySizeAt.current.at >= SIZE_SETTLE_MS;
           if (!ready && elapsed < MAX_WAIT_MS) {
             initialEnterTimer.current = setTimeout(typeWhenReady, 100);
             return;
@@ -1653,6 +1669,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // about the previous occupant of this id, so a reopened project's resume
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
+      // A shell tab Tabtivity opened to run something — a program of its own
+      // (`git clone`, an install's `bash`) or a line it types (a script's Run)
+      // — was asked for by whoever opened it, so it is commanded from its spawn,
+      // like a plain shell once a command is typed into it. The typed line would
+      // stamp it too, but a program has nothing to type, and a remount whose
+      // line was already typed (`claimInitialInput`) types nothing again: both
+      // stayed unstamped and never wore the running ▶.
+      if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
@@ -1877,6 +1901,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           flushPending();
         }
         fitRef.current.fit();
+        noteFit(termRef.current.cols, termRef.current.rows);
         queueResize(termRef.current.cols, termRef.current.rows);
       }
     };

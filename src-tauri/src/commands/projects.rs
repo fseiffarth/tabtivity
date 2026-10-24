@@ -51,6 +51,17 @@ pub(crate) fn remote_project_state_dir(id: &str) -> std::path::PathBuf {
 /// *local mirror*, the user may not have acknowledged it yet, and it is a fact about this
 /// machine rather than about any host.
 async fn clear_host_bound_state(project_id: &str, manifest: &SyncManifestState) {
+    // Under the project's mutation lock (`services::sync_op`), so a sync or lockstep
+    // pass still in flight finishes first rather than re-creating `sync.json` from
+    // its own record right after it was removed. A lock that cannot be had does not
+    // stop the detach the user asked for; it is logged.
+    let _op = match crate::services::sync_op::acquire(project_id).await {
+        Ok(op) => Some(op),
+        Err(e) => {
+            eprintln!("clear_host_bound_state: {project_id}: {e}");
+            None
+        }
+    };
     let _ = fs::remove_file(crate::services::remote_sync::manifest_path(project_id));
     let _ = fs::remove_file(crate::services::git_peer::state_path(project_id));
     manifest.lock().await.remove(project_id);

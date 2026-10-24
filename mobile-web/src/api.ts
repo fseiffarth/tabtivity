@@ -863,6 +863,9 @@ export interface SessionTranscript {
    * agent is running now — Claude's `Bash` calls still without a result, and
    * background ones still running. */
   shells?: RunningShell[];
+  /** Desktop Reader only (the phone's API strips it): the newest `/context`
+   * card Claude printed, colour codes stripped. */
+  contextCard?: string;
   /** Desktop Reader only: the read named a watch id and the backend armed
    * it, so a change will be announced (`lib/agents/transcriptWatch`). */
   watched?: boolean;

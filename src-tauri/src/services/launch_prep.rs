@@ -841,6 +841,12 @@ pub async fn prepare(
     // twice.)
     // (A chat's session is resolved once its argv is built, below.)
     if !assistant {
+        // OpenCode's session plugin is listed per release (a directory for 2,
+        // the file for 1.x): probe first, so the resolve lists the one this
+        // binary loads even right after an upgrade. The check below reuses it.
+        if opts.cmd == "opencode" {
+            crate::commands::agents::opencode_is_v2().await;
+        }
         opts = crate::services::agent_session::resolve_agent_session(opts);
     }
 

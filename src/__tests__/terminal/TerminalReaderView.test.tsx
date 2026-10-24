@@ -180,6 +180,25 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it("says the turn is only in the terminal when the stored conversation never records a sent prompt", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "a turn the store never shows"));
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeTruthy();
+      expect(host.textContent).not.toContain("the chat can't find that turn");
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull();
+      expect(host.querySelector(".terminal-reader-stray")?.textContent).toContain("the chat can't find that turn");
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+      expect(useAgentReaderStore.getState().byAgent.claude).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets no sent prompt go while its pane is hidden", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
@@ -1057,6 +1076,42 @@ describe("the Reader's live rows", () => {
     expect(submitCommand).toHaveBeenCalledTimes(2);
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Codex status" })).toBeNull();
+  });
+
+  it("draws Claude's /context card as a bar, a legend and folded listings", async () => {
+    submitCommand.mockClear();
+    sendSteeringPrompt.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    const rows = [">", "~/p (develop) · Opus 5.5 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const box = await screen.findByRole("textbox");
+    fireEvent.change(box, { target: { value: "/context" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/context");
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    rows.splice(0, rows.length, "❯ /context", "  ⎿  Context Usage",
+      "     ⛁ ⛁ ⛶ ⛶   Opus 5.5", "     ⛶ ⛶ ⛶ ⛶   31.2k/1m tokens (3%)",
+      "     ⛁ System tools: 19.2k tokens (1.9%)", "     ⛁ Messages: 10 tokens (0.0%)",
+      "     ⛶ Free space: 935.8k (93.6%)", "     ⛝ Autocompact buffer: 33k tokens (3.3%)", "",
+      "     Memory files · /memory", "     ├ ~/.claude/CLAUDE.md: 14 tokens", "     └ ~/.claude/RTK.md: 371 tokens", ">");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    const panel = screen.getByRole("dialog", { name: "Claude context" });
+    expect(panel.textContent).toContain("31.2k of 1m tokens");
+    expect(panel.textContent).toContain("3% used");
+    const bar = panel.querySelector(".terminal-reader-context-bar")!;
+    expect(bar.getAttribute("aria-label")).toContain("System tools: 19.2k");
+    // Free space is the track, not a segment; the buffer is hatched.
+    expect(bar.children).toHaveLength(3);
+    expect(bar.querySelector(".reserved")).not.toBeNull();
+    expect(panel.querySelector(".terminal-reader-context-legend li.free")?.textContent).toContain("935.8k");
+    expect(panel.querySelector(".terminal-reader-context-section summary")?.textContent).toContain("Memory files");
+    expect(panel.querySelector(".terminal-reader-context-section")?.textContent).toContain("~/.claude/RTK.md");
+    fireEvent.click(within(panel).getByRole("button", { name: "Refresh /context" }));
+    expect(submitCommand).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Claude context" })).toBeNull();
   });
 
   it("shows Claude's account limits from its usage panel on the /status card", async () => {

@@ -29,6 +29,9 @@
 //! [`session_changes`] reads for the desktop Reader's Changes panel. A part still streaming is left out until it is finished,
 //! so a bubble never changes once shown.
 //!
+//! The Reader's Resume menu lists a folder's top-level sessions by their first
+//! prompt ([`folder_chats`]); a picked one is read as the `own` session is.
+//!
 //! The database also holds OpenCode's account tokens. Only the `session`,
 //! `message` and `part` tables are ever queried, and the file is opened
 //! strictly read-only: OpenCode is writing it while it is read. A missing
@@ -39,6 +42,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 
+use crate::services::agent_chats::FolderChat;
 use crate::services::agent_changes::{opencode_part_changes, opencode_v2_tool_changes, AgentChanges};
 use crate::services::agent_transcript::{
     agent_entry, agents_unlisted, insert_by_time, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
@@ -171,6 +175,7 @@ pub fn session_transcript(
         effort: None,
         tokens: None,
         shells: Vec::new(),
+        context_card: None,
         cwd: None,
         running_cwds: Vec::new(),
         watched: false,
@@ -227,23 +232,163 @@ fn top_level(conn: &Connection, id: &str) -> Option<String> {
 /// The newest top-level, unarchived session of `directory` created at or
 /// after `since`; `None` when the store cannot be queried.
 fn newest_in(conn: &Connection, directory: &str, since: Option<i64>) -> Option<Option<String>> {
-    let mut dirs = vec![directory.to_string()];
-    if let Ok(real) = std::fs::canonicalize(directory) {
-        let real = real.to_string_lossy().into_owned();
-        if real != directory {
-            dirs.push(real);
-        }
-    }
+    let [given, real] = folder_dirs(directory);
     conn.query_row(
         "SELECT id FROM session
           WHERE directory IN (?1, ?2) AND parent_id IS NULL AND time_archived IS NULL
             AND time_created >= ?3
           ORDER BY time_updated DESC LIMIT 1",
-        rusqlite::params![&dirs[0], dirs.last().unwrap_or(&dirs[0]), since.unwrap_or(i64::MIN)],
+        rusqlite::params![given, real, since.unwrap_or(i64::MIN)],
         |row| row.get(0),
     )
     .optional()
     .ok()
+}
+
+/// The two ways a session's `directory` may name the folder: as given, and
+/// resolved (the same twice when they agree).
+fn folder_dirs(directory: &str) -> [String; 2] {
+    let real = std::fs::canonicalize(directory)
+        .map(|real| real.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| directory.to_string());
+    [directory.to_string(), real]
+}
+
+/// Whether `id` is a top-level, unarchived session OpenCode ran in
+/// `directory`: one of the folder's chats the Resume menu lists
+/// (`services::agent_chats`). False when the store cannot be read.
+pub fn folder_session(db: &Path, directory: &str, id: &str) -> bool {
+    let Some(conn) = open_store(db) else {
+        return false;
+    };
+    let [given, real] = folder_dirs(directory);
+    conn.query_row(
+        "SELECT 1 FROM session
+          WHERE id = ?1 AND directory IN (?2, ?3) AND parent_id IS NULL AND time_archived IS NULL",
+        rusqlite::params![id, given, real],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// The folder's chats for the Resume menu: from the `offset`-th of its
+/// top-level, unarchived sessions on, newest first, at most `limit` that a
+/// prompt went into, of at most `scanned` sessions read; and where the next
+/// page starts while older sessions are left. `None` when the store cannot
+/// be read.
+pub fn folder_chats(
+    db: &Path,
+    directory: &str,
+    offset: usize,
+    limit: usize,
+    scanned: usize,
+) -> Option<(Vec<FolderChat>, Option<usize>)> {
+    let conn = open_store(db)?;
+    let [given, real] = folder_dirs(directory);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, time_updated FROM session
+              WHERE directory IN (?1, ?2) AND parent_id IS NULL AND time_archived IS NULL
+              ORDER BY time_updated DESC, id DESC LIMIT ?3 OFFSET ?4",
+        )
+        .ok()?;
+    let rows: Vec<(String, i64)> = stmt
+        .query_map(rusqlite::params![given, real, scanned as i64 + 1, offset as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .ok()?
+        .filter_map(Result::ok)
+        .collect();
+    let mut chats = Vec::new();
+    let mut read = 0;
+    for (id, updated) in rows.iter().take(scanned) {
+        if chats.len() >= limit {
+            break;
+        }
+        read += 1;
+        let (first, last) = session_prompts(&conn, id);
+        let Some((title, at)) = first else { continue };
+        chats.push(FolderChat {
+            id: id.clone(),
+            title,
+            last,
+            started: Some(epoch_ms_to_iso(at)),
+            updated: u64::try_from(*updated).unwrap_or(0),
+        });
+    }
+    Some((chats, (read < rows.len()).then_some(offset + read)))
+}
+
+/// The session's first prompt with its moment (epoch ms), and its last one
+/// when that is another message.
+fn session_prompts(conn: &Connection, session: &str) -> (Option<(String, i64)>, Option<String>) {
+    let prompt = |newest: bool| -> Option<(String, i64)> {
+        let order = if newest { "DESC" } else { "ASC" };
+        let (text, at) = if v2_session(conn, session) {
+            // 2.1.3 keeps the kind in the row's `type` column, earlier V2 in `data`.
+            let kind = if has_column(conn, "session_message", "type") {
+                "coalesce(type, json_extract(data, '$.type'))"
+            } else {
+                "json_extract(data, '$.type')"
+            };
+            let (at, data): (i64, String) = conn
+                .query_row(
+                    &format!(
+                        "SELECT time_created, data FROM session_message
+                          WHERE session_id = ?1 AND {kind} = 'user' ORDER BY seq {order} LIMIT 1"
+                    ),
+                    [session],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok()?;
+            let message: Value = serde_json::from_str(&data).ok()?;
+            (message.get("text").and_then(Value::as_str)?.to_string(), at)
+        } else {
+            let (id, at): (String, i64) = conn
+                .query_row(
+                    &format!(
+                        "SELECT id, time_created FROM message
+                          WHERE session_id = ?1 AND json_extract(data, '$.role') = 'user'
+                          ORDER BY time_created {order}, id {order} LIMIT 1"
+                    ),
+                    [session],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok()?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT data FROM part
+                      WHERE message_id = ?1 AND json_extract(data, '$.type') = 'text'
+                      ORDER BY time_created, id",
+                )
+                .ok()?;
+            let text = stmt
+                .query_map([&id], |row| row.get::<_, String>(0))
+                .ok()?
+                .filter_map(Result::ok)
+                .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
+                .filter(is_written)
+                .filter_map(|part| part_text(&part).map(str::to_string))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (text, at)
+        };
+        (!text.trim().is_empty()).then_some((text, at))
+    };
+    let first = prompt(false);
+    let last = first.as_ref().and_then(|_| prompt(true)).filter(|last| Some(last) != first.as_ref());
+    (first, last.map(|(text, _)| text))
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    conn.prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .ok()
+                .map(|mut rows| rows.any(|name| name.is_ok_and(|name| name == column)))
+        })
+        .unwrap_or(false)
 }
 
 /// The files the tab's session — or `subagent`'s — changed, from its
@@ -460,18 +605,27 @@ fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry
 /// Public V2 message shapes: user text is direct, assistant content is typed.
 /// Synthetic/system/compaction records never become user turns. Query by seq
 /// (the durable admission order), not IDs that can precede queued prompts.
+/// The kind is the row's `type` column — `data` holds no `type` of its own
+/// (OpenCode 2.1.3) — put back into the message as `type`.
 fn v2_messages(conn: &Connection, session: &str, tail: i64) -> Option<(Vec<(i64, Value)>, bool)> {
     let mut stmt = conn.prepare(
-        "SELECT time_created, data FROM session_message WHERE session_id = ?1
+        "SELECT time_created, type, data FROM session_message WHERE session_id = ?1
          ORDER BY seq DESC LIMIT ?2",
     ).ok()?;
-    let mut rows: Vec<(i64, String)> = stmt.query_map(rusqlite::params![session, tail + 1], |row| {
-        Ok((row.get(0)?, row.get(1)?))
+    let mut rows: Vec<(i64, Option<String>, String)> = stmt.query_map(rusqlite::params![session, tail + 1], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     }).ok()?.filter_map(Result::ok).collect();
     let truncated = rows.len() as i64 > tail;
     rows.truncate(tail as usize);
     rows.reverse();
-    Some((rows.into_iter().filter_map(|(at, data)| Some((at, serde_json::from_str(&data).ok()?))).collect(), truncated))
+    let messages = rows.into_iter().filter_map(|(at, kind, data)| {
+        let mut message: Value = serde_json::from_str(&data).ok()?;
+        if let (Some(kind), Some(fields)) = (kind, message.as_object_mut()) {
+            fields.entry("type").or_insert(Value::String(kind));
+        }
+        Some((at, message))
+    }).collect();
+    Some((messages, truncated))
 }
 
 fn v2_message_entries(message: &Value, created: i64) -> Vec<TranscriptEntry> {
@@ -632,20 +786,26 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
                time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
-             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, seq INTEGER,
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
                time_created INTEGER, time_updated INTEGER, data TEXT);
              INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');
              INSERT INTO session_v2 VALUES ('ses_child', 'ses_v2', 'v2', 21, 30, NULL, 'Explore', 'explore');",
         ).unwrap();
-        for (seq, at, data) in [
-            (1, 30, json!({"type":"user","text":"question"})),
-            (2, 20, json!({"type":"assistant","content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"answer"}],"time":{"completed":40}})),
-            (3, 40, json!({"type":"synthetic","text":"hidden context"})),
-            (4, 50, json!({"type":"assistant","content":[{"type":"text","text":"still streaming"}],"time":{}})),
-            (5, 60, json!({"type":"assistant","content":[{"type":"tool","name":"edit","time":{"completed":61},"state":{"status":"completed","metadata":{"files":[{"file":"file.rs","patch":"@@ -1 +1 @@\n-old\n+new","status":"modified"}]}}}],"time":{"completed":62}})),
+        // The kind is the row's `type` column; OpenCode 2.1.3 keeps none in `data`.
+        for (seq, at, kind, data) in [
+            (1, 30, "user", json!({"text":"question"})),
+            (2, 20, "assistant", json!({"content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"answer"}],"time":{"completed":40}})),
+            (3, 40, "synthetic", json!({"text":"hidden context"})),
+            (4, 50, "assistant", json!({"content":[{"type":"text","text":"still streaming"}],"time":{}})),
+            (5, 60, "assistant", json!({"content":[{"type":"tool","name":"edit","time":{"completed":61},"state":{"status":"completed","metadata":{"files":[{"file":"file.rs","patch":"@@ -1 +1 @@\n-old\n+new","status":"modified"}]}}}],"time":{"completed":62}})),
+            (6, 70, "assistant", json!({"content":[
+                {"type":"tool","name":"edit","time":{"completed":71},"state":{"status":"completed","input":{"filePath":"lib.rs","oldString":"a","newString":"b"},"metadata":{"diff":"Index: lib.rs\n--- lib.rs\n+++ lib.rs\n@@ -1 +1 @@\n-a\n+b\n"}}},
+                {"type":"tool","name":"write","time":{"completed":72},"state":{"status":"completed","input":{"filePath":"new.rs","content":"fn x() {}\n"},"metadata":{"exists":false}}},
+            ],"time":{"completed":73}})),
+            (7, 80, "idle", json!({"outcome":"succeeded"})),
         ] {
-            conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?3, ?4)",
-                rusqlite::params![format!("msg_{seq}"), seq, at, data.to_string()]).unwrap();
+            conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?4, ?4, ?5)",
+                rusqlite::params![format!("msg_{seq}"), kind, seq, at, data.to_string()]).unwrap();
         }
         assert!(resumable_session(&db, "ses_v2"));
         assert!(!resumable_session(&db, "ses_child"));
@@ -655,9 +815,9 @@ mod tests {
         assert!(transcript.entries.iter().any(|e| e.kind == "agent" && e.subagent.is_some()));
         assert!(session_transcript(&db, "v2", None, Some("ses_v2"), None, transcript.version.as_deref(), 100).unwrap().unchanged);
         let changes = session_changes(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
-        assert_eq!(changes.changes.len(), 1);
-        assert_eq!(changes.changes[0].path, "file.rs");
-        assert_eq!(changes.changes[0].kind, "edit");
+        let mut changed: Vec<_> = changes.changes.iter().map(|c| (c.path.as_str(), c.kind.as_str())).collect();
+        changed.sort();
+        assert_eq!(changed, [("file.rs", "edit"), ("lib.rs", "edit"), ("new.rs", "add")]);
         let legacy = session_transcript(&db, "legacy", None, Some("ses_legacy"), None, None, 100).unwrap();
         assert_eq!(kinds(&legacy), [("prompt", "old question")]);
         // Opening the read-only adapter creates no persistent views or tables.
@@ -846,5 +1006,64 @@ mod tests {
         assert_eq!(task_of("Explore codebase structure (@explore subagent)"), "Explore codebase structure");
         assert_eq!(task_of("Plain title"), "Plain title");
         assert_eq!(task_of("(@x subagent)"), "(@x subagent)");
+    }
+
+    #[test]
+    fn a_folders_prompted_top_level_sessions_are_its_chats_newest_first() {
+        use serde_json::json;
+        let (db, conn) = store();
+        session(&conn, "ses_old", None, "dir", 10, None);
+        message(&conn, "msg_a", "ses_old", 10, json!({"role":"user"}));
+        part(&conn, "prt_a", "msg_a", "ses_old", 10, json!({"type":"text","text":"first ask"}));
+        part(&conn, "prt_s", "msg_a", "ses_old", 10, json!({"type":"text","text":"file body","synthetic":true}));
+        message(&conn, "msg_b", "ses_old", 11, json!({"role":"assistant"}));
+        message(&conn, "msg_c", "ses_old", 12, json!({"role":"user"}));
+        part(&conn, "prt_c", "msg_c", "ses_old", 12, json!({"type":"text","text":"then this"}));
+        session(&conn, "ses_new", None, "dir", 20, None);
+        message(&conn, "msg_d", "ses_new", 20, json!({"role":"user"}));
+        part(&conn, "prt_d", "msg_d", "ses_new", 20, json!({"type":"text","text":"only ask"}));
+        session(&conn, "ses_empty", None, "dir", 30, None);
+        session(&conn, "ses_child", Some("ses_new"), "dir", 40, None);
+        session(&conn, "ses_gone", None, "dir", 50, Some(50));
+        session(&conn, "ses_else", None, "other", 60, None);
+        let (chats, next) = folder_chats(&db, "dir", 0, 10, 10).unwrap();
+        let rows: Vec<_> = chats.iter().map(|c| (c.id.as_str(), c.title.as_str(), c.last.as_deref())).collect();
+        assert_eq!(rows, [("ses_new", "only ask", None), ("ses_old", "first ask", Some("then this"))]);
+        assert_eq!(next, None);
+        assert_eq!(chats[1].updated, 10);
+        // A page ends at its limit and says where the next begins.
+        let (page, next) = folder_chats(&db, "dir", 0, 1, 10).unwrap();
+        assert_eq!(page.len(), 1);
+        let (rest, _) = folder_chats(&db, "dir", next.unwrap(), 1, 10).unwrap();
+        assert_eq!(rest[0].id, "ses_old");
+        assert!(folder_session(&db, "dir", "ses_empty"));
+        for id in ["ses_child", "ses_gone", "ses_else", "ses_missing"] {
+            assert!(!folder_session(&db, "dir", id), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_v2_sessions_prompts_are_read_from_the_type_column_or_its_data() {
+        use serde_json::json;
+        let (db, conn) = store();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+               time_created INTEGER, time_updated INTEGER, data TEXT);
+             INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'dir', 20, 30, NULL, 'Test', 'build');",
+        ).unwrap();
+        for (seq, kind, data) in [
+            (1, Some("user"), json!({"text":"question"})),
+            (2, Some("assistant"), json!({"content":[]})),
+            (3, None, json!({"type":"user","text":"follow-up"})),
+        ] {
+            conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?3, ?3, ?4)",
+                rusqlite::params![format!("msg_{seq}"), kind, seq, data.to_string()]).unwrap();
+        }
+        let (chats, _) = folder_chats(&db, "dir", 0, 10, 10).unwrap();
+        assert_eq!(chats.len(), 1);
+        assert_eq!((chats[0].title.as_str(), chats[0].last.as_deref()), ("question", Some("follow-up")));
+        assert_eq!(chats[0].updated, 30);
     }
 }

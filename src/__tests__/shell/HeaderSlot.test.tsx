@@ -3,10 +3,12 @@
  * fold it behind the chevron, and the chevron exists only for what folds.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { HeaderSlot } from "../../components/header/HeaderSlot";
-import { isHeaderPinned, toggleHeaderPin } from "../../lib/headerPins";
+import { headerPinDefaults, isHeaderPinned, toggleHeaderPin } from "../../lib/headerPins";
+import { MOBILE_HOST_KEY } from "../../lib/brand";
+import type { Settings } from "../../types";
 import { useHeaderSlotsStore } from "../../stores/headerSlots";
 import { useSettingsStore } from "../../stores/settings";
 
@@ -36,6 +38,24 @@ describe("headerPins", () => {
     expect(folded).toEqual({ mail: false });
     expect(toggleHeaderPin(folded, "mail")).toEqual({});
   });
+
+  it("keeps the phone icon in the bar until Mobile is on or its guide was opened", () => {
+    const off = headerPinDefaults({} as Settings);
+    expect(isHeaderPinned(undefined, "mobile", off)).toBe(true);
+    expect(isHeaderPinned(undefined, "vpn", off)).toBe(false);
+    const on = { [MOBILE_HOST_KEY]: { enabled: true } } as unknown as Settings;
+    expect(isHeaderPinned(undefined, "mobile", headerPinDefaults(on))).toBe(false);
+    const seen = { mobile_setup_seen: true } as Settings;
+    expect(isHeaderPinned(undefined, "mobile", headerPinDefaults(seen))).toBe(false);
+    // Not loaded yet: no nudge, so an enabled Mobile never flashes into the bar.
+    expect(isHeaderPinned(undefined, "mobile", headerPinDefaults(null))).toBe(false);
+  });
+
+  it("saves a hide of the nudged phone icon as an override", () => {
+    const off = headerPinDefaults({} as Settings);
+    expect(toggleHeaderPin(undefined, "mobile", off)).toEqual({ mobile: false });
+    expect(isHeaderPinned({ mobile: false }, "mobile", off)).toBe(false);
+  });
 });
 
 describe("HeaderSlot", () => {
@@ -48,6 +68,13 @@ describe("HeaderSlot", () => {
     );
     expect(screen.getByTestId("mail").parentElement!.getAttribute("data-folded")).toBe("false");
     expect(screen.getByTestId("vpn").parentElement!.getAttribute("data-folded")).toBe("true");
+  });
+
+  it("keeps the phone icon unfolded while Mobile was never set up", () => {
+    render(<HeaderSlot id="mobile"><i data-testid="mobile" /></HeaderSlot>);
+    expect(screen.getByTestId("mobile").parentElement!.getAttribute("data-folded")).toBe("false");
+    act(() => useSettingsStore.setState({ settings: { mobile_setup_seen: true } as never } as never));
+    expect(screen.getByTestId("mobile").parentElement!.getAttribute("data-folded")).toBe("true");
   });
 
   it("shows everything while the chevron is expanded", () => {

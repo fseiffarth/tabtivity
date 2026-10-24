@@ -80,6 +80,23 @@ const PREFACE_SETTLE_MAX: Duration = Duration::from_secs(6);
 const PREFACE_POLL: Duration = Duration::from_millis(100);
 /// The buffer name the delivery loads a submission under; deleted on paste.
 const PASTE_BUFFER: &str = concat!(crate::app_slug!(), "-schedule");
+/// The most characters one unbracketed write carries (`TYPED_CHUNK` in
+/// `shared/agentComposer.ts`): Claude Code reads a longer key event as a
+/// paste and records it as a `<pasted_content>` block, not the user's words.
+const TYPED_PIECE_CHARS: usize = 256;
+/// Between those writes, so the pane reads them as separate key events
+/// (`WRITE_GAP_MS`).
+const TYPED_PIECE_GAP: Duration = Duration::from_millis(24);
+
+/// What `submission` goes in as, one tmux paste each: a bracketed paste
+/// whole, typed text in pieces of at most [`TYPED_PIECE_CHARS`].
+fn typed_pieces(submission: &Submission) -> Vec<String> {
+    if submission.bracketed {
+        return vec![submission.text.clone()];
+    }
+    let chars: Vec<char> = submission.text.chars().collect();
+    chars.chunks(TYPED_PIECE_CHARS).map(|piece| piece.iter().collect()).collect()
+}
 
 /// What the window's `scheduleVerdict` answers: an occurrence inside the
 /// catch-up window that waits for an idle point, one past it that is only
@@ -406,17 +423,23 @@ impl Runner for TmuxRunner {
                 if let Some(dir) = self.paste_file.parent() {
                     std::fs::create_dir_all(dir).map_err(|e| format!("stage submission: {e}"))?;
                 }
-                write_private(&self.paste_file, submission.text.as_bytes()).map_err(|e| format!("stage submission: {e}"))?;
-                let file = self.paste_file.to_string_lossy().into_owned();
-                self.run(&["load-buffer", "-b", PASTE_BUFFER, &file])?;
-                // `-r`: the newlines stay newlines (the default would turn
-                // each into a submit); `-p`: the pane's bracketed paste, when
-                // it asked for one and the agent reads pastes as typed text.
-                let mut args = vec!["paste-buffer", "-r", "-d", "-b", PASTE_BUFFER, "-t", &target];
-                if submission.bracketed {
-                    args.insert(1, "-p");
+                let pieces = typed_pieces(submission);
+                for (piece_index, piece) in pieces.iter().enumerate() {
+                    if piece_index > 0 {
+                        std::thread::sleep(TYPED_PIECE_GAP);
+                    }
+                    write_private(&self.paste_file, piece.as_bytes()).map_err(|e| format!("stage submission: {e}"))?;
+                    let file = self.paste_file.to_string_lossy().into_owned();
+                    self.run(&["load-buffer", "-b", PASTE_BUFFER, &file])?;
+                    // `-r`: the newlines stay newlines (the default would turn
+                    // each into a submit); `-p`: the pane's bracketed paste, when
+                    // it asked for one and the agent reads pastes as typed text.
+                    let mut args = vec!["paste-buffer", "-r", "-d", "-b", PASTE_BUFFER, "-t", &target];
+                    if submission.bracketed {
+                        args.insert(1, "-p");
+                    }
+                    self.run(&args)?;
                 }
-                self.run(&args)?;
                 let _ = std::fs::remove_file(&self.paste_file);
             }
             self.run(&["send-keys", "-t", &target, "Enter"])?;
@@ -825,6 +848,16 @@ mod tests {
         assert!(ready(None, probe(100, 960), now));
         assert!(ready(Some((TurnState::Working, Some(50))), probe(100, 960), now), "a record from before the session is the previous run's");
         assert!(!ready(Some((TurnState::Done, None)), probe(100, 980), now), "a stampless done needs the long quiet");
+    }
+
+    #[test]
+    fn a_typed_submission_goes_in_pieces_short_enough_not_to_read_as_a_paste() {
+        let text = format!("{}é\n{}", "x".repeat(300), "y".repeat(300));
+        let typed = typed_pieces(&Submission { text: text.clone(), bracketed: false });
+        assert!(typed.len() > 1);
+        assert!(typed.iter().all(|piece| piece.chars().count() <= TYPED_PIECE_CHARS));
+        assert_eq!(typed.concat(), text);
+        assert_eq!(typed_pieces(&Submission { text: text.clone(), bracketed: true }), vec![text]);
     }
 
     #[test]

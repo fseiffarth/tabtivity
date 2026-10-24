@@ -988,6 +988,17 @@ interface AgentApiKeyStatus {
     budget?: "open" | "reached" | "noLimit";
     /** Models priced at the provider's highest rate (not in the table). */
     unknownModels?: string[];
+    /** This month by model, most billed first: input and output apart. */
+    models?: {
+      model: string;
+      input: number;
+      output: number;
+      cacheWrite: number;
+      cacheRead: number;
+      requests: number;
+      billed: number;
+      usd: number;
+    }[];
     /** The workspace a saved Anthropic key that is not scoped to one names. */
     workspace?: string | null;
   }[];
@@ -1205,6 +1216,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
               : t("settings.agentApiSpent", {
                   spent,
                   limit: tokenCount(p.limitTokens),
+                  left: tokenCount(Math.max(0, p.limitTokens - (p.billed ?? 0))),
                   usd: usd(p.spentUsd ?? 0),
                 });
         const state = !status.readable
@@ -1353,6 +1365,23 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 {t("settings.agentApiOldUsdLimit", { usd: usd(p.legacyLimitUsd) })}
               </p>
             )}
+            {status.readable &&
+              (p.models ?? []).map((m) => (
+                <p key={m.model} className="settings-help">
+                  {[
+                    t("settings.agentApiModelUsage", {
+                      model: m.model,
+                      input: tokenCount(m.input),
+                      output: tokenCount(m.output),
+                    }),
+                    m.cacheRead > 0 && t("settings.agentApiModelCacheRead", { tokens: tokenCount(m.cacheRead) }),
+                    m.cacheWrite > 0 && t("settings.agentApiModelCacheWrite", { tokens: tokenCount(m.cacheWrite) }),
+                    `≈ ${usd(m.usd)}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              ))}
             {p.saved && (p.unknownModels?.length ?? 0) > 0 && (
               <p className="settings-help">
                 {t("settings.agentApiUnknownModels", { provider: name, models: (p.unknownModels ?? []).join(", ") })}
@@ -1378,7 +1407,8 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         const row = status.clis.find((c) => c.id === cli);
         if (!row) return null;
         const name = labels.get(cli) ?? cli;
-        const hasKey = row.providers.some((p) => saved.has(p));
+        const keyed = row.providers.filter((p) => saved.has(p));
+        const hasKey = keyed.length > 0;
         // One credential per CLI (#2389): its own login, the user's own API
         // key, or a hosted server administrator's key — never two at once.
         const current: Credential = row.usesAdmin ? "admin" : enabled.includes(cli) ? "key" : "login";
@@ -1389,7 +1419,9 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 {
                   value: "key",
                   label: t("settings.agentCredOwnKey", {
-                    providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                    // Only the providers a key is saved for: the others
+                    // stay on the CLI's own login (OpenCode).
+                    providers: (hasKey ? keyed : row.providers).map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
                   }),
                 },
               ]

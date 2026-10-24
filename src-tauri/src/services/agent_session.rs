@@ -47,6 +47,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "codex" => resolve_codex_session(opts),
         "vibe" => resolve_vibe_session(opts),
         "opencode" => crate::services::opencode_session::resolve(opts),
+        "agy" => crate::services::google_chat::resolve(opts),
         _ => opts,
     }
 }
@@ -1538,7 +1539,7 @@ pub fn read_live_session_and_source_for(
 /// The root holding `uid`'s current session record: of the shared root and the
 /// project's own slice, the one whose record was written last (see
 /// [`read_live_session_for`]).
-fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<PathBuf> {
+pub(crate) fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<PathBuf> {
     let root = live_sessions_dir();
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     let mut consider = |dir: &std::path::Path| {
@@ -1631,20 +1632,34 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// (`services::agent_chats`, which has checked that `chat` is one): the undo's
 /// two ways. Claude types `/resume <chat>` into the running session; Codex has
 /// its record pointed at `chat` — in the root that holds it, else the scope's
-/// own — and is relaunched onto it. `None` for any other agent, or a `chat`
-/// that is no id.
+/// own — and is relaunched onto it. OpenCode and Antigravity have their
+/// record pointed at `chat` the same way and are relaunched: OpenCode's spawn
+/// turns it into `--session <chat>` (`opencode_session::resolve`),
+/// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
+/// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
-    if !is_uuid_shaped(chat) || !is_uuid_shaped(uid) {
+    if !is_uuid_shaped(uid) {
         return None;
     }
+    let record_dir = || {
+        live_record_dir(project_id, uid).unwrap_or_else(|| match project_id {
+            Some(pid) => project_live_sessions_dir(pid),
+            None => live_sessions_dir(),
+        })
+    };
     match agent {
+        "opencode" if crate::services::opencode_session::is_session_id(chat) => {
+            crate::services::opencode_session::record_session_in(&record_dir(), uid, chat).ok()?;
+            Some(UndoClearPlan::Relaunch)
+        }
+        _ if !is_uuid_shaped(chat) => None,
         "claude" => Some(UndoClearPlan::Type { command: format!("/resume {chat}") }),
         "codex" => {
-            let dir = live_record_dir(project_id, uid).unwrap_or_else(|| match project_id {
-                Some(pid) => project_live_sessions_dir(pid),
-                None => live_sessions_dir(),
-            });
-            restore_cleared_in(&dir, uid, chat).ok()?;
+            restore_cleared_in(&record_dir(), uid, chat).ok()?;
+            Some(UndoClearPlan::Relaunch)
+        }
+        "agy" => {
+            write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
         _ => None,

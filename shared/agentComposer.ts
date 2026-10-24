@@ -56,9 +56,30 @@ export function bracketsAgentMessage(agent: string | undefined, paneBracketed: b
 }
 
 /**
+ * The most characters one typed write carries. Claude Code reads a key event
+ * longer than 800 UTF-16 units as a paste (2.1.309) and records a paste over
+ * 800 characters as a `<pasted_content>` block — the model is handed the
+ * words as something pasted from elsewhere, and the chat's sending bubble
+ * never finds its record (2026-10-23). 256 code points stay under the bound
+ * even when three writes coalesce and every one is astral.
+ */
+const TYPED_CHUNK = 256;
+
+/** `line` in writes of at most {@link TYPED_CHUNK} code points. */
+function typedPieces(line: string): string[] {
+  const chars = Array.from(line);
+  const pieces: string[] = [];
+  for (let start = 0; start < chars.length; start += TYPED_CHUNK) {
+    pieces.push(chars.slice(start, start + TYPED_CHUNK).join(""));
+  }
+  return pieces;
+}
+
+/**
  * The distinct writes that safely replace an agent composer draft and submit a
  * single message. Keep these split: some TUIs discard the remainder of a stdin
  * chunk that starts with a control key, and some absorb a CR into pasted text.
+ * A typed line longer than {@link TYPED_CHUNK} goes in several writes.
  */
 export function agentInputWrites(draft: string, bracketedPaste = false): string[] {
   const text = sanitizeAgentMessage(draft);
@@ -70,7 +91,7 @@ export function agentInputWrites(draft: string, bracketedPaste = false): string[
   const writes = [AGENT_LINE_RESET];
   text.split("\n").forEach((line, index) => {
     if (index) writes.push("\n");
-    if (line) writes.push(line);
+    writes.push(...typedPieces(line));
   });
   writes.push("\r");
   return writes;

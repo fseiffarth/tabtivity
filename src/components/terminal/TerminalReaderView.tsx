@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -32,12 +32,14 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore, useReaderChangesOpen } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import type { TabEntry } from "../../stores/tabs";
+import { hostTabCwd, type TabEntry } from "../../stores/tabs";
+import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { withAssistantPromptTarget } from "../../lib/assistant";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
-import { STATUS_AGENTS } from "./TerminalReaderStatus";
+import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
+import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
@@ -472,7 +474,8 @@ function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
  * flipped. Sends through the prompt box's path (`sendSteeringPrompt`); ↑/↓
  * walk `history`; Esc is `onEscape`. ↑ in the empty box while Claude shows
  * prompts sent from here as queued takes them back out of its queue to be
- * edited (`queuePull`), and `onPulled` drops their bubbles.
+ * edited (`queuePull`), and `onPulled` drops their bubbles; `pullRef` is the
+ * same for the sending bubble's Cancel and edit.
  *
  * With a Claude subagent open, `subagent`, the words go to it instead — through
  * Claude Code's own agent list (`subagentInput`), the one way it takes them —
@@ -486,7 +489,7 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, chipSlot, onEscape, onStatus, onPulled }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, chipSlot, onEscape, onStatus, onPulled, pullRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -507,9 +510,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   /** The facts row's end, where the chip row goes; over the text box without it. */
   chipSlot: HTMLElement | null;
   onEscape: () => void;
-  onStatus: () => void;
+  onStatus: (panel: ReaderPanel) => void;
   /** These of `queued` left Claude's queue for the composer. */
   onPulled: (ids: number[]) => void;
+  /** Set to what takes `queued` back into the box, whatever it holds. */
+  pullRef: MutableRefObject<(() => void) | null>;
 }) {
   const t = useT();
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
@@ -529,7 +534,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
   }, [draft]);
-  // One line until the text needs more: the box grows with it (upward, the
+  // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height.
   useLayoutEffect(() => {
     const box = composerRef.current;
@@ -638,8 +643,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // dictated words went into the draft.
     const text = draftRef.current.trim();
     if (!current || !text || sending) return;
-    if (STATUS_AGENTS[current.cmd] && text === "/status") {
-      onStatus();
+    const panel = STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
+      : CONTEXT_AGENTS[current.cmd] && text === "/context" ? "context" : null;
+    if (panel) {
+      onStatus(panel);
       setDraft("");
       undo.current.clear();
       setSendError("");
@@ -746,14 +753,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     return true;
   };
 
-  /** ↑ in the empty box while Claude says messages wait in its queue: they
-   * come back into the composer, out of the queue — so they are never sent
-   * as they were — and their bubbles go. */
-  const pullQueued = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
-    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
-    if (draft || historyAt.current !== null || queued.length === 0 || subagent || sending) return false;
-    if (pulling.current) return true;
-    if (!queuedHintShown(paneRows())) return false;
+  /** The queued prompts come back into the composer, after what it holds,
+   * out of Claude's queue — so they are never sent as they were — and their
+   * bubbles go. */
+  const pullQueued = () => {
+    if (pulling.current || queued.length === 0 || subagent || sending) return;
     pulling.current = true;
     const taken = [...queued];
     void pullQueuedPrompts({ rows: paneRows, key: paneKey }, taken.map((item) => item.text)).then((result) => {
@@ -764,11 +768,21 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       if (result.pulled > 0) onPulled(taken.slice(taken.length - result.pulled).map((item) => item.id));
       const current = draftRef.current;
       const next = current ? `${current}\n${result.text}` : result.text;
+      historyAt.current = null;
       editDraft(next);
       caretAt.current = next.length;
       if (!result.cleared) setSendError(t("terminal.reader.pullLeftover"));
       composerRef.current?.focus();
     }).finally(() => { pulling.current = false; });
+  };
+  pullRef.current = pullQueued;
+  /** ↑ in the empty box while Claude says messages wait in its queue. */
+  const pullKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
+    if (draft || historyAt.current !== null || queued.length === 0 || subagent || sending) return false;
+    if (pulling.current) return true;
+    if (!queuedHintShown(paneRows())) return false;
+    pullQueued();
     return true;
   };
 
@@ -820,7 +834,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
-    } else if (e.key === "ArrowUp" && pullQueued(e)) {
+    } else if (e.key === "ArrowUp" && pullKey(e)) {
       e.preventDefault();
     } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && walkHistory(e, e.key === "ArrowUp" ? -1 : 1)) {
       e.preventDefault();
@@ -851,7 +865,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <textarea
           ref={composerRef}
           value={draft}
-          rows={1}
+          rows={3}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
           aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
           onChange={(e) => editDraft(e.target.value, true)}
@@ -867,8 +881,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           aria-label={t("terminal.reader.send")}
           title={t("terminal.reader.send")}
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          {/* The phone composer's paper plane (`.send-icon`). */}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m4 4 16 8-16 8 3-8-3-8Z" />
+            <path d="M7 12h13" />
           </svg>
         </button>
       </div>
@@ -938,6 +954,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const sendTarget = tab?.scheduleTargetId;
   const pending = useSentPrompts(sendTarget);
   const [pendingTick, setPendingTick] = useState(0);
+  /** A sent prompt was let go without the stored conversation recording it
+   * (a store the Reader cannot read, a CLI that kept the turn elsewhere): the
+   * turn is only in the terminal. The entry count at that moment — the
+   * notice stays until the conversation gains a turn. */
+  const [unrecordedAt, setUnrecordedAt] = useState<number | null>(null);
   const [readTick, setReadTick] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -971,12 +992,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * (`NEXT_DIALOG_HOLD_MS`). */
   const [heldSignature, setHeldSignature] = useState("");
   const [picking, setPicking] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState<ReaderPanel | null>(null);
   /** The facts row's end, where the composer's chips go while it shows. */
   const [chipSlot, setChipSlot] = useState<HTMLDivElement | null>(null);
   const [statusRequest, setStatusRequest] = useState(0);
-  const requestStatus = () => { setStatusOpen(true); setStatusRequest((request) => request + 1); };
-  const closeStatus = () => setStatusOpen(false);
+  const requestStatus = (panel: ReaderPanel) => { setStatusOpen(panel); setStatusRequest((request) => request + 1); };
+  const closeStatus = () => setStatusOpen(null);
   /** Steering holds the keyboard (or its prompt box does): a composer on show
    * would take typing that goes to steering, so it stands aside — the Prompt
    * key (I) is how a prompt goes in then. */
@@ -1129,6 +1150,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // remote project runs in its local mirror), not the stored `tab.cwd`, which
   // for such a project names its state folder.
   const tabDir = cwd || tab?.cwd || "";
+  // What the facts row shows: a tab that runs on a host is in that host's
+  // project folder, which `tabDir` (the state folder the backend resolves to
+  // it) is not.
+  const hostDir = useProjectsStore((s) =>
+    !tab || localOnly ? null : hostTabCwd(tab, s.projects.find((p) => p.id === projectId)));
   const pathContext = usePathLinkContext(projectId, tabDir, localOnly);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
@@ -1329,6 +1355,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const dropPending = useCallback((ids: number[]) => {
     if (sendTarget) forgetSentPrompts(sendTarget, ids);
   }, [sendTarget]);
+  /** The composer's pull, for the last sending bubble's Cancel and edit. */
+  const pullQueued = useRef<(() => void) | null>(null);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
 
@@ -1365,7 +1393,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
     if (left.length !== pending.length) {
-      forgetSentPrompts(sendTarget, pending.filter((item) => !left.includes(item)).map((item) => item.id));
+      const gone = pending.filter((item) => !left.includes(item));
+      if (gone.some((item) => !recorded(item))) setUnrecordedAt(entries.length);
+      forgetSentPrompts(sendTarget, gone.map((item) => item.id));
       return;
     }
     // Nothing new may come in to look again: let the first one go on time.
@@ -1373,6 +1403,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const timer = setTimeout(() => setPendingTick((tick) => tick + 1), due);
     return () => clearTimeout(timer);
   }, [entries, pending, visible, sendTarget, pendingTick]);
+  useEffect(() => {
+    if (unrecordedAt !== null && entries.length > unrecordedAt) setUnrecordedAt(null);
+  }, [entries.length, unrecordedAt]);
+  const unrecorded = unrecordedAt !== null;
 
   /** The prompt the answer at the top of the chat belongs to — the last one
    * that starts above the scroll position — while its bubble is scrolled off
@@ -1424,7 +1458,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       list.scrollTop = list.scrollHeight;
     }
     checkPinnedPrompt();
-  }, [turns, pending, live, strayShown, shownTranscript, visible, checkPinnedPrompt]);
+  }, [turns, pending, live, strayShown, unrecorded, shownTranscript, visible, checkPinnedPrompt]);
 
   const showEarlier = () => {
     const list = listRef.current;
@@ -1470,7 +1504,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const cutLabel = t("terminal.reader.cut");
   const planLabel = t("mobile.transcript.plan");
   const subagentLabel = t("terminal.reader.subagent");
-  const empty = transcript?.available && turns.length === 0 && pending.length === 0 && !live.question && !live.working;
+  const empty = transcript?.available && turns.length === 0 && pending.length === 0 && !unrecorded && !live.question && !live.working;
   /** Where the open subagent stands among its siblings, and the conversation
    * the bar goes back up to. */
   const position = openStep ? siblingPosition(openStep) : { index: -1, count: 0 };
@@ -1671,17 +1705,29 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </Fragment>
             );
           })}
-          {!openStep && !browsed && pending.map((item) => (
+          {!openStep && !browsed && pending.map((item, index) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
-                  queue at once; ↑ in the empty composer takes it back. */}
+                  queue at once; ↑ in the empty composer takes it back. Both
+                  act on the whole queue, so their buttons go under the last. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
                 <small className="terminal-reader-pending-hint">
                   {t("terminal.reader.sendNowHint")}
                   <UntestedTag id="terminal.reader.sendNowHint" />
                   <UntestedTag id="terminal.reader.queuePull" />
                 </small>
+              )}
+              {live.working && isClaudeCommand(tab?.cmd) && index === pending.length - 1 && (
+                <div className="terminal-reader-queued-actions">
+                  <button type="button" className="terminal-reader-stop" onClick={pressEscape} title={t("terminal.reader.sendNowTitle")}>
+                    {t("terminal.reader.sendNow")}
+                  </button>
+                  <button type="button" className="terminal-reader-stop" onClick={() => pullQueued.current?.()} title={t("terminal.reader.cancelEditTitle")}>
+                    {t("terminal.reader.cancelEdit")}
+                  </button>
+                  <UntestedTag id="terminal.reader.queuedActions" />
+                </div>
               )}
               <small className="terminal-reader-time">{t("terminal.reader.sending")}</small>
             </div>
@@ -1720,13 +1766,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </button>
             </div>
           )}
-          {strayShown && !browsed && (
+          {strayShown && !browsed && !openStep && live.screen.length > 0 && (
+            <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
+          )}
+          {(strayShown || unrecorded) && !browsed && !openStep && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
-              <span>{t("terminal.reader.stray")}</span>
+              <span>{t(strayShown ? "terminal.reader.stray" : "terminal.reader.unrecorded")}</span>
               <button type="button" className="terminal-reader-stop" onClick={openTerminal} title={t("terminal.reader.strayOpenHint")}>
                 {t("terminal.reader.strayOpen")}
               </button>
-              <UntestedTag id="terminal.reader.stray" />
+              {strayShown ? <UntestedTag id="terminal.reader.stray" /> : <UntestedTag id="terminal.reader.unrecorded" />}
             </div>
           )}
           {backgroundAtWork > 0 && (
@@ -1768,8 +1817,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           live={live}
           modelTag={modelTag}
           usage={transcript?.available && !sinceClear ? transcript.usage : undefined}
+          contextCard={transcript?.available && !sinceClear ? transcript.contextCard : undefined}
           visible={visible}
-          path={tabDir}
+          path={hostDir ?? tabDir}
           effort={seenEffort}
           onEffortPicked={setSeenEffort}
           typeKeys={typeIntoPane}
@@ -1806,6 +1856,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
         onPulled={dropPending}
+        pullRef={pullQueued}
       />}
     </div>
     {changesOpen && tab && (

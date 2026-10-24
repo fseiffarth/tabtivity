@@ -32,7 +32,7 @@ import {
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
-import { isActionRow, isChatRow, isUnnumberedRow } from "./selectPrompt";
+import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -451,7 +451,7 @@ export function sessionStatus(
     if (!isInputLine(lines, index)) continue;
     // A highlighted dialog row opens with the input line's `❯`; the rows under
     // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
-    if (OPTION_ROW.test(lines[index].text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return null;
+    if (OPTION_ROW.test(lines[index].text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isStrayListRow(lines, index)) return null;
     inputIndex = index;
     break;
   }
@@ -534,7 +534,7 @@ export function inputFrameStart(
   for (let index = lines.length - 1; start < 0 && index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index)) return lines.length;
+    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index) || isStrayListRow(lines, index)) return lines.length;
     start = index;
   }
   if (start < 0) return lines.length;

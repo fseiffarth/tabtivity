@@ -18,6 +18,9 @@ const STATUS_ROWS = 120;
 const PLAIN = { plain: true } as const;
 const ESCAPE = new TextEncoder().encode("\u001b");
 
+/** The facts row's panels over the composer: `/status`'s, `/context`'s. */
+export type ReaderPanel = "status" | "context";
+
 /** The agents whose /status the panel reads, and the tag it wears for each. */
 export const STATUS_AGENTS: Partial<Record<string, UntestedId>> = {
   codex: "terminal.reader.codexStatus",

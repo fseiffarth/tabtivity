@@ -234,6 +234,13 @@ pub struct AgentTranscript {
     /// line is not something that crosses to the browser.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<RunningShell>,
+    /// The newest `/context` card Claude printed (its `local_command` stdout,
+    /// colour codes stripped). The fullscreen renderer draws it in the
+    /// alternate screen, which keeps no scrollback, so the Reader's Context
+    /// panel could not read its heading off the pane. Desktop Reader only:
+    /// it lists memory files by path, so the phone's API strips it.
+    #[serde(default, rename = "contextCard", skip_serializing_if = "Option::is_none")]
+    pub context_card: Option<String>,
     /// The folder the newest record says the agent works in — Claude's `cwd`,
     /// which follows a worktree it entered and its shell's `cd`; Codex's turn
     /// context. A path, so the phone's API turns it into a worktree name and
@@ -359,7 +366,9 @@ pub fn agent_session_transcript(
             return AgentTranscript::unavailable("unsupported");
         }
         let home = crate::services::agent_home::scope_home(project_id);
-        return crate::services::google_chat::transcript(cmd, &home, directory, since, version, limit);
+        let own = (cmd == "agy").then(|| crate::services::google_chat::recorded_conversation(project_id, launch_id)).flatten();
+        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
+        return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
     }
     let read = match cmd {
         "claude" => claude_transcript(project_id, launch_id, subagent, version, limit),
@@ -399,6 +408,21 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
+    if matches!(cmd, "opencode" | "agy") {
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return AgentTranscript::unavailable("no_transcript");
+        }
+        let dir = tab_dir.unwrap_or_default();
+        if cmd == "agy" {
+            if subagent.is_some() {
+                return AgentTranscript::unavailable("no_subagent");
+            }
+            let home = crate::services::agent_home::scope_home(project_id);
+            return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
+        }
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        return opencode_transcript(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+    }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
     };
@@ -421,6 +445,14 @@ pub fn stored_chat_watch_targets(
 ) -> Vec<crate::services::transcript_watch::Target> {
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return Vec::new();
+    }
+    if cmd == "opencode" {
+        // Its store, as the tab's own session is watched.
+        return if crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            watch_targets(cmd, project_id, launch_id, subagent, false)
+        } else {
+            Vec::new()
+        };
     }
     stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent)
         .map(|file| conversation_targets(cmd, &file, subagent.is_some()))
@@ -1043,6 +1075,7 @@ fn read_transcript_in(
     let model = newest_model(&lines, kind);
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
+    let context_card = newest_context_card(&lines, kind);
     let (mut entries, calls, shell_calls) = parse_entries(lines.into_iter(), kind, sidechain);
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
@@ -1104,6 +1137,7 @@ fn read_transcript_in(
         effort,
         tokens,
         shells,
+        context_card,
         cwd,
         running_cwds,
         watched: false,
@@ -1239,6 +1273,35 @@ fn claude_effort_switch(value: &Value) -> Option<String> {
         return None;
     };
     Some(level)
+}
+
+/// Longest `/context` card kept: its listings grow with every MCP tool and
+/// skill, and the file is written by the agent.
+const MAX_CONTEXT_CARD: usize = 64 * 1024;
+
+/// The newest `/context` card in `lines` ([`AgentTranscript::context_card`]):
+/// a `<local-command-stdout>` that opens with Claude's `Context Usage`
+/// heading. A sidechain's is never the session's.
+fn newest_context_card(lines: &[&str], kind: TranscriptKind) -> Option<String> {
+    if kind != TranscriptKind::Claude {
+        return None;
+    }
+    lines.iter().rev().filter(|line| line.contains("Context Usage")).find_map(|line| {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        let content = agent_session::claude_command_content(&value)?;
+        let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
+        let body = body.trim_end().strip_suffix("</local-command-stdout>").unwrap_or(body);
+        let card = crate::services::agent_usage::strip_ansi(body);
+        let card = card.trim_end();
+        if !card.trim_start().starts_with("Context Usage") {
+            return None;
+        }
+        let mut cut = card.len().min(MAX_CONTEXT_CARD);
+        while !card.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        Some(card[..cut].to_string())
+    })
 }
 
 /// The tokens the newest record in `lines` that carries usage counts
@@ -2940,6 +3003,31 @@ mod tests {
         std::fs::write(&rollout, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\",\"effort\":\"low\"}}\n").unwrap();
         let read = read_transcript(&rollout, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
         assert_eq!(read.effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn the_newest_context_card_is_read_off_its_local_command_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let command = "{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<command-name>/context</command-name>\\n<command-args></command-args>\"}\n";
+        let card = |used: &str| format!("{{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<local-command-stdout> \\u001b[1mContext Usage\\u001b[22m\\n\\u001b[37m⛀ ⛁\\u001b[39m  {used}/1m tokens (5%)\\n</local-command-stdout>\"}}\n");
+        std::fs::write(&path, [command.to_string(), card("45.1k"), command.to_string(), card("51.6k")].concat()).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.context_card.as_deref(), Some(" Context Usage\n⛀ ⛁  51.6k/1m tokens (5%)"));
+        assert!(serde_json::to_value(&read).unwrap()["contextCard"].is_string());
+
+        // Older releases' user record counts too; a subagent's and other
+        // command output do not.
+        let user = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Context Usage\\n1k/200k tokens (1%)</local-command-stdout>\"}}\n";
+        std::fs::write(&path, user).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.context_card.as_deref(), Some("Context Usage\n1k/200k tokens (1%)"));
+        let sidechain = "{\"type\":\"system\",\"subtype\":\"local_command\",\"isSidechain\":true,\"content\":\"<local-command-stdout>Context Usage</local-command-stdout>\"}\n";
+        let other = "{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<local-command-stdout>Set model to Context Usage</local-command-stdout>\"}\n";
+        std::fs::write(&path, [sidechain, other].concat()).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.context_card, None);
+        assert!(serde_json::to_value(&read).unwrap().get("contextCard").is_none());
     }
 
     #[test]

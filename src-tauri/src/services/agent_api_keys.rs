@@ -275,6 +275,11 @@ pub fn set_key(provider: Provider, key: Option<&str>, workspace: Option<&str>) -
     // Saved or not, the proxy reads the keychain again at its next use: a
     // removed key stops running keyed tabs at their next request.
     crate::services::api_proxy::forget_key(provider);
+    // What OpenCode's picker hides was the old key's: list the new one's.
+    crate::services::opencode_models::forget(provider);
+    if saved.is_ok() && key.is_some() {
+        crate::services::opencode_models::refresh(vec![provider]);
+    }
     saved
 }
 
@@ -478,7 +483,22 @@ pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'sta
         }
         Some("opencode") if !injected.is_empty() => {
             let ambient = std::env::var(OPENCODE_INLINE_ENV).ok();
-            route_opencode(&mut opts.env, &injected, ambient.as_deref());
+            // The cached listings are the user's own keys': an administrator's
+            // key hides nothing.
+            let picker = match admin {
+                None => {
+                    let keyed: Vec<Provider> =
+                        routes_of("opencode").iter().filter(|r| injected.contains(&r.base_var)).map(|r| r.provider).collect();
+                    let store = crate::services::agent_versions::load();
+                    Picker {
+                        v2: crate::services::agent_versions::opencode_is_v2(store.get("opencode")),
+                        hidden: crate::services::opencode_models::hidden_for(&keyed),
+                        extra: crate::services::opencode_models::extra_for(&keyed),
+                    }
+                }
+                Some(_) => Picker::default(),
+            };
+            route_opencode(&mut opts.env, &injected, ambient.as_deref(), &picker);
         }
         _ => {}
     }
@@ -505,41 +525,131 @@ fn opencode_provider(provider: Provider) -> (&'static str, &'static str) {
 /// Over a stored OpenCode login too: the inline config outranks `auth.json`,
 /// key or OAuth (OpenCode 1.19.3 and 2.1.3).
 /// A provider whose block in `existing` already names a base URL or key keeps
-/// it, and every one does when `existing` is not a JSON object. Returns the
-/// config when something was added, and the providers left out. Pure.
-fn opencode_inline_with(existing: Option<&str>, keyed: &[(Provider, &str, String)]) -> (Option<String>, Vec<Provider>) {
+/// it — OpenCode 2's own `providers` block too — and every one does when
+/// `existing` is not a JSON object. A routed provider's catalog models its
+/// key cannot call (`picker`) are hidden as well ([`hide_in_picker`]).
+/// Returns the config when something was added, and the providers left out.
+/// Pure.
+fn opencode_inline_with(
+    existing: Option<&str>,
+    keyed: &[(Provider, &str, String)],
+    picker: &Picker,
+) -> (Option<String>, Vec<Provider>) {
     let all = || keyed.iter().map(|(p, _, _)| *p).collect();
     let mut config = match existing.map(serde_json::from_str::<serde_json::Value>) {
         None => serde_json::json!({}),
         Some(Ok(v)) if v.is_object() => v,
         Some(_) => return (None, all()),
     };
-    let Some(providers) = config
-        .as_object_mut()
-        .map(|root| root.entry("provider").or_insert_with(|| serde_json::json!({})))
-        .and_then(serde_json::Value::as_object_mut)
-    else {
-        return (None, all());
+    let native_claimed = |config: &serde_json::Value, name: &str| {
+        let settings = &config["providers"][name]["settings"];
+        settings.get("baseURL").is_some() || settings.get("apiKey").is_some()
     };
     let mut left_out = Vec::new();
     for (provider, token_var, base) in keyed {
         let (name, path) = opencode_provider(*provider);
+        if native_claimed(&config, name) {
+            left_out.push(*provider);
+            continue;
+        }
+        let Some(providers) = config
+            .as_object_mut()
+            .map(|root| root.entry("provider").or_insert_with(|| serde_json::json!({})))
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            return (None, all());
+        };
         let options = providers
             .entry(name)
             .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
             .map(|block| block.entry("options").or_insert_with(|| serde_json::json!({})))
             .and_then(serde_json::Value::as_object_mut);
-        match options {
-            Some(options) if !options.contains_key("baseURL") && !options.contains_key("apiKey") => {
-                options.insert("baseURL".into(), format!("{base}{path}").into());
-                options.insert("apiKey".into(), format!("{{env:{token_var}}}").into());
-            }
-            _ => left_out.push(*provider),
+        let Some(options) = options.filter(|o| !o.contains_key("baseURL") && !o.contains_key("apiKey")) else {
+            left_out.push(*provider);
+            continue;
+        };
+        let settings = serde_json::json!({ "baseURL": format!("{base}{path}"), "apiKey": format!("{{env:{token_var}}}") });
+        options.extend(settings.as_object().cloned().unwrap_or_default());
+        let hidden = picker.hidden.get(provider).map(Vec::as_slice).unwrap_or_default();
+        let extra = picker.extra.get(provider).map(Vec::as_slice).unwrap_or_default();
+        // OpenCode 2's own block for the provider outranks the legacy one,
+        // so one the user's config has must carry the route too.
+        if !hidden.is_empty() || !extra.is_empty() || (picker.v2 && config["providers"][name].is_object()) {
+            hide_in_picker(&mut config, name, &settings, hidden, extra, picker.v2);
         }
     }
     let added = left_out.len() < keyed.len();
     (added.then(|| config.to_string()), left_out)
+}
+
+/// What a keyed OpenCode spawn hides from its model picker
+/// (`opencode_models`): by provider, the catalog models its key cannot call.
+#[derive(Debug, Default)]
+pub(crate) struct Picker {
+    /// The OpenCode Tabtivity last probed is 2.x (`agent_versions`).
+    pub v2: bool,
+    pub hidden: HashMap<Provider, Vec<String>>,
+    /// By provider, the models its key can call that the catalog lacks
+    /// (`opencode_models::extra`): offered under their exact id.
+    pub extra: HashMap<Provider, Vec<String>>,
+}
+
+/// Hide `hidden` of provider `name` from OpenCode's model list and offer
+/// `extra` — models the key calls that the catalog lacks — under their exact
+/// id. 1.x: the legacy block's `blacklist` (unless it filters already) and
+/// `models`. 2.x drops that as a legacy setting and takes
+/// `providers.<name>.models.<id>.disabled` — in its own `providers` block,
+/// which outranks the legacy one for that provider, so it carries the same
+/// `settings` (checked with 2.1.2) — also with nothing to hide, for a block
+/// the user's config has. A model entry the config already has keeps its own
+/// `disabled` and `name`.
+fn hide_in_picker(
+    config: &mut serde_json::Value,
+    name: &str,
+    settings: &serde_json::Value,
+    hidden: &[String],
+    extra: &[String],
+    v2: bool,
+) {
+    let Some(root) = config.as_object_mut() else {
+        return;
+    };
+    let block = if v2 {
+        root.entry("providers")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .and_then(|providers| providers.entry(name).or_insert_with(|| serde_json::json!({})).as_object_mut())
+    } else {
+        root.get_mut("provider").and_then(|p| p.get_mut(name)).and_then(serde_json::Value::as_object_mut)
+    };
+    let Some(block) = block else {
+        return;
+    };
+    if v2 {
+        if let Some(own) = block.entry("settings").or_insert_with(|| serde_json::json!({})).as_object_mut() {
+            own.extend(settings.as_object().cloned().unwrap_or_default());
+        }
+    } else if !hidden.is_empty() && !block.contains_key("whitelist") && !block.contains_key("blacklist") {
+        block.insert("blacklist".into(), hidden.into());
+    }
+    if (!v2 || hidden.is_empty()) && extra.is_empty() {
+        return;
+    }
+    let Some(models) = block.entry("models").or_insert_with(|| serde_json::json!({})).as_object_mut() else {
+        return;
+    };
+    for id in extra {
+        models.entry(id.as_str()).or_insert_with(|| serde_json::json!({ "name": id }));
+    }
+    if !v2 {
+        return;
+    }
+    for id in hidden {
+        if let Some(entry) = models.entry(id.as_str()).or_insert_with(|| serde_json::json!({})).as_object_mut() {
+            entry.entry("disabled").or_insert(true.into());
+        }
+    }
 }
 
 /// OpenCode reads none of its routes' base-URL variables: each route
@@ -548,7 +658,7 @@ fn opencode_inline_with(existing: Option<&str>, keyed: &[(Provider, &str, String
 /// Tabtivity's Ollama models — or else (`ambient`) the user's own from
 /// Tabtivity's environment. A route that config keeps for itself loses its
 /// token and base URL again, so the CLI stays on what the user set.
-fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], ambient: Option<&str>) {
+fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], ambient: Option<&str>, picker: &Picker) {
     let routes = routes_of("opencode");
     let keyed: Vec<(Provider, &str, String)> = routes
         .iter()
@@ -556,7 +666,7 @@ fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], 
         .map(|r| (r.provider, r.token_var, env[r.base_var].clone()))
         .collect();
     let existing = env.get(OPENCODE_INLINE_ENV).cloned().or_else(|| ambient.map(str::to_string));
-    let (config, left_out) = opencode_inline_with(existing.as_deref(), &keyed);
+    let (config, left_out) = opencode_inline_with(existing.as_deref(), &keyed, picker);
     if let Some(config) = config {
         env.insert(OPENCODE_INLINE_ENV.to_string(), config);
     }
@@ -656,8 +766,50 @@ pub struct ProviderStatus {
     /// Models used this month that the price table does not know: priced at
     /// the provider's highest rate.
     pub unknown_models: Vec<String>,
+    /// This month's use by model, most billed first: what the one billed
+    /// count is made of (input and output are priced apart).
+    pub models: Vec<ModelStatus>,
     /// The workspace a saved Anthropic key that is not scoped to one names.
     pub workspace: Option<String>,
+}
+
+/// One model's month from `api_usage::ModelUsage`, in the panel's casing.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStatus {
+    pub model: String,
+    pub input: u64,
+    pub output: u64,
+    pub cache_write: u64,
+    pub cache_read: u64,
+    pub requests: u64,
+    pub billed: u64,
+    pub usd: f64,
+}
+
+/// `ledger`'s models for `provider`, most billed first.
+fn model_statuses(ledger: &crate::services::api_usage::Ledger, provider: Provider) -> Vec<ModelStatus> {
+    let mut models: Vec<ModelStatus> = ledger
+        .providers
+        .get(provider.id())
+        .map(|u| {
+            u.models
+                .iter()
+                .map(|(name, m)| ModelStatus {
+                    model: name.clone(),
+                    input: m.input,
+                    output: m.output,
+                    cache_write: m.cache_write,
+                    cache_read: m.cache_read,
+                    requests: m.requests,
+                    billed: m.billed,
+                    usd: m.usd,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort_by(|a, b| b.billed.cmp(&a.billed).then_with(|| a.model.cmp(&b.model)));
+    models
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -730,6 +882,7 @@ fn status_with(
                 legacy_limit_usd: limit_tokens.is_none().then(|| legacy_usd.get(p.id()).copied()).flatten(),
                 budget: crate::services::api_usage::Verdict::of(billed, limit_tokens).id(),
                 unknown_models: ledger.unknown_models(p),
+                models: model_statuses(ledger, p),
                 workspace: None,
             }
         })
@@ -1105,7 +1258,7 @@ mod tests {
         let mut env = HashMap::from([(OPENCODE_INLINE_ENV.to_string(), ollama.to_string())]);
         let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
         assert_eq!(set, [ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV, GEMINI_CARRIER, GEMINI_BASE_ENV, OPENAI_CARRIER, OPENAI_BASE_ENV]);
-        route_opencode(&mut env, &set, None);
+        route_opencode(&mut env, &set, None, &Picker::default());
         let text = &env[OPENCODE_INLINE_ENV];
         assert!(!text.contains(FAKE_TOKEN), "no token in the config: {text}");
         let config: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -1123,7 +1276,7 @@ mod tests {
         let mut env = HashMap::new();
         let anthropic_only = |p: Provider| (p == Provider::Anthropic).then(|| proxied(p)).flatten();
         let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, anthropic_only);
-        route_opencode(&mut env, &set, None);
+        route_opencode(&mut env, &set, None, &Picker::default());
         let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
         assert_eq!(config["provider"].as_object().unwrap().keys().collect::<Vec<_>>(), ["anthropic"]);
         assert!(proxies("opencode"));
@@ -1134,7 +1287,7 @@ mod tests {
         let mine = r#"{"provider":{"anthropic":{"options":{"baseURL":"https://gateway.example/v1"}}},"model":"anthropic/x"}"#;
         let mut env = HashMap::new();
         let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
-        route_opencode(&mut env, &set, Some(mine));
+        route_opencode(&mut env, &set, Some(mine), &Picker::default());
         let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
         assert_eq!(config["provider"]["anthropic"]["options"]["baseURL"], "https://gateway.example/v1");
         assert!(config["provider"]["anthropic"]["options"].get("apiKey").is_none());
@@ -1147,9 +1300,76 @@ mod tests {
         for broken in ["not json", "[1]", r#"{"provider":"x"}"#] {
             let mut env = HashMap::new();
             let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
-            route_opencode(&mut env, &set, Some(broken));
+            route_opencode(&mut env, &set, Some(broken), &Picker::default());
             assert!(env.is_empty(), "{broken}: {env:?}");
         }
+    }
+
+    /// What a key cannot call leaves OpenCode's picker: 2.x through its own
+    /// `providers` block, carrying the proxy settings too; 1.x as a legacy
+    /// `blacklist`. A provider without a list, or one the user routed, is
+    /// left as it was.
+    #[test]
+    fn opencode_hides_the_catalog_models_a_key_cannot_call() {
+        let hidden = HashMap::from([(Provider::Anthropic, vec!["claude-sonnet-5".to_string(), "claude-sonnet-5-fast".to_string()])]);
+        let routed = |picker: &Picker, ambient: Option<&str>| {
+            let mut env = HashMap::new();
+            let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
+            route_opencode(&mut env, &set, ambient, picker);
+            serde_json::from_str::<serde_json::Value>(&env[OPENCODE_INLINE_ENV]).unwrap()
+        };
+        let v2 = routed(&Picker { v2: true, hidden: hidden.clone(), ..Default::default() }, None);
+        let native = &v2["providers"]["anthropic"];
+        assert_eq!(native["models"]["claude-sonnet-5"]["disabled"], true);
+        assert_eq!(native["models"]["claude-sonnet-5-fast"]["disabled"], true);
+        assert_eq!(native["settings"]["baseURL"], "http://127.0.0.1:9/anthropic/v1");
+        assert_eq!(native["settings"]["apiKey"], "{env:ANTHROPIC_AUTH_TOKEN}");
+        assert_eq!(v2["provider"]["anthropic"]["options"]["baseURL"], "http://127.0.0.1:9/anthropic/v1");
+        assert!(v2["provider"]["anthropic"].get("blacklist").is_none());
+        assert_eq!(v2["providers"].as_object().unwrap().len(), 1, "no list, no native block: {v2}");
+
+        let v1 = routed(&Picker { v2: false, hidden: hidden.clone(), ..Default::default() }, None);
+        assert_eq!(v1["provider"]["anthropic"]["blacklist"], serde_json::json!(["claude-sonnet-5", "claude-sonnet-5-fast"]));
+        assert!(v1.get("providers").is_none());
+        // The user's own filter and model entries stay theirs.
+        let mine = r#"{"provider":{"anthropic":{"whitelist":["claude-opus-5-5"]}}}"#;
+        assert_eq!(routed(&Picker { v2: false, hidden: hidden.clone(), ..Default::default() }, Some(mine))["provider"]["anthropic"]["whitelist"], serde_json::json!(["claude-opus-5-5"]));
+        let mine = r#"{"providers":{"anthropic":{"models":{"claude-sonnet-5":{"disabled":false}}}}}"#;
+        let kept = routed(&Picker { v2: true, hidden: hidden.clone(), ..Default::default() }, Some(mine));
+        assert_eq!(kept["providers"]["anthropic"]["models"]["claude-sonnet-5"]["disabled"], false);
+        assert_eq!(kept["providers"]["anthropic"]["models"]["claude-sonnet-5-fast"]["disabled"], true);
+        // A provider OpenCode 2's own block points somewhere is not routed at all.
+        let mine = r#"{"providers":{"anthropic":{"settings":{"baseURL":"https://gateway.example/v1"}}}}"#;
+        let mut env = HashMap::new();
+        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
+        route_opencode(&mut env, &set, Some(mine), &Picker { v2: true, hidden, ..Default::default() });
+        let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
+        assert_eq!(config["providers"]["anthropic"], serde_json::json!({"settings":{"baseURL":"https://gateway.example/v1"}}));
+        assert!(config["provider"].get("anthropic").is_none_or(|b| b["options"].get("baseURL").is_none()));
+        assert!(!env.contains_key(ANTHROPIC_CARRIER) && env.contains_key(GEMINI_CARRIER));
+        // The user's 2.x block without a route gets the proxy's, list or not.
+        let mine = r#"{"providers":{"google":{"name":"Mine"}}}"#;
+        let config = routed(&Picker { v2: true, hidden: HashMap::new(), ..Default::default() }, Some(mine));
+        assert_eq!(config["providers"]["google"]["settings"]["apiKey"], "{env:GEMINI_API_KEY}");
+        assert_eq!(config["providers"]["google"]["name"], "Mine");
+        assert!(config["providers"]["google"].get("models").is_none());
+        assert!(config["providers"].get("anthropic").is_none());
+    }
+
+    #[test]
+    fn a_model_the_catalog_lacks_is_offered_under_its_exact_id() {
+        let extra = HashMap::from([(Provider::Anthropic, vec!["claude-sonnet-5-5".to_string()])]);
+        let mut config = serde_json::json!({"provider":{"anthropic":{"options":{}}}});
+        let settings = serde_json::json!({"baseURL": "http://127.0.0.1:9/anthropic/v1"});
+        hide_in_picker(&mut config, "anthropic", &settings, &[], &extra[&Provider::Anthropic], false);
+        assert_eq!(config["provider"]["anthropic"]["models"]["claude-sonnet-5-5"]["name"], "claude-sonnet-5-5");
+        assert!(config.get("providers").is_none());
+        let mut config = serde_json::json!({"providers":{"anthropic":{"models":{"claude-sonnet-5-5":{"name":"Mine"}}}}});
+        hide_in_picker(&mut config, "anthropic", &settings, &["old".into()], &["claude-sonnet-5-5".into(), "claude-x".into()], true);
+        let models = &config["providers"]["anthropic"]["models"];
+        assert_eq!(models["claude-sonnet-5-5"]["name"], "Mine");
+        assert_eq!(models["claude-x"]["name"], "claude-x");
+        assert_eq!(models["old"]["disabled"], true);
     }
 
     #[test]
@@ -1220,6 +1440,9 @@ mod tests {
         assert!((anthropic.spent_usd - 20.0).abs() < 1e-9);
         assert_eq!(anthropic.legacy_limit_usd, None, "a token limit is set");
         assert_eq!(anthropic.unknown_models, ["claude-new"]);
+        // By model, most billed first, input and output kept apart.
+        let models: Vec<_> = anthropic.models.iter().map(|m| (m.model.as_str(), m.input, m.output, m.billed)).collect();
+        assert_eq!(models, [("claude-opus-5-5", 0, 12_000, 12_000), ("claude-new", 0, 8_000, 8_000)]);
         let gemini = &s.providers[1];
         assert_eq!((gemini.limit_tokens, gemini.budget, gemini.legacy_limit_usd), (None, "noLimit", Some(7.5)));
         assert_eq!(s.ledger_restarted.as_deref(), Some("2026-10-04T12:00:00Z"));
@@ -1228,6 +1451,8 @@ mod tests {
         assert_eq!(json["providers"][0]["billed"], 20_000);
         assert_eq!(json["providers"][1]["legacyLimitUsd"], 7.5);
         assert_eq!(json["providers"][1]["budget"], "noLimit");
+        assert_eq!(json["providers"][0]["models"][0]["cacheRead"], 0);
+        assert_eq!(json["providers"][2]["models"], serde_json::json!([]));
         assert_eq!(json["store"], "vault");
         // Claude's only provider is out of budget, Gemini's has no limit:
         // both are blocked; with a limit and room, Gemini is not.

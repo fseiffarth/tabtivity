@@ -444,17 +444,22 @@
   letter-spacing: 0.04em;
 }
 
+/* Wraps onto a second row: icon + label of all three chips don't fit in 170px,
+   and a chip squeezed below its content wrapped the label under the icon and
+   clipped it at the chip's fixed height. */
 .cal-list-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
 .cal-list-actions .cal-chip {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 0 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
   white-space: nowrap;
 }
 

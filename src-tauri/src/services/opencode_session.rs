@@ -7,9 +7,11 @@
 //! Now each tab records the session it is in, as the other CLIs' hooks do,
 //! and is restored into that one with `--session <id>`:
 //!
-//! - **The plugin.** One file of Tabtivity's in `<state_dir>/hooks/` (read-only
-//!   in the fence, at its own path), listed by file URL in every agent home's
-//!   `.config/opencode/opencode.json` `plugin` list. Each time the tab's
+//! - **The plugin.** One directory of Tabtivity's in `<state_dir>/hooks/`
+//!   (read-only in the fence, at its own path), listed by file URL in every
+//!   agent home's `.config/opencode/opencode.json` `plugin` list — the
+//!   directory for OpenCode 2 (2.1.3 skips a configured plugin file), its
+//!   `index.js` for 1.x. Each time the tab's
 //!   OpenCode takes a prompt it writes that session's id to
 //!   `live_sessions/<uid>`, beside the other CLIs' records — a `/new` or a
 //!   session picked from `/sessions` moves it at the next prompt. Only the
@@ -41,8 +43,14 @@ use crate::services::opencode_store;
 use crate::storage;
 use crate::terminal::PtyOptions;
 
-/// The plugin file in `<state_dir>/hooks/`.
-const PLUGIN_NAME: &str = concat!(crate::app_slug!(), "_opencode_session.js");
+/// The plugin's directory in `<state_dir>/hooks/`, and its entry file.
+/// OpenCode 2 loads a configured local plugin only as a directory (2.1.3 skips
+/// a file with "configured plugin path must be a directory") and resolves its
+/// `index`; 1.x imports the file itself.
+const PLUGIN_DIR: &str = concat!(crate::app_slug!(), "_opencode_session");
+const PLUGIN_ENTRY: &str = "index.js";
+/// The single file earlier builds wrote and listed: taken back out of homes.
+const LEGACY_PLUGIN_FILE: &str = concat!(crate::app_slug!(), "_opencode_session.js");
 /// Set by the plugin in its own environment once it records for the tab: an
 /// OpenCode the tab's agent starts inherits it and records nothing.
 const CLAIM_ENV: &str = crate::app_env!("OPENCODE_SESSION");
@@ -56,13 +64,37 @@ pub fn is_session_id(s: &str) -> bool {
         .is_some_and(|rest| (1..=64).contains(&rest.len()) && rest.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
-fn plugin_path() -> PathBuf {
-    storage::state_dir().join("hooks").join(PLUGIN_NAME)
+fn plugin_dir() -> PathBuf {
+    storage::state_dir().join("hooks").join(PLUGIN_DIR)
 }
 
-/// The `plugin` entry OpenCode imports the file by.
-fn plugin_url() -> Option<String> {
-    url::Url::from_file_path(plugin_path()).ok().map(String::from)
+fn file_url(path: PathBuf) -> Option<String> {
+    url::Url::from_file_path(path).ok().map(String::from)
+}
+
+/// The `plugin` entry OpenCode loads the plugin by: the directory for V2, the
+/// entry file for V1.
+fn plugin_url(v2: bool) -> Option<String> {
+    let dir = plugin_dir();
+    file_url(if v2 { dir } else { dir.join(PLUGIN_ENTRY) })
+}
+
+/// Every entry of Tabtivity's that is not `url`: the other release's, and the
+/// single file earlier builds listed.
+fn stale_urls(url: &str) -> Vec<String> {
+    let hooks = storage::state_dir().join("hooks");
+    [plugin_url(true), plugin_url(false), file_url(hooks.join(LEGACY_PLUGIN_FILE))]
+        .into_iter()
+        .flatten()
+        .filter(|u| u != url)
+        .collect()
+}
+
+/// Whether the OpenCode Tabtivity last probed is 2.x (`agent_versions`; a
+/// spawn probes it before resolving, `launch_prep::prepare`).
+fn installed_v2() -> bool {
+    let store = crate::services::agent_versions::load();
+    crate::services::agent_versions::opencode_is_v2(store.get("opencode"))
 }
 
 fn plugin_body(live_dir: &str) -> String {
@@ -131,15 +163,18 @@ fn plugin_body(live_dir: &str) -> String {
 }
 
 /// Write the plugin beside the session hook. Idempotent; part of
-/// `agent_session::install_session_start_hook`.
+/// `agent_session::install_session_start_hook`. Every spawn re-lists the
+/// plugin in its home, so the earlier single file is removed.
 pub fn write_plugin() -> std::io::Result<()> {
-    let path = plugin_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let dir = plugin_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(PLUGIN_ENTRY);
     let body = plugin_body(&live_sessions_dir().to_string_lossy());
     if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
         std::fs::write(&path, body)?;
+    }
+    if let Some(hooks) = dir.parent() {
+        let _ = std::fs::remove_file(hooks.join(LEGACY_PLUGIN_FILE));
     }
     Ok(())
 }
@@ -148,11 +183,12 @@ pub fn write_plugin() -> std::io::Result<()> {
 /// listed afterwards — a config that isn't plain JSON is left alone, and then
 /// the tab records nothing.
 pub fn register_in_home(home: &Path) -> bool {
-    let Some(url) = plugin_url() else { return false };
+    let Some(url) = plugin_url(installed_v2()) else { return false };
+    let stale = stale_urls(&url);
     let Some(file) = HomeFile::open(home, crate::services::agent_hint::OPENCODE_CONFIG) else {
         return false;
     };
-    if let Err(e) = crate::services::agent_hint::merge_json(&file, |root| add_plugin(root, &url)) {
+    if let Err(e) = crate::services::agent_hint::merge_json(&file, |root| add_plugin(root, &url, &stale)) {
         eprintln!("opencode_session: register the plugin in {}: {e}", home.display());
     }
     file.read()
@@ -170,14 +206,21 @@ fn plugin_key(root: &Value) -> &'static str {
     if root.get("plugins").is_some() { "plugins" } else { "plugin" }
 }
 
-/// Add `url` to OpenCode's `plugin` list. False when it is there.
-fn add_plugin(root: &mut Value, url: &str) -> bool {
-    if lists(root, url) {
+/// Add `url` to OpenCode's `plugin` list, taking the `stale` entries out.
+/// False when nothing changes.
+fn add_plugin(root: &mut Value, url: &str, stale: &[String]) -> bool {
+    let is_stale = |p: &Value| p.as_str().is_some_and(|p| stale.iter().any(|s| s == p));
+    let key = plugin_key(root);
+    let has_stale = root.get(key).and_then(Value::as_array).is_some_and(|list| list.iter().any(is_stale));
+    if lists(root, url) && !has_stale {
         return false;
     }
-    let key = plugin_key(root);
     let list = crate::services::agent_hint::slot(root, key, json!([]));
-    list.as_array_mut().expect("an array").push(json!(url));
+    let list = list.as_array_mut().expect("an array");
+    list.retain(|p| !is_stale(p));
+    if !list.iter().any(|p| p.as_str() == Some(url)) {
+        list.push(json!(url));
+    }
     true
 }
 
@@ -223,6 +266,19 @@ pub fn recorded_session(project_id: Option<&str>, uid: &str) -> Option<String> {
         })
         .max_by_key(|(stamp, _)| *stamp)
         .map(|(_, id)| id)
+}
+
+/// Point the record of `uid` in `dir` at the session `id`, as its plugin
+/// would at the session's next prompt: the Reader's Resume menu
+/// (`agent_session::resume_chat_plan`), before the tab is relaunched onto it.
+pub fn record_session_in(dir: &Path, uid: &str, id: &str) -> std::io::Result<()> {
+    if !is_uuid_shaped(uid) || !is_session_id(id) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a tab key and an OpenCode session"));
+    }
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{uid}.tmp"));
+    std::fs::write(&tmp, id)?;
+    std::fs::rename(&tmp, dir.join(uid))
 }
 
 /// How a tab's last launch began, from its launch note.
@@ -371,6 +427,18 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn the_resume_menu_records_the_session_a_relaunch_resumes() {
+        let dir = tmp("record");
+        record_session_in(&dir, UID, "ses_Picked1").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(UID)).unwrap(), "ses_Picked1");
+        let (args, _) = session_args(&["--continue".to_string()], Some("ses_Picked1"), true);
+        assert_eq!(args, ["--session", "ses_Picked1"]);
+        assert!(record_session_in(&dir, UID, "ses_bad/../x").is_err());
+        assert!(record_session_in(&dir, "../escape", "ses_Picked1").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn opts(args: &[&str]) -> PtyOptions {
         let mut o = PtyOptions {
             login: None,
@@ -477,17 +545,42 @@ mod tests {
     #[test]
     fn the_plugin_is_listed_once_beside_the_users_own() {
         let mut root = json!({ "plugin": ["mine"], "model": "m" });
-        assert!(add_plugin(&mut root, "file:///x.js"));
-        assert!(!add_plugin(&mut root, "file:///x.js"));
+        assert!(add_plugin(&mut root, "file:///x.js", &[]));
+        assert!(!add_plugin(&mut root, "file:///x.js", &[]));
         assert_eq!(root["plugin"], json!(["mine", "file:///x.js"]));
         assert_eq!(root["model"], "m");
     }
 
     #[test]
+    fn a_release_switch_replaces_the_other_entry_of_ours() {
+        // OpenCode 2.1.3 skips the file entry an earlier build listed; the
+        // directory takes its place, and back for 1.x.
+        let stale = ["file:///h/x.js".to_string(), "file:///h/x/index.js".to_string()];
+        let mut root = json!({ "plugin": ["mine", "file:///h/x.js"] });
+        assert!(add_plugin(&mut root, "file:///h/x", &stale));
+        assert_eq!(root["plugin"], json!(["mine", "file:///h/x"]));
+        assert!(!add_plugin(&mut root, "file:///h/x", &stale));
+        let back = ["file:///h/x".to_string()];
+        assert!(add_plugin(&mut root, "file:///h/x/index.js", &back));
+        assert_eq!(root["plugin"], json!(["mine", "file:///h/x/index.js"]));
+    }
+
+    #[test]
+    fn v2_lists_the_plugin_directory_and_v1_its_entry_file() {
+        let v2 = plugin_url(true).unwrap();
+        let v1 = plugin_url(false).unwrap();
+        assert!(v2.ends_with(PLUGIN_DIR), "{v2}");
+        assert_eq!(v1, format!("{v2}/{PLUGIN_ENTRY}"));
+        let stale = stale_urls(&v2);
+        assert!(stale.contains(&v1) && !stale.contains(&v2));
+        assert!(stale.iter().any(|u| u.ends_with(LEGACY_PLUGIN_FILE)));
+    }
+
+    #[test]
     fn native_v2_plugins_take_precedence_without_losing_the_users_entries() {
         let mut root = json!({ "plugins": ["mine"], "plugin": ["legacy"] });
-        assert!(add_plugin(&mut root, "file:///x.js"));
-        assert!(!add_plugin(&mut root, "file:///x.js"));
+        assert!(add_plugin(&mut root, "file:///x.js", &[]));
+        assert!(!add_plugin(&mut root, "file:///x.js", &[]));
         assert_eq!(root["plugins"], json!(["mine", "file:///x.js"]));
         assert_eq!(root["plugin"], json!(["legacy"]));
     }

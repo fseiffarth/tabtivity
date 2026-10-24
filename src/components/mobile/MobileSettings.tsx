@@ -189,6 +189,10 @@ export function MobileSettings() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [serveVerification, setServeVerification] = useState<ServeVerification | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
+  // Rows switched in this visit stay listed, so turning one off doesn't pull
+  // it out from under the pointer; keys are `project:<id>` / `box:<id>`.
+  const [touchedRows, setTouchedRows] = useState<ReadonlySet<string>>(() => new Set());
+  const touchRow = (key: string) => setTouchedRows((rows) => (rows.has(key) ? rows : new Set(rows).add(key)));
   // The setup fold: `null` until someone (or the first status read) opens or
   // shuts it; `checked` is that first read having landed.
   const [setupOpen, setSetupOpen] = useState<boolean | null>(null);
@@ -524,15 +528,19 @@ export function MobileSettings() {
     const host = projectHostKind(project);
     return host === "local" ? undefined : t(HOST_REACH_KEY[host]);
   };
+  // With the search empty only the shared rows are listed — a long project
+  // list made the section a scroll — and the search finds the rest.
   const normalizedProjectSearch = projectSearch.trim().toLocaleLowerCase();
   const matchingProjects = normalizedProjectSearch
     ? projects.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
-    : projects;
+    : projects.filter((project) => project[MOBILE_ACCESS_KEY] || touchedRows.has(`project:${project.id}`));
+  const hiddenProjects = normalizedProjectSearch ? 0 : projects.length - matchingProjects.length;
   // Boxes ride under the same search box: every project type and every box may
   // be shared (a box's tabs run locally whatever its members are).
   const matchingBoxes = normalizedProjectSearch
     ? boxes.filter((box) => box.name.toLocaleLowerCase().includes(normalizedProjectSearch))
-    : boxes;
+    : boxes.filter((box) => box[MOBILE_ACCESS_KEY] || touchedRows.has(`box:${box.id}`));
+  const hiddenBoxes = normalizedProjectSearch ? 0 : boxes.length - matchingBoxes.length;
   const securityHealth = !stored?.enabled
     ? { tone: "off", title: t("mobile.healthOffTitle"), detail: t("mobile.healthOffDetail") }
     : !status?.running
@@ -758,6 +766,7 @@ export function MobileSettings() {
             checked={project[MOBILE_ACCESS_KEY] ?? false}
             onChange={(event) => {
               setError(null);
+              touchRow(`project:${project.id}`);
               // One click on = every phone; narrowing is the ▾ button's job.
               void setProjectMobileAccess(project.id, event.target.checked, null).catch((reason) => setError(String(reason)));
             }}
@@ -765,7 +774,8 @@ export function MobileSettings() {
           />
         ))}
         {projects.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
-        {projects.length > 0 && matchingProjects.length === 0 && <p className="settings-help">{t("mobile.noProjectsMatch", { query: projectSearch.trim() })}</p>}
+        {hiddenProjects > 0 && <p className="settings-help">{t("mobile.hiddenProjects", { count: hiddenProjects })}</p>}
+        {normalizedProjectSearch && projects.length > 0 && matchingProjects.length === 0 && <p className="settings-help">{t("mobile.noProjectsMatch", { query: projectSearch.trim() })}</p>}
       </div>
 
       {boxes.length > 0 && <>
@@ -778,12 +788,14 @@ export function MobileSettings() {
               checked={box[MOBILE_ACCESS_KEY] ?? false}
               onChange={(event) => {
                 setError(null);
+                touchRow(`box:${box.id}`);
                 void setBoxMobileAccess(box.id, event.target.checked, null).catch((reason) => setError(String(reason)));
               }}
               aside={phoneScopeButton("box", box.id, box.name, box[MOBILE_ACCESS_KEY] ?? false, box[MOBILE_DEVICES_KEY])}
             />
           ))}
-          {matchingBoxes.length === 0 && <p className="settings-help">{t("mobile.noBoxesMatch", { query: projectSearch.trim() })}</p>}
+          {hiddenBoxes > 0 && <p className="settings-help">{t("mobile.hiddenBoxes", { count: hiddenBoxes })}</p>}
+          {normalizedProjectSearch && matchingBoxes.length === 0 && <p className="settings-help">{t("mobile.noBoxesMatch", { query: projectSearch.trim() })}</p>}
         </div>
       </>}
 

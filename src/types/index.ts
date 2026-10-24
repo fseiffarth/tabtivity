@@ -219,6 +219,9 @@ export interface Settings {
    * item in the bar while the chevron is collapsed, `false` folds it behind the
    * chevron. An id that is absent follows the built-in default. */
   header_pins?: Record<string, boolean>;
+  /** The header's Mobile setup guide has been opened once; from then on the
+   * dimmed phone icon folds like any readout (`lib/headerPins`). */
+  mobile_setup_seen?: boolean;
   /** Top-bar item ids in the order the user dragged them (`lib/headerPins`).
    * An id that is absent keeps its built-in place after the listed ones. */
   header_order?: string[];

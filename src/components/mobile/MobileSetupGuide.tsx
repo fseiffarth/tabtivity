@@ -80,7 +80,7 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="settings-title-row">
-            <h2>{t("mobile.setupTitle")} <UntestedTag id="mobile.setupTitle" /></h2>
+            <h2>{t("mobile.setupTitle")} <UntestedTag id="mobile.setupTitle" /> <UntestedTag id="headerPins.mobileNudge" /></h2>
             <button
               type="button"
               className="dialog-close-btn"

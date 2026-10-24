@@ -4248,6 +4248,7 @@ async fn phone_transcript(
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
     transcript.shells.clear();
+    transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
     let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();

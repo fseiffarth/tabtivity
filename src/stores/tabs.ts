@@ -6749,6 +6749,28 @@ export function localTabCwd(
 }
 
 /**
+ * The folder a PTY tab that runs ON a host starts in: that host's `remote_path`
+ * (`ssh_exec::wrap_pty_options` cds into the project root there), or `null` for
+ * a tab that runs locally. Its spawn cwd is only the local state folder the
+ * backend resolves to the host, so it is no path to show. A worker id the
+ * project no longer has falls back to the primary, as the backend does.
+ */
+export function hostTabCwd(
+  tab: { kind: TabKind; location?: TabLocation },
+  project: {
+    remote?: { remote_path: string };
+    compute_hosts?: readonly { id: string; remote_path: string }[];
+    vm?: { enabled?: boolean };
+  } | undefined,
+): string | null {
+  if (!project) return null;
+  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
+  if (!hostId) return null;
+  const worker = hostId === "primary" ? undefined : project.compute_hosts?.find((h) => h.id === hostId);
+  return (worker ?? project.remote)?.remote_path || null;
+}
+
+/**
  * #42: build the saved layout tree that should be PERSISTED for a scope that has
  * detached groups. Each detached group's serialized subtree is appended to the
  * in-window tree as a sibling (row split) — so `project.json` always reflects "if
