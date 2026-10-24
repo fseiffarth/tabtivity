@@ -23,6 +23,15 @@ Referenced from `AGENTS.md`.
   and tmux runs the script's path; the script `exec`s the same quoted line.
   Removed with the session (explicit kill, clean quit); a respawn rewrites it.
 
+**A fenced agent's pane ends with the agent** (threat recheck 2026-10-24, gap 43,
+decision D3): no trailing login shell — it would run outside the fence and a
+phone could type into it with `shell_tabs` off. `tmux_local::local_tmux_args_on_end`
+sets `remain-on-exit` on the window instead, so the finished run stays visible
+and reattachable but takes no input. The desktop polls `local_tmux_pane_dead`
+for a visible local tmux tab and `TerminalDeadPaneCard` offers **Restart**
+(`agentClearUndo::relaunch`) and **Open a shell here** (a new shell tab in the
+same folder). An unfenced command tab keeps its trailing login shell.
+
 Scoped to **shell tabs** (Python runs open one; a command runs inside the
 session's login shell, which outlives it → the run reattaches, not re-runs) and,
 **since the remote-agent extension**, to **remote agent tabs** (Claude, Codex,

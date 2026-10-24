@@ -234,6 +234,30 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
     app_core::rt::try_blocking("terminal", crate::services::tmux_local::kill_app_sessions).await
 }
 
+/// Whether a **local** tmux session's pane has ended and stays on screen — a
+/// fenced agent that quit (`remain-on-exit`, `services::tmux_local`). The pane
+/// card's Restart / Open a shell here offer reads it. `false` for a session
+/// that is not here (a remote tab, one that exited, no tmux).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn local_tmux_pane_dead(session: String) -> Result<bool, String> {
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session)
+        || !crate::services::tmux_local::tmux_available()
+    {
+        return Ok(false);
+    }
+    app_core::rt::blocking("terminal", move || {
+        crate::services::tmux_local::tmux_command()
+            .args(crate::services::tmux_local::local_tmux_pane_dead_args(&session))
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some_and(|output| {
+                crate::services::tmux_local::pane_dead_answer(&String::from_utf8_lossy(&output.stdout))
+            })
+    })
+    .await
+}
+
 /// The visible screen of a **local** tmux session, as plain rows — what the
 /// model tag beside an agent tab reads the session's status line from
 /// (`stores/agents/agentModels`). `None` when the session is not here (a remote

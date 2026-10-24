@@ -710,6 +710,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["copilot_fence_sign_out", "core"],
   ["local_tmux_kill", "core"],
   ["local_tmux_kill_app_sessions", "core"],
+  ["local_tmux_pane_dead", "core"],
   ["local_tmux_rename", "core"],
   ["local_tmux_screen", "core"],
   ["project_cpu_percent", "core"],

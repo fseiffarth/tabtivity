@@ -954,6 +954,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_fence_sign_out", Core),
     ("local_tmux_kill", Core),
     ("local_tmux_kill_app_sessions", Core),
+    ("local_tmux_pane_dead", Core),
     ("local_tmux_rename", Core),
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),

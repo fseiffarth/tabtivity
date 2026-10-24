@@ -64,6 +64,7 @@ import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
 import { buildScaffoldFillPrompt } from "../projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
@@ -2522,6 +2523,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     )}
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
+    )}
+    {agentPane && !attachOnly && !signIn && !signInDone && host && (
+      <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}
     {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard

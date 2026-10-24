@@ -113,11 +113,9 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
 /// Discard whatever is waiting in the terminal's input queue. The shim runs
 /// on the user's own shell tab; once the fenced CLI has exited, the next
 /// reader of that queue is the unfenced shell, so nothing the fenced process
-/// left there may reach it (the same drain a fenced tmux pane runs before
-/// its trailing shell, `tmux_local::FENCE_INPUT_DRAIN`). On Linux the fence's
-/// pid namespace dies with the CLI, so nothing fenced can add more after
-/// this; on macOS a process the agent left behind could still, which is the
-/// same limit the pane drain has there.
+/// left there may reach it. On Linux the fence's pid namespace dies with the
+/// CLI, so nothing fenced can add more after this; on macOS a process the
+/// agent left behind could still.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn drain_terminal_input() {
     // SAFETY: plain libc calls on descriptor 0.

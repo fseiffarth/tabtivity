@@ -2242,6 +2242,7 @@ pub fn run() {
             commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,
             commands::terminal::local_tmux_screen,
+            commands::terminal::local_tmux_pane_dead,
             commands::terminal::project_cpu_percent,
             // External apps / window tracking
             commands::apps::launch_app,
