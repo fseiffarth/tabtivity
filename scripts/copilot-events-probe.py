@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check what Tabtivity reads of the Copilot CLI against the installed release.
+"""Check what the app reads of the Copilot CLI against the installed release.
 
 Runs `copilot -p` three times in a throwaway HOME against a local stub model
 (Copilot's BYOK mode, `COPILOT_PROVIDER_BASE_URL`), so no GitHub login, no
