@@ -21,6 +21,12 @@
 //! - a window up: `ssh -O check` on the literal socket, then — unless the
 //!   host is tagged HPC (`hpc_hosts`) — `tmux ls` over the master. A `tmux
 //!   ls` that fails keeps the last answer for at most [`CARRY_FORWARD`].
+//!
+//! Every round needs each host's literal socket path, which only `ssh -G` can
+//! tell, and `ssh -G` evaluates the user's ssh_config — `Match exec` commands
+//! included. So it runs under a deadline (`ssh_exec::RESOLVE_TIMEOUT`) and its
+//! answer is kept per host: [`RESOLVE_KEEP`] while the path finds a master,
+//! [`RESOLVE_RETRY`] while it does not.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -103,13 +109,21 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a host whose `tmux ls` keeps failing is still read by its last
 /// answer. Past this it counts as unreachable.
 const CARRY_FORWARD: Duration = Duration::from_secs(60);
+/// How long a resolved socket path that found a master is used before
+/// `ssh -G` is asked again. Only an edit to the user's ssh_config changes it.
+const RESOLVE_KEEP: Duration = Duration::from_secs(5 * 60);
+/// How long a resolution that found no master (no answer, no socket file, a
+/// dead master) is used before `ssh -G` is asked again: rarely enough that a
+/// host nobody connected to does not run the user's `Match exec` every round.
+const RESOLVE_RETRY: Duration = Duration::from_secs(60);
 
 /// The probes a round runs, behind a seam so the round's rules are tested
 /// without ssh.
 pub(super) trait Probe {
-    /// The literal socket of the desktop's master for `spec`, when one is
-    /// there as a file.
-    fn control_socket(&self, spec: &RemoteSpec) -> Option<PathBuf>;
+    /// The literal socket path of the desktop's master for `spec` (`ssh -G`).
+    fn resolve_control_path(&self, spec: &RemoteSpec) -> Option<PathBuf>;
+    /// Whether that socket is there as a file.
+    fn socket_exists(&self, control_path: &Path) -> bool;
     /// `ssh -O check` on it.
     fn master_alive(&self, control_path: &Path) -> bool;
     /// `tmux ls` on the host over the master; `Err` when it could not be asked.
@@ -120,8 +134,12 @@ pub(super) trait Probe {
 struct SshProbe;
 
 impl Probe for SshProbe {
-    fn control_socket(&self, spec: &RemoteSpec) -> Option<PathBuf> {
-        ssh_exec::resolve_control_path(spec).filter(|path| path.exists())
+    fn resolve_control_path(&self, spec: &RemoteSpec) -> Option<PathBuf> {
+        ssh_exec::resolve_control_path(spec)
+    }
+
+    fn socket_exists(&self, control_path: &Path) -> bool {
+        control_path.exists()
     }
 
     fn master_alive(&self, control_path: &Path) -> bool {
@@ -174,19 +192,61 @@ fn hpc_tagged(settings: &Value) -> HashSet<String> {
 /// The last `tmux ls` answer per host, for [`CARRY_FORWARD`].
 type Answers = HashMap<String, (Instant, HashSet<String>)>;
 
+/// One host's `ssh -G` answer, and whether the last round found a master on it.
+#[derive(Debug, Clone)]
+struct Resolution {
+    at: Instant,
+    path: Option<PathBuf>,
+    works: bool,
+}
+
+/// What rounds carry over to the next one, per host key.
+#[derive(Debug, Default)]
+struct Memory {
+    answers: Answers,
+    resolved: HashMap<String, Resolution>,
+}
+
+/// `spec`'s socket path when it is there as a file: the kept resolution while
+/// it is fresh ([`RESOLVE_KEEP`] / [`RESOLVE_RETRY`]), else a new `ssh -G`.
+/// A missing socket marks the resolution as not working.
+fn control_socket(
+    spec: &RemoteSpec,
+    key: &str,
+    resolved: &mut HashMap<String, Resolution>,
+    probe: &dyn Probe,
+    now: Instant,
+) -> Option<PathBuf> {
+    let fresh = resolved.get(key).is_some_and(|kept| {
+        now.saturating_duration_since(kept.at) < if kept.works { RESOLVE_KEEP } else { RESOLVE_RETRY }
+    });
+    if !fresh {
+        let path = probe.resolve_control_path(spec);
+        resolved.insert(key.to_string(), Resolution { at: now, path, works: false });
+    }
+    let kept = resolved.get_mut(key)?;
+    let path = kept.path.clone().filter(|path| probe.socket_exists(path));
+    kept.works = path.is_some();
+    path
+}
+
 /// One round over `targets`. `window_up`: a window holds the timer lease.
 fn round(
     targets: &[RemoteSpec],
     window_up: bool,
     hpc: Option<&HashSet<String>>,
-    answers: &mut Answers,
+    memory: &mut Memory,
     probe: &dyn Probe,
     now: Instant,
 ) -> HostLive {
+    let keys: HashSet<String> = targets.iter().map(key_of).collect();
+    memory.resolved.retain(|key, _| keys.contains(key));
+    memory.answers.retain(|key, _| keys.contains(key));
+    let Memory { answers, resolved } = memory;
     let mut live = HostLive::default();
     for spec in targets {
         let key = key_of(spec);
-        let Some(control_path) = probe.control_socket(spec) else {
+        let Some(control_path) = control_socket(spec, &key, resolved, probe, now) else {
             answers.remove(&key);
             continue;
         };
@@ -195,6 +255,9 @@ fn round(
             continue;
         }
         if !probe.master_alive(&control_path) {
+            if let Some(kept) = resolved.get_mut(&key) {
+                kept.works = false;
+            }
             answers.remove(&key);
             continue;
         }
@@ -230,16 +293,16 @@ fn unix_now() -> u64 {
 }
 
 /// One round against the real state dir and ssh.
-fn round_now(state_dir: &Path, answers: &mut Answers) -> HostLive {
+fn round_now(state_dir: &Path, memory: &mut Memory) -> HostLive {
     let targets = super::discovery::host_probe_targets(state_dir);
     if targets.is_empty() {
-        answers.clear();
+        *memory = Memory::default();
         return HostLive::default();
     }
     let lease = crate::services::timer_lease::lease_file(state_dir);
     let window_up = crate::services::timer_lease::holder_in(&lease, unix_now()).is_some();
     let hpc = hpc_hosts(state_dir);
-    round(&targets, window_up, hpc.as_ref(), answers, &SshProbe, Instant::now())
+    round(&targets, window_up, hpc.as_ref(), memory, &SshProbe, Instant::now())
 }
 
 /// The refresher, for the host's whole life: a round every [`ROUND`] while a
@@ -251,7 +314,7 @@ pub async fn run(
     live: SharedHostLive,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut answers = Answers::new();
+    let mut memory = Memory::default();
     let mut last_round: Option<Instant> = None;
     let mut tick = tokio::time::interval(GATE_TICK);
     loop {
@@ -264,7 +327,7 @@ pub async fn run(
         }
         if !auth.lock_ok().has_live_session(unix_now()) {
             *live.lock_ok() = HostLive::default();
-            answers.clear();
+            memory = Memory::default();
             last_round = None;
             continue;
         }
@@ -273,7 +336,7 @@ pub async fn run(
         }
         last_round = Some(Instant::now());
         let dir = state_dir.clone();
-        let mut carried = std::mem::take(&mut answers);
+        let mut carried = std::mem::take(&mut memory);
         let Ok((next, carried)) = tokio::task::spawn_blocking(move || {
             let next = round_now(&dir, &mut carried);
             (next, carried)
@@ -282,7 +345,7 @@ pub async fn run(
         else {
             continue;
         };
-        answers = carried;
+        memory = carried;
         *live.lock_ok() = next;
     }
 }
@@ -301,13 +364,19 @@ mod tests {
     struct Script {
         sockets: HashMap<String, PathBuf>,
         alive: HashSet<PathBuf>,
+        /// Resolved paths whose socket file is not there.
+        missing: HashSet<PathBuf>,
         tmux: HashMap<String, Result<HashSet<String>, String>>,
         asked: RefCell<Vec<String>>,
     }
 
     impl Probe for Script {
-        fn control_socket(&self, spec: &RemoteSpec) -> Option<PathBuf> {
+        fn resolve_control_path(&self, spec: &RemoteSpec) -> Option<PathBuf> {
+            self.asked.borrow_mut().push(format!("resolve {}", spec.host));
             self.sockets.get(&spec.host).cloned()
+        }
+        fn socket_exists(&self, control_path: &Path) -> bool {
+            !self.missing.contains(control_path)
         }
         fn master_alive(&self, control_path: &Path) -> bool {
             self.asked.borrow_mut().push(format!("check {}", control_path.display()));
@@ -332,12 +401,16 @@ mod tests {
         let mut script = Script::default();
         script.sockets.insert("a.example".into(), socket("cm-a"));
         let targets = [spec("a.example"), spec("b.example")];
-        let live = round(&targets, false, Some(&HashSet::new()), &mut Answers::new(), &script, Instant::now());
+        let live = round(&targets, false, Some(&HashSet::new()), &mut Memory::default(), &script, Instant::now());
         let a = live.reach(&spec("a.example")).expect("socket present");
         assert_eq!(a.sessions, None);
         assert!(a.has_session("anything"));
         assert!(live.reach(&spec("b.example")).is_none(), "no socket, unreachable");
-        assert!(script.asked.borrow().is_empty(), "no -O check, no tmux ls: {:?}", script.asked.borrow());
+        assert!(
+            script.asked.borrow().iter().all(|asked| asked.starts_with("resolve")),
+            "no -O check, no tmux ls: {:?}",
+            script.asked.borrow()
+        );
     }
 
     #[test]
@@ -348,7 +421,7 @@ mod tests {
         script.alive.insert(socket("cm-up"));
         script.tmux.insert("up.example".into(), Ok(names(&["s1"])));
         let targets = [spec("dead.example"), spec("up.example")];
-        let live = round(&targets, true, Some(&HashSet::new()), &mut Answers::new(), &script, Instant::now());
+        let live = round(&targets, true, Some(&HashSet::new()), &mut Memory::default(), &script, Instant::now());
         assert!(live.reach(&spec("dead.example")).is_none());
         let up = live.reach(&spec("up.example")).expect("alive");
         assert!(up.has_session("s1") && !up.has_session("s2"));
@@ -362,9 +435,9 @@ mod tests {
         script.sockets.insert("hpc.example".into(), socket("cm-hpc"));
         script.alive.insert(socket("cm-hpc"));
         let tagged = names(&[&key_of(&spec("hpc.example"))]);
-        let live = round(&[spec("hpc.example")], true, Some(&tagged), &mut Answers::new(), &script, Instant::now());
+        let live = round(&[spec("hpc.example")], true, Some(&tagged), &mut Memory::default(), &script, Instant::now());
         assert_eq!(live.reach(&spec("hpc.example")).expect("alive").sessions, None);
-        let live = round(&[spec("hpc.example")], true, None, &mut Answers::new(), &script, Instant::now());
+        let live = round(&[spec("hpc.example")], true, None, &mut Memory::default(), &script, Instant::now());
         assert_eq!(live.reach(&spec("hpc.example")).expect("alive").sessions, None);
         assert!(script.asked.borrow().iter().all(|asked| !asked.starts_with("tmux")), "{:?}", script.asked.borrow());
     }
@@ -376,7 +449,7 @@ mod tests {
         script.alive.insert(socket("cm-h"));
         script.tmux.insert("h.example".into(), Ok(names(&["s1"])));
         let targets = [spec("h.example")];
-        let mut answers = Answers::new();
+        let mut answers = Memory::default();
         let t0 = Instant::now();
         round(&targets, true, Some(&HashSet::new()), &mut answers, &script, t0);
         script.tmux.insert("h.example".into(), Err("hung".into()));
@@ -385,8 +458,100 @@ mod tests {
         let gone = round(&targets, true, Some(&HashSet::new()), &mut answers, &script, t0 + Duration::from_secs(61));
         assert!(gone.reach(&spec("h.example")).is_none());
         // With no earlier answer a failure is unreachable at once.
-        let fresh = round(&targets, true, Some(&HashSet::new()), &mut Answers::new(), &script, t0);
+        let fresh = round(&targets, true, Some(&HashSet::new()), &mut Memory::default(), &script, t0);
         assert!(fresh.reach(&spec("h.example")).is_none());
+    }
+
+    fn resolves(script: &Script) -> usize {
+        script.asked.borrow().iter().filter(|asked| asked.starts_with("resolve")).count()
+    }
+
+    /// `ssh -G` runs the user's `Match exec`: a path that finds a master is
+    /// asked for again only after [`RESOLVE_KEEP`], not every round.
+    #[test]
+    fn a_working_socket_path_is_resolved_once_per_keep_window_not_every_round() {
+        let mut script = Script::default();
+        script.sockets.insert("up.example".into(), socket("cm-keep"));
+        script.alive.insert(socket("cm-keep"));
+        script.tmux.insert("up.example".into(), Ok(names(&["s1"])));
+        let targets = [spec("up.example")];
+        let mut memory = Memory::default();
+        let t0 = Instant::now();
+        for round_no in 0..30u64 {
+            let at = t0 + ROUND * round_no as u32;
+            let live = round(&targets, true, Some(&HashSet::new()), &mut memory, &script, at);
+            assert!(live.reach(&spec("up.example")).is_some(), "round {round_no}");
+        }
+        assert_eq!(resolves(&script), 1, "{:?}", script.asked.borrow());
+        // With no window, the socket file alone: kept just the same.
+        round(&targets, false, Some(&HashSet::new()), &mut memory, &script, t0 + Duration::from_secs(299));
+        assert_eq!(resolves(&script), 1);
+        round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0 + RESOLVE_KEEP);
+        assert_eq!(resolves(&script), 2, "asked again once the keep window is over");
+    }
+
+    #[test]
+    fn a_host_without_a_master_is_resolved_at_most_once_a_minute() {
+        let mut script = Script::default();
+        // No answer from `ssh -G` (a deadline, or nothing printed) …
+        let targets = [spec("none.example"), spec("nofile.example"), spec("dead.example")];
+        // … a path whose socket file is not there …
+        script.sockets.insert("nofile.example".into(), socket("cm-nofile"));
+        script.missing.insert(socket("cm-nofile"));
+        // … and a socket with a dead master.
+        script.sockets.insert("dead.example".into(), socket("cm-deadm"));
+        let mut memory = Memory::default();
+        let t0 = Instant::now();
+        for round_no in 0..6u64 {
+            let at = t0 + ROUND * round_no as u32;
+            let live = round(&targets, true, Some(&HashSet::new()), &mut memory, &script, at);
+            assert!(targets.iter().all(|t| live.reach(t).is_none()), "round {round_no}");
+        }
+        assert_eq!(resolves(&script), 3, "one each in the first minute: {:?}", script.asked.borrow());
+        round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0 + RESOLVE_RETRY);
+        assert_eq!(resolves(&script), 6);
+
+        // A master that comes up is found at the next retry, then kept.
+        script.missing.clear();
+        script.alive.insert(socket("cm-nofile"));
+        script.tmux.insert("nofile.example".into(), Ok(names(&["s1"])));
+        let found = round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0 + RESOLVE_RETRY * 2);
+        assert!(found.reach(&spec("nofile.example")).is_some());
+        let after = resolves(&script);
+        round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0 + RESOLVE_RETRY * 3);
+        let asked_again: Vec<_> = script.asked.borrow()[..].iter().filter(|a| *a == "resolve nofile.example").cloned().collect();
+        assert_eq!(asked_again.len(), 3, "kept while it works");
+        assert_eq!(resolves(&script), after + 2, "the two without a master retried");
+    }
+
+    #[test]
+    fn a_master_that_dies_has_its_path_resolved_again_after_the_retry_window() {
+        let mut script = Script::default();
+        script.sockets.insert("h.example".into(), socket("cm-dies"));
+        script.alive.insert(socket("cm-dies"));
+        script.tmux.insert("h.example".into(), Ok(names(&["s1"])));
+        let targets = [spec("h.example")];
+        let mut memory = Memory::default();
+        let t0 = Instant::now();
+        round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0);
+        script.alive.clear();
+        let dead = round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0 + ROUND);
+        assert!(dead.reach(&spec("h.example")).is_none());
+        assert_eq!(resolves(&script), 1);
+        round(&targets, true, Some(&HashSet::new()), &mut memory, &script, t0 + RESOLVE_RETRY);
+        assert_eq!(resolves(&script), 2, "a failing path is re-asked after a minute, not five");
+    }
+
+    #[test]
+    fn a_host_no_longer_probed_is_forgotten() {
+        let mut script = Script::default();
+        script.sockets.insert("a.example".into(), socket("cm-fa"));
+        let mut memory = Memory::default();
+        let t0 = Instant::now();
+        round(&[spec("a.example")], false, Some(&HashSet::new()), &mut memory, &script, t0);
+        assert_eq!(memory.resolved.len(), 1);
+        round(&[spec("b.example")], false, Some(&HashSet::new()), &mut memory, &script, t0 + ROUND);
+        assert!(!memory.resolved.contains_key(&key_of(&spec("a.example"))));
     }
 
     #[test]

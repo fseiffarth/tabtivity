@@ -700,35 +700,78 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
-/// `Command::output` with a deadline: the child is killed and reaped once
-/// `limit` has passed, and that is reported as `TimedOut`. Both pipes are
+/// `Command::output` with a deadline: once `limit` has passed the child is
+/// killed and reaped, and that is reported as `TimedOut`. Both pipes are
 /// drained on their own threads meanwhile, so a child that fills one cannot
-/// block on it; the threads end when the child's ends of the pipes close,
-/// which killing it does. (The phone sidecar's probes: `tmux ls`, and the
+/// block on it. (The phone sidecar's probes: `tmux ls`, `ssh -G`, and the
 /// one-shots it runs over a remote host's ssh master.)
+///
+/// Nothing it starts outlives it:
+/// - Unix: the child leads its own process group, and a timeout kills the
+///   whole group — `ssh` runs a config's `Match exec` and `ProxyCommand` in
+///   children of its own, which killing `ssh` alone would leave running.
+/// - Linux: the child gets `SIGKILL` when the process that spawned it dies
+///   ([`die_with_parent`]), so a sidecar that quits or is killed mid-probe
+///   leaves no `ssh` hanging on a dead master.
+///
+/// A process that left the group and still holds a pipe cannot hold the call:
+/// the readers get a short grace after the child is gone, then whatever they
+/// read is all there is.
 pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
-    fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
+    use app_core::sync::LockExt;
+    use std::time::{Duration, Instant};
+    type Drained = (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, std::thread::JoinHandle<()>);
+    fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> Drained {
+        let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = bytes.clone();
+        let reader = std::thread::spawn(move || {
+            let Some(mut pipe) = pipe else { return };
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => sink.lock_ok().extend_from_slice(&chunk[..read]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
             }
-            bytes
-        })
+        });
+        (bytes, reader)
     }
-    let mut child = command
+    fn collect((bytes, reader): Drained) -> Vec<u8> {
+        let until = Instant::now() + Duration::from_secs(2);
+        while !reader.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::mem::take(&mut *bytes.lock_ok())
+    }
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(target_os = "linux")]
+    die_with_parent(&mut command);
+    let mut child = command.spawn()?;
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
-    let deadline = std::time::Instant::now() + limit;
+    let deadline = Instant::now() + limit;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(2)),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
             waited => {
+                #[cfg(unix)]
+                // SAFETY: no pointers; the group is the child's own
+                // (`process_group(0)`) and it is not reaped yet, so its id
+                // cannot have been reused. A gone group returns ESRCH.
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(match waited {
@@ -738,11 +781,31 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
             }
         }
     };
-    Ok(std::process::Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    })
+    Ok(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) })
+}
+
+/// Linux: arm `SIGKILL` for `command`'s child when this process dies
+/// ([`output_within`]). The kernel sends it when the spawning *thread* ends;
+/// `output_within` waits for the child on that thread, so the thread outlives
+/// it. The parent is checked right after arming, so a process that died
+/// between fork and exec is caught too (the child was reparented by then).
+#[cfg(target_os = "linux")]
+fn die_with_parent(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let parent = std::process::id() as libc::pid_t;
+    // SAFETY: the closure runs between fork and exec and makes only
+    // async-signal-safe syscalls; it allocates nothing.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        });
+    }
 }
 
 #[cfg(test)]
@@ -958,6 +1021,48 @@ mod tests {
 
         let exe = command_for_program_for(OsKind::Windows, Path::new(r"C:\tools\fmt.exe"));
         assert_eq!(exe.get_program(), OsStr::new(r"C:\tools\fmt.exe"));
+    }
+
+    /// `ssh` runs a config's `Match exec` in a child of its own: a deadline
+    /// that killed `ssh` alone would leave that child running, and the
+    /// child's open pipe would hold the readers. The whole group goes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn output_within_kills_the_childs_own_children_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let mut hung = Command::new("sh");
+        hung.arg("-c").arg(format!("sleep 300 & echo $! > '{}'; wait", pid_file.display()));
+        let started = std::time::Instant::now();
+        let error = output_within(hung, std::time::Duration::from_millis(300)).expect_err("deadline");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+        let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        // Dead: gone from the table, or a zombie waiting for its new parent.
+        let gone = |pid: u32| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .map(|stat| stat.rsplit(") ").next().is_some_and(|rest| rest.starts_with('Z')))
+                .unwrap_or(true)
+        };
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !gone(pid) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline");
+    }
+
+    /// A process that leaves the group and keeps a pipe open cannot hold a
+    /// call whose child has already answered.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn output_within_does_not_wait_on_a_pipe_a_runaway_holds() {
+        let mut quick = Command::new("sh");
+        quick.args(["-c", "printf out; setsid sleep 6 & exit 0"]);
+        let started = std::time::Instant::now();
+        let out = output_within(quick, std::time::Duration::from_secs(10)).expect("output");
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"out", "what came before the grace is kept");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[cfg(unix)]

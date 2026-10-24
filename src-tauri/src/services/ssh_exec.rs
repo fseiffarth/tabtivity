@@ -157,6 +157,10 @@ fn owned_private_dir(dir: &std::path::Path, uid: u32) -> bool {
 /// `None` on Windows (no control socket at all) and whenever `ssh -G` cannot be
 /// run or says nothing — callers treat that as "no socket to manage", never as a
 /// path to guess at.
+///
+/// `ssh -G` evaluates the user's ssh_config, `Match exec` commands included, so
+/// it runs under [`RESOLVE_TIMEOUT`]: a `Match exec` that hangs is killed with
+/// its process group, and the answer is `None`.
 pub fn resolve_control_path(spec: &RemoteSpec) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -175,13 +179,23 @@ pub fn resolve_control_path(spec: &RemoteSpec) -> Option<PathBuf> {
             cmd.arg("-p").arg(port.to_string());
         }
         cmd.arg(target);
-        let out = cmd.output().ok()?;
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .find_map(|line| line.strip_prefix("controlpath "))
-            .map(|p| PathBuf::from(p.trim()))
-            .filter(|p| p.parent() == Some(control_dir().as_path()))
+        let out = crate::paths::output_within(cmd, RESOLVE_TIMEOUT).ok()?;
+        controlpath_of(&out.stdout)
     }
+}
+
+/// How long [`resolve_control_path`]'s `ssh -G` may take.
+pub const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The `controlpath` line of `ssh -G`'s output, when it names a socket in
+/// [`control_dir`] — never a path elsewhere.
+#[cfg(not(target_os = "windows"))]
+fn controlpath_of(ssh_g_stdout: &[u8]) -> Option<PathBuf> {
+    String::from_utf8_lossy(ssh_g_stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("controlpath "))
+        .map(|p| PathBuf::from(p.trim()))
+        .filter(|p| p.parent() == Some(control_dir().as_path()))
 }
 
 /// Whether a ControlMaster is still listening on `path`. `ssh -O check` against
