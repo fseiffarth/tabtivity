@@ -282,10 +282,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const [closedOpen, setClosedOpen] = useState(false);
   /** The list's two gesture hints, each gone for good once dismissed or once
    *  its gesture has been used (`prefs.ts`). */
-  const [hintsGone, setHintsGone] = useState(() => ({ reorder: readFlag("projectHintReorder"), swipe: readFlag("projectHintSwipe") }));
-  const dropHint = (which: "reorder" | "swipe") => {
+  const [hintsGone, setHintsGone] = useState(() => ({ reorder: readFlag("projectHintReorder"), swipe: readFlag("projectHintSwipe"), hold: readFlag("projectHintHold") }));
+  const dropHint = (which: "reorder" | "swipe" | "hold") => {
     setHintsGone((gone) => gone[which] ? gone : { ...gone, [which]: true });
-    writeFlag(which === "reorder" ? "projectHintReorder" : "projectHintSwipe", true);
+    writeFlag(which === "reorder" ? "projectHintReorder" : which === "swipe" ? "projectHintSwipe" : "projectHintHold", true);
   };
   /** The tab whose close is in flight — its ✕ is held until the desktop answers. */
   const [closingId, setClosingId] = useState<string | null>(null);
@@ -467,7 +467,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const quickAgent = creates ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
   const fabPress = useTapHold(
     () => { if (!quickAgent) setNewTabOpen(true); else if (!creating) void create("agent", quickAgent); },
-    () => setNewTabOpen(true),
+    () => { dropHint("hold"); setNewTabOpen(true); },
   );
   /** The tab being started, by tab id: an agent tab the desktop is
    * restarting so the phone can attach to it. */
@@ -639,6 +639,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const closedRows = createVerdict === "none" ? [] : detail?.closed ?? [];
   const showReorderHint = canReorder && !hintsGone.reorder;
   const showSwipeHint = tabs.length > 0 && !hintsGone.swipe;
+  // Only while a tap starts one agent: the sheet of the others sits behind a hold.
+  const showHoldHint = !!quickAgent && tabs.length > 0 && !hintsGone.hold;
   return <main className="screen project-screen" ref={screenRef}>
     {/* One dense row, shaped like an agent tab's header: chevron, the name
         (ellipsized) with the order it sorts by under it, then the drawer's ☰
@@ -747,13 +749,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     />)}</section>
     {/* The list's gestures, said once under it in one muted line: gone for
         good once dismissed, and each half once its gesture has been used. */}
-    {(showReorderHint || showSwipeHint) && <p className="project-hint">
+    {(showReorderHint || showSwipeHint || showHoldHint) && <p className="project-hint">
       <span>
         {showReorderHint && <><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>} </>}
-        {showSwipeHint && <>{t("mobile.project.swipeCloseHint")}{isUntested("mobile.project.swipeClose") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>}
+        {showSwipeHint && <>{t("mobile.project.swipeCloseHint")}{isUntested("mobile.project.swipeClose") && <span className="untested">{t("mobile.newTab.untested")}</span>} </>}
+        {showHoldHint && <>{t("mobile.project.fabHoldHint", { agent: quickAgent?.label ?? "" })}{isUntested("mobile.project.fabHoldHint") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>}
         {isUntested("mobile.project.hintDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </span>
-      <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
+      <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); if (showHoldHint) dropHint("hold"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
     </p>}
     <div className="project-foot">
       {/* Agent tabs closed on either surface, newest first, folded under one

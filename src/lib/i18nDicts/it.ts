@@ -293,6 +293,7 @@ export const dict: Dict = {
   "mobile.project.noFolderVm": "I suoi file restano nella VM, quindi il telefono non ne mostra finché sul computer non è configurato un mirror locale.",
   "mobile.project.reorderHint": "Trascina {grip} per riordinare — è l’ordine delle schede del desktop stesso, quindi la finestra di {app} lo segue.",
   "mobile.project.swipeCloseHint": "Scorri una scheda da destra a sinistra per chiuderla.",
+  "mobile.project.fabHoldHint": "Toccando ＋ si apre {agent}; tieni premuto ＋ per avviare un altro agente.",
   "mobile.project.colorTab": "Colora {label}",
   "mobile.project.renameTab": "Rinomina {label}",
   "mobile.project.changeModelOf": "Cambia il modello di {label}",

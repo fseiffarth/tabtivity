@@ -26,12 +26,12 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * has each Submit handed to a new subagent of the tab's agent
  * (`markupForSubagent`), off unset. `markupDirect` is **Apply marks
  * directly** (`markupInstruction.ts`), read with an on fallback.
- * `projectHintReorder`, `projectHintSwipe` and `homeHintReorder` are the
+ * `projectHintReorder`, `projectHintSwipe`, `projectHintHold` and `homeHintReorder` are the
  * gesture hints under the project screen's and Home's lists, set once one is
  * dismissed or its gesture has been used: a hint read every visit is noise.
  * `limitBars` shows the facts row's usage limits as bars rather than
  * percentages, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "homeHintReorder" | "limitBars";
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than

@@ -75,6 +75,18 @@ describe("Mobile project screen — layout", () => {
     expect(screen.queryByText(/Swipe a card from right to left/)).toBeNull();
   });
 
+  it("says a hold of ＋ reaches the other agents, until it is held or dismissed", async () => {
+    serve([agent("a", "claude 1")], { agents: [{ id: "claude", label: "Claude", modes: [], default: true }] });
+    const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    expect(await screen.findByText(/Tapping ＋ opens Claude; hold ＋ to start a different agent/)).toBeTruthy();
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
+    expect(screen.queryByText(/hold ＋ to start a different agent/)).toBeNull();
+    first.unmount();
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("claude 1");
+    expect(screen.queryByText(/hold ＋ to start a different agent/)).toBeNull();
+  });
+
   it("folds Recently closed under one row", async () => {
     serve([agent("a", "claude 1")], { closed: [{ id: "c1", label: "old claude", agent: "claude", closed_at: 1 }] });
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);

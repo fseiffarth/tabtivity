@@ -293,6 +293,7 @@ export const dict: Dict = {
   "mobile.project.noFolderVm": "Sus archivos se quedan en la VM, así que el móvil no muestra ninguno salvo que configures un espejo local en el ordenador.",
   "mobile.project.reorderHint": "Arrastra {grip} para ordenar — es el propio orden de pestañas del escritorio, así que la ventana de {app} lo sigue.",
   "mobile.project.swipeCloseHint": "Desliza una tarjeta de derecha a izquierda para cerrarla.",
+  "mobile.project.fabHoldHint": "Tocar ＋ abre {agent}; mantén pulsado ＋ para iniciar otro agente.",
   "mobile.project.colorTab": "Colorear {label}",
   "mobile.project.renameTab": "Renombrar {label}",
   "mobile.project.changeModelOf": "Cambiar el modelo de {label}",

@@ -357,6 +357,7 @@ export const enSource = {
   "mobile.project.noFolderVm": "Its files stay in the VM, so the phone shows none unless a local mirror is set up on the desktop.",
   "mobile.project.reorderHint": "Drag {grip} to arrange — this is the desktop's own tab order, so the {app} window follows.",
   "mobile.project.swipeCloseHint": "Swipe a card from right to left to close it.",
+  "mobile.project.fabHoldHint": "Tapping ＋ opens {agent}; hold ＋ to start a different agent.",
   "mobile.project.colorTab": "Colour {label}",
   "mobile.project.renameTab": "Rename {label}",
   "mobile.project.changeModelOf": "Change the model of {label}",
