@@ -3197,12 +3197,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
    the hook); the ring is a border scaled by transform, never a blurred
    shadow (WebKitGTK). */
 .terminal-reader-input.with-mic textarea {
-  padding-right: 62px;
+  padding-right: 72px;
 }
 .terminal-reader-mic {
   position: absolute;
-  right: 30px;
-  bottom: 4px;
+  right: 36px;
+  bottom: 7px;
   display: grid;
   place-items: center;
   width: 22px;
