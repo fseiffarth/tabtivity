@@ -325,7 +325,7 @@ pub async fn run(
         if *shutdown.borrow() {
             break;
         }
-        if !auth.lock_ok().has_live_session(unix_now()) {
+        if !auth.lock_ok().has_live_session() {
             *live.lock_ok() = HostLive::default();
             memory = Memory::default();
             last_round = None;
