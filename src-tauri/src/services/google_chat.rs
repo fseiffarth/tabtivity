@@ -18,7 +18,8 @@
 use std::io::Read;
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags, config::DbConfig, limits::Limit};
+use rusqlite::Connection;
+use crate::services::agent_sqlite::{Limits, open_read};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -197,15 +198,8 @@ fn gemini_record(raw: &str, jsonl: bool) -> Option<Value> {
 }
 
 fn database(file: &HomeFile) -> Option<Connection> {
-    file.open_read()?; // Reject non-regular files before SQLite can block on one.
-    let conn = Connection::open_with_flags(file.path(), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW).ok()?;
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false).ok()?;
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true).ok()?;
-    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_STEP_BYTES as i32).ok()?;
-    conn.busy_timeout(std::time::Duration::from_millis(100)).ok()?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-    conn.progress_handler(1000, Some(move || std::time::Instant::now() >= deadline)).ok()?;
-    Some(conn)
+    let limits = Limits { deadline: std::time::Duration::from_millis(500), max_len: MAX_STEP_BYTES as i32, busy: std::time::Duration::from_millis(100) };
+    open_read(file, limits, &["steps", "conversation_summaries"])
 }
 
 /// Antigravity's store in an agent home: the conversations' summaries and the

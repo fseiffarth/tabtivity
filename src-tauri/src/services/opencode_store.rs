@@ -39,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::services::agent_chats::FolderChat;
@@ -55,6 +55,11 @@ const MESSAGE_TAIL: i64 = 2000;
 /// The most edit tool parts of one session read for its changes.
 const CHANGE_TAIL: i64 = 2000;
 
+/// Components of the store below its home (`.local/share/opencode/opencode.db`).
+const DB_DEPTH: usize = 4;
+/// The names read from the store; each must be a table, never a view.
+const STORE_TABLES: &[&str] = &["session", "session_v2", "session_message", "message", "part"];
+
 fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(()))
         .is_ok()
@@ -64,7 +69,7 @@ fn table_exists(conn: &Connection, table: &str) -> bool {
 /// `session_message`. A connection-local view lets the session ownership and
 /// subagent queries serve both formats without changing the vendor database.
 fn open_store(db: &Path) -> Option<Connection> {
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = crate::services::agent_sqlite::open_below(db, DB_DEPTH, STORE_TABLES)?;
     if table_exists(&conn, "session_v2") {
         let mut sql = String::from(
             "CREATE TEMP VIEW session AS SELECT id, parent_id, directory, time_created,

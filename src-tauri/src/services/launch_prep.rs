@@ -433,7 +433,7 @@ fn assemble_assistant_launch(
     home: &std::path::Path,
     provider: Option<&str>,
 ) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
-    assemble_assistant_launch_with(opts, plan, home, provider, &crate::services::agent_session::resolve_agent_session)
+    assemble_assistant_launch_with(opts, plan, home, provider, &crate::services::agent_session::resolve_agent_session_bounded)
 }
 
 /// [`assemble_assistant_launch`] with the session resolver given, so a test
@@ -847,7 +847,11 @@ pub async fn prepare(
         if opts.cmd == "opencode" {
             crate::commands::agents::opencode_is_v2().await;
         }
-        opts = crate::services::agent_session::resolve_agent_session(opts);
+        let resolving = opts.clone();
+        opts = match tokio::task::spawn_blocking(move || crate::services::agent_session::resolve_agent_session_bounded(resolving)).await {
+            Ok(resolved) => resolved,
+            Err(e) => return Err(format!("Agent session: {e}")),
+        };
     }
 
     // Resolve the fourth authority axis while cmd/cwd still describe the agent

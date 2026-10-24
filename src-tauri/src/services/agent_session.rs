@@ -52,6 +52,18 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
     }
 }
 
+/// [`resolve_agent_session`] for a spawn on the async path: the OpenCode and
+/// Codex resolvers read stores the agent wrote, so they run under a short
+/// wait, and one that does not answer means no session (a fresh start).
+pub fn resolve_agent_session_bounded(opts: PtyOptions) -> PtyOptions {
+    if !matches!(opts.cmd.as_str(), "opencode" | "codex") {
+        return resolve_agent_session(opts);
+    }
+    let mut fresh = opts.clone();
+    fresh.env.insert(TAB_AGENT_ENV.to_string(), opts.cmd.clone());
+    crate::services::agent_sqlite::bounded(std::time::Duration::from_secs(3), move || resolve_agent_session(opts)).unwrap_or(fresh)
+}
+
 /// Vibe chooses its own session ID. Its post-agent hook records that ID under
 /// Tabtivity's stable tab key, including after an in-app `/resume` or `/branch`.
 /// Old tabs without a hook record retain their project-scoped `--continue`.

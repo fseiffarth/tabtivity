@@ -1,5 +1,6 @@
 pub mod agent_prompts;
 pub mod agent_session;
+pub mod agent_sqlite;
 // The turn state an agent's own hooks report (working / decision / done),
 // relayed from the hook script's per-tab record to the window's activity
 // store — the authority for the tab's working and finished marks.

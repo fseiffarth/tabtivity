@@ -58,6 +58,20 @@ fn components(rel: &str) -> Option<Vec<&str>> {
     Some(parts)
 }
 
+/// The home `depth` components above `path` (as far up as there are any) and
+/// the way down to `path` from it. On unix the home is canonicalized: it is
+/// Tabtivity's, and a link in its own prefix (a symlinked temp dir) is not the
+/// agent's doing.
+fn split_below(path: &Path, depth: usize) -> Option<(PathBuf, String)> {
+    let home = path.ancestors().take(depth + 1).last()?;
+    let rel = path.strip_prefix(home).ok()?.to_str()?.to_string();
+    #[cfg(unix)]
+    let home = std::fs::canonicalize(home).ok()?;
+    #[cfg(not(unix))]
+    let home = home.to_path_buf();
+    Some((home, rel))
+}
+
 #[cfg(unix)]
 fn cstr(name: &OsStr) -> io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
@@ -95,6 +109,14 @@ impl HomeDir {
             dir = dir.subdir_in(part, create).ok()?;
         }
         Some(dir)
+    }
+
+    /// `path`, a directory `depth` components below the agent home it is in,
+    /// opened by handle without creating anything. The home is Tabtivity's
+    /// and resolved once by name; a link at any component below it is refused.
+    pub fn open_below(path: &Path, depth: usize) -> Option<Self> {
+        let (home, rel) = split_below(path, depth)?;
+        Self::open_in(&home, &rel, false)
     }
 
     #[cfg(unix)]
@@ -208,15 +230,26 @@ impl HomeDir {
     /// acted on through the handle, so a listing of the wrong directory
     /// yields names that fail there.
     pub fn names(&self) -> Vec<String> {
+        self.entry_names().0
+    }
+
+    /// [`HomeDir::names`] and how many entries were left out because their
+    /// name is not UTF-8, for a caller that must account for every entry.
+    pub fn entry_names(&self) -> (Vec<String>, usize) {
         let Ok(entries) = std::fs::read_dir(&self.path) else {
-            return Vec::new();
+            return (Vec::new(), 0);
         };
+        let mut odd = 0;
         let mut names: Vec<String> = entries
             .flatten()
-            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter_map(|e| {
+                let name = e.file_name().to_str().map(str::to_string);
+                odd += usize::from(name.is_none());
+                name
+            })
             .collect();
         names.sort();
-        names
+        (names, odd)
     }
 
     /// Open the child directory `name` without creating it: `None` when
@@ -382,6 +415,12 @@ impl HomeFile {
         let (name, dirs) = parts.split_last()?;
         let dir = HomeDir::open_in(home, &dirs.join("/"), create)?;
         Some(HomeFile { dir, name: OsString::from(name) })
+    }
+
+    /// [`HomeDir::open_below`] for a file `depth` components below its home.
+    pub fn open_below(path: &Path, depth: usize) -> Option<Self> {
+        let (home, rel) = split_below(path, depth)?;
+        Self::open_in(&home, &rel, false)
     }
 
     /// The directory the file is in.
