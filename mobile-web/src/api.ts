@@ -367,6 +367,26 @@ export function setUnauthorizedHandler(handler: (() => Promise<boolean>) | undef
   onUnauthorized = handler;
 }
 
+/** Set by the app root: told the id of a project the host answered
+ * `project_not_found` for — gone, or no longer shared with this phone — so
+ * what the phone kept for it (its covers) goes too. */
+let onProjectGone: ((projectId: string) => void) | undefined;
+
+export function setProjectGoneHandler(handler: ((projectId: string) => void) | undefined): void {
+  onProjectGone = handler;
+}
+
+/** The project a `/api/v1/projects/{id}/…` path names. */
+function projectOfPath(path: string): string | null {
+  const match = /^\/api\/v1\/projects\/([^/?#]+)/.exec(path);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 /** Renew the session the way a 401 would, for a caller that met the lapse
  * elsewhere — the terminal socket's `session_expired` close. */
 export function recoverSession(): Promise<boolean> {
@@ -522,6 +542,10 @@ export async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUE
   if (response.status === 401 && !path.startsWith("/api/v1/auth/") && path !== "/api/v1/pair") {
     // Once: a 401 on the retry means the renewed session is refused too.
     if (!retried && await onUnauthorized?.()) return api<T>(path, init, timeoutMs, true);
+  }
+  if (response.status === 404 && body?.error === "project_not_found") {
+    const gone = projectOfPath(path);
+    if (gone) onProjectGone?.(gone);
   }
   if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   // A truncated body on a 200 used to become `{}` and reach callers as `T`,

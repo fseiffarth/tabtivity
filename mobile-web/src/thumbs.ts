@@ -65,6 +65,8 @@ export interface ThumbBackend {
   delete(keys: string[]): Promise<void>;
   /** Every key with its last use. */
   usage(): Promise<[string, number][]>;
+  /** Every record. Optional: without it, the keys `usage` lists are deleted. */
+  clear?(): Promise<void>;
 }
 
 /** A read: the cover, a recorded failure, nothing yet, or no cache at all. */
@@ -123,6 +125,35 @@ export class ThumbCache {
     } catch {
       return false;
     }
+  }
+
+  /** Drop every cover and failure of `projectId` (all of them without it);
+   * answers whether the storage was reached. */
+  async forget(projectId?: string): Promise<boolean> {
+    try {
+      const index = await this.usage();
+      if (projectId === undefined && this.backend.clear) {
+        await this.backend.clear();
+        index.clear();
+        return true;
+      }
+      const keys = [...index.keys()].filter((key) => projectId === undefined || projectOfKey(key) === projectId);
+      if (keys.length) await this.backend.delete(keys);
+      for (const key of keys) index.delete(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** The project a cache key belongs to, or `null` for one not made by `thumbKey`. */
+function projectOfKey(key: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null;
+  } catch {
+    return null;
   }
 }
 
@@ -238,6 +269,12 @@ export const indexedDbThumbs: ThumbBackend = {
     }
     await finished(transaction);
   },
+  async clear() {
+    const transaction = (await openDatabase()).transaction([THUMBS, USED], "readwrite");
+    transaction.objectStore(THUMBS).clear();
+    transaction.objectStore(USED).clear();
+    await finished(transaction);
+  },
   async usage() {
     const store = (await openDatabase()).transaction(USED).objectStore(USED);
     const [keys, values] = await Promise.all([promised(store.getAllKeys()), promised(store.getAll())]);
@@ -249,6 +286,18 @@ export const indexedDbThumbs: ThumbBackend = {
 let shared: ThumbCache | null = null;
 const cache = () => (shared ??= new ThumbCache(indexedDbThumbs));
 const queue = new ThumbQueue();
+
+/** Every cover and recorded failure, gone — this device was unpaired
+ * (`forgetDeviceData`). */
+export function forgetCovers(): Promise<boolean> {
+  return cache().forget();
+}
+
+/** A project's covers, gone — the host no longer knows the project to this
+ * phone, so nothing will ask for them again. */
+export function forgetProjectCovers(projectId: string): Promise<boolean> {
+  return cache().forget(projectId);
+}
 /** Keys whose bytes could not be fetched this visit (offline, a stale token):
  * not recorded as failures, since the next visit may fetch them, nor tried
  * again before it. */

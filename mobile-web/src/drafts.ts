@@ -92,3 +92,12 @@ export function writeDraft(tabId: string, text: string, storage?: DraftStorage, 
     // reader is in the middle of typing.
   }
 }
+
+/** Every draft, gone — this device was unpaired (`forgetDeviceData`). */
+export function forgetDrafts(storage?: DraftStorage): void {
+  try {
+    (storage ?? localStorage).removeItem(KEY);
+  } catch {
+    // See load().
+  }
+}

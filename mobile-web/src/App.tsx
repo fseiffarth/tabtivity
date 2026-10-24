@@ -6,9 +6,11 @@ import { finishOidcReturn, hasPairedDevice, logoutAuth, resumeAuth } from "./aut
 import { newCodeAdvised, releaseSecrets } from "./secrets";
 import { SecretsNewCodeSheet } from "./screens/SecretsNewCodeSheet";
 import { SecretsRepinSheet } from "./screens/SecretsRepinSheet";
-import { connectTrace, getMobileStatus, primeConnection, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
+import { connectTrace, getMobileStatus, primeConnection, setProjectGoneHandler, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
-import { forgetLastPlace, parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
+import { parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
+import { forgetDeviceData } from "./forgetDeviceData";
+import { forgetProjectCovers } from "./thumbs";
 import { refreshPush } from "./push";
 import { hasLocalUnlock } from "./localLock";
 import { clearConnectReload, isConnectReload, noteUnlockedLeave, takeConnectReload, takeReloadGrace } from "./reloadGrace";
@@ -333,7 +335,7 @@ export function App() {
           if (outcome !== "untrusted") setSecretsNewCode(await newCodeAdvised());
         });
       } else if (result.kind === "unpaired") {
-        forgetLastPlace();
+        void forgetDeviceData();
       } else {
         fail(result.reason, result.detail);
         return;
@@ -361,7 +363,7 @@ export function App() {
       return Promise.all([hasPairedDevice(), hasLocalUnlock()]);
     }).then(([paired, locked]) => {
       if (!paired) {
-        forgetLastPlace();
+        void forgetDeviceData();
         setPairNeedsLock(!locked);
         setAuth("unpaired");
       } else if (locked && takeReloadGrace()) {
@@ -453,7 +455,7 @@ export function App() {
         if (result.kind === "paired") return true;
         reset();
         if (result.kind === "unpaired") {
-          forgetLastPlace();
+          void forgetDeviceData();
           setAuth("unpaired");
         } else {
           setAuth("locked");
@@ -468,6 +470,13 @@ export function App() {
     });
     return () => setUnauthorizedHandler(undefined);
   }, [reset]);
+
+  useEffect(() => {
+    // A project the host no longer knows to this phone is off its list for
+    // good: its covers are not asked for again, so they do not stay.
+    setProjectGoneHandler((projectId) => { void forgetProjectCovers(projectId); });
+    return () => setProjectGoneHandler(undefined);
+  }, []);
 
   useEffect(() => {
     const lock = () => {
