@@ -49,28 +49,40 @@ impl Os {
 }
 
 /// Linux (and the other free Unixes): desktop entries, scripts, AppImages,
-/// Java archives, and the Windows programs Wine registers itself for.
+/// Java archives and Web Start files, Flatpak install descriptors, packages
+/// the software installer opens, and the Windows programs Wine registers
+/// itself for.
 const LINUX: &[&str] = &[
-    "desktop", "sh", "bash", "zsh", "csh", "ksh", "fish", "run", "appimage", "jar",
+    "desktop", "sh", "bash", "zsh", "csh", "ksh", "fish", "run", "appimage", "jar", "jnlp",
+    "flatpakref", "flatpakrepo", "deb", "rpm",
     // Wine's `wine start` associations.
     "exe", "com", "msi", "bat", "cmd", "lnk", "scr", "pif",
 ];
 
 /// macOS: bundles, Terminal-run scripts and settings, installers, Automator
-/// and AppleScript, location files that can point at an app, Java archives.
+/// and AppleScript, location files that can point at an app or a URL scheme
+/// (`.fileloc`, `.webloc`, `.inetloc`, `.ftploc`, `.afploc`), Java archives.
 const MACOS: &[&str] = &[
     "app", "command", "tool", "terminal", "pkg", "mpkg", "workflow", "action", "scpt",
-    "scptd", "applescript", "osax", "prefpane", "fileloc", "jar", "sh",
+    "scptd", "applescript", "osax", "prefpane", "fileloc", "webloc", "inetloc", "ftploc",
+    "afploc", "jar", "sh",
 ];
 
 /// Windows: the default `PATHEXT` set (it may be unset or trimmed), plus
 /// shortcuts, installers, script hosts, control-panel and registry files,
-/// ClickOnce, and the Python launcher's associations.
+/// ClickOnce, Web Start, the older script hosts, Office add-ins, update and app
+/// packages, themes, saved searches, disk images that mount and show their own
+/// autorun entries, Access databases (macros), and the Python launcher's
+/// associations.
 const WINDOWS: &[&str] = &[
     "com", "exe", "bat", "cmd", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msc", "lnk", "url",
     "scr", "pif", "msi", "msp", "mst", "hta", "ps1", "psm1", "cpl", "reg", "inf", "scf",
     "appref-ms", "application", "gadget", "chm", "diagcab", "xbap", "settingcontent-ms",
     "library-ms", "searchconnector-ms", "website", "jar", "py", "pyw", "pyz", "pyzw",
+    "ws", "wsc", "sct", "xll", "msu", "jnlp", "appx", "msix", "appxbundle", "msixbundle",
+    "appinstaller", "theme", "themepack", "search-ms", "iso", "vhd", "vhdx",
+    // Access: databases and projects, with macros and add-ins.
+    "mdb", "accdb", "accde", "accdr", "accdt", "ade", "adp", "mde", "mda", "mdw", "mdz",
 ];
 
 /// Every launcher extension any of the three systems knows, for a file that
@@ -327,6 +339,14 @@ mod tests {
         for (os, names) in [
             (Os::Linux, &["run.desktop", "x.SH", "a.AppImage", "b.jar", "setup.exe", "go.run", "w.bat"][..]),
             (Os::MacOs, &["Evil.app", "go.command", "t.tool", "s.terminal", "i.pkg", "w.workflow", "s.scpt", "f.fileloc", "b.JAR"][..]),
+            (Os::Linux, &["app.jnlp", "x.flatpakref", "r.flatpakrepo", "p.DEB", "p.rpm"][..]),
+            (Os::MacOs, &["a.webloc", "b.INETLOC", "c.afploc", "d.ftploc"][..]),
+            (
+                Os::Windows,
+                &["a.ws", "b.WSC", "c.sct", "d.xll", "e.msu", "f.mdb", "g.accdb", "h.accde", "i.adp", "j.jnlp",
+                  "k.appx", "l.MSIX", "m.appxbundle", "n.theme", "o.themepack", "p.search-ms", "q.iso",
+                  "r.vhd", "s.VHDX"][..],
+            ),
             (
                 Os::Windows,
                 &["a.exe", "b.LNK", "c.cmd", "d.bat", "e.vbs", "f.ps1", "g.js", "h.msi", "i.hta", "j.url",
@@ -354,6 +374,11 @@ mod tests {
         assert!(!is_launcher_name("run.desktop", Os::Windows, None));
         assert!(is_launcher_on_any_os("run.desktop") && is_launcher_on_any_os("x.lnk") && is_launcher_on_any_os("y.app"));
         assert!(!is_launcher_on_any_os("paper.pdf"));
+        // The new extensions stay per OS where they mean nothing elsewhere.
+        assert!(!is_launcher_name("disk.iso", Os::Linux, None) && !is_launcher_name("disk.iso", Os::MacOs, None));
+        assert!(!is_launcher_name("p.deb", Os::Windows, None) && !is_launcher_name("p.deb", Os::MacOs, None));
+        assert!(!is_launcher_name("a.webloc", Os::Linux, None) && !is_launcher_name("a.webloc", Os::Windows, None));
+        assert!(is_launcher_on_any_os("a.webloc") && is_launcher_on_any_os("p.rpm") && is_launcher_on_any_os("d.vhdx"));
     }
 
     #[test]
