@@ -13,6 +13,7 @@ import {
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
+import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
@@ -173,10 +174,12 @@ function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
  * answer can be changed before Submit. Claude Code's "Type something." row
  * opens a field under it instead: its answer is words, sent as the phone's
  * are (`answerTextKeys`). */
-function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
+function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep }: {
   live: ReaderLive;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
+  /** The last answer's keys never reached the session, and why. */
+  failure: "aiOff" | "write" | null;
   /** Keys of any kind are on their way: nothing can be clicked. */
   busy: boolean;
   onAnswer: (index: number) => void;
@@ -318,6 +321,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
       {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
+      {failure && <small className="terminal-reader-question-more" role="alert">{t(failure === "aiOff" ? "terminal.reader.answerAiOff" : "terminal.reader.answerFailed")}</small>}
     </div>
   );
 }
@@ -969,6 +973,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** When a read last saw the agent at work: a sent prompt waits from then. */
   const workingSeenAt = useRef(0);
   const [answered, setAnswered] = useState("");
+  /** Why the last answer's keys did not reach the session: the AI switch (⏻)
+   * refuses typing into an agent, or the write itself failed. */
+  const [answerFailure, setAnswerFailure] = useState<"aiOff" | "write" | null>(null);
   /** What `answered` waits on: a row's answer, or a walk along the tab row. */
   const [answeredBy, setAnsweredBy] = useState<"row" | "step">("row");
   /** The dialog drawn in place of an answered one, while it is held
@@ -1075,6 +1082,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * replaced the one answered. */
   const held = (!!answered && answered === live.signature) || (!!heldSignature && heldSignature === live.signature);
 
+  const answerFailed = (error: unknown) => {
+    setAnswered("");
+    setAnswerFailure(isAiOffRefusal(error) ? "aiOff" : "write");
+  };
+  useEffect(() => setAnswerFailure(null), [live.signature]);
+
   const answer = (index: number) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
@@ -1082,9 +1095,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const keys = answerKeys(question, option);
     if (keys.length === 0) return;
     setAnswered(live.signature);
+    setAnswerFailure(null);
     setAnsweredBy("row");
     stuck.current = true;
-    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(answerFailed);
   };
   /** Answers the free-text row with the words typed under it. */
   const answerText = (index: number, text: string) => {
@@ -1094,16 +1108,18 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const keys = answerTextKeys(question, option, text);
     if (keys.length === 0) return;
     setAnswered(live.signature);
+    setAnswerFailure(null);
     setAnsweredBy("row");
     stuck.current = true;
-    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(answerFailed);
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
     if (!live.question || keys.length === 0 || answered || held) return;
     setAnswered(live.signature);
+    setAnswerFailure(null);
     setAnsweredBy("step");
-    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(answerFailed);
   };
   const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
   const shownLive = picking ? NO_LIVE : live;
@@ -1718,6 +1734,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           <LiveQuestion
             live={browsed ? NO_LIVE : shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
+            failure={answerFailure}
             busy={held}
             onAnswer={answer}
             onType={answerText}
