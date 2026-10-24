@@ -854,6 +854,15 @@ So root is a phone scope, behind a line drawn where the rights actually are:
   (`tmux_local::local_tmux_args`, `ssh_exec::tmux_wrap_exec`; session-scoped,
   so a user's own tmux sessions on the same server keep theirs). Both clients
   already ran `status off` and nothing of Tabtivity's binds the prefix, so nobody
-  loses a key — and without one, no keystroke from a paired phone can open
+  loses a key — and without one, no *keystroke* from a paired phone can open
   tmux's own command line and detach, rename or spawn past the review gate
-  above. Decided 2026-09-24.
+  above. Decided 2026-09-24. **That covers keys, not mouse reports** (threat
+  recheck 2026-10-24, gap 44): tmux's default *root* table binds a right click
+  and Alt+right click on a pane to a menu (split, respawn, kill), `mouse on`
+  keeps it, and `prefix None` does not touch it. The PWA never sends a report
+  (its terminal takes no input of its own), but a stolen phone or any client
+  holding a session could, so `pty_bridge::MouseReportFilter` drops X10, SGR
+  and urxvt reports from every phone input frame — split over frames or not —
+  before they reach the pane. The session is not given a Tabtivity-owned
+  `key-table`: re-binding the wheel and drag the desktop uses would replace
+  the user's own bindings and could not be checked live here.

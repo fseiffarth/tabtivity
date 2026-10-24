@@ -542,6 +542,172 @@ async fn exit_code_soon(child: &mut (dyn portable_pty::Child + Send + Sync)) -> 
     None
 }
 
+/// How long a lone `Esc` at the end of an input frame is held back in case the
+/// rest of a mouse report follows in the next one (see [`MouseReportFilter`]).
+/// Short enough that the Esc key does not feel late.
+const ESC_HOLD: std::time::Duration = std::time::Duration::from_millis(60);
+
+/// The longest unresolved prefix [`MouseReportFilter`] keeps; tmux itself gives
+/// up on a report longer than 40 bytes.
+const MOUSE_HELD_MAX: usize = 48;
+
+/// What the bytes held so far make of a mouse report.
+enum MouseVerdict {
+    /// A complete report: dropped.
+    Report,
+    /// A prefix that could still become one.
+    Partial,
+    /// Not a report. `committed`: it already had the report's own shape (after
+    /// `ESC [ <`, or `ESC [ M`), so what was held is dropped, not forwarded.
+    Other { committed: bool },
+}
+
+/// Drops terminal mouse reports — X10 (`ESC [ M` and three bytes), SGR
+/// (`ESC [ < b ; x ; y M|m`) and urxvt (`ESC [ b ; x ; y M`) — from the phone's
+/// input before it reaches the pane. tmux binds a menu (split, respawn, kill)
+/// to a right click in its root table, and `prefix None` does not stop a
+/// click: a client that types reports could open a shell beside a fenced agent
+/// (`docs/context/root_console.md`). The real PWA never sends one (its
+/// terminal takes no input of its own), so nothing it does is lost.
+///
+/// A report may arrive split over frames, so a prefix is held until it is
+/// resolved, never forwarded in part: tmux would otherwise finish it with the
+/// next bytes it is given. A held lone `Esc` is the Esc key and goes out
+/// after [`ESC_HOLD`] ([`Self::flush`]); the filter then still reads what
+/// follows as the rest of an escape sequence, because tmux may still be
+/// waiting for it (its `escape-time`) and would join them. Any other prefix
+/// still unresolved by then is dropped: no key makes one.
+#[derive(Default)]
+struct MouseReportFilter {
+    /// Starts with the `Esc` that opened the sequence.
+    held: Vec<u8>,
+    /// That `Esc` is out already (a flushed Esc key); it is never sent again.
+    esc_sent: bool,
+}
+
+impl MouseReportFilter {
+    const ESC: u8 = 0x1b;
+
+    fn classify(&self) -> MouseVerdict {
+        use MouseVerdict::*;
+        let held = &self.held;
+        if held.len() < 2 {
+            return Partial;
+        }
+        if held[1] != b'[' {
+            return Other { committed: false };
+        }
+        let Some(&third) = held.get(2) else { return Partial };
+        let semis = |bytes: &[u8]| bytes.iter().filter(|&&b| b == b';').count();
+        match third {
+            b'M' => {
+                // Three units follow: a byte each, or a UTF-8 sequence where the
+                // terminal's mouse mode says so.
+                let mut at = 3;
+                let mut units = 0;
+                while units < 3 {
+                    let Some(&lead) = held.get(at) else { return Partial };
+                    at += match lead {
+                        0xf0..=0xff => 4,
+                        0xe0..=0xef => 3,
+                        0xc0..=0xdf => 2,
+                        _ => 1,
+                    };
+                    units += 1;
+                }
+                if held.len() >= at { Report } else { Partial }
+            }
+            b'<' => {
+                let rest = &held[3..];
+                match rest.last() {
+                    None => Partial,
+                    Some(b'M' | b'm') if semis(&rest[..rest.len() - 1]) == 2
+                        && rest[..rest.len() - 1].iter().all(|b| b.is_ascii_digit() || *b == b';') => Report,
+                    Some(b) if b.is_ascii_digit() || *b == b';' => Partial,
+                    Some(_) => Other { committed: true },
+                }
+            }
+            b'0'..=b'9' => {
+                let rest = &held[2..];
+                match rest.last() {
+                    Some(b) if b.is_ascii_digit() || *b == b';' => Partial,
+                    Some(b'M') if semis(&rest[..rest.len() - 1]) == 2 => Report,
+                    _ => Other { committed: false },
+                }
+            }
+            _ => Other { committed: false },
+        }
+    }
+
+    /// What `held` goes on as when it is not a report, or nothing when it is
+    /// dropped.
+    fn release(&mut self, out: &mut Vec<u8>, drop_it: bool) {
+        if !drop_it {
+            out.extend_from_slice(&self.held[usize::from(self.esc_sent)..]);
+        }
+        self.held.clear();
+        self.esc_sent = false;
+    }
+
+    /// One input frame's bytes, less any mouse report and any prefix of one
+    /// still undecided (held for the next frame).
+    fn feed(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+        for &byte in input {
+            if self.held.is_empty() {
+                if byte == Self::ESC {
+                    self.held.push(byte);
+                } else {
+                    out.push(byte);
+                }
+                continue;
+            }
+            self.held.push(byte);
+            let verdict = if self.held.len() > MOUSE_HELD_MAX {
+                MouseVerdict::Other { committed: true }
+            } else {
+                self.classify()
+            };
+            match verdict {
+                MouseVerdict::Report => {
+                    self.held.clear();
+                    self.esc_sent = false;
+                }
+                MouseVerdict::Partial => {}
+                MouseVerdict::Other { committed } => {
+                    // The last byte is not part of it: it starts over.
+                    self.held.pop();
+                    self.release(&mut out, committed);
+                    if byte == Self::ESC {
+                        self.held.push(byte);
+                    } else {
+                        out.push(byte);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether the timer must run: bytes are held that may yet be a key.
+    fn pending(&self) -> bool {
+        !self.held.is_empty() && !(self.esc_sent && self.held.len() == 1)
+    }
+
+    /// The hold ran out: a lone `Esc` was the key; anything longer is no key.
+    fn flush(&mut self) -> Vec<u8> {
+        if self.held.len() == 1 && !self.esc_sent {
+            self.esc_sent = true;
+            return vec![Self::ESC];
+        }
+        if self.held.len() > 1 {
+            self.held.clear();
+            self.esc_sent = false;
+        }
+        Vec::new()
+    }
+}
+
 /// What the AI switch keeps of an input frame to the tab, when it drops any of
 /// it: an agent's frame while AI is off, unless the frame only interrupts or
 /// steers (`ai_switch::filter_while_off`). `None` writes the frame as is.
@@ -733,6 +899,10 @@ pub async fn attach(
     // Binary input frames written to the PTY on this socket; the phone counts
     // the ones it sent the same way, and each `ack` names this count.
     let mut input_frames: u64 = 0;
+    // Mouse reports never reach the pane (`MouseReportFilter`); `flush_at` is
+    // when a held Esc goes out as the key it is.
+    let mut mouse = MouseReportFilter::default();
+    let mut flush_at: Option<tokio::time::Instant> = None;
     // The phone spoke: its session slides (`auth::SESSION_IDLE`). Every frame
     // it sends, not the tick — a tick is the sidecar checking, not the phone.
     let touch = |auth: &Arc<Mutex<AuthStore>>| {
@@ -786,6 +956,19 @@ pub async fn attach(
                 }
                 tick = tick.wrapping_add(1);
             }
+            _ = async {
+                match flush_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                flush_at = None;
+                let held = mouse.flush();
+                if !held.is_empty() {
+                    let held = ai_input_kept(ai, &state_dir, &held).unwrap_or(held);
+                    if !held.is_empty() && (writer.write_all(&held).is_err() || writer.flush().is_err()) { break Ok(()); }
+                }
+            }
             Some((cols, rows)) = window_rx.recv() => {
                 if !deliver(&mut ws_tx, Message::Text(TerminalEvent::Window { cols, rows }.to_frame().into())).await { break Ok(()); }
             }
@@ -804,6 +987,16 @@ pub async fn attach(
                     last_client_message = std::time::Instant::now();
                     touch(&auth);
                     if bytes.len() > MAX_INPUT_FRAME { break Err("input_frame_too_large".into()); }
+                    // Before anything else reads the frame: a mouse report is
+                    // dropped here (acked, as the AI switch's drops are), so it
+                    // neither reaches tmux nor counts as the phone commanding it.
+                    let bytes = mouse.feed(&bytes);
+                    flush_at = mouse.pending().then(|| tokio::time::Instant::now() + ESC_HOLD);
+                    if bytes.is_empty() {
+                        input_frames += 1;
+                        if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
+                        continue;
+                    }
                     // The AI switch: nothing typed reaches an agent while it is
                     // off. The frame is still acked — it was handled, by
                     // dropping it — and the phone is told why.
@@ -916,6 +1109,7 @@ mod tests {
         ack_frame, closing_retries, deliver, input_report_due, replay_frames, OutputQueue, IDLE_TIMEOUT,
         INPUT_REPORT_INTERVAL, REPLAY_CHUNK, WRITE_TIMEOUT,
     };
+    use super::MouseReportFilter;
     use crate::services::mobile_control::protocol::{TerminalControl, TerminalEvent, MAX_OUTPUT_QUEUE};
     use axum::extract::ws::Message;
     use std::{
@@ -1436,5 +1630,115 @@ mod tests {
     async fn a_frame_the_phone_takes_is_reported_delivered() {
         let mut sink = futures_util::sink::drain();
         assert!(deliver(&mut sink, Message::Text("x".to_string().into())).await);
+    }
+
+    /// Every frame through one filter, the way the bridge feeds it: the bytes
+    /// that go on to the pane.
+    fn through(frames: &[&[u8]]) -> Vec<u8> {
+        let mut filter = MouseReportFilter::default();
+        frames.iter().flat_map(|frame| filter.feed(frame)).collect()
+    }
+
+    #[test]
+    fn mouse_reports_of_every_form_are_dropped_and_the_rest_goes_through() {
+        // X10, SGR press and release, urxvt; a right click and an Alt+right
+        // click (the buttons that open tmux's pane menu) among them.
+        for report in [
+            &b"\x1b[M\"!!"[..],
+            b"\x1b[M2!!",
+            b"\x1b[<2;10;5M",
+            b"\x1b[<34;10;5M",
+            b"\x1b[<2;10;5m",
+            b"\x1b[<0;1;1M",
+            b"\x1b[34;10;5M",
+            "\u{1b}[M\"\u{12d}!".as_bytes(),
+        ] {
+            assert_eq!(through(&[report]), b"", "{report:?}");
+            let mut framed = b"ls".to_vec();
+            framed.extend_from_slice(report);
+            framed.extend_from_slice(b"\r");
+            assert_eq!(through(&[&framed]), b"ls\r", "{report:?}");
+        }
+    }
+
+    #[test]
+    fn keys_and_text_are_not_touched() {
+        for input in [
+            &b"hello world\r"[..],
+            b"\x1b[A\x1b[B\x1bOA\x1b[1;5C\x1b[3~\x1b[200~paste\x1b[201~",
+            b"\x1bx",
+            b"\x03\x1b\x1b[Z",
+            b"[<2;10;5M",
+            "snow \u{2603} man".as_bytes(),
+        ] {
+            assert_eq!(through(&[input]), input, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn a_report_split_over_frames_is_dropped_wherever_it_splits() {
+        let report = b"\x1b[<2;10;5M";
+        for cut in 1..report.len() {
+            let (a, b) = report.split_at(cut);
+            assert_eq!(through(&[a, b]), b"", "cut at {cut}");
+        }
+        let x10 = b"\x1b[M\"!!";
+        for cut in 1..x10.len() {
+            let (a, b) = x10.split_at(cut);
+            assert_eq!(through(&[a, b]), b"", "x10 cut at {cut}");
+        }
+        // One byte a frame.
+        let frames: Vec<&[u8]> = report.chunks(1).collect();
+        assert_eq!(through(&frames), b"");
+        // A held prefix is never forwarded in part: nothing came out yet.
+        let mut filter = MouseReportFilter::default();
+        assert!(filter.feed(b"\x1b[<2;1").is_empty());
+        assert!(filter.pending());
+    }
+
+    #[test]
+    fn a_prefix_that_turns_out_not_to_be_a_report_goes_on_whole() {
+        // Held, then released by what follows.
+        assert_eq!(through(&[b"\x1b", b"[A"]), b"\x1b[A");
+        assert_eq!(through(&[b"\x1b[1;", b"5A"]), b"\x1b[1;5A");
+        assert_eq!(through(&[b"\x1b[", b"3~"]), b"\x1b[3~");
+        // A report-shaped start that breaks off is dropped, the new escape kept.
+        assert_eq!(through(&[b"\x1b[<2;1\x1b[A"]), b"\x1b[A");
+        assert_eq!(through(&[b"\x1b[<2;1x"]), b"x");
+        // Longer than tmux reads: dropped, the digits after it are plain text.
+        let long = [b"\x1b[<".as_slice(), &[b'1'; 80], b"M"].concat();
+        assert!(!through(&[&long]).contains(&0x1b));
+    }
+
+    #[test]
+    fn a_lone_escape_is_the_key_after_the_hold_and_a_late_report_still_drops() {
+        let mut filter = MouseReportFilter::default();
+        assert!(filter.feed(b"\x1b").is_empty());
+        assert!(filter.pending());
+        assert_eq!(filter.flush(), b"\x1b");
+        // The Esc is out: nothing more to hold on a timer, and it is not sent twice.
+        assert!(!filter.pending());
+        assert!(filter.flush().is_empty());
+        // tmux may still be waiting on its `escape-time` for the rest of a
+        // sequence: a report finishing now is dropped whole.
+        assert!(filter.feed(b"[<2;10;5M").is_empty());
+        assert!(!filter.pending());
+        // …and what is not one goes on without a second Esc.
+        let mut filter = MouseReportFilter::default();
+        filter.feed(b"\x1b");
+        filter.flush();
+        assert_eq!(filter.feed(b"[A"), b"[A");
+        assert_eq!(filter.feed(b"ab"), b"ab");
+    }
+
+    #[test]
+    fn a_partial_report_is_dropped_when_the_hold_runs_out() {
+        let mut filter = MouseReportFilter::default();
+        assert!(filter.feed(b"\x1b[<2;10").is_empty());
+        assert!(filter.pending());
+        assert!(filter.flush().is_empty());
+        assert!(!filter.pending());
+        // Nothing of it is left to join what comes next.
+        assert_eq!(filter.feed(b";5Mx"), b";5Mx");
     }
 }
