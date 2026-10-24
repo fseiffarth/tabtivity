@@ -196,6 +196,28 @@ pub fn register_in_home(home: &Path) -> bool {
         .is_some_and(|root| lists(&root, &url))
 }
 
+/// OpenCode 2's managed background service listens on one fixed loopback
+/// port shared by every home, and a typed `opencode` does not get
+/// `--standalone`. `disabled: true` in the home's service config makes every
+/// launch from it use a private server (`standalone || disabled`). A 1.x
+/// home ignores the file.
+const SERVICE_CONFIG: &str = ".config/opencode/service.json";
+
+pub fn disable_service_in_home(home: &Path) {
+    let Some(file) = HomeFile::open(home, SERVICE_CONFIG) else {
+        eprintln!("opencode_session: {SERVICE_CONFIG} in {} is not a plain path; skipped", home.display());
+        return;
+    };
+    let result = crate::services::agent_hint::merge_json(&file, |root| {
+        let changed = root.get("disabled") != Some(&json!(true));
+        root["disabled"] = json!(true);
+        changed
+    });
+    if let Err(e) = result {
+        eprintln!("opencode_session: disable the service in {}: {e}", home.display());
+    }
+}
+
 fn lists(root: &Value, url: &str) -> bool {
     root.get(plugin_key(root))
         .and_then(Value::as_array)
@@ -523,6 +545,17 @@ mod tests {
         o.env.clear();
         let out = resolve_in(o, &notes, true, |_| Some("ses_x".into()), |_| true);
         assert_eq!(out.args, ["--continue"]);
+    }
+
+    #[test]
+    fn a_home_keeps_its_opencode_service_off_beside_the_users_own_settings() {
+        let home = tmp("service");
+        let file = home.join(".config").join("opencode").join("service.json");
+        disable_service_in_home(&home);
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap(), json!({"disabled": true}));
+        std::fs::write(&file, r#"{"disabled": false, "port": 5}"#).unwrap();
+        disable_service_in_home(&home);
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap(), json!({"disabled": true, "port": 5}));
     }
 
     #[test]

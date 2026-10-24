@@ -2339,6 +2339,7 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     }
     // OpenCode's session plugin (`services::opencode_session`).
     crate::services::opencode_session::register_in_home(home);
+    crate::services::opencode_session::disable_service_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);
