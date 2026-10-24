@@ -120,7 +120,21 @@ openssl dgst -sha256 -verify release-signing.pub.pem -signature SHA256SUMS.sig S
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Both checks must say `Verified OK` and `OK`. Then install it:
+Both checks must say `Verified OK` and `OK`. They prove the package is the file
+the release signed with the key you just downloaded — and that key comes from the
+same repository as the release, so they do not prove the key is the maintainer's.
+Compare its fingerprint with one published somewhere other than this repository:
+
+```bash
+openssl pkey -pubin -in release-signing.pub.pem -outform DER | sha256sum
+```
+
+*Open item (threat-model recheck 2026-10-24):* that fingerprint has not been
+published outside the repository yet (see `docs/context/release_signing.md`), so
+there is nothing to compare it with until it is. Until then the check above is an
+integrity check against the repository, not an independent one.
+
+Then install it:
 
 ```bash
 sudo apt install "./tabtivity-server_${v#v}_amd64.deb"
