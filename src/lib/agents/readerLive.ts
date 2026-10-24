@@ -22,6 +22,7 @@ import {
 } from "../../../mobile-web/src/terminal/selectPrompt";
 import { isAntigravityTab, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort } from "../../../mobile-web/src/terminal/antigravity";
 import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
+import { readPromptSuggestion } from "../../../mobile-web/src/terminal/promptSuggestion";
 import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
@@ -68,10 +69,13 @@ export interface ReaderLive {
   /** The bottom of that screen as drawn, blank rows dropped at its ends, so
    * the chat can show what it cannot read. Empty unless `stray`. */
   screen: string[];
+  /** Claude Code's prompt suggestion, dimmed in its empty input box ("" when
+   * none): on the screen only, no stored record carries it. */
+  suggestion: string;
 }
 
 export const NO_LIVE: ReaderLive = {
-  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false, screen: [],
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false, screen: [], suggestion: "",
 };
 
 /** Rows of a stray screen the chat shows: a first-run screen fits, a long
@@ -132,13 +136,18 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
       status,
       stray: false,
       screen: [],
+      suggestion: "",
     };
   }
   const working = agentWork(lines);
   // `inputFrameStart` answers the screen's length when it finds no input box
   // (or the box-like row is a dialog's highlighted option).
   const stray = !working && noFrame && lines.some((line) => line.text.trim() !== "");
-  return { ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [] };
+  return {
+    ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [],
+    // Only an idle box holds one; a busy row means a turn is running.
+    suggestion: working ? "" : readPromptSuggestion(lines, agentLabel),
+  };
 }
 
 function strayScreen(rows: string[]): string[] {
@@ -168,6 +177,7 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.working?.effort === b.working?.effort
     && a.stray === b.stray
     && a.screen.join("\n") === b.screen.join("\n")
+    && a.suggestion === b.suggestion
     && sameStatus(a.status, b.status);
 }
 

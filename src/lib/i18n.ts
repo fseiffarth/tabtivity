@@ -5316,6 +5316,8 @@ export const enSource = {
   "terminal.reader.cut": "Cut here — the full text is in the terminal and the session.",
   "terminal.reader.subagent": "Subagent",
   "terminal.reader.placeholder": "Message the agent — Enter sends, Shift+Enter for a new line, ↑ for earlier messages",
+  "terminal.reader.suggestion": "Claude suggests",
+  "terminal.reader.suggestionHint": "Fills the message box — nothing is sent until you send it",
   "terminal.reader.subagentPlaceholder": "Message this subagent — Enter sends, Shift+Enter for a new line, ↑ for earlier messages",
   "terminal.reader.subagentNotListed": "Not sent — this subagent is no longer in Claude's agent list, so it can't take a message. Your text is still here.",
   "terminal.reader.subagentAmbiguous": "Not sent — Claude lists more than one subagent with this description. Your text is still here.",

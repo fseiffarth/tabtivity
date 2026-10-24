@@ -59,6 +59,7 @@ import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/term
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
+import { ReaderSuggestion } from "./ReaderSuggestion";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
@@ -487,7 +488,7 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, chipSlot, onEscape, onStatus, onPulled, pullRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, suggestion, chipSlot, onEscape, onStatus, onPulled, pullRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -505,6 +506,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   steering: boolean;
   /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
   questionOpen: boolean;
+  /** Claude's own suggestion for the next message, read off its empty box. */
+  suggestion: string;
   /** The facts row's end, where the chip row goes; over the text box without it. */
   chipSlot: HTMLElement | null;
   onEscape: () => void;
@@ -567,6 +570,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   };
   const pickSlash = (suggestion: SlashSuggestion) => {
     editDraft(suggestion.args ? `${suggestion.line} ` : suggestion.line);
+    composerRef.current?.focus();
+  };
+  const pickSuggestion = () => {
+    editDraft(suggestion);
     composerRef.current?.focus();
   };
   const forgetSlash = (line: string) => {
@@ -836,6 +843,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   return <>
     <div className="terminal-reader-composer">
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
+      {suggestion && !draft && !subagent && !sending && <ReaderSuggestion text={suggestion} onPick={pickSuggestion} />}
       {chipSlot ? createPortal(chips, chipSlot) : chips}
       <div className="terminal-reader-input">
         <textarea
@@ -1827,6 +1835,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         visible={visible}
         steering={steering}
         questionOpen={!!shownLive.question}
+        suggestion={shownLive.suggestion}
         chipSlot={chipSlot}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}

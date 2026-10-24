@@ -5110,6 +5110,8 @@ export const dict: Dict = {
   "terminal.reader.cut": "Cortado aquí — el texto completo está en el terminal y en la sesión.",
   "terminal.reader.subagent": "Subagente",
   "terminal.reader.placeholder": "Mensaje al agente — Intro envía, Mayús+Intro para una nueva línea, ↑ para mensajes anteriores",
+  "terminal.reader.suggestion": "Claude sugiere",
+  "terminal.reader.suggestionHint": "Rellena el cuadro de mensaje — no se envía nada hasta que lo envíes",
   "terminal.reader.subagentPlaceholder": "Mensaje a este subagente — Intro envía, Mayús+Intro para una nueva línea, ↑ para mensajes anteriores",
   "terminal.reader.subagentNotListed": "No enviado — este subagente ya no está en la lista de agentes de Claude, así que no puede recibir mensajes. Tu texto sigue aquí.",
   "terminal.reader.subagentAmbiguous": "No enviado — Claude muestra más de un subagente con esta descripción. Tu texto sigue aquí.",
