@@ -1,6 +1,8 @@
 # Code screen 2026-10-25 — plan
 
-Status: plan only. No code changed. Findings come from five read-only screening
+Status: A–E and G landed on develop 2026-10-25 (not run live); S not started —
+each S step waits for the user's go-ahead on a quiet tree. Results, flags and
+click-through: `docs/code_screen_handoff.md`. Findings come from five read-only screening
 agents (Rust services; Rust commands/terminal/platform/crates; frontend
 components; frontend lib/stores/mobile-web; folder structure), run 2026-10-25
 on develop 8953f472 plus the uncommitted tree of that day. Items marked ✔ were
