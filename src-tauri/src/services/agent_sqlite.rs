@@ -119,7 +119,9 @@ mod tests {
 
     #[test]
     fn a_runaway_query_is_interrupted() {
-        let home = dir("deadline");
+        // `open_read` opens with NOFOLLOW, which refuses a symlinked temp dir
+        // (a CI runner's); `open_below` resolves the home, this opens it by hand.
+        let home = dir("deadline").canonicalize().unwrap();
         let db = home.join("state.sqlite");
         store(&db, "CREATE TABLE threads (id TEXT);");
         let limits = Limits { deadline: Duration::from_millis(1000), ..Limits::STORE };
