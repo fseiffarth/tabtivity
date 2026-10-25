@@ -1,10 +1,11 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { lastPrompt } from "../agentPrompts";
 import { getActivity, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
 import { describeFailure } from "../connection";
 import { SECTION_ICON } from "../glyphs";
 import { ageLabel } from "../terminal/fileLabels";
+import { useVisiblePoll } from "../visiblePoll";
 import { isUnseenDone, type SeenDone } from "../seenDone";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -92,31 +93,15 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
   // wrong card.
   const [finishing, setFinishing] = useState<string | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
-    const load = () => {
-      if (document.visibilityState !== "visible") return;
-      void getActivity(controller.signal)
-        .then((body) => {
-          if (disposed) return;
-          setTabs(Array.isArray(body.tabs) ? body.tabs : []);
-          setNow(Date.now());
-        })
-        // Keep the last answer: the project list's own notice says the link
-        // is down, and one dropped packet should not empty the group.
-        .catch(() => undefined);
-    };
-    load();
-    const timer = window.setInterval(load, POLL_MS);
-    document.addEventListener("visibilitychange", load);
-    return () => {
-      disposed = true;
-      controller.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", load);
-    };
-  }, []);
+  useVisiblePoll((signal) => getActivity(signal)
+    .then((body) => {
+      if (signal.aborted) return;
+      setTabs(Array.isArray(body.tabs) ? body.tabs : []);
+      setNow(Date.now());
+    })
+    // Keep the last answer: the project list's own notice says the link
+    // is down, and one dropped packet should not empty the group.
+    .catch(() => undefined), POLL_MS);
   const finish = async (alertId: string) => {
     if (finishing) return;
     setFinishing(alertId);

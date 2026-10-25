@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, readMarkupQuestions, type MarkupSource, type PhoneMarkupAsk } from "../api";
 import type { MarkTick } from "./layer";
+import { startVisiblePoll } from "../visiblePoll";
 
 /** How often an open markup view (or a Focus chat) asks whether the agent has
  * a markup question, while it is on screen and the page is visible. */
@@ -54,38 +55,21 @@ export function useMarkupAsks(tabId: string | undefined, source: MarkupSource | 
 
   useEffect(() => {
     if (!on || !tabId) return;
-    let stopped = false;
-    let inflight: AbortController | undefined;
-    const poll = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      inflight?.abort();
-      const controller = new AbortController();
-      inflight = controller;
-      void readMarkupQuestions(tabId, sourceRef.current, controller.signal).then(
-        (next) => {
-          if (stopped || controller.signal.aborted) return;
-          setAsks((was) => (sameList(was, next.asks) ? was : next.asks));
-          setTicks((was) => (sameList(was, next.ticks) ? was : next.ticks));
-        },
-        (error: unknown) => {
-          if (stopped || controller.signal.aborted) return;
-          const code = error instanceof ApiError ? error.code : "";
-          // Offline or slow: keep the card; the next poll retries.
-          if (code === "offline" || code === "timeout") return;
-          setAsks((was) => (was.length ? [] : was));
-          setTicks((was) => (was.length ? [] : was));
-        },
-      );
-    };
-    poll();
-    const timer = window.setInterval(poll, MARKUP_ASK_POLL);
-    document.addEventListener("visibilitychange", poll);
-    return () => {
-      stopped = true;
-      inflight?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
-    };
+    return startVisiblePoll((signal) => readMarkupQuestions(tabId, sourceRef.current, signal).then(
+      (next) => {
+        if (signal.aborted) return;
+        setAsks((was) => (sameList(was, next.asks) ? was : next.asks));
+        setTicks((was) => (sameList(was, next.ticks) ? was : next.ticks));
+      },
+      (error: unknown) => {
+        if (signal.aborted) return;
+        const code = error instanceof ApiError ? error.code : "";
+        // Offline or slow: keep the card; the next poll retries.
+        if (code === "offline" || code === "timeout") return;
+        setAsks((was) => (was.length ? [] : was));
+        setTicks((was) => (was.length ? [] : was));
+      },
+    ), MARKUP_ASK_POLL).stop;
   }, [on, tabId, sourceKey, edge, tick]);
 
   const refresh = useCallback(() => setTick((was) => was + 1), []);

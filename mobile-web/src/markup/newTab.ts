@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiError, api, TAB_CREATE_TIMEOUT, type AgentRow, type AgentStatus, type ProjectDetail, type TabRow } from "../api";
+import { startVisiblePoll } from "../visiblePoll";
 import type { AgentSignal } from "./submitState";
 
 /**
@@ -48,33 +49,16 @@ export function useOpenedTabAgent(projectId: string, tabId: string | undefined):
   const [model, setModel] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!tabId) return;
-    let stopped = false;
-    let inflight: AbortController | undefined;
     const path = `/api/v1/projects/${encodeURIComponent(projectId)}`;
-    const poll = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      inflight?.abort();
-      const controller = new AbortController();
-      inflight = controller;
-      void api<ProjectDetail>(path, { signal: controller.signal }).then(
-        (detail) => {
-          if (stopped || controller.signal.aborted) return;
-          const row = detail.tabs.find((tab) => tab.id === tabId);
-          setSignal(signalOf(row?.agent_status));
-          setModel(row?.agent_model?.trim().split(/\s+/)[0] || undefined);
-        },
-        () => {},
-      );
-    };
-    poll();
-    const timer = window.setInterval(poll, OPENED_TAB_POLL);
-    document.addEventListener("visibilitychange", poll);
-    return () => {
-      stopped = true;
-      inflight?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
-    };
+    return startVisiblePoll((signal) => api<ProjectDetail>(path, { signal }).then(
+      (detail) => {
+        if (signal.aborted) return;
+        const row = detail.tabs.find((tab) => tab.id === tabId);
+        setSignal(signalOf(row?.agent_status));
+        setModel(row?.agent_model?.trim().split(/\s+/)[0] || undefined);
+      },
+      () => {},
+    ), OPENED_TAB_POLL).stop;
   }, [projectId, tabId]);
   return tabId ? { agent: signal, model } : { agent: "idle" };
 }

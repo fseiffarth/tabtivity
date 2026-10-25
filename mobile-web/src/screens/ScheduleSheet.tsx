@@ -18,6 +18,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
 import { useBackLayer } from "../backStack";
+import { startVisiblePoll } from "../visiblePoll";
 
 /** Per-tab scheduled prompts, opened from the project tab overview — the phone's
  * counterpart to the desktop Agents view, and deliberately not from inside the
@@ -120,17 +121,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
   useEffect(() => {
     // Gated like the project screen's poll: a sheet left open when the screen
     // went off kept a desktop round trip going every 5s all night.
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      void refresh();
-    };
-    void refresh();
-    const timer = window.setInterval(tick, 5_000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
-    };
+    return startVisiblePoll(() => refresh(), 5_000).stop;
   }, [refresh]);
 
   const reset = () => {

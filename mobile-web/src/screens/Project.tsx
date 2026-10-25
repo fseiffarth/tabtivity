@@ -35,6 +35,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { describeFailure } from "../connection";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import type { SubagentStep } from "../terminal/subagents";
+import { startVisiblePoll } from "../visiblePoll";
 
 /** The orders this list offers, in the words this screen can use for them. The
  * cross-project Agents list calls `native` "Status", because there the arrival
@@ -362,18 +363,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   useEffect(() => {
     // A 1.5s poll is a full catalog load plus a desktop round trip, 40 times a
     // minute, and it ran while the phone's screen was off.
-    let timer = 0;
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      void load();
-    };
-    void load();
-    timer = window.setInterval(tick, 5_000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
-    };
+    return startVisiblePoll(() => load(), 5_000).stop;
   }, [load]);
   /** Reads the outbox now and every `OUTBOX_POLL` while the page is visible;
    * coming back to the page reads it at once. A listing that could not be
@@ -385,30 +375,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     setFileOpen(null);
     // No folder stands behind the assistant scope, so there is no outbox to read.
     if (assistantScope || isAssistantScope(id)) return;
-    let stopped = false;
-    let inflight: AbortController | undefined;
-    const poll = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      inflight?.abort();
-      const controller = new AbortController();
-      inflight = controller;
-      void listOutbox({ project: id }, controller.signal).then(
-        (files) => {
-          if (stopped || controller.signal.aborted || !Array.isArray(files)) return;
-          setOutbox((current) => sameOutbox(current, files) ? current : files);
-        },
-        () => {},
-      );
-    };
-    poll();
-    const timer = window.setInterval(poll, OUTBOX_POLL);
-    document.addEventListener("visibilitychange", poll);
-    return () => {
-      stopped = true;
-      inflight?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
-    };
+    return startVisiblePoll((signal) => listOutbox({ project: id }, signal).then(
+      (files) => {
+        if (signal.aborted || !Array.isArray(files)) return;
+        setOutbox((current) => sameOutbox(current, files) ? current : files);
+      },
+      () => {},
+    ), OUTBOX_POLL).stop;
   }, [id, assistantScope]);
   useEffect(() => {
     if (!fileOpen && !galleryOpen) return;

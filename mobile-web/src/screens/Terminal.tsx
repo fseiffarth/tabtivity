@@ -155,6 +155,7 @@ import { inboxInPlace, inboxLeaves, inboxSegments, useInboxFiles, withoutInboxRe
 import { afterClear, clearMark, type ClearMark } from "../terminal/clearedSession";
 import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../terminal/heldPrompts";
 import { ageLabel } from "../terminal/fileLabels";
+import { startVisiblePoll, type VisiblePoll } from "../visiblePoll";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
@@ -2272,7 +2273,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [transcriptCurrent, setTranscriptCurrent] = useState(false);
   useEffect(() => { if (view !== "focus") setTranscriptCurrent(false); }, [view]);
   const transcriptVersion = useRef<string | undefined>();
-  const transcriptRequest = useRef<AbortController>();
+  /** The session poll below, so the settle read can ask it to read now. */
+  const transcriptPoll = useRef<VisiblePoll>();
   useEffect(() => { transcriptVersion.current = transcript?.version; }, [transcript]);
   /** What this chat changed and has not committed: the Commit chip's count
    * and its sheet's list, read again each time the sheet opens. */
@@ -2286,52 +2288,29 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * whose transcript is not read, no desktop) hands Focus to the screen. */
   useEffect(() => {
     if (tab.kind !== "agent" || view !== "focus") return;
-    let stopped = false;
-    const read = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      transcriptRequest.current?.abort();
-      const controller = new AbortController();
-      transcriptRequest.current = controller;
-      void getTranscript(tab.id, transcriptVersion.current, transcriptLimit, controller.signal).then(
-        (next) => {
-          if (stopped || controller.signal.aborted) return;
-          // A malformed answer is a failed read: keep what is shown.
-          if (!next || typeof next !== "object") return;
-          setTranscriptCurrent(true);
-          if (next.unchanged) return;
-          // A forced full read (after an Undo) answers the same session: keep
-          // what is shown, but ask by its version again from here on.
-          transcriptVersion.current = next.version;
-          showTranscript(next);
-        },
-        () => {},
-      );
-    };
-    read();
-    const timer = window.setInterval(read, TRANSCRIPT_POLL);
-    document.addEventListener("visibilitychange", read);
+    const poll = startVisiblePoll((signal) => getTranscript(tab.id, transcriptVersion.current, transcriptLimit, signal).then(
+      (next) => {
+        if (signal.aborted) return;
+        // A malformed answer is a failed read: keep what is shown.
+        if (!next || typeof next !== "object") return;
+        setTranscriptCurrent(true);
+        if (next.unchanged) return;
+        // A forced full read (after an Undo) answers the same session: keep
+        // what is shown, but ask by its version again from here on.
+        transcriptVersion.current = next.version;
+        showTranscript(next);
+      },
+      () => {},
+    ), TRANSCRIPT_POLL);
+    transcriptPoll.current = poll;
     return () => {
-      stopped = true;
-      transcriptRequest.current?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", read);
+      poll.stop();
+      if (transcriptPoll.current === poll) transcriptPoll.current = undefined;
     };
   }, [tab.id, tab.kind, view, transcriptLimit, transcriptReload]);
   useEffect(() => {
     if (!sessionFocus || screenTick === 0) return;
-    const timer = window.setTimeout(() => {
-      transcriptRequest.current?.abort();
-      const controller = new AbortController();
-      transcriptRequest.current = controller;
-      void getTranscript(tab.id, transcriptVersion.current, transcriptLimit, controller.signal).then(
-        (next) => {
-          if (controller.signal.aborted || !next || typeof next !== "object") return;
-          setTranscriptCurrent(true);
-          if (!next.unchanged) showTranscript(next);
-        },
-        () => {},
-      );
-    }, TRANSCRIPT_SETTLE);
+    const timer = window.setTimeout(() => transcriptPoll.current?.now(), TRANSCRIPT_SETTLE);
     return () => window.clearTimeout(timer);
   }, [screenTick, sessionFocus, tab.id, transcriptLimit]);
   /** Where the live screen's input box begins — `liveScreen.length` while the
@@ -2402,34 +2381,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * still at work keeps writing. */
   useEffect(() => {
     if (!subToken || tab.kind !== "agent" || view !== "focus") return;
-    let stopped = false;
     let version: string | undefined;
-    let inflight: AbortController | undefined;
-    const read = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      inflight?.abort();
-      const controller = new AbortController();
-      inflight = controller;
-      void getTranscript(tab.id, version, subLimit, controller.signal, subToken).then(
-        (next) => {
-          if (stopped || controller.signal.aborted || !next || typeof next !== "object" || next.unchanged) return;
-          version = next.version;
-          setSubRead((current) => current && current.token === subToken && sameTranscript(current.transcript, next)
-            ? current
-            : { token: subToken, transcript: next });
-        },
-        () => {},
-      );
-    };
-    read();
-    const timer = window.setInterval(read, TRANSCRIPT_POLL);
-    document.addEventListener("visibilitychange", read);
-    return () => {
-      stopped = true;
-      inflight?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", read);
-    };
+    return startVisiblePoll((signal) => getTranscript(tab.id, version, subLimit, signal, subToken).then(
+      (next) => {
+        if (signal.aborted || !next || typeof next !== "object" || next.unchanged) return;
+        version = next.version;
+        setSubRead((current) => current && current.token === subToken && sameTranscript(current.transcript, next)
+          ? current
+          : { token: subToken, transcript: next });
+      },
+      () => {},
+    ), TRANSCRIPT_POLL).stop;
   }, [subToken, subLimit, tab.id, tab.kind, view]);
   /** The conversation on screen — the session's, or the open subagent's —
    * which is where a card tapped in it was opened from. */
@@ -2527,62 +2489,41 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setOutboxOpen(null);
     setInboxOpen(null);
     if (bare) return;
-    let stopped = false;
-    let inflight: AbortController | undefined;
-    const poll = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      inflight?.abort();
-      const controller = new AbortController();
-      inflight = controller;
-      void listOutbox({ tab: tab.id }, controller.signal).then(
-        (images) => {
-          if (stopped || controller.signal.aborted || !Array.isArray(images)) return;
-          setOutbox((current) => sameOutbox(current, images) ? current : images);
-        },
-        () => {},
-      );
-    };
-    poll();
-    const timer = window.setInterval(poll, OUTBOX_POLL);
-    document.addEventListener("visibilitychange", poll);
-    return () => {
-      stopped = true;
-      inflight?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
-    };
+    return startVisiblePoll((signal) => listOutbox({ tab: tab.id }, signal).then(
+      (images) => {
+        if (signal.aborted || !Array.isArray(images)) return;
+        setOutbox((current) => sameOutbox(current, images) ? current : images);
+      },
+      () => {},
+    ), OUTBOX_POLL).stop;
   }, [tab.id, bare]);
   /** Reads the usage panel now and every `LIMITS_POLL` while the page is
    * visible. A CLI with no usage readout stops the polling; a failed read keeps
    * what was shown — the next poll retries. */
   useEffect(() => {
     if (tab.kind !== "agent") return;
-    let stopped = false;
     let last = 0;
-    const poll = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      if (Date.now() - last < LIMITS_POLL / 2) return;
+    let unsupported = false;
+    let disposed = false;
+    const poll = startVisiblePoll(() => {
+      if (unsupported || Date.now() - last < LIMITS_POLL / 2) return undefined;
       last = Date.now();
-      void getAgentStatus(tab.id).then(
+      return getAgentStatus(tab.id).then(
         (report) => {
           // A malformed answer is a failed read: keep what is shown.
-          if (stopped || !report?.usage) return;
+          if (disposed || !report?.usage) return;
           if (report.usage.supported === false) {
-            stopped = true;
+            unsupported = true;
             return;
           }
           if (report.usage.raw) rememberLimits(limitMeters(parseUsageReport(report.usage.raw)));
         },
         () => {},
       );
-    };
-    poll();
-    const timer = window.setInterval(poll, LIMITS_POLL);
-    document.addEventListener("visibilitychange", poll);
+    }, LIMITS_POLL);
     return () => {
-      stopped = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
+      disposed = true;
+      poll.stop();
     };
   }, [tab.id, tab.kind, rememberLimits]);
   useEffect(() => {

@@ -152,7 +152,7 @@ describe("Mobile activity list — rows", () => {
     await screen.findByText("Now");
     expect(small("Now")).toBe("Aurora · finished just now");
     expect(small("Hour")).toBe("Aurora · finished 2 h ago");
-    expect(small("Days")).toBe("Aurora · finished 2d ago");
+    expect(small("Days")).toBe("Aurora · finished 2 d ago");
   });
 
   it("remembers the sort choice for the next mount, and offers no sort for a single tab", async () => {

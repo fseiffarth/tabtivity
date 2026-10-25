@@ -4,6 +4,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { parseUnifiedDiff } from "../../../src/lib/viewers/diff";
 import { getChanges, type ChatChange, type ChatChanges as ChatChangesRead } from "../api";
 import { chatMoment, chatTime } from "../terminal/chatTimes";
+import { startVisiblePoll } from "../visiblePoll";
 
 /** How often the open view asks again; an unmoved transcript answers
  * `unchanged`, so no diff crosses the link while nothing happens. */
@@ -103,30 +104,19 @@ export function ChatChanges({ tabId, subagent, subagentTitle, visible, onClose }
 
   useEffect(() => {
     if (!visible) return;
-    let stopped = false;
-    let controller: AbortController | undefined;
-    const ask = () => {
-      controller?.abort();
-      controller = new AbortController();
+    return startVisiblePoll((signal) => {
       const version = versionRef.current?.key === readKey ? versionRef.current.version : undefined;
-      void getChanges(tabId, version, subagent, controller.signal).then((answer) => {
-        if (stopped) return;
+      return getChanges(tabId, version, subagent, signal).then((answer) => {
+        if (signal.aborted) return;
         setFailed(false);
         if (answer.unchanged) return;
         versionRef.current = { key: readKey, version: answer.version };
         setRead({ key: readKey, changes: answer });
       }, (reason: unknown) => {
-        if (stopped || (reason instanceof DOMException && reason.name === "AbortError")) return;
+        if (signal.aborted || (reason instanceof DOMException && reason.name === "AbortError")) return;
         setFailed(true);
       });
-    };
-    ask();
-    const timer = window.setInterval(ask, POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-      controller?.abort();
-    };
+    }, POLL_MS).stop;
   }, [visible, tabId, subagent, readKey]);
 
   const changes = read?.key === readKey ? read.changes : null;

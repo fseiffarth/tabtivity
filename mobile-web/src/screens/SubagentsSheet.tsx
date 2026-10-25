@@ -5,6 +5,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { useBackLayer } from "../backStack";
+import { startVisiblePoll } from "../visiblePoll";
 
 /** As many turns as the Reader first reads (`Terminal`'s TRANSCRIPT_STEP), so
  * the siblings the opened subagent's bar steps through are the Reader's own. */
@@ -25,39 +26,22 @@ export function SubagentsSheet({ tab, onClose, onOpen }: {
   const [entries, setEntries] = useState<TranscriptEntry[] | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    let stopped = false;
     let version: string | undefined;
-    let inflight: AbortController | undefined;
     // Gated like the prompts sheet: a sheet left open with the screen off
     // must not keep a desktop round trip going.
-    const read = () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      inflight?.abort();
-      const controller = new AbortController();
-      inflight = controller;
-      void getTranscript(tab.id, version, SESSION_TURNS, controller.signal).then(
-        (next) => {
-          if (stopped || controller.signal.aborted || next.unchanged) return;
-          version = next.version;
-          setFailed(!next.available);
-          setEntries(next.available ? next.entries : []);
-        },
-        () => {
-          if (stopped || controller.signal.aborted) return;
-          setFailed(true);
-          setEntries((current) => current ?? []);
-        },
-      );
-    };
-    read();
-    const timer = window.setInterval(read, POLL);
-    document.addEventListener("visibilitychange", read);
-    return () => {
-      stopped = true;
-      inflight?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", read);
-    };
+    return startVisiblePoll((signal) => getTranscript(tab.id, version, SESSION_TURNS, signal).then(
+      (next) => {
+        if (signal.aborted || next.unchanged) return;
+        version = next.version;
+        setFailed(!next.available);
+        setEntries(next.available ? next.entries : []);
+      },
+      () => {
+        if (signal.aborted) return;
+        setFailed(true);
+        setEntries((current) => current ?? []);
+      },
+    ), POLL).stop;
   }, [tab.id]);
 
   const refs = entries ? subagentsIn(entries) : [];

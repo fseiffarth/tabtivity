@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { draftPreview, lastPrompt } from "../agentPrompts";
 import { readDrafts } from "../drafts";
@@ -11,6 +11,7 @@ import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ageLabel } from "../terminal/fileLabels";
+import { useVisiblePoll } from "../visiblePoll";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -92,43 +93,27 @@ export function Activity({ open, onConnection }: {
     workingAt: tab.working_at,
     doneAt: lastWorkedAt(tab),
   })), [drafts, sort, tabs]);
-  useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
-    const load = () => {
-      if (document.visibilityState !== "visible") return;
-      void getActivity(controller.signal)
-        .then((body) => {
-          if (disposed) return;
-          // An answer with no list is a failed one: keep the last good list.
-          if (!Array.isArray(body.tabs)) throw new ApiError(200, "malformed_response");
-          setTabs(body.tabs);
-          setNow(Date.now());
-          setDesktop(body.desktop_available);
-          setAiOff(body.ai_off === true);
-          setOffline(null);
-          onConnection(null);
-          setLoaded(true);
-        })
-        // Keep the last good list rather than blanking it: one dropped packet on
-        // a flaky link should not wipe the screen the reader is looking at.
-        .catch((error: unknown) => {
-          if (disposed || controller.signal.aborted) return;
-          const reason = classifyUnavailable(error);
-          setOffline(reason);
-          onConnection(reason);
-        });
-    };
-    load();
-    const timer = window.setInterval(load, POLL_MS);
-    document.addEventListener("visibilitychange", load);
-    return () => {
-      disposed = true;
-      controller.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", load);
-    };
-  }, [onConnection]);
+  useVisiblePoll((signal) => getActivity(signal)
+    .then((body) => {
+      if (signal.aborted) return;
+      // An answer with no list is a failed one: keep the last good list.
+      if (!Array.isArray(body.tabs)) throw new ApiError(200, "malformed_response");
+      setTabs(body.tabs);
+      setNow(Date.now());
+      setDesktop(body.desktop_available);
+      setAiOff(body.ai_off === true);
+      setOffline(null);
+      onConnection(null);
+      setLoaded(true);
+    })
+    // Keep the last good list rather than blanking it: one dropped packet on
+    // a flaky link should not wipe the screen the reader is looking at.
+    .catch((error: unknown) => {
+      if (signal.aborted) return;
+      const reason = classifyUnavailable(error);
+      setOffline(reason);
+      onConnection(reason);
+    }), POLL_MS);
   return <>
     {offline && <p className="error connection-error">
       <strong>{describeUnavailable(offline).title}</strong>
