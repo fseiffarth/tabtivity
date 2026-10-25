@@ -36,9 +36,16 @@ function card(over: Partial<TodoCard> = {}): TodoCard {
   };
 }
 
+/** Today shifted by whole calendar days: a 24 h offset lands on the same date
+ *  in the last hour of a 25-hour (DST-end) day. */
+const dayFromToday = (days: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return todayStr(d);
+};
 const TODAY = todayStr();
-const YESTERDAY = todayStr(new Date(Date.now() - 86_400_000));
-const TOMORROW = todayStr(new Date(Date.now() + 86_400_000));
+const YESTERDAY = dayFromToday(-1);
+const TOMORROW = dayFromToday(1);
 
 describe("mobile board date-governed columns", () => {
   it("keeps a late card in Overdue and refuses the other two", () => {
