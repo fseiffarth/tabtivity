@@ -952,6 +952,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),
+    ("agent_tab_features", Core),
     ("copilot_fence_auth_status", Core),
     ("copilot_fence_sign_out", Core),
     ("local_tmux_kill", Core),

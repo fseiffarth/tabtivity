@@ -708,6 +708,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["sync_whole_project", "core"],
   ["agent_fence_marks", "core"],
   ["agent_fence_status", "core"],
+  ["agent_tab_features", "core"],
   ["copilot_fence_auth_status", "core"],
   ["copilot_fence_sign_out", "core"],
   ["local_tmux_kill", "core"],

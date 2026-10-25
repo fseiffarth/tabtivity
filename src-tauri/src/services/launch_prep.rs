@@ -558,8 +558,19 @@ pub struct PreparedLaunch {
     /// The fence scope the spawn runs in, `None` for an unfenced one.
     fenced_scope: Option<String>,
     host_agent_tab: Option<crate::services::agent_fence::HostAgentTab>,
+    /// A local agent's sandbox, home and CLI, for the hover card
+    /// (`services::agent_features`); its API keys are read off the final env.
+    features: Option<LocalAgentFeatures>,
     spawned_tab_id: String,
     generation: SpawnGeneration,
+}
+
+/// What [`prepare`] learns of a local agent spawn for `agent_features`.
+struct LocalAgentFeatures {
+    cli: String,
+    cwd: String,
+    home: std::path::PathBuf,
+    sandbox: crate::services::agent_features::Sandbox,
 }
 
 /// A spawn's sequence number ([`agent_fence::begin_spawn`]), taken before any
@@ -604,6 +615,7 @@ impl Drop for SpawnGeneration {
 ///
 /// [`agent_fence::on_tab_gone`]: crate::services::agent_fence::on_tab_gone
 pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
+    crate::services::agent_features::forget(tab_id, seq);
     if !crate::services::agent_fence::on_tab_gone(tab_id, seq) {
         return false;
     }
@@ -658,6 +670,17 @@ impl PreparedLaunch {
         );
         if !current {
             return;
+        }
+        match self.features.take() {
+            Some(f) => crate::services::agent_features::record(&self.spawned_tab_id, crate::services::agent_features::Spawn {
+                seq: self.generation.seq,
+                cli: f.cli,
+                cwd: f.cwd,
+                home: Some(f.home),
+                sandbox: Some(f.sandbox),
+                api_keys: crate::services::agent_features::api_keys_in(&self.opts.env),
+            }),
+            None => crate::services::agent_features::forget_tab(&self.spawned_tab_id),
         }
         // A local model's tab: its conversations are not cleared while it runs.
         if let Some(home) = self.opts.env.get("VIBE_HOME") {
@@ -1210,6 +1233,9 @@ pub async fn prepare(
             tmux_session: opts.tmux_session.clone(),
         });
     let spawned_tab_id = opts.id.clone();
+    let mut features: Option<LocalAgentFeatures> = None;
+    // The CLI before the fence wrap renames the program.
+    let agent_cli = std::path::Path::new(&opts.cmd).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     // What the root tab's MCP session records as its projects grant: the
     // paths the fence argv bound when fenced, everything when the agent runs
     // unfenced (it already reads everything).
@@ -1248,6 +1274,10 @@ pub async fn prepare(
                 // `Fenced` there); the home is still prepared for symmetry.
                 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 let _ = &home;
+                features = Some(LocalAgentFeatures {
+                    cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
+                    sandbox: crate::services::agent_features::Sandbox::Fenced,
+                });
                 root_projects = match crate::services::agent_fence::take_root_projects_granted(&opts.id) {
                     Some(paths) => crate::services::root_mcp::ProjectsGrant::Paths(paths),
                     None => crate::services::root_mcp::ProjectsGrant::Hidden,
@@ -1260,6 +1290,10 @@ pub async fn prepare(
                 reason: crate::services::agent_fence::HOST_SESSION_REASON,
             } if local_agent => {
                 let home = home_off_thread("Host session home", crate::services::agent_home::prepare_host_home).await?;
+                features = Some(LocalAgentFeatures {
+                    cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
+                    sandbox: crate::services::agent_features::Sandbox::HostSession,
+                });
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -1277,6 +1311,10 @@ pub async fn prepare(
                     Some(home) => home,
                     None => prepare_agent_home(&scope_id, roots, opts.local_model).await?,
                 };
+                features = Some(LocalAgentFeatures {
+                    cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
+                    sandbox: crate::services::agent_features::Sandbox::Unfenced,
+                });
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -1344,6 +1382,7 @@ pub async fn prepare(
         resume_claim,
         fenced_scope,
         host_agent_tab,
+        features,
         spawned_tab_id,
         generation,
         drop_dir,
@@ -1440,7 +1479,7 @@ mod tests {
         };
         PreparedLaunch {
             opts, named: false, interrupted: false, resting: false, drop_dir: None, ai: true, mcp_spawn_guard: None,
-            resume_claim: None, fenced_scope, host_agent_tab: None, spawned_tab_id: tab.into(), generation,
+            resume_claim: None, fenced_scope, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
 

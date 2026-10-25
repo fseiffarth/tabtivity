@@ -67,6 +67,9 @@ pub mod api_meter;
 pub mod api_prices;
 pub mod api_usage;
 pub mod agent_global;
+// What a live agent tab was handed (sandbox, MCP servers, skills, API key),
+// for the tab hover card.
+pub mod agent_features;
 pub mod agent_hint;
 pub mod agent_home;
 // The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).

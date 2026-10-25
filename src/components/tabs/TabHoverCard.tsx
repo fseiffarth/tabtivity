@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import {
   effectiveTabLocation,
   isLocatableKind,
@@ -64,6 +65,19 @@ const VIEWER_LABEL_KEY: Record<InternalViewer, TranslationKey> = {
   bib: "viewerLabel.bib",
   eldeck: "viewerLabel.eldeck",
 };
+
+/** What the backend knows an agent tab was handed (`agent_tab_features`,
+ *  `services::agent_features`); `null` for a tab this process did not spawn. */
+interface AgentTabFeatures {
+  sandbox: "fenced" | "host_session" | "unfenced" | null;
+  appMcp: string[];
+  ownMcp: string[];
+  skills: string[];
+  apiKeys: ("anthropic" | "gemini" | "openai")[];
+}
+
+/** Names past this many collapse into "+N more". */
+const MAX_SHOWN_NAMES = 6;
 
 /** Gap between the tab and the card, and the keep-inside-the-window margin. */
 const GAP = 6;
@@ -180,6 +194,24 @@ export function TabHoverCard({
 
   const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
 
+  // What the agent was handed — sandbox, MCP servers, skills, API key — asked
+  // once per hover; a tab this window's backend did not spawn answers null and
+  // gets no rows.
+  const [features, setFeatures] = useState<AgentTabFeatures | null>(null);
+  useEffect(() => {
+    if (!isAgent) return;
+    let live = true;
+    invoke<AgentTabFeatures | null>("agent_tab_features", { id: ptyId })
+      .then((f) => {
+        // Nothing known, or an answer not shaped like one: no rows.
+        if (live && f && !Array.isArray(f)) setFeatures(f);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [isAgent, ptyId]);
+
   // Muted kind line, enriched with what the tiny tab badges can only hint at:
   // the concrete viewer, where the process runs (remote projects), and which
   // side a viewed file came from. An agent's permission mode is deliberately
@@ -232,6 +264,22 @@ export function TabHoverCard({
   const costInfo = tabCost(scope, tab);
   const cost = costInfo ? describeTabCost(costInfo, t) : null;
 
+  const names = (list: string[]) =>
+    list.length > MAX_SHOWN_NAMES
+      ? `${list.slice(0, MAX_SHOWN_NAMES).join(", ")} ${t("tabHoverCard.moreNames", { count: list.length - MAX_SHOWN_NAMES })}`
+      : list.join(", ");
+  const featureRows: { label: string; value: string }[] = [];
+  if (features?.sandbox) {
+    featureRows.push({ label: t("tabHoverCard.sandboxLabel"), value: t(`tabHoverCard.sandbox.${features.sandbox}`) });
+  }
+  const mcp = [...(features?.appMcp ?? []), ...(features?.ownMcp ?? [])];
+  if (mcp.length) featureRows.push({ label: t("tabHoverCard.mcpLabel"), value: names(mcp) });
+  if (features?.skills?.length) featureRows.push({ label: t("tabHoverCard.skillsLabel"), value: names(features.skills) });
+  if (features?.apiKeys?.length) {
+    const providers = features.apiKeys.map((p) => t(`tabHoverCard.provider.${p}`)).join(", ");
+    featureRows.push({ label: t("tabHoverCard.apiKeyLabel"), value: t("tabHoverCard.apiKeyValue", { providers }) });
+  }
+
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -245,7 +293,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features]);
 
   return createPortal(
     <div
@@ -280,6 +328,15 @@ export function TabHoverCard({
           <span className="tab-popup-meta">{restart}</span>
         </span>
       )}
+      {featureRows.map((row, i) => (
+        <span key={row.label} className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {row.label}
+            {i === 0 && <> <UntestedTag id="tabHoverCard.agentFeatures" /></>}
+          </span>
+          <span className="tab-popup-meta">{row.value}</span>
+        </span>
+      ))}
       {launch.program && (
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">

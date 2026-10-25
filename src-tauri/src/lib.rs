@@ -2285,6 +2285,7 @@ pub fn run() {
             commands::terminal::pty_scrollback,
             commands::terminal::pty_watch,
             commands::terminal::pty_unwatch,
+            commands::terminal::agent_tab_features,
             commands::terminal::local_tmux_kill,
             commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,
