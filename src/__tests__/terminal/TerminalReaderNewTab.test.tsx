@@ -48,7 +48,7 @@ vi.mock("../../stores/settings", () => ({
   resolveTheme: (s: string) => s,
 }));
 vi.mock("../../components/terminal/TerminalReaderView", () => ({
-  TerminalReaderView: () => <div data-testid="reader" />,
+  TerminalReaderView: ({ shown }: { shown?: boolean }) => <div data-testid="reader" hidden={shown === false} />,
 }));
 
 import { TerminalView } from "../../components/terminal/TerminalView";
@@ -71,12 +71,12 @@ describe("TerminalView — a new agent tab follows its CLI's view", () => {
     expect(view.queryByTestId("reader")).not.toBeNull();
   });
 
-  it("opens on its terminal when the CLI's choice is the terminal", async () => {
+  it("keeps Chat hidden on its terminal when the CLI's choice is the terminal", async () => {
     useAgentReaderStore.setState({ byAgent: { claude: false } });
     let view!: ReturnType<typeof render>;
     await act(async () => {
       view = render(<TerminalView id="p:t1" cmd="claude" cwd="/p" visible focused kind="agent" />);
     });
-    expect(view.queryByTestId("reader")).toBeNull();
+    expect((view.getByTestId("reader") as HTMLElement).hidden).toBe(true);
   });
 });

@@ -53,9 +53,9 @@ function sendWheel(term: Terminal, notches: number): void {
   for (let i = 0; i < Math.abs(notches); i++) screen.dispatchEvent(new WheelEvent("wheel", init));
 }
 
-/** The conversation of a Reader shown over this terminal, if one is. */
+/** The selected Chat or Diffs view; a retained hidden draft must not take terminal scrolling. */
 function readerList(term: Terminal): HTMLElement | null {
-  return term.element?.parentElement?.querySelector<HTMLElement>(":scope > .terminal-reader .terminal-reader-list") ?? null;
+  return term.element?.parentElement?.querySelector<HTMLElement>(":scope > .terminal-changes .terminal-changes-list, :scope > .terminal-reader:not([hidden]) .terminal-reader-list") ?? null;
 }
 
 /**

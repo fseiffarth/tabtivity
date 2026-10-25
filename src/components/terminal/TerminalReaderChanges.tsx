@@ -1,13 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { basename, relativePathWithin } from "../../lib/paths";
-import { parseUnifiedDiff } from "../../lib/viewers/diff";
+import { parseUnifiedDiff, type DiffLine } from "../../lib/viewers/diff";
 import { disabledViewers, type FileEntry } from "../../lib/viewers/fileUtils";
-import { CHANGES_MIN_WIDTH, readerRequest } from "../../lib/agents/agentReader";
+import { readerRequest } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
-import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
 import { DiffLineRow } from "../embed/DiffView";
@@ -16,23 +15,39 @@ import { openFileEntry } from "../files/openFileEntry";
 import { openTabInScope } from "../tabs/tabScopeContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
+import { Dropdown } from "../common/Dropdown";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 
 /**
  * The Reader's Changes panel: the files the conversation on screen changed,
  * as the diffs its CLI recorded (`agent_tab_changes`, `services::agent_changes`
  * — Claude's applied edits, Codex's file changes, OpenCode's edit tools),
- * docked beside the chat rather than in it. Newest first; a file row narrows
+ * shown in a dedicated full-width tab. Newest first; a file row narrows
  * the list to that file's changes. Reads while shown, as the chat does, and
  * follows it into an open subagent. Portaled with the Reader over the
  * pane, so the pane's mouse handling leaves it alone (`SIGN_IN_CARD_CLASS`).
  */
 
-/** The panel's width as the custom property its stylesheet (and the chat's
- * right edge beside it, `.terminal-reader.with-changes`) reads: never so wide
- * that the chat keeps less than 320px. */
-export function changesWidthStyle(width: number): CSSProperties {
-  return { "--reader-changes-w": `${Math.round(width)}px` } as CSSProperties;
+/** Pair each contiguous replacement run; keep context and metadata in order. */
+export function splitDiffRows(lines: readonly DiffLine[]): { before?: DiffLine; after?: DiffLine; note?: string }[] {
+  const rows: { before?: DiffLine; after?: DiffLine; note?: string }[] = [];
+  let at = 0;
+  while (at < lines.length) {
+    const line = lines[at];
+    if (line.type === "del" || line.type === "add") {
+      const before: DiffLine[] = [];
+      const after: DiffLine[] = [];
+      while (at < lines.length && (lines[at].type === "del" || lines[at].type === "add")) {
+        const item = lines[at++];
+        (item.type === "del" ? before : after).push(item);
+      }
+      for (let index = 0; index < Math.max(before.length, after.length); index++) rows.push({ before: before[index], after: after[index] });
+    } else {
+      rows.push(line.type === "context" ? { before: line, after: line } : { note: line.text });
+      at++;
+    }
+  }
+  return rows;
 }
 
 
@@ -98,21 +113,22 @@ function changeKeys(list: FileChange[]): string[] {
   });
 }
 
-/** One change: its file, what kind, when, and its diff — folded until
- * clicked, so a change arriving mid-read never unfolds and shoves the list.
- * One that arrived while the panel was shown is marked new until unfolded. */
-const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use24h, onOpenFile, onOpenDiff, onUnfold }: {
+/** One change, with its time and diff. The first existing edit opens on entry;
+ * newly arriving edits stay folded and marked new until opened. */
+const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold }: {
   change: FileChange;
   cardKey: string;
   fresh: boolean;
   base: string | undefined;
   use24h: boolean;
+  split: boolean;
+  initialOpen: boolean;
   onOpenFile: (path: string, newSubwindow: boolean) => void;
   onOpenDiff: (path: string) => void;
   onUnfold: (cardKey: string) => void;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   // Without its final newline, which would parse as one more (empty) row.
   const files = useMemo(() => (open ? parseUnifiedDiff(change.diff.replace(/\n$/u, "")) : []), [open, change.diff]);
   const shown = shownPath(base, change.path);
@@ -174,7 +190,15 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
         <div className="terminal-changes-diff">
           {files.flatMap((file) => file.hunks).map((hunk, hunkIndex) => (
             <div className="diff-hunk" key={hunkIndex}>
-              {hunk.lines.map((line, lineIndex) => <DiffLineRow line={line} key={lineIndex} />)}
+              {split ? <div className="terminal-changes-split">
+                <div className="terminal-changes-split-heading"><span>{t("terminal.changes.before")}</span><span>{t("terminal.changes.after")}</span></div>
+                {splitDiffRows(hunk.lines).map((row, index) => row.note !== undefined
+                  ? <div className="terminal-changes-split-note" key={index}>{row.note}</div>
+                  : <div className="terminal-changes-split-row" key={index}>
+                    <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before?.text}</code></div>
+                    <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after?.text}</code></div>
+                  </div>)}
+              </div> : hunk.lines.map((line, lineIndex) => <DiffLineRow line={line} key={lineIndex} />)}
             </div>
           ))}
           {change.cut && <small className="terminal-changes-note">{t("terminal.changes.cut")}</small>}
@@ -202,7 +226,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   const use24h = useUse24h();
   const [read, setRead] = useState<{ key: string; changes: AgentChanges } | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
-  const width = useAgentReaderStore((state) => state.changesWidth);
+  const [split, setSplit] = useState(true);
   const viewerPrefs = useSettingsStore((state) => state.settings?.viewer_prefs);
   const disabled = useMemo(() => disabledViewers(viewerPrefs), [viewerPrefs]);
   const tabRef = useRef(tab);
@@ -319,42 +343,17 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     );
   };
 
-  /** Drag the panel's left edge: it widens leftwards, the chat gives way. */
-  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const host = e.currentTarget.parentElement?.parentElement;
-    if (!host || e.button !== 0) return;
-    e.preventDefault();
-    const handle = e.currentTarget;
-    handle.setPointerCapture(e.pointerId);
-    const right = host.getBoundingClientRect().right;
-    const widthAt = (x: number) => Math.max(CHANGES_MIN_WIDTH, right - x);
-    const move = (ev: PointerEvent) => useAgentReaderStore.getState().setChangesWidth(widthAt(ev.clientX));
-    const up = (ev: PointerEvent) => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", up);
-      handle.removeEventListener("pointercancel", up);
-      useAgentReaderStore.getState().setChangesWidth(widthAt(ev.clientX), true);
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up);
-    handle.addEventListener("pointercancel", up);
-  };
-
   return (
-    <aside className={`terminal-changes ${SIGN_IN_CARD_CLASS}`} aria-label={t("terminal.changes.title")} style={changesWidthStyle(width)}>
-      <div
-        className="terminal-changes-resize"
-        role="separator"
-        aria-orientation="vertical"
-        title={t("terminal.changes.resize")}
-        onPointerDown={startResize}
-      />
+    <aside className={`terminal-changes terminal-changes-tab ${SIGN_IN_CARD_CLASS}`} aria-label={t("terminal.changes.title")} tabIndex={-1}>
       <header className="terminal-changes-head">
         <strong>{t("terminal.changes.title")}</strong>
         <UntestedTag id="terminal.reader.changes" />
         {list.length > 0 && (
           <small>{t("terminal.changes.summary", { files: files.length, edits: list.length })}</small>
         )}
+        <Dropdown className="terminal-changes-view" value={split ? "split" : "unified"}
+          options={[{ value: "split", label: t("terminal.changes.split") }, { value: "unified", label: t("terminal.changes.unified") }]}
+          onChange={(value) => setSplit(value === "split")} />
         <button type="button" className="terminal-changes-close" onClick={onClose} title={t("terminal.changes.close")} aria-label={t("terminal.changes.close")}>
           ✕
         </button>
@@ -364,7 +363,8 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
       ) : chat && (
         <small className="terminal-changes-scope" title={chatTitle}>{t("terminal.changes.chat", { name: chatTitle ?? "" })}</small>
       )}
-      {files.length > 1 && (
+      <div className="terminal-changes-body">
+      {files.length > 0 && (
         <div className="terminal-changes-files" role="listbox" aria-label={t("terminal.changes.files")}>
           <button type="button" role="option" aria-selected={!filter} className={!filter ? "active" : undefined} onClick={() => setPicked(null)}>
             <span className="terminal-changes-path"><strong>{t("terminal.changes.allFiles")}</strong></span>
@@ -395,7 +395,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
         ) : list.length === 0 ? (
           <div className="terminal-reader-empty">{t("terminal.changes.empty")}</div>
         ) : (
-          cards.map(({ change, key }) => (
+          cards.map(({ change, key }, index) => (
             <ChangeCard
               key={key}
               change={change}
@@ -403,6 +403,8 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
               fresh={!!freshCards?.has(key)}
               base={base}
               use24h={use24h}
+              split={split}
+              initialOpen={index === 0 && !freshCards?.has(key)}
               onOpenFile={openFile}
               onOpenDiff={openDiff}
               onUnfold={unfold}
@@ -412,6 +414,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
         {changes?.available && changes.truncated && (
           <small className="terminal-changes-note">{t("terminal.changes.truncated")}</small>
         )}
+      </div>
       </div>
     </aside>
   );

@@ -58,7 +58,7 @@ describe("the Reader's Changes panel", () => {
     expect(invoke).not.toHaveBeenCalledWith("agent_tab_changes", expect.anything());
   });
 
-  it("lists the conversation's changes beside the chat, newest first, with their diffs", async () => {
+  it("opens a full-width Diffs tab, newest first, with split and unified views", async () => {
     useAgentReaderStore.getState().setChanges("claude", true);
     reader(host);
     const panel = await waitFor(() => {
@@ -69,17 +69,21 @@ describe("the Reader's Changes panel", () => {
     expect(invoke).toHaveBeenCalledWith("agent_tab_changes", expect.objectContaining({
       agent: "claude", projectId: "p", sessionId: "launch-1", tabDir: "/p", subagent: null, limit: null,
     }));
-    // The chat gives way: its right edge moves in by the panel's width.
+    // Chat stays mounted with its draft, while Diffs owns the pane.
     const chat = host.querySelector<HTMLElement>(".terminal-reader");
-    expect(chat?.classList.contains("with-changes")).toBe(true);
-    expect(chat?.style.getPropertyValue("--reader-changes-w")).toBe("520px");
+    expect(chat?.hidden).toBe(true);
+    expect(panel.classList.contains("terminal-changes-tab")).toBe(true);
+    expect(panel.querySelector('[role="separator"]')).toBeNull();
     const cards = [...panel.querySelectorAll<HTMLElement>(".terminal-changes-card")];
     // Newest first, paths shown relative to the tab's folder.
     expect(cards.map((card) => card.querySelector(".terminal-changes-path")?.textContent)).toEqual(["src/a.rs", "docs/b.md", "src/a.rs"]);
     expect(cards[1].querySelector(".terminal-changes-kind")?.textContent).toBe("Created");
-    // Every diff starts folded; what the panel found on opening is not new.
-    expect(panel.querySelectorAll(".terminal-changes-diff").length).toBe(0);
+    // The newest existing change is open; arrivals stay folded.
+    expect(panel.querySelectorAll(".terminal-changes-diff").length).toBe(1);
+    expect(panel.querySelectorAll(".terminal-changes-split-row").length).toBeGreaterThan(0);
     expect(panel.querySelectorAll(".terminal-changes-new").length).toBe(0);
+    fireEvent.click(within(panel).getByRole("button", { name: /^Split view/ }));
+    fireEvent.click(within(panel).getByRole("option", { name: "Unified view" }));
     fireEvent.click(within(cards[2]).getByRole("button", { expanded: false }));
     // The diff, with the old/new line numbers its hunk names.
     const rows = [...cards[2].querySelectorAll<HTMLElement>(".diff-line")];

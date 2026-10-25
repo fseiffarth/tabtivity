@@ -2826,44 +2826,43 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-secondary);
   border-left: none;
 }
-/* The Reader's Changes panel (components/terminal/TerminalReaderChanges):
-   docked at the pane's right, the chat's own right edge moved in by the same
-   width (`--reader-changes-w`, dragged), so neither covers the other; the
-   chat keeps 320px at least. */
-.terminal-reader.with-changes,
-.terminal-pane-with-changes,
-.terminal-changes {
-  --reader-changes-inset: min(var(--reader-changes-w, 520px), calc(100% - 320px));
-}
-.terminal-reader.with-changes { right: var(--reader-changes-inset); }
-/* Terminal mode (`.terminal-pane-with-changes`): the panel over the pane's
-   right edge, which the pane pads by this inset so the fit leaves it free. */
+/* The Diffs tab occupies the same pane as Chat and Terminal. */
 .terminal-changes {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: var(--reader-changes-inset);
+  inset: 0;
   z-index: 4;
   display: flex;
   flex-direction: column;
   min-width: 0;
   color: var(--text-primary);
   background: var(--bg-panel);
-  border-left: 1px solid var(--border-subtle);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
 }
-.terminal-changes-resize {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -3px;
-  width: 6px;
-  z-index: 1;
-  cursor: var(--cur-col-resize, col-resize);
+.terminal-changes-body { display: flex; flex: 1; min-height: 0; }
+.terminal-changes-body > .terminal-changes-files {
+  width: clamp(160px, 22%, 260px);
+  max-height: none;
+  border-bottom: none;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
 }
-.terminal-changes-resize:hover { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.terminal-changes-body > .terminal-changes-list { min-width: 0; }
+.terminal-changes-view { margin-left: auto; }
+.terminal-changes-split { min-width: 500px; }
+.terminal-changes-split-heading, .terminal-changes-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.terminal-changes-split-heading > span { padding: 6px 12px; color: var(--text-secondary); background: var(--bg-subtle); border-bottom: 1px solid var(--border-subtle); }
+.terminal-changes-split-row > div { display: flex; min-width: 0; }
+.terminal-changes-split-row > div:first-child, .terminal-changes-split-heading > span:first-child { border-right: 1px solid var(--border-subtle); }
+.terminal-changes-split-row > div > span { flex: none; width: 42px; padding: 0 8px; text-align: right; color: var(--text-muted); user-select: none; }
+.terminal-changes-split-row code { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.terminal-changes-split-row .add { background: color-mix(in srgb, #3fb950 13%, transparent); }
+.terminal-changes-split-row .del { background: color-mix(in srgb, #f85149 13%, transparent); }
+.terminal-changes-split-note { padding: 4px 12px; color: var(--text-muted); background: var(--bg-subtle); }
+@media (max-width: 600px) {
+  .terminal-changes-body { flex-direction: column; }
+  .terminal-changes-body > .terminal-changes-files { width: auto; max-height: 25%; border-right: none; border-bottom: 1px solid var(--border-subtle); }
+}
 .terminal-changes-head {
   flex: none;
   display: flex;
@@ -3284,17 +3283,45 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   gap: 6px;
   margin-top: 4px;
 }
-/* The chat over the prompt strip's row: the composer's text box sits on
-   that row, centred like the switches, and leaves them their room. */
-.terminal-reader.over-strip {
-  bottom: calc(-1 * var(--prompt-strip-h));
+/* The approved desktop layout: a stable toolbar above the pane, with the
+   whole width below reserved for the selected view and its composer. */
+.prompt-strip.reader-topbar {
+  order: -1;
+  position: relative;
+  z-index: 6;
+  height: auto;
+  min-height: 46px;
+  padding: 7px 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border-top: none;
+  border-bottom: 1px solid var(--border-subtle);
 }
-.terminal-reader.over-strip .terminal-reader-composer {
-  padding-bottom: calc((var(--prompt-strip-h) - 30px) / 2);
-}
-.terminal-reader.over-strip:not(.with-changes) .terminal-reader-composer {
-  padding-right: calc(var(--strip-actions-w, 0px) + 20px);
-}
+.reader-topbar .prompt-strip-actions { flex: 1; min-width: 0; flex-wrap: wrap; margin-left: 0; gap: 6px; }
+.reader-topbar-navigation { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.reader-topbar-actions { display: inline-flex; margin-left: auto; }
+.reader-view-tabs { display: inline-flex; align-items: center; flex: none; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
+.reader-view-tabs > button { padding: 5px 11px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius); background: transparent; cursor: var(--cur-pointer, pointer); }
+.reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--accent); }
+.reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
+.reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
+.reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
+.reader-topbar .terminal-reader-subagent-index { position: relative; padding: 0; border: none; background: none; }
+.reader-topbar .terminal-reader-subagent-list { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, 80vw); margin: 0; padding: 6px; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius); z-index: 2; }
+.reader-toolbar-dropdown .dropdown-trigger { font-size: var(--text-sm); border-color: transparent; background: none; }
+.reader-toolbar-dropdown .dropdown-menu { width: max-content; max-width: min(420px, 80vw); color: var(--text-primary); }
+.reader-toolbar-dropdown .dropdown-menu button { white-space: normal; overflow-wrap: anywhere; }
+.reader-toolbar-error { max-width: 260px; color: var(--danger); font-size: var(--text-xs); }
+.terminal-reader[hidden] { display: none; }
+.terminal-reader-chip-actions { display: inline-flex; align-items: center; gap: 6px; position: relative; }
+.reader-topbar-actions .terminal-reader-chip { border-color: transparent; border-radius: var(--radius); }
+.reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border-color)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel)); }
+.reader-topbar-actions .terminal-reader-commit-menu { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; z-index: 3; }
+.terminal-reader.has-topbar .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
+.terminal-reader.has-topbar .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
+.terminal-reader.has-topbar .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+.terminal-reader.has-topbar .terminal-reader-send { right: 10px; bottom: 10px; }
+.terminal-reader.has-topbar .terminal-reader-mic { right: 42px; bottom: 12px; }
 .terminal-reader-error {
   flex: none;
   padding: 0 14px 8px;
