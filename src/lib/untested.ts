@@ -830,6 +830,7 @@ export const UNTESTED = {
   "tabBar.1": { area: "tabs", what: "TabBar · Duplicate tab" },
   "tabBar.2": { area: "tabs", what: "TabBar · Schedule prompt…" },
   "tabBar.reopenClosed": { area: "tabs", what: "TabBar · tab right-click Reopen closed agent tab, and the + menu's Recently closed group: a closed resumable agent tab comes back in its old place on its resume args (Claude --resume, Codex/Vibe by hook id, others continue-last); a remote tab reattaches its still-running session" },
+  "tabBar.continue": { area: "tabs", what: "TabBar/popout/root-console strip · ▶ Continue pill on an agent tab marked ■ interrupted sends \"continue\" into it without switching tabs; the pill goes once the new turn starts" },
   "tabBar.modeMarks": { area: "tabs", what: "TabBar/popout strip · PLAN and GOAL pills on an agent tab while its own status line reads plan mode or a running /goal", tested: "2026-09-28" },
   "tabColor.menu": { area: "tabs", what: "TabColorPicker · Colour" },
   "tabMark.menu": { area: "tabs", what: "TabBar/popout · tab right-click Important / Urgent: a !/!! glyph on the tab, and the project pill sums the marked tabs (click jumps to the most urgent); kept after a relaunch" },
