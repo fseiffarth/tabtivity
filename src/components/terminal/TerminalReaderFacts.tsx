@@ -15,7 +15,7 @@ import {
 } from "../../lib/agents/agentWorktrees";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { useProjectsStore } from "../../stores/projects";
-import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
+import { agentBranchAt, agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
@@ -369,6 +369,17 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
   const [worktreeSwitching, setWorktreeSwitching] = useState("");
   const [worktreeFailed, setWorktreeFailed] = useState(false);
+  // Codex's status line names no branch: read the one checked out where the
+  // tab runs, so the chip says it instead of the generic word.
+  const statusBranch = status?.branch;
+  const [cwdBranch, setCwdBranch] = useState<string | undefined>();
+  useEffect(() => {
+    setCwdBranch(undefined);
+    if (!projectDir || statusBranch || !tab.cwd) return;
+    let live = true;
+    void agentBranchAt(projectDir, tab.cwd).then((branch) => { if (live) setCwdBranch(branch); });
+    return () => { live = false; };
+  }, [projectDir, statusBranch, tab.cwd]);
   const closeWorktrees = () => {
     setWorktreesOpen(false);
     setWorktreeSwitching("");
@@ -721,7 +732,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             aria-expanded={worktreesOpen}
             title={t("terminal.reader.worktreeSwitchHint")}
           >
-            ⎇ {status?.branch ?? t("terminal.reader.worktreeButton")}
+            ⎇ {statusBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}
             <UntestedTag id="terminal.reader.worktreeSwitch" />
           </button>
         ) : status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}

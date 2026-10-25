@@ -3321,6 +3321,22 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     () => (tab.kind === "agent" ? sessionStatus(liveScreen, agentLabel) : null),
     [tab.kind, liveScreen, agentLabel],
   );
+  /** A status line that names no branch (Codex's): the ⎇ chip reads the one
+   * the tab's worktree has from the desktop instead of its generic word. */
+  const statusBranch = status?.branch;
+  const [cwdBranch, setCwdBranch] = useState<string | undefined>();
+  const movable = tab.worktree_movable === true;
+  const linkedBranch = tab.worktree?.branch;
+  const linkedLabel = tab.worktree?.label;
+  useEffect(() => {
+    setCwdBranch(undefined);
+    if (!movable || statusBranch || linkedBranch || !connected) return;
+    let live = true;
+    getTabWorktrees(tab.id).then((choices) => {
+      if (live) setCwdBranch(choices.worktrees.find((row) => row.id === choices.current)?.branch);
+    }, () => {});
+    return () => { live = false; };
+  }, [tab.id, movable, statusBranch, linkedBranch, linkedLabel, connected]);
   // The mode walk reads the status between two presses, outside React's render.
   useEffect(() => { statusRef.current = status; }, [status]);
   /** Codex draws neither its context nor its limits on screen and has no
@@ -4888,7 +4904,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {/* As on the desktop Reader: the branch moves the agent to another
             worktree of the project, where the move applies. */}
         {tab.worktree_movable
-          ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {status?.branch ?? t("terminal.reader.worktreeButton")}</span></button>
+          ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {statusBranch ?? linkedBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}</span></button>
           : status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
         {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
