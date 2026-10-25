@@ -20,8 +20,9 @@
 //!   committed — the git-style diff in `result.detailedContent`, one section
 //!   per file in `fileEdits` order. A call that failed lists nothing.
 //!
-//! Desktop only: a diff is file content, which never crosses to the phone.
-//! Read for the conversation on screen — the session's, or one subagent's —
+//! A diff is file content: it reaches the phone only through
+//! `mobile_control::chat_changes`, behind the "Project files on the phone"
+//! switch, its paths made checkout-relative. Read for the conversation on screen — the session's, or one subagent's —
 //! resolved the way the Reader resolves it (`agent_transcript`).
 
 use std::fmt::Write as _;
@@ -689,7 +690,7 @@ fn diff_of(value: &Value) -> Option<&str> {
 
 /// A unified diff from its first hunk on: a file header (`---`/`+++`,
 /// `Index:`, `diff --git`) is the panel's to draw.
-fn hunks_only(diff: &str) -> &str {
+pub(crate) fn hunks_only(diff: &str) -> &str {
     if diff.starts_with("@@") {
         return diff;
     }

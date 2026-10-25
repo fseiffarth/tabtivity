@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -10,7 +10,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
@@ -59,9 +59,8 @@ import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
-import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
-import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
+import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
@@ -859,6 +858,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       fitRef.current?.fit();
       flushPending();
       noteFit(built.cols, built.rows);
+      notePtyResize(id);
       invoke("pty_resize", { id, cols: built.cols, rows: built.rows }).catch(() => {});
       if (focusedRef.current) built.focus();
       // The pane may keep growing right after open — the startup fullscreen
@@ -1883,7 +1883,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       resizeTimer = null;
       const size = pendingResize;
       pendingResize = null;
-      if (size) invoke("pty_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
+      if (!size) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
     };
     const queueResize = (cols: number, rows: number) => {
       pendingResize = { cols, rows };
@@ -2287,19 +2289,24 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerAvailable = readerOffered(readerTab);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
-  const readerOn = readerAlways ? readerAvailable : readerPreferred;
-  const changesOn = useReaderChangesOpen(readerAgent);
-  /** The Changes panel over the terminal itself while the Reader is off —
-   * the pane pads its right edge by the panel, so the fit leaves it free. */
-  const terminalChanges = changesOn && readerAvailable && !readerOn && !!readerTab;
-  const changesWidth = useAgentReaderStore((state) => state.changesWidth);
-  /** The prompt strip's switches (`TerminalPromptStrip`): a chat over this
-   * pane reaches down over the strip's row and leaves them this much room. */
-  const [stripActionsWidth, setStripActionsWidth] = useState(0);
-  const stripUnderChat = !!readerTab && readerAvailable && !readerAlways && (paneKind === "agent" || paneKind === "local_agent");
+  const readerTopBar = readerAvailable && !readerAlways;
+  /** This pane's Diffs tab: the pane's own, unlike the Chat/Terminal choice
+   * (per CLI) — a full-pane view must not take over every pane of the CLI,
+   * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
+  const [changesPicked, setChangesPicked] = useState(false);
+  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent);
+  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
+  const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
+  const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
+    setChangesPicked(false);
     useAgentReaderStore.getState().set(readerAgent, on);
     if (!on) setTimeout(() => termRef.current?.focus(), 0);
+  };
+  /** Leave Diffs (or the terminal) for this pane's chat. */
+  const showReaderChat = () => {
+    setChangesPicked(false);
+    if (!readerPreferred) useAgentReaderStore.getState().set(readerAgent, true);
   };
 
   // Take keyboard focus only when this pane is the focused one (and opened);
@@ -2402,10 +2409,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     <>
     <div
       ref={containerRef}
-      className={[terminalChanges && "terminal-pane-with-changes", dropActive && "terminal-drop-active"].filter(Boolean).join(" ") || undefined}
+      className={dropActive ? "terminal-drop-active" : undefined}
       style={{
-        ...(terminalChanges ? changesWidthStyle(changesWidth) : null),
-        ...(stripUnderChat ? { "--strip-actions-w": `${stripActionsWidth}px` } as CSSProperties : null),
         flex: 1,
         minHeight: 0,
         minWidth: 0,
@@ -2416,7 +2421,6 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // on the right (the viewport scrollbar already insets the right edge), so
         // the text margins read as balanced. FitAddon accounts for this padding.
         ...(zoomable ? { paddingLeft: 10, paddingRight: 4 } : null),
-        ...(terminalChanges ? { paddingRight: "var(--reader-changes-inset)" } : null),
         // The ground under xterm's own canvas, which must be the SAME colour the
         // terminal paints — it shows through before the renderer's first frame
         // and in the strip below the last row. So it is read straight off
@@ -2437,31 +2441,25 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
         onReturnFocus={() => {
           // Over the chat the keys go back to its text box, not the terminal under it.
-          const box = readerOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
+          const box = readerOn && !changesOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
           if (box) box.focus();
+          else if (changesOn) host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
           else termRef.current?.focus();
         }}
         chatShown={readerOn}
-        onActionsWidth={setStripActionsWidth}
+        topBar={readerTopBar}
+        navigationSlot={setReaderNavigationSlot}
+        actionSlot={setReaderActionSlot}
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
-          changes: changesOffered(readerAgent) ? { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) } : undefined,
+          changes: changesOffered(readerAgent) ? { open: changesOn, onToggle: () => {
+            if (changesOn) showReaderChat();
+            else setChangesPicked(true);
+          } } : undefined,
           cwd,
         } : undefined}
       />
-    )}
-    {terminalChanges && readerTab && splitId && host && createPortal(
-      <TerminalReaderChanges
-        scope={splitId.scope}
-        tab={readerTab}
-        cwd={cwd}
-        visible={visible}
-        subagent={undefined}
-        subagentTitle={undefined}
-        onClose={() => useAgentReaderStore.getState().setChanges(readerAgent, false)}
-      />,
-      host,
     )}
     {aiOff && (agentPane || assistant) && host && createPortal(
       <div className="terminal-drop-banner terminal-ai-off-banner" role="status">
@@ -2475,7 +2473,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       </div>,
       host,
     )}
-    {readerOn && splitId && host && (
+    {(readerOn || readerTopBar) && splitId && host && (
       <TerminalReaderView
         host={host}
         ptyId={id}
@@ -2483,9 +2481,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         cwd={cwd}
         localOnly={localOnly}
-        visible={visible}
-        focused={focused}
-        overStrip={stripUnderChat}
+        visible={visible && readerOn}
+        focused={focused && readerOn && !changesOn}
+        shown={readerOn}
+        changesOpen={changesOn}
+        onShowChat={showReaderChat}
+        navigationSlot={readerNavigationSlot}
+        actionSlot={readerActionSlot}
       />
     )}
     {signIn && host && (

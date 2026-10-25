@@ -1001,3 +1001,101 @@ describe("Mobile project — favorites, recent files, folder colours, thumbnails
     expect(marking?.querySelector(".markup-submit")).not.toBeNull();
   });
 });
+
+describe("Mobile project — a remote project's files on its host", () => {
+  const HOST_ROOT = {
+    entries: [
+      { token: "h-data", name: "data", kind: "dir", size: 0, modified: 1_770_000_000 },
+      { token: "h-run", name: "run.sh", kind: "text/plain; charset=utf-8", size: 9, modified: 1_770_000_000 },
+      { token: "h-paper", name: "paper.pdf", kind: "application/pdf", size: 90_000, modified: 1_770_000_000 },
+    ],
+    truncated: false,
+    uploads: false,
+  };
+
+  /** A remote project: this computer's mirror (`files`, unless `mirror` is
+   * off) and the host's side (`host_files`); `offline` makes the host's
+   * routes answer as with no connection on the desktop. */
+  function remoteHost({ mirror = true, offline = false } = {}) {
+    return vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/v1/projects/p1/outbox") return new Response(JSON.stringify({ files: [] }), { status: 200 });
+      if (url === "/api/v1/projects/p1/git") return new Response(JSON.stringify({
+        repo: false, worktrees: [], worktrees_total: 0, branches: [], branches_total: 0, remote_branches: [], remote_total: 0,
+      }), { status: 200 });
+      if (url.includes("/files") && url.includes("on=host") && offline) return new Response(JSON.stringify({ error: "host_offline" }), { status: 409 });
+      if (url === "/api/v1/projects/p1/files?on=host") return new Response(JSON.stringify(HOST_ROOT), { status: 200 });
+      if (url === "/api/v1/projects/p1/files/raw?f=h-run&on=host") return new Response("echo hi\n", { status: 200 });
+      if (url === "/api/v1/projects/p1/files/search?q=run&on=host") return new Response(JSON.stringify({
+        hits: [{ ...HOST_ROOT.entries[1], trail: [] }], truncated: false,
+      }), { status: 200 });
+      if (url === "/api/v1/projects/p1/files") return new Response(JSON.stringify(ROOT), { status: 200 });
+      if (url.startsWith("/api/v1/projects/p1/files")) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
+      return new Response(JSON.stringify({
+        project: { id: "p1", label: "Alpha", status: "active", host: "remote" },
+        desktop_available: true,
+        agents: [],
+        tabs: [],
+        files: mirror,
+        host_files: true,
+        folder: mirror,
+      }), { status: 200 });
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("switches between this computer's folder and the host's tree, read-only there, and keeps the side", async () => {
+    const fetch = remoteHost();
+    vi.stubGlobal("fetch", fetch);
+    const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    let library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    const switcher = within(library).getByRole("group", { name: "Which computer's files" });
+    expect(within(switcher).getByRole("button", { name: "This computer" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(within(switcher).getByRole("button", { name: "Remote computer" }));
+    library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open the folder data" });
+    expect(within(library).queryByRole("button", { name: "Open the folder src" })).toBeNull();
+    expect(library.textContent).toContain("Read-only");
+    // Nothing on the host is marked up, and nothing is uploaded to it.
+    fireEvent.click(within(library).getByRole("button", { name: "More for paper.pdf" }));
+    expect(within(screen.getByRole("dialog", { name: "paper.pdf" })).queryByRole("button", { name: "Mark up" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "paper.pdf" })).getByRole("button", { name: "Close" }));
+
+    // Search and files go to the host's side too.
+    fireEvent.change(within(library).getByRole("searchbox"), { target: { value: "run" } });
+    fireEvent.click(await within(library).findByRole("button", { name: "Open run.sh" }));
+    const text = screen.getByRole("dialog", { name: "run.sh" });
+    await waitFor(() => expect(text.querySelector("pre")?.textContent).toBe("echo hi\n"));
+    expect(fetch.mock.calls.some(([url]) => String(url) === "/api/v1/projects/p1/files/raw?f=h-run&on=host")).toBe(true);
+
+    // Opened again, the library is on the side it was put away on.
+    first.unmount();
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder data" });
+    expect(within(library).getByRole("button", { name: "Remote computer" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("opens on the host's side with no switch when there is no mirror yet, and says so when the desktop is not connected", async () => {
+    vi.stubGlobal("fetch", remoteHost({ mirror: false, offline: true }));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    expect(await screen.findByText(/☰ Files shows them on the remote computer/)).toBeTruthy();
+    // No mirror, no Git and no sent files: the drawer would hold Files alone,
+    // so ☰ opens the library itself.
+    fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
+    const library = screen.getByRole("dialog", { name: "Files" });
+    expect(within(library).queryByRole("group", { name: "Which computer's files" })).toBeNull();
+    expect(await within(library).findByText("The desktop is not connected to the remote computer. Connect the project on the desktop, then try again.")).toBeTruthy();
+  });
+});

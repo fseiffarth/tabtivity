@@ -43,7 +43,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindow, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     WindowFromPoint, GA_ROOT, GWL_STYLE, GW_OWNER, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWMINNOACTIVE, WS_MAXIMIZEBOX,
+    WS_THICKFRAME,
 };
 
 pub struct WindowsBackend {
@@ -516,7 +517,13 @@ fn restore_and_raise(hwnd: HWND) {
         // used to park: it un-hides the window while preserving its prior
         // maximized/normal placement. `SW_RESTORE` would also un-maximize, so a
         // maximized project app would lose that state on every switch-back. The
-        // explicit raise below handles bringing it to front.
+        // explicit raise below handles bringing it to front. A window the user
+        // minimized stays minimized (`SW_HIDE` keeps `WS_MINIMIZE`): shown as
+        // its taskbar button, not activated or raised.
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+            return;
+        }
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = BringWindowToTop(hwnd);
         let _ = SetForegroundWindow(hwnd);

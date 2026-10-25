@@ -137,7 +137,7 @@ pub fn probe(roots: &[PathBuf], changed: &[String]) -> ChatUncommitted {
 /// with what a file in it wears: a linked worktree its own name, a box
 /// member's folder (any root after the first) its leaf name, the first
 /// root's own checkout nothing. A remote or vanished root is skipped.
-fn checkouts_of(roots: &[PathBuf]) -> Vec<(String, Option<TabWorktree>)> {
+pub(super) fn checkouts_of(roots: &[PathBuf]) -> Vec<(String, Option<TabWorktree>)> {
     let mut checkouts: Vec<(String, Option<TabWorktree>)> = Vec::new();
     for (index, root) in roots.iter().enumerate() {
         if !root.is_dir() || crate::services::remote::remote_target_for_dir(&root.to_string_lossy()).is_some() {
@@ -163,7 +163,7 @@ fn checkouts_of(roots: &[PathBuf]) -> Vec<(String, Option<TabWorktree>)> {
 /// (a symlinked folder, macOS's `/var`), a deleted file through its deepest
 /// existing ancestor, and compared as spelled when that does not place it.
 /// `None` outside it.
-fn relative_to(checkout: &Path, path: &Path) -> Option<String> {
+pub(super) fn relative_to(checkout: &Path, path: &Path) -> Option<String> {
     fn resolved(path: &Path) -> PathBuf {
         crate::commands::fs::canonical_or_new(path).unwrap_or_else(|_| path.to_path_buf())
     }

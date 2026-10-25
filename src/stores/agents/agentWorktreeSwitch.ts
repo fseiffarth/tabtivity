@@ -42,6 +42,18 @@ export async function agentSwitchChoicesIn(projectDir: string): Promise<GitWorkt
   }
 }
 
+/** The branch checked out where the tab runs (`cwd`), for a CLI whose status
+ * line names none (Codex): the project's worktree list entry for that folder.
+ * Undefined when the list cannot be read or the folder is detached. */
+export async function agentBranchAt(projectDir: string, cwd: string): Promise<string | undefined> {
+  try {
+    const list = (await invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" })) ?? [];
+    return list.find((w) => !w.is_bare && sameDir(w.path, cwd))?.branch || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Move `tab` to `to`, one of `choices` (`agentSwitchChoicesIn`) — the one
  * move both the Reader's ⎇ chip and the phone's run: the label follows the
  * branch (`movedTabLabel`), and a pick of the folder it is in moves nothing. */

@@ -812,6 +812,37 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .focus-menu small { color:#98a0b4; font-size:.8rem; overflow-wrap:anywhere; }
 .focus-menu svg { width:19px; height:19px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .terminal-body { position:relative; min-height:0; overflow:hidden; }
+/* The Diffs view (components/ChatChanges): over the chat or the terminal,
+   the readable stream's ground; its head is the chat strip's. */
+.readable-output.chat-changes { z-index:3; }
+.chat-changes-head { align-items:center; }
+.chat-changes-title { display:grid; flex:1 1 auto; gap:1px; min-width:0; }
+.chat-changes-title strong { font-size:.85rem; }
+.chat-changes-title em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+.chat-changes-title small { color:var(--ink-muted); font-size:.72rem; }
+.chat-changes-head select { flex:0 1 46%; width:auto; padding:6px 30px 6px 9px; font-size:.78rem; background-position:right 10px center; }
+.chat-changes-close { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; background:transparent; }
+.chat-changes-close svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
+.chat-changes-scope { display:block; margin:0 0 8px; color:var(--ink-muted); font-size:.75rem; }
+.chat-changes-list { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.chat-change { min-width:0; border:1px solid #2c3a55; border-radius:10px; background:#151b28; overflow:hidden; }
+.chat-change.fresh { border-color:#6c5ce7; }
+.chat-change-head { display:grid; gap:3px; width:100%; padding:9px 11px; border:0; border-radius:0; background:transparent; color:#dbe4f6; text-align:left; }
+.chat-change-path { display:flex; gap:6px; align-items:baseline; min-width:0; }
+.chat-change-path em { flex:0 0 auto; color:#8fb8ff; font-size:.64rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+.chat-change-path strong { min-width:0; font-size:.82rem; font-weight:600; overflow-wrap:anywhere; }
+.chat-change-head small { color:var(--ink-muted); font-size:.72rem; }
+.chat-change-head small i { color:#a99cf0; font-style:normal; }
+.chat-change-head .add, .chat-diff-line.add span { color:#56d364; }
+.chat-change-head .del, .chat-diff-line.del span { color:#f8817a; }
+.chat-change-diff { display:grid; padding:0 0 6px; border-top:1px solid #262a3a; font:400 .75rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-x:auto; }
+.chat-diff-line { display:flex; min-width:0; }
+.chat-diff-line span { flex:0 0 auto; width:4ch; padding-right:6px; color:#5d6479; text-align:right; -webkit-user-select:none; user-select:none; }
+.chat-diff-line code { flex:1; min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.chat-diff-line.add { background:rgba(63,185,80,.14); }
+.chat-diff-line.del { background:rgba(248,81,73,.14); }
+.chat-diff-line.note { padding:4px 8px; color:#8a91a6; background:#10131b; }
+.chat-change-note { display:block; padding:6px 10px 0; color:var(--ink-muted); font-size:.72rem; }
 /* tmux sizes a window to its widest client, so the phone's emulator is a
    desktop-width screen (see terminal/wideOutput.ts). Terminal view pans across
    it, and across the rows below the fold, on both axes — `touch-action:none`
@@ -1107,6 +1138,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
    back to the whole of it. */
 .readable-pinned-prompt { position:absolute; top:6px; right:14px; z-index:1; display:flex; align-items:baseline; gap:8px; max-width:min(88%, calc(100% - 28px)); padding:6px 12px; border:1px solid #4a3f8a; border-radius:14px 14px 4px 14px; background:#2b2650; color:#e9e4ff; font:400 .82rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; box-shadow:0 4px 14px rgba(0,0,0,.45); }
 .readable-pinned-prompt-text { display:-webkit-box; min-width:0; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:pre-wrap; overflow-wrap:anywhere; }
+.readable-pinned-prompt .transcript-time { flex:0 0 auto; margin:0; align-self:flex-end; color:#a69fd4; }
 .readable-pinned-prompt em { flex:0 0 auto; color:#a99cf0; font-size:.68rem; font-style:normal; }
 .readable-jump { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); padding:8px 14px; border:1px solid #4c5165; border-radius:999px; background:rgba(23,26,36,.94); color:#e7e9f2; font-size:.78rem; box-shadow:0 6px 18px rgba(0,0,0,.35); }
 .terminal-controls { min-height:0; overflow:auto; }
@@ -1364,8 +1396,8 @@ span.files-close { background:transparent; }
 .files-tile { position:relative; display:grid; align-content:start; gap:4px; min-width:0; }
 .files-tile-open { display:grid; gap:3px; min-width:0; padding:0; border:0; background:transparent; color:#d8e2f5; text-align:left; }
 .files-tile-cover { position:relative; display:grid; place-items:center; aspect-ratio:4 / 5; overflow:hidden; border:1px solid #2b3040; border-radius:10px; background:#1e2230; }
-.files-tile-cover .files-icon { display:grid; place-items:center; width:56px; height:56px; border-radius:14px; background:#252a3a; color:#aab2c5; }
-.files-tile-cover .files-icon svg { width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.files-tile-cover .files-icon { display:grid; place-items:center; width:64px; height:64px; border-radius:14px; background:#252a3a; color:#aab2c5; }
+.files-tile-cover .files-icon svg { width:34px; height:34px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-cover .files-icon-dir { background:#1d2a44; color:#8fb8ff; }
 .files-tile-cover .files-icon-image { background:#1d3329; color:#8ad1a6; }
 .files-tile-cover .files-icon-pdf { background:#3a2226; color:#f28b82; }
@@ -1392,8 +1424,20 @@ span.files-close { background:transparent; }
 .files-strip { display:flex; gap:10px; overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:4px; scrollbar-width:none; }
 .files-strip > .files-tile { flex:0 0 96px; }
 .files-stale { opacity:.45; }
+/* A remote project's side switch above the search box: the terminal view
+   switch, as wide as the box, its two sides alike. */
+.files-side-switch { margin:0 4px; }
+.files-side-switch button { flex:1 1 0; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
+/* Upload here: one line under the search box, as wide as it, the arrow in a
+   tinted tile before the label; the add-only note below it is fine print. */
+.files-library .new-tab-file.files-upload { justify-content:flex-start; gap:12px; min-height:56px; margin:0 4px; padding:8px 14px 8px 10px; border-radius:11px; }
+.files-library .files-upload svg { flex:0 0 38px; box-sizing:border-box; width:38px; height:38px; padding:9px; border-radius:10px; background:#1d2a44; color:#8fb8ff; }
+.files-library .files-upload > span { flex:1; gap:1px; }
+.files-library .files-upload strong { font-size:.95rem; }
+.files-library .files-upload small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.files-note { margin:-4px 4px 0; padding:0 2px; font-size:.76rem; }
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
 /* A file's ↗ Share sits beside its row, drawn as the outbox tile's Share link. */
 .files-list li { display:flex; flex-wrap:wrap; align-items:stretch; gap:3px; }

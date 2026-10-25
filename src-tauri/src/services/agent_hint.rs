@@ -469,7 +469,12 @@ mod tests {
                 .stdin(Stdio::piped()).stdout(Stdio::piped());
             if let Some(agent) = agent { cmd.env(crate::app_env!("TAB_AGENT"), agent); }
             let mut child = cmd.spawn().unwrap();
-            child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+            // A script that records nothing never reads its stdin, and may be gone
+            // before the payload is written.
+            match child.stdin.take().unwrap().write_all(payload.as_bytes()) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("{e}"),
+                _ => {}
+            }
             let out = child.wait_with_output().unwrap();
             assert!(out.status.success());
             String::from_utf8(out.stdout).unwrap()

@@ -2253,6 +2253,7 @@ mod tests {
             host: super::super::discovery::ProjectHost::Local,
             folder: false,
             create: super::super::discovery::CreateVerdict::All,
+            primary_host: None,
         };
         let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
         let sink = seen.clone();
@@ -2415,6 +2416,7 @@ mod tests {
             host,
             folder: true,
             create,
+            primary_host: None,
         }
     }
 

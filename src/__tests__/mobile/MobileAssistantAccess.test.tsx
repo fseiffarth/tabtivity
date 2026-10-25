@@ -248,7 +248,29 @@ describe("Mobile bridge — the chat assistant", () => {
       vi.mocked(listen).mockReset();
       await mount(open, [{ ...CHAT, assistant: { cli: "opencode_local", model: "qwen3:8b" } }]);
       expect(await ask({ type: "assistant_models", request_id: "l2", ...target })).toEqual({
-        status: "assistant_models", models: ["qwen3:8b"], current: "qwen3:8b",
+        status: "assistant_models", models: ["qwen3:8b"], rows: [{ id: "qwen3:8b", label: "qwen3:8b" }], current: "qwen3:8b",
+      });
+    });
+
+    it("sends Claude's own picker rows, the default ticked for a chat with no model", async () => {
+      await mount(open, [{ ...CHAT, assistant: { cli: "claude" } }]);
+      const fallback = vi.mocked(invoke).getMockImplementation();
+      vi.mocked(invoke).mockImplementation((command, args) => command === "assistant_claude_models"
+        ? Promise.resolve([[
+          "   Select model",
+          "",
+          "     1.  Default (recommended)  Sonnet 5.5 \u00b7 Efficient for routine tasks",
+          "   \u276f 2.  Opus 5.5 \u2714             For complex work and everyday tasks",
+        ]])
+        : fallback!(command, args));
+      expect(await ask({ type: "assistant_models", request_id: "l", ...target })).toEqual({
+        status: "assistant_models",
+        models: ["default", "claude-opus-5-5"],
+        rows: [
+          { id: "default", label: "Default (recommended)", description: "Sonnet 5.5 \u00b7 Efficient for routine tasks" },
+          { id: "claude-opus-5-5", label: "Opus 5.5", description: "For complex work and everyday tasks" },
+        ],
+        current: "default",
       });
     });
 

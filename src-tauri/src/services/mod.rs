@@ -67,10 +67,17 @@ pub mod api_meter;
 pub mod api_prices;
 pub mod api_usage;
 pub mod agent_global;
+// What a live agent tab was handed (sandbox, MCP servers, skills, API key),
+// for the tab hover card.
+pub mod agent_features;
 pub mod agent_hint;
 pub mod agent_home;
 // The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
 pub mod assistant;
+// Claude's own `/model` list for the assistant's chats, read by a short-lived probe.
+pub mod assistant_model_probe;
+// The rows each CLI's own model picker last drew, per installed build.
+pub mod model_rows;
 // Where each CLI keeps its conversations in an agent home, for export/import.
 pub mod agent_history;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.

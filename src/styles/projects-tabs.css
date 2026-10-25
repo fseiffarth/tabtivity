@@ -1956,6 +1956,28 @@ button.tab-todo-link {
 }
 .tab-mode-mark.plan { color: var(--accent-secondary); }
 .tab-mode-mark.goal { color: var(--accent); }
+/* The ▶ Continue pill on an interrupted agent tab (`TabContinueButton`): the
+   mode pills' shape, in the interrupted ring's colour, and a button. */
+.tab-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  height: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--status-interrupted);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  cursor: var(--cur-pointer, pointer);
+}
+.tab-continue:hover { background: color-mix(in srgb, currentColor 28%, transparent); }
+.tab-continue:disabled { cursor: var(--cur-default, default); opacity: 0.55; }
+.tab-continue svg { width: 7px; height: 7px; }
 .tab-source { cursor: var(--cur-default, default); }
 .tab-locality.local,
 .tab-source.local { color: var(--success); }

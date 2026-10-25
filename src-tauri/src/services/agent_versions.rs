@@ -425,7 +425,8 @@ fn modified_nanos(metadata: &std::fs::Metadata) -> Option<u128> {
 
 /// Follow the launcher and also watch its link: installers can replace either
 /// the binary itself or a symlink that selects a different release.
-fn version_source(path: &Path) -> Option<VersionSource> {
+/// `services::model_rows` keys its rows by it too.
+pub fn version_source(path: &Path) -> Option<VersionSource> {
     let target = std::fs::metadata(path).ok()?;
     let link = std::fs::symlink_metadata(path).ok()?;
     Some(VersionSource {

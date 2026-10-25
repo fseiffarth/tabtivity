@@ -25,7 +25,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { ASSISTANT_SCOPE, assistantModelChoices, type AssistantOptions } from "../../lib/assistant";
+import { ASSISTANT_DEFAULT_MODEL, ASSISTANT_SCOPE, assistantModelRows, claudeModelId, claudeModelRows, type AssistantOptions } from "../../lib/assistant";
 import { _resetSyncBaseForTest, useTabsStore } from "../../stores/tabs";
 import { assistantTabs, ensureAssistantScopeHydrated, startAssistantChat, switchAssistantModel } from "../../stores/assistantScope";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
@@ -111,6 +111,17 @@ describe("switchAssistantModel", () => {
     expect(assistantTabs()[0].assistant).toEqual({ cli: "claude_local", model: "gemma3:4b" });
   });
 
+  it("switches a Claude chat to its default by dropping the model", async () => {
+    const tab = await hydrate(chatRecord({ cli: "claude", model: "claude-opus-5-5" }, "Claude"));
+    expect(await switchTo(tab.key, ASSISTANT_DEFAULT_MODEL)).toBe(true);
+    expect(assistantTabs()[0].assistant).toEqual({ cli: "claude" });
+  });
+
+  it("does nothing for the default on a chat that runs it", async () => {
+    const tab = await hydrate(chatRecord({ cli: "claude" }, "Claude"));
+    expect(await switchAssistantModel(tab.key, ASSISTANT_DEFAULT_MODEL)).toBe(false);
+  });
+
   it("does nothing for the model the chat already runs", async () => {
     const tab = await hydrate(chatRecord({ cli: "claude", model: "opus" }, "Claude"));
     expect(await switchAssistantModel(tab.key, "opus")).toBe(false);
@@ -119,7 +130,79 @@ describe("switchAssistantModel", () => {
   });
 });
 
-describe("assistantModelChoices", () => {
+// Claude Code 2.1.310's `/model` in a 160x50 tmux pane, as the probe captures
+// it: the first screen (the highlight on the home's default, ten rows drawn)
+// and the one after the walk reached the last row.
+const PICKER_HEAD = [
+  "   Select model",
+  "   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.",
+  "",
+];
+const PICKER_FOOT = [
+  "",
+  "   \u25cf High effort \u2190/\u2192 to adjust",
+  "",
+  "   Enter to set as default \u00b7 s to use this session only \u00b7 Esc to cancel",
+];
+const FIRST_SCREEN = [
+  ...PICKER_HEAD,
+  "     1.  Default (recommended)  Sonnet 5.5 \u00b7 Efficient for routine tasks",
+  "     2.  Opus 5.5               For complex work and everyday tasks",
+  "     3.  Fable 5.1              For your toughest challenges",
+  "   \u276f 4.  Sonnet 5.5 \u2714           Most efficient for simpler tasks",
+  "     5.  Haiku 5.5              Fastest for quick answers",
+  "     6.  Haiku 4.5              Fastest for quick answers",
+  "     7.  Sonnet 5               Efficient for routine tasks",
+  "     8.  Opus 5                 Best for everyday, complex tasks",
+  "     9.  Fable 5                Most capable for your hardest and longest-running tasks",
+  "   \u2193 10. Opus 4.8               Best for everyday, complex tasks",
+  "      \u2026 +3 models",
+  ...PICKER_FOOT,
+];
+const LAST_SCREEN = [
+  ...PICKER_HEAD,
+  "   \u2191 4.  Sonnet 5.5 \u2714           Most efficient for simpler tasks",
+  "     5.  Haiku 5.5              Fastest for quick answers",
+  "     6.  Haiku 4.5              Fastest for quick answers",
+  "     7.  Sonnet 5               Efficient for routine tasks",
+  "     8.  Opus 5                 Best for everyday, complex tasks",
+  "     9.  Fable 5                Most capable for your hardest and longest-running tasks",
+  "     10. Opus 4.8               Best for everyday, complex tasks",
+  "     11. Opus 4.7               Best for everyday, complex tasks",
+  "     12. Opus 4.6               Best for everyday, complex tasks",
+  "   \u276f 13. Sonnet 4.6             Efficient for routine tasks",
+  ...PICKER_FOOT,
+];
+
+describe("claudeModelRows", () => {
+  it("pieces Claude's own rows together from the walked screens, in its words", () => {
+    const rows = claudeModelRows([FIRST_SCREEN, LAST_SCREEN]);
+    expect(rows.map((row) => row.label)).toEqual([
+      "Default (recommended)", "Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Haiku 4.5",
+      "Sonnet 5", "Opus 5", "Fable 5", "Opus 4.8", "Opus 4.7", "Opus 4.6", "Sonnet 4.6",
+    ]);
+    expect(rows[0]).toEqual({ id: ASSISTANT_DEFAULT_MODEL, label: "Default (recommended)", description: "Sonnet 5.5 \u00b7 Efficient for routine tasks" });
+    // The home's ✔ is not the chat's.
+    expect(rows[3]).toEqual({ id: "claude-sonnet-5-5", label: "Sonnet 5.5", description: "Most efficient for simpler tasks" });
+    expect(rows.find((row) => row.label === "Haiku 4.5")?.id).toBe("claude-haiku-4-5");
+    expect(rows.find((row) => row.label === "Opus 5")?.id).toBe("claude-opus-5");
+  });
+
+  it("reads nothing off a screen with no picker", () => {
+    expect(claudeModelRows([["\u276f Try \"fix typecheck errors\"", "  ? for shortcuts"]])).toEqual([]);
+    expect(claudeModelRows([])).toEqual([]);
+  });
+
+  it("names a row by the model a chat can be launched with", () => {
+    expect(claudeModelId("Default (recommended)")).toBe(ASSISTANT_DEFAULT_MODEL);
+    expect(claudeModelId("Opus 5.5 \u2714")).toBe("claude-opus-5-5");
+    // Older pickers name the family and put the version in the note.
+    expect(claudeModelId("Fable")).toBe("fable");
+    expect(claudeModelId("Opus (1M context)")).toBeNull();
+  });
+});
+
+describe("assistantModelRows", () => {
   const options = {
     clis: [],
     localModels: ["qwen3:8b"],
@@ -130,11 +213,25 @@ describe("assistantModelChoices", () => {
   } as AssistantOptions;
   const cli = (id: string, local: boolean, models?: string[]) =>
     ({ id, label: id, local, installed: true, signedIn: local ? null : true, ready: true, models });
+  const ids = async (from: Promise<{ id: string }[]>) => (await from).map((row) => row.id);
 
-  it("lists Ollama models for a local CLI, Claude's aliases, and Codex's catalog", () => {
-    expect(assistantModelChoices(cli("opencode_local", true), options)).toEqual(["qwen3:8b"]);
-    expect(assistantModelChoices(cli("claude", false), options)).toContain("opus");
-    expect(assistantModelChoices(cli("codex", false, ["gpt-a"]), options)).toEqual(["gpt-a"]);
-    expect(assistantModelChoices(cli("codex", false), options)).toEqual([]);
+  it("lists Ollama models for a local CLI and Codex's catalog, by name", async () => {
+    expect(await assistantModelRows(cli("opencode_local", true), options)).toEqual([{ id: "qwen3:8b", label: "qwen3:8b" }]);
+    expect(await ids(assistantModelRows(cli("codex", false, ["gpt-a"]), options))).toEqual(["gpt-a"]);
+    expect(await ids(assistantModelRows(cli("codex", false), options))).toEqual([]);
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("assistant_claude_models");
+  });
+
+  it("lists Claude's own picker rows from the probe", async () => {
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.resolve([FIRST_SCREEN, LAST_SCREEN]));
+    const rows = await assistantModelRows(cli("claude", false), options);
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("assistant_claude_models");
+    expect(rows).toHaveLength(13);
+    expect(rows[1]).toEqual({ id: "claude-opus-5-5", label: "Opus 5.5", description: "For complex work and everyday tasks" });
+  });
+
+  it("falls back to Claude's aliases when the probe fails", async () => {
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.reject(new Error("model_probe_timeout")));
+    expect(await ids(assistantModelRows(cli("claude", false), options))).toContain("opus");
   });
 });

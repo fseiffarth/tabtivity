@@ -9,7 +9,8 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DRAFT_SAVE_DELAY, readDraft, writeDraft } from "../../../mobile-web/src/drafts";
+import { DRAFT_SAVE_DELAY, readDraft, readDrafts, writeDraft } from "../../../mobile-web/src/drafts";
+import { draftPreview } from "../../../mobile-web/src/agentPrompts";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -43,7 +44,8 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
-import { BRAND, storageKey } from "../../lib/brand";
+import { Project } from "../../../mobile-web/src/screens/Project";
+import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 const KEY = storageKey("mobile.drafts");
@@ -98,6 +100,19 @@ describe(`${BRAND.display} Mobile composer drafts — the store`, () => {
     }
     // A sound entry beside a broken one still reads.
     expect(readDraft("tab-b", memoryStorage({ [KEY]: '{"tab-a":"bare","tab-b":{"text":"kept","at":9}}' }))).toBe("kept");
+  });
+
+  it("hands the tab lists every draft at once, and previews one without its attached files", () => {
+    const storage = memoryStorage();
+    const file = `@${NAMES.inboxDir}/shot.png`;
+    writeDraft("tab-a", "half a thought", storage, 1_000);
+    writeDraft("tab-b", `look at this ${file} `, storage, 2_000);
+    expect(readDrafts(storage)).toEqual({ "tab-a": "half a thought", "tab-b": `look at this ${file} ` });
+    expect(draftPreview(readDrafts(storage)["tab-b"])).toBe("look at this");
+    // Nothing but a file still says something; nothing at all says nothing.
+    expect(draftPreview(`${file} `)).toBe(file);
+    expect(draftPreview(undefined)).toBe("");
+    expect(draftPreview("  ")).toBe("");
   });
 
   it("survives a blocked store the way the view preferences do", () => {
@@ -155,5 +170,49 @@ describe(`${BRAND.display} Mobile composer drafts — the composer`, () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe(`${BRAND.display} Mobile composer drafts — the project's tab list`, () => {
+  const tab = (id: string, label: string, extra: object = {}) => ({ id, label, kind: "agent", available: true, viewer_busy: false, ...extra });
+  const detail = {
+    project: { id: "p1", label: "Alpha", status: "active" },
+    desktop_available: true,
+    tabs: [
+      tab("t-busy", "Busy", { agent_status: "working" }),
+      tab("t-recent", "Recent", { done_at: 2_000, prompts: [{ text: "the last thing asked", at: "2026-10-25T08:00:00Z" }] }),
+      tab("t-drafted", "Drafted"),
+      tab("t-asked", "Asked", { prompts: [{ text: "an older question", at: "2026-10-25T07:00:00Z" }] }),
+    ],
+    agents: [],
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(detail), { status: 200 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("lifts a tab holding an unsent message under the working ones and shows it like a prompt, with no time", async () => {
+    writeDraft("t-drafted", "the reply I have not sent");
+    writeDraft("t-asked", "and a follow-up");
+    render(<Project id="p1" back={() => {}} terminal={vi.fn()} />);
+    const draft = await screen.findByText("the reply I have not sent");
+    const titles = [...document.querySelectorAll(".tab-card-title strong")].map((node) => node.textContent);
+    // Among the drafted, the newest reading first: "Asked" has its prompt's time, "Drafted" none.
+    expect(titles).toEqual(["Busy", "Asked", "Drafted", "Recent"]);
+    const row = draft.closest(".tab-card-prompt");
+    expect(row?.classList.contains("draft")).toBe(true);
+    expect(row?.querySelector(".tab-card-prompt-when")).toBeNull();
+    // It stands in for "nothing read yet" on a card with no prompts…
+    expect(screen.queryAllByText("Nothing read from this session's transcript yet.")).toHaveLength(1);
+    // …and leads the sent ones on a card that has some, which keep their time.
+    const asked = screen.getByText("an older question").closest(".tab-card-prompt");
+    expect(asked?.classList.contains("latest")).toBe(false);
+    expect(asked?.querySelector(".tab-card-prompt-when")).not.toBeNull();
+    expect(screen.getByText("and a follow-up").closest(".tab-card-prompt")?.classList.contains("draft")).toBe(true);
   });
 });

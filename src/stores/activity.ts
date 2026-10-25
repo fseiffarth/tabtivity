@@ -56,6 +56,16 @@ const WORK_ONSET_MS = 1500;
 /// typing a long prompt never lights "working"; still counted as paint.
 const ECHO_MS = 150;
 
+/// An agent TUI repaints its whole screen when its pane is resized — a tab
+/// opened on the desktop, put on a phone's screen (tmux resizes the window to
+/// the new client), a split dragged — and a full-screen one (OpenCode) keeps
+/// painting text past `WORK_ONSET_MS` while it settles. With no hooks to say
+/// otherwise, that repaint read as a turn: "took 1 s · finished just now" on a
+/// tab idle since yesterday. Text that would START a burst this soon after a
+/// look or a resize is paint, not work — unless the user typed since. A burst
+/// already running (an agent at work when the tab was opened) is untouched.
+const REPAINT_SETTLE_MS = 3000;
+
 /// A hook verdict of "working" is trusted only while the tab is painting at
 /// all. An agent whose turn was interrupted fires no Stop, and a Claude that
 /// idles goes fully silent, so this much total silence under a "working"
@@ -296,6 +306,9 @@ const backgroundAtByPty: Record<string, number> = {};
 /// answer a question — so it stood until the user typed. Agents with no hooks
 /// never raise this, and keep the screen check.
 const awaitingHookByPty: Record<string, number> = {};
+/// When the tab was last opened or resized — what makes its TUI repaint (see
+/// `REPAINT_SETTLE_MS`).
+const repaintAtByPty: Record<string, number> = {};
 
 /** When the tab's current or last turn began, if this session saw one begin. */
 export function agentTurnStartedAt(ptyId: string): number | undefined {
@@ -357,6 +370,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   turnStartByPty,
   backgroundAtByPty,
   awaitingHookByPty,
+  repaintAtByPty,
 ];
 
 /// Braille pattern cells (U+2800–U+28FF), which an agent TUI paints as
@@ -449,10 +463,15 @@ export function notePtyOutput(ptyId: string, data = "") {
     return;
   }
   const prev = lastOutputByPty[ptyId];
+  const fresh = prev === undefined || now - prev >= TEXT_GAP_MS;
+  // The repaint of an opened or resized tab. Its tail is left alone too: the
+  // last burst's still holds whatever the screen was showing.
+  const repaint = repaintAtByPty[ptyId];
+  if (data && fresh && repaint !== undefined && now - repaint < REPAINT_SETTLE_MS && (input ?? 0) < repaint) return;
   // Start of a fresh burst after quiet (or the very first text): reset the
   // onset. Text within the gap keeps the existing onset, so a continuous
   // stream ages past WORK_ONSET_MS and flips to "working".
-  if (prev === undefined || now - prev >= TEXT_GAP_MS) {
+  if (fresh) {
     onsetByPty[ptyId] = now;
     // A new burst redraws the screen, so the last one's tail is stale. Dropping
     // it is what stops an ALREADY-ANSWERED prompt from being matched again as a
@@ -722,6 +741,16 @@ export function noteTurnCutOff(ptyId: string) {
   if (!splitPtyId(ptyId)) return;
   interruptedByPty[ptyId] = Date.now();
   useActivityStore.getState().recompute();
+}
+
+/** Record that the tab's pane was resized: its agent repaints the screen, which
+ *  is not work (see `REPAINT_SETTLE_MS`). */
+export function notePtyResize(ptyId: string) {
+  if (isDetachedWindow()) {
+    void emit(DETACHED_ACTIVITY_EVENT, { ptyId, kind: "resize" });
+    return;
+  }
+  repaintAtByPty[ptyId] = Date.now();
 }
 
 /** True when a keystroke is the user cutting the agent off: a bare Escape (the
@@ -1252,6 +1281,8 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
     }
     seenAtByPty[ptyId] = Date.now();
     readAtByPty[ptyId] = seenAtByPty[ptyId];
+    // Opening it resizes its pane (the phone's tmux client too): a repaint.
+    repaintAtByPty[ptyId] = seenAtByPty[ptyId];
     const kind = get().attentionByTab[ptyId];
     if (!kind) return;
     // Looking at a tab marks its output read — but it does not ANSWER a prompt,

@@ -1,4 +1,5 @@
 import type { TabPrompt, TabRow } from "./api";
+import { withoutInboxReferences } from "./terminal/inboxRefs";
 import { isOpenCodeTab } from "./terminal/openCodeMini";
 
 /**
@@ -26,6 +27,17 @@ export function promptLines(tab: TabRow): TabPrompt[] {
 /** The last prompt a session was given, or nothing when none was readable. */
 export function lastPrompt(tab: TabRow): TabPrompt | undefined {
   return tab.prompts?.[tab.prompts.length - 1];
+}
+
+/**
+ * A draft as a tab list shows it: the typed text, without the `@` references
+ * of the files attached to it (the composer shows those as chips, not words).
+ * A draft that is nothing but files still says so, by its references; one
+ * that is only whitespace is no draft.
+ */
+export function draftPreview(stored: string | undefined): string {
+  if (!stored) return "";
+  return withoutInboxReferences(stored) || stored.trim();
 }
 
 /** The instant (ms epoch) of the last prompt a session was given, when the

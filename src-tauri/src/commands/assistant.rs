@@ -195,6 +195,21 @@ pub async fn assistant_options() -> Result<AssistantOptions, String> {
     .map_err(|_| "assistant_failed".to_string())
 }
 
+// ── assistant_claude_models ─────────────────────────────────────────────────
+
+/// `assistant_claude_models()` → the screens (a string per row) Claude's own
+/// `/model` picker drew in a short-lived probe of the assistant's home as its
+/// highlight walked down (`services::assistant_model_probe`), for the renderer
+/// to read the way it reads the picker in any other Claude tab. Cached for
+/// hours; the first call takes several seconds.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn assistant_claude_models() -> Result<Vec<Vec<String>>, String> {
+    gate(enabled_now())?;
+    app_core::rt::spawn_blocking(crate::services::assistant_model_probe::claude_model_screens)
+        .await
+        .map_err(|_| "assistant_failed".to_string())?
+}
+
 // ── assistant_new_chat ──────────────────────────────────────────────────────
 
 /// The chat the command made.

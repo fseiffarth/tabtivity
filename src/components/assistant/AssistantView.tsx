@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isAiOffRefusal } from "../../lib/aiSwitch";
-import { ASSISTANT_SCOPE, assistantModelChoices, assistantNewChat } from "../../lib/assistant";
+import { ASSISTANT_DEFAULT_MODEL, ASSISTANT_SCOPE, assistantModelRows, assistantNewChat, type AssistantModelRow } from "../../lib/assistant";
 import { useT } from "../../lib/i18n";
 import { useAssistantViewStore } from "../../stores/assistantView";
 import {
@@ -141,7 +141,21 @@ export function AssistantView() {
     ?? (chat?.assistant ? { cli: chat.assistant.cli, model: chat.assistant.model ?? null } : null)
     ?? defaultLaunch();
   const currentCli = current ? options?.clis.find((c) => c.id === current.cli) : undefined;
-  const modelChoices = currentCli && options ? assistantModelChoices(currentCli, options) : [];
+  // Read again only when what they come from changes, not at every options poll.
+  const [modelChoices, setModelChoices] = useState<AssistantModelRow[]>([]);
+  const rowsFrom = useRef({ currentCli, options });
+  rowsFrom.current = { currentCli, options };
+  const rowsKey = currentCli && options
+    ? JSON.stringify([currentCli.id, currentCli.local ? options.localModels : currentCli.models ?? []])
+    : "";
+  useEffect(() => {
+    let live = true;
+    setModelChoices([]);
+    const { currentCli: cli, options: from } = rowsFrom.current;
+    if (cli && from) void assistantModelRows(cli, from).then((rows) => { if (live) setModelChoices(rows); });
+    return () => { live = false; };
+  }, [rowsKey]);
+  const shownModel = current?.model ?? (current?.cli === "claude" ? ASSISTANT_DEFAULT_MODEL : "");
 
   const pick = (next: Launch) => {
     setError(null);
@@ -165,7 +179,7 @@ export function AssistantView() {
       void switchAssistantModel(chat.key, model).finally(() => setSwitching(false));
       return;
     }
-    pick({ cli: current.cli, model });
+    pick({ cli: current.cli, model: model === ASSISTANT_DEFAULT_MODEL && !currentCli?.local ? null : model });
   };
   const relaunch = () => {
     if (!chat?.assistant || busy) return;
@@ -219,10 +233,10 @@ export function AssistantView() {
         {currentCli && (currentCli.local || modelChoices.length > 0) && (
           <Dropdown
             className="assistant-head-pick"
-            value={current?.model ?? ""}
+            value={shownModel}
             ariaLabel={t(currentCli.local ? "assistant.newChat.model" : "assistant.newChat.cloudModel")}
             title={t(currentCli.local ? "assistant.newChat.model" : "assistant.newChat.cloudModel")}
-            options={modelChoices.map((m) => ({ value: m, label: m }))}
+            options={modelChoices.map((row) => ({ value: row.id, label: row.label }))}
             placeholder={t(currentCli.local ? "assistant.newChat.noModel" : "assistant.newChat.defaultModel")}
             disabled={modelChoices.length === 0 || busy || switching}
             onChange={pickModel}

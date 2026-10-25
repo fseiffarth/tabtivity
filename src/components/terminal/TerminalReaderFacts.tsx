@@ -15,7 +15,7 @@ import {
 } from "../../lib/agents/agentWorktrees";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { useProjectsStore } from "../../stores/projects";
-import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
+import { agentBranchAt, agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
@@ -36,7 +36,7 @@ import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./Termina
 import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
-import { assistantModelChoices, assistantOptions } from "../../lib/assistant";
+import { assistantCurrentModel, assistantModelRows, assistantOptions, type AssistantModelRow } from "../../lib/assistant";
 import { switchAssistantModel } from "../../stores/assistantScope";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
@@ -311,7 +311,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const assistantLaunch = tab.assistant;
   const [assistantOpen, setAssistantOpen] = useState(false);
   /** `null` while the choices are read. */
-  const [assistantModels, setAssistantModels] = useState<string[] | null>(null);
+  const [assistantModels, setAssistantModels] = useState<AssistantModelRow[] | null>(null);
+  const assistantCurrent = assistantLaunch ? assistantCurrentModel(assistantLaunch) : undefined;
   const [assistantSwitching, setAssistantSwitching] = useState("");
   const [assistantFailed, setAssistantFailed] = useState(false);
   const closeAssistantModels = () => {
@@ -331,17 +332,16 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setAssistantFailed(false);
     setAssistantModels(null);
     setAssistantOpen(true);
-    void assistantOptions().then(
-      (options) => {
+    void assistantOptions()
+      .then((options) => {
         const cli = options.clis.find((c) => c.id === assistantLaunch.cli);
-        setAssistantModels(cli ? assistantModelChoices(cli, options) : []);
-      },
-      () => setAssistantModels([]),
-    );
+        return cli ? assistantModelRows(cli, options) : [];
+      })
+      .then(setAssistantModels, () => setAssistantModels([]));
   };
   const chooseAssistantModel = (model: string) => {
     if (assistantSwitching) return;
-    if (model === assistantLaunch?.model) {
+    if (model === assistantCurrent) {
       closeAssistantModels();
       return;
     }
@@ -369,6 +369,17 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
   const [worktreeSwitching, setWorktreeSwitching] = useState("");
   const [worktreeFailed, setWorktreeFailed] = useState(false);
+  // Codex's status line names no branch: read the one checked out where the
+  // tab runs, so the chip says it instead of the generic word.
+  const statusBranch = status?.branch;
+  const [cwdBranch, setCwdBranch] = useState<string | undefined>();
+  useEffect(() => {
+    setCwdBranch(undefined);
+    if (!projectDir || statusBranch || !tab.cwd) return;
+    let live = true;
+    void agentBranchAt(projectDir, tab.cwd).then((branch) => { if (live) setCwdBranch(branch); });
+    return () => { live = false; };
+  }, [projectDir, statusBranch, tab.cwd]);
   const closeWorktrees = () => {
     setWorktreesOpen(false);
     setWorktreeSwitching("");
@@ -470,7 +481,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
-                  className={picker && option.index === picker.current ? "terminal-reader-option current" : "terminal-reader-option"}
+                  className={!session.remembered && picker && option.index === picker.current ? "terminal-reader-option current" : "terminal-reader-option"}
                   disabled={busy}
                   onClick={() => choose(option.index)}
                 >
@@ -489,6 +500,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           {listing
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
+          {session.remembered && <small className="terminal-reader-question-more">{t("terminal.reader.modelRemembered")} <UntestedTag id="agents.modelRows.remembered" /></small>}
         </div>
       )}
       {assistantOpen && assistantLaunch && (
@@ -510,15 +522,18 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <div className="terminal-reader-options">
               {assistantModels.map((model, index) => (
                 <button
-                  key={model}
+                  key={model.id}
                   type="button"
-                  className={model === assistantLaunch.model ? "terminal-reader-option current" : "terminal-reader-option"}
+                  className={model.id === assistantCurrent ? "terminal-reader-option current" : "terminal-reader-option"}
                   disabled={!!assistantSwitching}
-                  aria-busy={model === assistantSwitching}
-                  onClick={() => chooseAssistantModel(model)}
+                  aria-busy={model.id === assistantSwitching}
+                  onClick={() => chooseAssistantModel(model.id)}
                 >
-                  <span className="terminal-reader-option-number">{model === assistantSwitching ? "…" : index + 1}</span>
-                  <span className="terminal-reader-option-label"><span>{model}</span></span>
+                  <span className="terminal-reader-option-number">{model.id === assistantSwitching ? "…" : index + 1}</span>
+                  <span className="terminal-reader-option-label">
+                    <span>{model.label}</span>
+                    {model.description && <small>{model.description}</small>}
+                  </span>
                 </button>
               ))}
             </div>
@@ -717,7 +732,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             aria-expanded={worktreesOpen}
             title={t("terminal.reader.worktreeSwitchHint")}
           >
-            ⎇ {status?.branch ?? t("terminal.reader.worktreeButton")}
+            ⎇ {statusBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}
             <UntestedTag id="terminal.reader.worktreeSwitch" />
           </button>
         ) : status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}

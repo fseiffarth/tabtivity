@@ -14,21 +14,9 @@ import { TerminalReaderChats } from "./TerminalReaderChats";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 
-/**
- * The strip docked under an agent pane's terminal: the last prompt of the
- * tab, one line, with ‹ › to step back through the earlier ones and a pop-up
- * over the terminal's bottom for the whole text and the list; the pane's
- * switches (Resume, Diffs, Chat/Terminal) at its right end.
- *
- * Agent TUIs repaint, fold and clear their own scrollback, so the prompt that
- * started a long turn is often nowhere on screen; the strip keeps it without
- * asking the CLI (`lib/agents/prompt/trail`). While the chat is shown the
- * prompt part stands down (the chat pins it itself): the chat reaches down
- * over the strip's row and its composer takes it, the switches staying where
- * they were, right of the text box (`onActionsWidth` is the room it leaves
- * them). A fixed one-line height in both, so neither a mode switch nor the
- * pop-up refits the terminal or moves a switch.
- */
+/** Prompt history under a terminal; readable agents use the same controls
+ * as a top toolbar with resource/action slots and Chat / Diffs / Terminal tabs.
+ * Popups remain local to the pane and never resize the running terminal. */
 
 /** Scopes whose history this window already asked for. */
 const historyAsked = new Set<string>();
@@ -60,8 +48,10 @@ export function TerminalPromptStrip({
   foreground,
   onReturnFocus,
   chatShown = false,
-  onActionsWidth,
   reader,
+  topBar = false,
+  navigationSlot,
+  actionSlot,
 }: {
   ptyId: string;
   scope: string;
@@ -73,8 +63,10 @@ export function TerminalPromptStrip({
   onReturnFocus: () => void;
   /** The Reader covers the terminal: the prompt part is left out. */
   chatShown?: boolean;
-  /** The switches' width, whenever it changes. */
-  onActionsWidth?: (width: number) => void;
+  /** Desktop Reader navigation lives above the pane, leaving the composer full width. */
+  topBar?: boolean;
+  navigationSlot?: (slot: HTMLSpanElement | null) => void;
+  actionSlot?: (slot: HTMLSpanElement | null) => void;
   /** The Reader switch (`TerminalReaderView`), for an agent whose stored
    * conversation Tabtivity reads; absent for any other. `changes` is the
    * Diffs switch (`TerminalReaderChanges`), beside the chat or the terminal;
@@ -97,9 +89,6 @@ export function TerminalPromptStrip({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const actionsRef = useRef<HTMLSpanElement>(null);
-  const onActionsWidthRef = useRef(onActionsWidth);
-  onActionsWidthRef.current = onActionsWidth;
   const listRef = useRef<HTMLOListElement>(null);
 
   useEffect(() => {
@@ -126,20 +115,6 @@ export function TerminalPromptStrip({
       list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight;
     }
   }, [open, index]);
-  // Measured, not guessed: which switches show (and their labels' language)
-  // decides the room the composer leaves them.
-  const hasMarkup = !!markupLink;
-  const hasReader = !!reader;
-  useEffect(() => {
-    const actions = actionsRef.current;
-    if (!actions) return;
-    const report = () => onActionsWidthRef.current?.(actions.offsetWidth);
-    report();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(report);
-    observer.observe(actions);
-    return () => observer.disconnect();
-  }, [chatShown, hasMarkup, hasReader]);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1400);
@@ -191,10 +166,10 @@ export function TerminalPromptStrip({
 
   return (
     <div
-      className={chatShown ? "prompt-strip chat" : "prompt-strip"}
-      style={chatShown ? undefined : { background, color: foreground }}
+      className={`prompt-strip${chatShown ? " chat" : ""}${topBar ? " reader-topbar" : ""}`}
+      style={chatShown || topBar ? undefined : { background, color: foreground }}
     >
-      {!chatShown && <>
+      {!chatShown && !topBar && <>
         <span className="prompt-strip-label">
           {t("terminal.promptStrip.label")}
           <UntestedTag id="terminal.promptStrip" />
@@ -253,17 +228,18 @@ export function TerminalPromptStrip({
           </>
         )}
       </>}
-      <span ref={actionsRef} className="prompt-strip-actions">
+      <span className="prompt-strip-actions">
         {/* First of the switches, not in the prompt part: the list is offered
             over the chat too, and the row is the same in both modes. */}
         {/* Over the chat a labelled pill like Resume beside it; under the
             terminal the prompt text sits right beside it, so a caret will do. */}
-        {current && chatShown && (
+        {(current || topBar) && (chatShown || topBar) && (
           <button
             type="button"
             className={open ? "prompt-strip-reader active" : "prompt-strip-reader"}
             onMouseDown={keepFocus}
             onClick={() => (open ? close() : setOpen(true))}
+            disabled={!current}
             aria-expanded={open}
             title={t(open ? "terminal.promptStrip.collapse" : "terminal.promptStrip.expand")}
           >
@@ -271,7 +247,7 @@ export function TerminalPromptStrip({
             <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▴</span>
           </button>
         )}
-        {current && !chatShown && (
+        {current && !chatShown && !topBar && (
           <button
             type="button"
             className="prompt-strip-btn"
@@ -299,6 +275,39 @@ export function TerminalPromptStrip({
         {reader && chatsOffered(scope, tab) && (
           <TerminalReaderChats ptyId={ptyId} scope={scope} tab={tab} cwd={reader.cwd} onReturnFocus={onReturnFocus} />
         )}
+        {topBar && <>
+          <span className="reader-topbar-navigation" ref={navigationSlot} />
+          <span className="reader-topbar-actions" ref={actionSlot} />
+        </>}
+        {topBar && reader ? (
+          <div className="reader-view-tabs" role="tablist" aria-label={t("terminal.reader.views")} onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+            const at = tabs.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (at + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+            tabs[next]?.focus();
+            tabs[next]?.click();
+          }}>
+            <button type="button" role="tab" aria-selected={reader.open && !reader.changes?.open}
+              tabIndex={reader.open && !reader.changes?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (!reader.open) reader.onToggle(); }}>
+              {t("terminal.reader.showReader")}
+            </button>
+            {reader.changes && <button type="button" role="tab" aria-selected={reader.changes.open}
+              tabIndex={reader.changes.open ? 0 : -1}
+              onClick={() => { if (!reader.changes?.open) reader.changes?.onToggle(); }}>
+              {t("terminal.reader.changes")}
+            </button>}
+            <button type="button" role="tab" aria-selected={!reader.open && !reader.changes?.open}
+              tabIndex={!reader.open && !reader.changes?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.open) reader.onToggle(); }}>
+              {t("terminal.reader.showTerminal")}
+            </button>
+            <UntestedTag id="terminal.reader.topbar" />
+          </div>
+        ) : <>
         {reader?.changes && (
           <button
             type="button"
@@ -332,6 +341,7 @@ export function TerminalPromptStrip({
             {tab?.cmd === "agy" && <UntestedTag id="terminal.reader.antigravity" />}
           </button>
         )}
+        </>}
       </span>
       {open && current && (
         <div

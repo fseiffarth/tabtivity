@@ -1009,6 +1009,17 @@ pub fn host_mux_args(
     Ok(args)
 }
 
+/// [`host_mux_args`] for the host's SFTP subsystem (`-s … -- sftp`): the
+/// phone's read-only view of a remote project's tree (`mobile_control::
+/// host_files`), over the same master and just as unable to dial.
+pub fn host_mux_sftp_args(spec: &RemoteSpec, control_path: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut args = host_mux_args(spec, control_path, false, "sftp")?;
+    // `… <target> -- sftp`: `-s` goes in front of the target, with the options.
+    let target_at = args.len() - 3;
+    args.insert(target_at, "-s".to_string());
+    Ok(args)
+}
+
 /// `control_path` as the one `-o ControlPath=` value it may be: absolute, and
 /// with nothing ssh would read as more than a path — a `%` token it would
 /// expand, whitespace that would split the option, a control character.
@@ -1121,6 +1132,23 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
     valid_tmux_session_name(session).then(|| {
         host_sh(&format!(
             "{HOST_TMUX_EXACT}tmux -u display-message -p -t \"$e\"{session}\"$c\" \"#{{window_width}}x#{{window_height}}\""
+        ))
+    })
+}
+
+/// The host-side Send now (`pty_bridge::QueueHint`): Esc into the session's
+/// pane, only while a row of its screen starts with `row_start` and holds
+/// `words` — the CLI saying a message still waits in its queue. Check and
+/// press are one script on the host, so no ssh round trip falls between
+/// them; shell builtins and tmux only. Prints `sent` when it pressed. `None`
+/// for an invalid name, or a hint that could break out of its quotes.
+pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str) -> Option<String> {
+    let quotable = |text: &str| !text.chars().any(|c| matches!(c, '\'' | '"' | '\\' | '$' | '`') || c.is_control());
+    (valid_tmux_session_name(session) && quotable(row_start) && quotable(words)).then(|| {
+        host_sh(&format!(
+            "{HOST_TMUX_EXACT}t=\"$e\"{session}\"$c\"; \
+             q=$(tmux -u capture-pane -p -J -t \"$t\" | while IFS= read -r l; do case \"$l\" in \"{row_start}\"*\"{words}\"*) echo 1;; esac; done); \
+             [ -n \"$q\" ] && tmux send-keys -t \"$t\" Escape && echo sent"
         ))
     })
 }
@@ -2120,6 +2148,20 @@ mod tests {
         root.join("run").join("ssh-control").join("cm-0123abcd")
     }
 
+    /// The SFTP lane is the same no-dial argv with the subsystem asked for:
+    /// `-s` among the options, the target, then `-- sftp`.
+    #[test]
+    fn host_mux_sftp_args_ask_for_the_subsystem_over_the_same_master() {
+        let s = spec(Some("alice"), "host.example", Some(2222), "/srv/p");
+        let path = socket_path();
+        let args = host_mux_sftp_args(&s, &path).unwrap();
+        assert_eq!(&args[args.len() - 4..], ["-s", "alice@host.example", "--", "sftp"]);
+        let mut plain = host_mux_args(&s, &path, false, "sftp").unwrap();
+        plain.insert(plain.len() - 3, "-s".to_string());
+        assert_eq!(args, plain);
+        assert!(args.contains(&"ControlMaster=no".to_string()) && args.contains(&"ProxyCommand=false".to_string()));
+    }
+
     #[test]
     fn host_mux_args_ride_the_literal_master_and_cannot_dial() {
         let s = spec(Some("alice"), "host.example", Some(2222), "/srv/p");
@@ -2311,6 +2353,31 @@ mod tests {
         };
         assert_eq!(probe("3.6"), format!("={name}:"));
         assert_eq!(probe("1.8"), name);
+    }
+
+    /// The host-side Send now presses Esc into the exact pane only while the
+    /// queue hint is on its screen, and says so; with no hint, or the hint's
+    /// words only in the conversation above, it presses nothing.
+    #[cfg(unix)]
+    #[test]
+    fn host_send_now_presses_esc_only_while_the_queue_hint_shows() {
+        let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
+        let script = host_tmux_send_now_command(name, "❯", "Press up to edit queued messages").unwrap();
+        let run = |screen: &str| {
+            let body = format!(
+                "case \"$1 $2\" in \"-u capture-pane\") printf '%s\\n' '{screen}';; \"send-keys \"*) shift; echo \"pressed $*\";; esac"
+            );
+            let out = run_host_script(&script, Some(("3.6", &body)));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let queued = run("✻ Pondering… (9s)\n───\n❯ Press up to edit queued messages\n───");
+        assert!(queued.contains("sent"), "{queued}");
+        assert!(queued.contains(&format!("-t ={name}: Escape")), "{queued}");
+        assert_eq!(run("✻ Pondering… (9s)\n───\n❯ \n───"), "");
+        assert_eq!(run("  the box said Press up to edit queued messages\n❯ "), "");
+        // A hint that could leave its quotes is refused outright.
+        assert!(host_tmux_send_now_command(name, "❯", "a\"; rm -rf ~; \"").is_none());
+        assert!(host_tmux_send_now_command("bad name", "❯", "words").is_none());
     }
 
     /// The no-dial claim against the real `ssh` (run with `--ignored`): with

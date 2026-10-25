@@ -14,6 +14,10 @@
  *   arrival order — a tab that is working right now has no reading that would
  *   order it (its `workingAt` is the last turn's edge, not this one's), and
  *   shuffling the questions would move them under the pointer as they arrive.
+ *   The phone adds one tier below the working tabs: a tab holding a message
+ *   typed on the phone and not sent yet (`drafted`) — the reader started
+ *   something there and is the one it waits on, more than any finished turn.
+ *   The desktop never knows of a phone draft and passes none.
  * - `lastDone`: by the last turn each agent finished, most recent first. The
  *   triage order with no tiers over it: what finished last, whatever else the
  *   tabs are doing now.
@@ -35,6 +39,8 @@ export interface AgentSortKeys {
   decision?: boolean;
   /** Producing output right now — the second tier of `lastWorking`. */
   working: boolean;
+  /** Holds a typed, unsent message — the third tier of `lastWorking`. */
+  drafted?: boolean;
   /** ms epoch of the tab's last output while working, if seen this session. */
   workingAt?: number;
   /** ms epoch of the tab's last finished turn, if seen this session. */
@@ -45,10 +51,12 @@ export function isAgentSort(value: unknown): value is AgentSort {
   return typeof value === "string" && (AGENT_SORTS as readonly string[]).includes(value);
 }
 
-/** 2 needs the reader, 1 is busy, 0 is neither — `lastWorking`'s three tiers. */
+/** 3 needs the reader, 2 is busy, 1 holds a draft, 0 is none of these —
+ * `lastWorking`'s tiers. */
 function tierOf(keys: AgentSortKeys): number {
-  if (keys.decision) return 2;
-  return keys.working ? 1 : 0;
+  if (keys.decision) return 3;
+  if (keys.working) return 2;
+  return keys.drafted ? 1 : 0;
 }
 
 export function sortAgentTabs<T>(tabs: readonly T[], sort: AgentSort, keysOf: (tab: T) => AgentSortKeys): T[] {
@@ -62,10 +70,10 @@ export function sortAgentTabs<T>(tabs: readonly T[], sort: AgentSort, keysOf: (t
         if (byTier !== 0) return byTier;
         // A question and a working tab are ordered by nothing but the tab bar:
         // neither carries a reading of what it is doing *now*.
-        if (tier !== 0) return a.index - b.index;
+        if (tier >= 2) return a.index - b.index;
       }
-      // The bottom tier, and the whole of `lastDone`: newest finished turn
-      // first, a tab that has finished none of them last.
+      // The drafted and bottom tiers, and the whole of `lastDone`: newest
+      // finished turn first, a tab that has finished none of them last.
       const byDone = (b.keys.doneAt ?? Number.NEGATIVE_INFINITY) - (a.keys.doneAt ?? Number.NEGATIVE_INFINITY);
       // Two infinities subtract to NaN, which is the tie the index settles.
       return Number.isNaN(byDone) || byDone === 0 ? a.index - b.index : byDone;

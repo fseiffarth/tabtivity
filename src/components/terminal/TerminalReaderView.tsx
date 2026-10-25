@@ -32,7 +32,7 @@ import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
-import { useAgentReaderStore, useReaderChangesOpen } from "../../stores/agents/agentReader";
+import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { hostTabCwd, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
@@ -42,14 +42,15 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
-import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
+import { TerminalReaderChanges } from "./TerminalReaderChanges";
+import { ReaderToolbarNavigation, type ReaderToolbarFile } from "./ReaderToolbarNavigation";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
 import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
-import { PATH_LINK_ATTR, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
+import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
@@ -61,7 +62,6 @@ import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/term
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
-import { ReaderSuggestion } from "./ReaderSuggestion";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
 import { useReaderReadAloud } from "./ReaderReadAloud";
@@ -75,7 +75,8 @@ import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPo
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
-import type { AskedQuestion, RunningShell } from "../../../mobile-web/src/api";
+import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
+import type { UntestedId } from "../../lib/untested";
 
 /** How long a sent prompt shows as sending while the transcript has not
  * recorded it yet — counted from the send, or from the last moment the agent
@@ -520,7 +521,7 @@ interface ReaderVoiceLoop {
   chips: ReactNode;
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, steering, questionOpen, suggestion, chipSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -535,6 +536,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   queued: readonly SentPrompt[];
   focused: boolean;
   visible: boolean;
+  acceptInserts?: boolean;
+  onReveal?: () => void;
   steering: boolean;
   /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
   questionOpen: boolean;
@@ -542,6 +545,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   suggestion: string;
   /** The facts row's end, where the chip row goes; over the text box without it. */
   chipSlot: HTMLElement | null;
+  actionSlot?: HTMLElement | null;
   voiceLoop: ReaderVoiceLoop;
   onEscape: () => void;
   onStatus: (panel: ReaderPanel) => void;
@@ -557,6 +561,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const [sendError, setSendError] = useState("");
   const pulling = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const revealRef = useRef(onReveal);
+  revealRef.current = onReveal;
   /** Ctrl+Z / Ctrl+Shift+Z (`editorUndo`/`editorRedo`): the composer's own
    * history, since React setting the value loses the box's. `draftRef` is
    * the text a change replaces; `caretAt` where an undo puts the caret. */
@@ -605,9 +611,16 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     editDraft(suggestion.args ? `${suggestion.line} ` : suggestion.line);
     composerRef.current?.focus();
   };
-  const pickSuggestion = () => {
-    editDraft(suggestion);
-    composerRef.current?.focus();
+  /** Claude Code's prompt suggestion, as its own CLI shows it: dimmed in the
+   * empty box (the placeholder), taken into it by Tab or →, so the user still
+   * sends, edits or ignores it. */
+  const shownSuggestion = suggestion && !subagent && !sending ? suggestion : "";
+  const suggestionKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!shownSuggestion || draft || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
+    editDraft(shownSuggestion);
+    caretAt.current = shownSuggestion.length;
+    return true;
   };
   const forgetSlash = (line: string) => {
     forgetSlashCommand(cli, line);
@@ -623,7 +636,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
   // the Reader is up: at the cursor when the box has focus, else at the end.
-  useEffect(() => onReaderInsert(ptyId, (text) => {
+  useEffect(() => acceptInserts ? onReaderInsert(ptyId, (text) => {
+    revealRef.current?.();
     const box = composerRef.current;
     const focusedBox = box !== null && document.activeElement === box;
     const current = draftRef.current;
@@ -635,7 +649,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setDraft(next);
     setSendError("");
     box?.focus();
-  }), [ptyId]);
+  }) : undefined, [ptyId, acceptInserts]);
 
   // A paste that finds no text on the clipboard may be an image (a
   // screenshot): it lands like a dropped file, an inbox `@` reference typed at
@@ -892,7 +906,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       e.preventDefault();
       voice.cancelSend();
       voiceLoop.stopReading();
-    } else if (slashKey(e)) {
+    } else if (slashKey(e) || suggestionKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
@@ -917,12 +931,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onPrefix={togglePrefix}
     onClear={clearChat}
     onCommit={commit}
+    actionSlot={actionSlot}
     extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>
     <div className="terminal-reader-composer">
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
-      {suggestion && !draft && !subagent && !sending && <ReaderSuggestion text={suggestion} onPick={pickSuggestion} />}
       {chipSlot ? createPortal(chips, chipSlot) : chips}
       {voice.strip}
       <div className={voice.button ? "terminal-reader-input with-mic" : "terminal-reader-input"}>
@@ -930,12 +944,17 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           ref={composerRef}
           value={draft}
           rows={3}
-          placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
-          aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
+          placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
+            : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
+            : t("terminal.reader.placeholder")}
+          aria-label={subagent ? t("terminal.reader.subagentPlaceholder")
+            : shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}`
+            : t("terminal.reader.placeholder")}
           onChange={(e) => editDraft(e.target.value, true)}
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
+        {shownSuggestion && !draft && <span className="terminal-reader-suggestion-tag"><UntestedTag id="terminal.reader.promptSuggestion" /></span>}
         {voice.button}
         <button
           type="button"
@@ -957,7 +976,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
     </div>
-    {sendError && <div className="terminal-reader-error" role="alert">{sendError}</div>}
+    {sendError && (actionSlot && !visible
+      ? createPortal(<span className="reader-toolbar-error" role="alert">{sendError}</span>, actionSlot)
+      : <div className="terminal-reader-error" role="alert">{sendError}</div>)}
   </>;
 }
 
@@ -988,7 +1009,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, overStrip = false }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, onShowChat, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -999,10 +1020,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   localOnly?: boolean;
   visible: boolean;
   focused: boolean;
-  /** The pane's prompt strip lies under the chat: it reaches down over the
-   * strip's row, its composer is that row, the switches right of the text box
-   * (`TerminalPromptStrip`, `--strip-actions-w`). */
-  overStrip?: boolean;
+  /** Keep the draft mounted while the terminal or the full-width Diffs tab is selected. */
+  shown?: boolean;
+  /** This pane's Diffs tab is selected (`TerminalView`'s own, never another
+   * pane's): the chat stays mounted under it, hidden. */
+  changesOpen?: boolean;
+  /** Select this pane's Chat tab — leaving Diffs, or the terminal. */
+  onShowChat?: () => void;
+  navigationSlot?: HTMLElement | null;
+  actionSlot?: HTMLElement | null;
 }) {
   const t = useT();
   // A Tabby chat with its window-local prompt target: the composer, the
@@ -1033,6 +1059,35 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>([]);
   const [subagentListOpen, setSubagentListOpen] = useState(false);
   const subagentListId = useId();
+  /** The top bar's Workspaces list: the session's Claude `Workflow` runs. */
+  const [workflowListOpen, setWorkflowListOpen] = useState(false);
+  const workflowListId = useId();
+  const toolbarMenuOpen = subagentListOpen || workflowListOpen;
+  useEffect(() => {
+    if (!toolbarMenuOpen || !navigationSlot) return;
+    const closeAll = () => {
+      setSubagentListOpen(false);
+      setWorkflowListOpen(false);
+    };
+    const away = (event: PointerEvent) => {
+      const menu = navigationSlot.querySelector(".terminal-reader-subagent-index:has(> [aria-expanded=\"true\"])");
+      if (!menu?.contains(event.target as Node)) closeAll();
+    };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const toggle = navigationSlot.querySelector<HTMLButtonElement>(".terminal-reader-subagent-toggle[aria-expanded=\"true\"]");
+      closeAll();
+      toggle?.focus();
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [toolbarMenuOpen, navigationSlot]);
   const openStep = subagentPath[subagentPath.length - 1];
   const subToken = openStep?.token;
   /** The last read of a subagent's conversation, and whose it is — a read
@@ -1083,9 +1138,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * typed into the session, the chat staying shown (the prompt strip's switch
    * is the way back to the terminal). */
   const pressEscape = useCallback(() => { void typeIntoPane(["\u001b"]).catch(() => {}); }, [typeIntoPane]);
-  /** The Changes panel beside the chat (the prompt strip's Diffs switch). */
-  const changesOpen = useReaderChangesOpen(tab ? readerAgent(tab) : "");
-  const changesWidth = useAgentReaderStore((state) => state.changesWidth);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
    * answer, and a `/effort`'s confirmation) and the one just picked there —
@@ -1740,13 +1792,112 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     else chatBack();
   };
 
+  /** A list of the session's `agent` entries under a toggle: the chat's own
+   * Subagents index, or in the top bar Subagents and Workspaces (Claude
+   * `Workflow` runs, the orchestrations) side by side. A pick opens it in the
+   * chat; from the top bar it also brings the chat back over Diffs or the
+   * terminal. */
+  const agentMenu = ({ list, earlier, label, region, untestedId, open, setOpen, listId }: {
+    list: readonly TranscriptEntry[];
+    /** Agents only earlier turns hold: counted, and read in by the last row. */
+    earlier: number;
+    label: string;
+    region: string;
+    untestedId: UntestedId;
+    open: boolean;
+    setOpen: (update: (open: boolean) => boolean) => void;
+    listId: string;
+  }) => (
+    <nav className="terminal-reader-subagent-index" aria-label={region}>
+      <button
+        type="button"
+        className="terminal-reader-subagent-toggle"
+        aria-expanded={open}
+        aria-controls={listId}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") { event.preventDefault(); setOpen(() => true); }
+        }}
+        onClick={() => {
+          setOpen((was) => !was);
+          // One list open at a time in the top bar.
+          if (navigationSlot) (setOpen === setSubagentListOpen ? setWorkflowListOpen : setSubagentListOpen)(false);
+        }}
+      >
+        <span>{label}</span>
+        <UntestedTag id={untestedId} />
+        <span className={open ? "terminal-reader-subagent-caret open" : "terminal-reader-subagent-caret"} aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div id={listId} className="terminal-reader-subagent-list" onKeyDown={(event) => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+          if (!buttons.length) return;
+          const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+          buttons[next]?.focus();
+        }}>
+          {list.map((entry, index) => (
+            <button type="button" key={`${entry.at ?? ""}:${index}`} disabled={!entry.subagent} onClick={() => { openAgent(entry, true); if (navigationSlot) { setOpen(() => false); onShowChat?.(); } }}>
+              <small>
+                {entry.role ?? subagentLabel}
+                {subagentAtWork(entry, !!live.working) && (
+                  <span className="terminal-reader-working-dots" role="img" aria-label={t("terminal.reader.working")}><i /><i /><i /></span>
+                )}
+              </small>
+              <span>{entry.text}{entry.cut && "…"}</span>
+            </button>
+          ))}
+          {earlier > 0 && (
+            <button type="button" className="terminal-reader-subagent-earlier" onClick={showEarlier}>
+              {t("mobile.subagent.earlier")}
+            </button>
+          )}
+        </div>
+      )}
+    </nav>
+  );
+  /** In the top bar the orchestrations have their own Workspaces list. */
+  const plainAgents = navigationSlot ? sessionAgents.filter((entry) => !entry.workflow) : sessionAgents;
+  const workflowRuns = navigationSlot ? sessionAgents.filter((entry) => entry.workflow) : [];
+  const subagentsMenu = transcript?.available && (plainAgents.length > 0 || moreEarlier) ? agentMenu({
+    list: plainAgents, earlier: agentsEarlier,
+    label: t("mobile.subagent.index", { count: plainAgents.length + agentsEarlier }), region: t("mobile.subagent.indexRegion"),
+    untestedId: "terminal.reader.subagents", open: subagentListOpen, setOpen: setSubagentListOpen, listId: subagentListId,
+  }) : null;
+  const workspacesMenu = transcript?.available && workflowRuns.length > 0 ? agentMenu({
+    list: workflowRuns, earlier: 0,
+    label: t("terminal.reader.workspaces", { count: workflowRuns.length }), region: t("terminal.reader.workspacesRegion"),
+    untestedId: "terminal.reader.topbar", open: workflowListOpen, setOpen: setWorkflowListOpen, listId: workflowListId,
+  }) : null;
+  // Scanned once per conversation or link change, not on every live-screen
+  // render (each settled write of the pane re-renders the Reader).
+  const toolbarFiles = useMemo(() => {
+    if (!navigationSlot) return [];
+    const found = new Map<string, ReaderToolbarFile>();
+    for (const entry of levelEntries) for (const candidate of findPathCandidates(entry.text)) {
+      const file = pathLinks.get(candidate.path);
+      if (file && !file.is_dir) found.set(file.path, {
+        path: file.path, label: relativePathWithin(tabDir, file.path) || file.path,
+        open: () => openInboxEntry(file),
+      });
+    }
+    if (readerInbox) for (const file of readerInbox.files.values()) if (file) {
+      const path = `inbox:${file.name}`;
+      if (![...found.values()].some((entry) => entry.path.endsWith(file.name))) {
+        found.set(path, { path, label: file.name, open: () => readerInbox.open(file) });
+      }
+    }
+    return [...found.values()];
+  }, [navigationSlot, levelEntries, pathLinks, tabDir, openInboxEntry, readerInbox]);
+
   return createPortal(<>
     <div
       ref={regionRef}
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${changesOpen && tab ? " with-changes" : ""}${browsed ? " browsing" : ""}${overStrip ? " over-strip" : ""}`}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}`}
+      hidden={!shown || changesOpen}
       role="region"
       aria-label={t("terminal.reader.title")}
-      style={changesOpen && tab ? changesWidthStyle(changesWidth) : undefined}
       tabIndex={browsed ? -1 : undefined}
       onKeyDown={onRegionKey}
     >
@@ -1787,43 +1938,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             </div>
           )}
         </nav>
-      ) : transcript?.available && (sessionAgents.length > 0 || moreEarlier) && (
-        // Every subagent of the session by name, counted with the ones only
-        // earlier turns hold, which the list's last row reads in.
-        <nav className="terminal-reader-subagent-index" aria-label={t("mobile.subagent.indexRegion")}>
-          <button
-            type="button"
-            className="terminal-reader-subagent-toggle"
-            aria-expanded={subagentListOpen}
-            aria-controls={subagentListId}
-            onClick={() => setSubagentListOpen((open) => !open)}
-          >
-            <span>{t("mobile.subagent.index", { count: sessionAgents.length + agentsEarlier })}</span>
-            <UntestedTag id="terminal.reader.subagents" />
-            <span className={subagentListOpen ? "terminal-reader-subagent-caret open" : "terminal-reader-subagent-caret"} aria-hidden="true">▾</span>
-          </button>
-          {subagentListOpen && (
-            <div id={subagentListId} className="terminal-reader-subagent-list">
-              {sessionAgents.map((entry, index) => (
-                <button type="button" key={`${entry.at ?? ""}:${index}`} disabled={!entry.subagent} onClick={() => openAgent(entry, true)}>
-                  <small>
-                    {entry.role ?? subagentLabel}
-                    {subagentAtWork(entry, !!live.working) && (
-                      <span className="terminal-reader-working-dots" role="img" aria-label={t("terminal.reader.working")}><i /><i /><i /></span>
-                    )}
-                  </small>
-                  <span>{entry.text}{entry.cut && "…"}</span>
-                </button>
-              ))}
-              {moreEarlier && (
-                <button type="button" className="terminal-reader-subagent-earlier" onClick={showEarlier}>
-                  {t("mobile.subagent.earlier")}
-                </button>
-              )}
-            </div>
-          )}
-        </nav>
-      )}
+      ) : !navigationSlot && subagentsMenu}
       <div className="terminal-reader-stream">
         <PathLinksContext.Provider value={pathLinks}>
         <ReaderInboxContext.Provider value={readerInbox}>
@@ -2016,11 +2131,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         history={history}
         queued={queuedPrompts}
         focused={focused}
-        visible={visible}
+        visible={visible && shown && !changesOpen}
+        acceptInserts={visible && shown}
+        onReveal={onShowChat}
         steering={steering}
         questionOpen={!!shownLive.question}
         suggestion={shownLive.suggestion}
-        chipSlot={chipSlot}
+        chipSlot={actionSlot ? null : chipSlot}
+        actionSlot={actionSlot}
         voiceLoop={voiceLoop}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
@@ -2028,7 +2146,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         pullRef={pullQueued}
       />}
     </div>
-    {changesOpen && tab && (
+    {/* The conversation's menus only over Chat or Diffs: in Terminal the
+        transcript and the live screen are not read, so they would go stale. */}
+    {navigationSlot && shown && createPortal(<>
+      {subagentsMenu}
+      {workspacesMenu}
+      <ReaderToolbarNavigation files={toolbarFiles} />
+    </>, navigationSlot)}
+    {changesOpen && shown && tab && (
       <TerminalReaderChanges
         scope={scope}
         tab={tab}
@@ -2038,7 +2163,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
         chat={chatId}
         chatTitle={browsed?.chat.title}
-        onClose={() => useAgentReaderStore.getState().setChanges(readerAgent(tab), false)}
+        onClose={() => onShowChat?.()}
       />
     )}
   </>, host);

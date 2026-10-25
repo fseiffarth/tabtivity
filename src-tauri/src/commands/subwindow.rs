@@ -119,6 +119,7 @@ pub fn release_detached_entry(reg: &mut WindowRegistry, label: &str) -> Option<u
     // Drop any captured switch-back geometry too, so a docked/closed label never
     // leaves a stale bounds entry a reused label could later pick up (#42).
     reg.detached_bounds.remove(label);
+    reg.detached_minimized.remove(label);
     reg.detached_parking.forget(label);
     // A handshake still in flight has nothing left to retire, and the label's
     // next window must announce its own readiness.
@@ -853,8 +854,24 @@ pub fn hide_detached_windows(
             continue;
         };
         if win.is_visible().unwrap_or(false) {
-            if let (Ok(pos), Ok(size)) = (win.outer_position(), win.inner_size()) {
-                win_registry.lock_ok().detached_bounds.insert(
+            // A minimized popout stays minimized across the switch. Its geometry
+            // is not captured: a minimized window's rect is the WM's icon slot
+            // (Windows reports -32000,-32000), and the rect taken while it was
+            // last on screen is the one to keep.
+            let minimized = win.is_minimized().unwrap_or(false);
+            let rect = if minimized {
+                None
+            } else {
+                win.outer_position().ok().zip(win.inner_size().ok())
+            };
+            let mut reg = win_registry.lock_ok();
+            if minimized {
+                reg.detached_minimized.insert(label.clone());
+            } else {
+                reg.detached_minimized.remove(label);
+            }
+            if let Some((pos, size)) = rect {
+                reg.detached_bounds.insert(
                     label.clone(),
                     crate::commands::apps::DetachedBounds {
                         x: pos.x,
@@ -874,7 +891,9 @@ pub fn hide_detached_windows(
 ///
 /// Wayland presents a popout minimized by the unsaved-work fallback
 /// ([`park_minimized`]) — the only kind parked there; other backends use
-/// `unminimize()` first in case a backend minimized rather than hid them. The remembered rect
+/// `unminimize()` first in case a backend minimized rather than hid them,
+/// except for a popout the user had minimized, which comes back minimized
+/// (`detached_minimized`). The remembered rect
 /// is then validated against
 /// the currently-connected monitors, so an unplugged display can't strand a
 /// popout off-screen.
@@ -907,8 +926,19 @@ pub fn show_detached_windows(
             }
             continue;
         }
-        let _ = win.unminimize();
-        let _ = win.show();
+        // A popout the user had minimized comes back minimized. Minimizing the
+        // still-hidden window first makes the show map it straight to its icon
+        // (GTK's iconify-initially hint) instead of flashing it up; the second
+        // call covers the X11 backend's `show_window` having mapped it already.
+        let minimized = win_registry.lock_ok().detached_minimized.remove(label);
+        if minimized {
+            let _ = win.minimize();
+            let _ = win.show();
+            let _ = win.minimize();
+        } else {
+            let _ = win.unminimize();
+            let _ = win.show();
+        }
         // Put the popout back where it was before it was parked: the show()
         // above lets the WM move it (often onto the wrong monitor), so re-apply
         // the geometry captured at hide time. Size before position so a resize
@@ -1765,6 +1795,7 @@ mod tests {
             reserve_detached_seq(&mut reg, label);
             reg.windows.insert(label.to_string(), tracked(label, Some(7)));
             reg.detached_bounds.insert(label.to_string(), bounds);
+            reg.detached_minimized.insert(label.to_string());
         }
         reg.detached_retire.mark_retiring("detached-p1-g-1");
         // Planned: released, NOT reported, size kept for the respawn.
@@ -1775,6 +1806,8 @@ mod tests {
         // A crash / seed-timeout self-destroy: reported → the tabs dock back.
         assert_eq!(on_detached_destroyed(&mut reg, "detached-p1-g-2"), (Some(7), true));
         assert!(!reg.detached_bounds.contains_key("detached-p1-g-2"));
+        // A reused label never inherits a minimized flag.
+        assert!(reg.detached_minimized.is_empty());
     }
 
     fn two_scopes() -> WindowRegistry {

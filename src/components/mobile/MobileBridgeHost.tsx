@@ -14,7 +14,7 @@ import {
 } from "../../stores/tabs";
 import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
-import { ASSISTANT_SCOPE, type AssistantLaunch, assistantErrorCode, assistantModelChoices, assistantNewChat, assistantOptions } from "../../lib/assistant";
+import { ASSISTANT_SCOPE, type AssistantLaunch, type AssistantModelRow, assistantCurrentModel, assistantErrorCode, assistantModelRows, assistantNewChat, assistantOptions } from "../../lib/assistant";
 import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat, switchAssistantModel } from "../../stores/assistantScope";
 import { experimentalEnabled } from "../../lib/experimental";
 import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootOverlay";
@@ -295,7 +295,7 @@ type DesktopRequest =
   | { type: "agent_status"; request_id: string; project_id: string; tmux_session: string; refresh: boolean }
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
-  | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string; interrupt?: boolean }
   | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
@@ -335,7 +335,7 @@ type DesktopResponse =
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
   | { status: "tab_worktrees"; worktrees: MobileWorktree[]; current?: string; carries: boolean }
-  | { status: "assistant_models"; models: string[]; current?: string }
+  | { status: "assistant_models"; models: string[]; rows: AssistantModelRow[]; current?: string }
   | { status: "worktree_moved"; moved: "carried" | "fresh" }
   | { status: "attached"; attachment: InboxAttachment }
   | { status: "markup_questions"; asks: MobileMarkupAsk[]; ticks: MarkupTick[] }
@@ -2711,10 +2711,10 @@ async function moveTabWorktree(
 }
 
 /** A Tabby chat the phone's model chip may switch, with the models its CLI can
- * run (`assistantModelChoices` — the desktop Reader's chip lists the same), or
+ * run (`assistantModelRows` — the desktop Reader's chip lists the same), or
  * the refusal to answer with. Any other tab's `/model` is its CLI's own. */
 async function assistantChat(projectId: string, tmuxSession: string): Promise<
-  | { scope: MobileScope; tab: TabEntry; launch: AssistantLaunch; models: string[] }
+  | { scope: MobileScope; tab: TabEntry; launch: AssistantLaunch; rows: AssistantModelRow[]; models: string[] }
   | DesktopResponse
 > {
   const scope = mobileScope(projectId);
@@ -2728,9 +2728,17 @@ async function assistantChat(projectId: string, tmuxSession: string): Promise<
   const options = await assistantOptions().catch(() => null);
   if (!options) return { status: "error", code: "desktop_unavailable", message: "The model list could not be read" };
   const cli = options.clis.find((candidate) => candidate.id === launch.cli);
-  // Only names a CLI would take as an argument leave this window.
-  const models = (cli ? assistantModelChoices(cli, options) : []).filter((model) => model.length <= 128 && SAFE_MODEL.test(model)).slice(0, 64);
-  return { scope, tab, launch, models };
+  // Only names a CLI would take as an argument leave this window, each with
+  // the words Claude's picker gave it, bounded.
+  const rows = (cli ? await assistantModelRows(cli, options) : [])
+    .filter((row) => row.id.length <= 128 && SAFE_MODEL.test(row.id))
+    .slice(0, 64)
+    .map((row) => ({
+      id: row.id,
+      label: row.label.slice(0, 120),
+      ...(row.description ? { description: row.description.slice(0, 240) } : {}),
+    }));
+  return { scope, tab, launch, rows, models: rows.map((row) => row.id) };
 }
 
 const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/u;
@@ -2739,7 +2747,8 @@ const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/u;
 async function tabAssistantModels(projectId: string, tmuxSession: string): Promise<DesktopResponse> {
   const found = await assistantChat(projectId, tmuxSession);
   if ("status" in found) return found;
-  return { status: "assistant_models", models: found.models, ...(found.launch.model ? { current: found.launch.model } : {}) };
+  const current = assistantCurrentModel(found.launch);
+  return { status: "assistant_models", models: found.models, rows: found.rows, ...(current ? { current } : {}) };
 }
 
 /** The phone picked a model for a Tabby chat: the desktop Reader's pick
@@ -2749,7 +2758,7 @@ async function switchTabAssistantModel(projectId: string, tmuxSession: string, m
   const found = await assistantChat(projectId, tmuxSession);
   if ("status" in found) return found;
   if (!found.models.includes(model)) return { status: "error", code: "model_not_found", message: "That model is not offered any more" };
-  if (found.launch.model === model) return { status: "seen" };
+  if (assistantCurrentModel(found.launch) === model) return { status: "seen" };
   if (agentTabState(`${found.scope.id}:${found.tab.key}`) !== "idle") {
     return { status: "error", code: "tab_busy", message: "The chat is at work or waiting for an answer" };
   }
@@ -2766,15 +2775,18 @@ async function switchTabAssistantModel(projectId: string, tmuxSession: string, m
  * from reading as a finished turn). Without this report a tab driven entirely
  * from the phone produced status for nobody: the pills stayed blank on the very
  * surface that asked for the work. Throttled sidecar-side to the leading edge of
- * each burst of typing, so a held key is one report, not forty. */
-function markTabInput(projectId: string, tmuxSession: string): DesktopResponse {
+ * each burst of typing, so a held key is one report, not forty. `interrupt`: a
+ * bare Esc or Ctrl+C, always reported — a question dismissed on the phone ends
+ * Claude's turn with no `Stop`, and without it the tab read as working until
+ * the next hook, holding every phone prompt behind it. */
+function markTabInput(projectId: string, tmuxSession: string, interrupt = false): DesktopResponse {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (tab) {
-    noteUserInput(`${scope.id}:${tab.key}`);
+    noteUserInput(`${scope.id}:${tab.key}`, interrupt);
     // `tabtivity-send` from this tab now puts files on the phone.
     noteInputFrom(`${scope.id}:${tab.key}`, "phone");
   }
@@ -2959,7 +2971,7 @@ async function handleRequest(
     case "agent_status": return agentStatusFor(request.project_id, request.tmux_session, request.refresh);
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
-    case "tab_input": return markTabInput(request.project_id, request.tmux_session);
+    case "tab_input": return markTabInput(request.project_id, request.tmux_session, request.interrupt === true);
     case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);

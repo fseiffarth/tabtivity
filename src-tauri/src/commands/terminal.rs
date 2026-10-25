@@ -582,6 +582,16 @@ pub async fn pty_unwatch(ctx: Ctx, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// What the agent in tab `id` was handed, for the tab hover card: sandbox,
+/// Tabtivity's MCP servers and the user's own, skills, API keys
+/// (`services::agent_features`). The tab's own id, not a server client's
+/// attach PTY: the record is the spawn's. `None` when this process did not
+/// spawn it. Reads the home's config off the async runtime.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_features(id: String) -> Result<Option<crate::services::agent_features::Features>, String> {
+    app_core::rt::blocking("agent features", move || crate::services::agent_features::features(&id)).await
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();

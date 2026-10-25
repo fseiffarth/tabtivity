@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { COMMIT_CHOICES, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
@@ -14,7 +15,7 @@ const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit
  * commit prompts, each sent as a prompt of its own, the draft kept too.
  * `prefixes` are the commands this CLI takes as a lead (`draftPrefixes`).
  */
-export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, extra }: {
+export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, actionSlot, extra }: {
   prefixes: readonly string[];
   /** The command the draft leads with, if it is one of `prefixes`. */
   active: string | null;
@@ -22,7 +23,9 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   onPrefix: (command: string) => void;
   onClear: () => void;
   onCommit: (choice: CommitChoice) => void;
-  /** Chips of the composer's own after these (read-aloud, hands-free). */
+  /** Clear and Commit stay in the toolbar while the view below changes. */
+  actionSlot?: HTMLElement | null;
+  /** Chips of the composer's own after the prefixes (read-aloud, hands-free). */
   extra?: ReactNode;
 }) {
   const t = useT();
@@ -49,25 +52,24 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   // The composer keeps the focus: a click on a chip must not blur the field.
   const keepFocus = (event: React.MouseEvent) => event.preventDefault();
 
-  return (
-    <div className="terminal-reader-chips" ref={wrap}>
-      {prefixes.map((command) => {
-        const plan = command === "/plan";
-        return (
-          <button
-            key={command}
-            type="button"
-            className={`terminal-reader-chip${active === command ? " active" : ""}`}
-            disabled={disabled}
-            aria-pressed={active === command}
-            onMouseDown={keepFocus}
-            onClick={() => onPrefix(command)}
-            title={t(plan ? "mobile.composer.planHint" : "mobile.composer.goalHint")}
-          >
-            {t(plan ? "mobile.composer.plan" : "mobile.composer.goal")}
-          </button>
-        );
-      })}
+  const prefixesRow = prefixes.map((command) => {
+    const plan = command === "/plan";
+    return (
+      <button
+        key={command}
+        type="button"
+        className={`terminal-reader-chip${active === command ? " active" : ""}`}
+        disabled={disabled}
+        aria-pressed={active === command}
+        onMouseDown={keepFocus}
+        onClick={() => onPrefix(command)}
+        title={t(plan ? "mobile.composer.planHint" : "mobile.composer.goalHint")}
+      >
+        {t(plan ? "mobile.composer.plan" : "mobile.composer.goal")}
+      </button>
+    );
+  });
+  const actions = <div className="terminal-reader-chip-actions" ref={wrap}>
       <button
         type="button"
         className="terminal-reader-chip"
@@ -107,7 +109,10 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
           ))}
         </div>
       )}
-      {extra}
-    </div>
-  );
+    </div>;
+  return <div className="terminal-reader-chips">
+    {prefixesRow}
+    {extra}
+    {actionSlot ? createPortal(actions, actionSlot) : actions}
+  </div>;
 }

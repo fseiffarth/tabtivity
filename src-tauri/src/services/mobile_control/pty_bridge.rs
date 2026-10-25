@@ -139,6 +139,34 @@ pub enum AttachTarget {
     Host { name: String, ssh: HostSsh },
 }
 
+/// A CLI's sign on its screen that a message typed mid-turn still waits in
+/// its queue: a row starting with `row_start` that holds `words`. While it
+/// shows, Esc stops the turn and the CLI sends the queue at once; once the
+/// turn has taken the message in (Claude does at its next tool call), the
+/// sign is gone and an Esc would stop the turn that is to answer it — so Send
+/// now presses only while it shows (`AttachTarget::send_now`).
+#[derive(Debug, Clone, Copy)]
+struct QueueHint {
+    row_start: &'static str,
+    words: &'static str,
+}
+
+/// Which CLIs Send now serves (probed 2026-10-25). Claude Code 2.1.310 holds
+/// a mid-turn message until its next tool call and says so in its empty box.
+/// Codex 0.164 and Copilot take one into the running turn at once, so there
+/// is nothing to send now; OpenCode queues one but marks it nowhere a screen
+/// can read. Any other CLI is unprobed.
+fn queue_hint(family: &str) -> Option<QueueHint> {
+    match family {
+        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages" }),
+        _ => None,
+    }
+}
+
+fn queue_hint_shown(screen: &str, hint: &QueueHint) -> bool {
+    screen.lines().any(|row| row.starts_with(hint.row_start) && row.contains(hint.words))
+}
+
 /// The two one-shots the bridge runs beside the attach.
 #[derive(Debug, Clone, Copy)]
 enum Probe {
@@ -176,6 +204,39 @@ impl AttachTarget {
                 let mut command = crate::paths::command_no_window("ssh");
                 command.args(args);
                 Ok(command)
+            }
+        }
+    }
+
+    /// Send now: Esc straight into the pane (`send-keys`, so tmux's
+    /// escape-time does not hold it back as an attach client's Esc is) while
+    /// `hint` is on its screen; whether it went. A local check and press are
+    /// two tmux calls milliseconds apart; a host's are one script on the host
+    /// (`ssh_exec::host_tmux_send_now_command`), under the probe deadline.
+    fn send_now(&self, hint: QueueHint) -> bool {
+        match self {
+            Self::Local { name } => {
+                let mut capture = crate::services::tmux_local::tmux_command();
+                capture.args(crate::services::tmux_local::local_tmux_screen_args(name));
+                let Ok(screen) = capture.output() else { return false };
+                if !screen.status.success() || !queue_hint_shown(&String::from_utf8_lossy(&screen.stdout), &hint) {
+                    return false;
+                }
+                let mut press = crate::services::tmux_local::tmux_command();
+                press.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
+                press.status().is_ok_and(|status| status.success())
+            }
+            Self::Host { name, ssh } => {
+                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words) else {
+                    return false;
+                };
+                let Ok(args) = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script) else {
+                    return false;
+                };
+                let mut command = crate::paths::command_no_window("ssh");
+                command.args(args);
+                crate::paths::output_within(command, PROBE_TIMEOUT)
+                    .is_ok_and(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "sent")
             }
         }
     }
@@ -493,6 +554,14 @@ fn input_report_due(last: Option<std::time::Instant>, now: std::time::Instant) -
     last.is_none_or(|at| now.duration_since(at) >= INPUT_REPORT_INTERVAL)
 }
 
+/// Whether an input frame is a bare Esc or Ctrl+C — the desktop's
+/// `isInterruptInput`. Such a frame is reported whatever the burst window: it
+/// can end a turn that fires no `Stop` (a dismissed question, an interrupted
+/// tool), and only the report tells the desktop the turn is over.
+fn is_interrupt_frame(bytes: &[u8]) -> bool {
+    bytes == [MouseReportFilter::ESC] || bytes == [0x03]
+}
+
 /// Whether a close for `reason` tells the phone to come back. `replaced` means
 /// another viewer took over; that client must not fight its way back in a
 /// reconnect loop. `session_expired` retries through the phone's silent
@@ -773,9 +842,10 @@ pub async fn attach(
     // The tab runs an agent: its input obeys the AI switch.
     ai: bool,
     // Called on the leading edge of each burst of typing from this viewer (see
-    // `INPUT_REPORT_INTERVAL`). A callback rather than a desktop call of its
+    // `INPUT_REPORT_INTERVAL`), and on every interrupt key with `true` (see
+    // `is_interrupt_frame`). A callback rather than a desktop call of its
     // own, so this module keeps knowing nothing about the desktop socket.
-    on_input: impl Fn(),
+    on_input: impl Fn(bool),
     // Called at each moment the screen was last, or is again, in front of
     // somebody: when the phone reports its page hidden or visible, and at
     // detach unless the page was hidden by then (see `host::terminal`).
@@ -873,7 +943,7 @@ pub async fn attach(
     }
     // Last, and only ever read by a phone that knows the name: what this
     // bridge accepts beyond the base controls.
-    opening.push(TerminalEvent::Features { visibility: true }.to_frame());
+    opening.push(TerminalEvent::Features { visibility: true, send_now: true }.to_frame());
     // The AI switch, for an agent tab's composer: said at open only while
     // off, and on the tick below at every change.
     let settings_file = state_dir.join("settings.json");
@@ -903,6 +973,9 @@ pub async fn attach(
     // when a held Esc goes out as the key it is.
     let mut mouse = MouseReportFilter::default();
     let mut flush_at: Option<tokio::time::Instant> = None;
+    // The held Esc came as a frame of its own: the Esc key, an interrupt once
+    // it goes out.
+    let mut held_esc_key = false;
     // The phone spoke: its session slides (`auth::SESSION_IDLE`). Every frame
     // it sends, not the tick — a tick is the sidecar checking, not the phone.
     let touch = |auth: &Arc<Mutex<AuthStore>>| {
@@ -967,6 +1040,12 @@ pub async fn attach(
                 if !held.is_empty() {
                     let held = ai_input_kept(ai, &state_dir, &held).unwrap_or(held);
                     if !held.is_empty() && (writer.write_all(&held).is_err() || writer.flush().is_err()) { break Ok(()); }
+                    // The Esc key the frame path held back: told here, once
+                    // it reached the pane.
+                    if !held.is_empty() {
+                        last_input_report = Some(std::time::Instant::now());
+                        on_input(std::mem::take(&mut held_esc_key));
+                    }
                 }
             }
             Some((cols, rows)) = window_rx.recv() => {
@@ -987,10 +1066,12 @@ pub async fn attach(
                     last_client_message = std::time::Instant::now();
                     touch(&auth);
                     if bytes.len() > MAX_INPUT_FRAME { break Err("input_frame_too_large".into()); }
+                    let interrupt = is_interrupt_frame(&bytes);
                     // Before anything else reads the frame: a mouse report is
                     // dropped here (acked, as the AI switch's drops are), so it
                     // neither reaches tmux nor counts as the phone commanding it.
                     let bytes = mouse.feed(&bytes);
+                    held_esc_key = interrupt && mouse.pending();
                     flush_at = mouse.pending().then(|| tokio::time::Instant::now() + ESC_HOLD);
                     if bytes.is_empty() {
                         input_frames += 1;
@@ -1015,9 +1096,9 @@ pub async fn attach(
                     // never reported as having commanded it — and never acked.
                     input_frames += 1;
                     if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
-                    if input_report_due(last_input_report, last_client_message) {
+                    if interrupt || input_report_due(last_input_report, last_client_message) {
                         last_input_report = Some(last_client_message);
-                        on_input();
+                        on_input(interrupt);
                     }
                 }
                 Some(Ok(Message::Text(text))) => {
@@ -1044,6 +1125,23 @@ pub async fn attach(
                         // what finishes in between stays unread.
                         TerminalControl::Visibility { visible } => {
                             if guard.set_visible(visible) { on_seen(); }
+                        }
+                        // Nothing goes in while the AI switch is off: the
+                        // queue Esc would release is the agent's work.
+                        TerminalControl::SendNow { family } => {
+                            let sent = match queue_hint(&family) {
+                                Some(hint) if !ai_off => {
+                                    let target = target.clone();
+                                    tokio::task::spawn_blocking(move || target.send_now(hint)).await.unwrap_or(false)
+                                }
+                                _ => false,
+                            };
+                            // An Esc the pane got, told as the phone's own is.
+                            if sent {
+                                last_input_report = Some(std::time::Instant::now());
+                                on_input(true);
+                            }
+                            if !deliver(&mut ws_tx, Message::Text(TerminalEvent::SendNow { sent }.to_frame().into())).await { break Ok(()); }
                         }
                     }
                 }
@@ -1102,11 +1200,11 @@ fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str)
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_scrollback, parse_window_size, tmux_attach_command, tmux_capture_command,
+        normalize_scrollback, parse_window_size, queue_hint, queue_hint_shown, tmux_attach_command, tmux_capture_command,
         tmux_window_size_command, MOBILE_SCROLLBACK_LINES,
     };
     use super::{
-        ack_frame, closing_retries, deliver, input_report_due, replay_frames, OutputQueue, IDLE_TIMEOUT,
+        ack_frame, closing_retries, deliver, input_report_due, is_interrupt_frame, replay_frames, OutputQueue, IDLE_TIMEOUT,
         INPUT_REPORT_INTERVAL, REPLAY_CHUNK, WRITE_TIMEOUT,
     };
     use super::MouseReportFilter;
@@ -1274,6 +1372,17 @@ mod tests {
         // Typing again after the window is a new burst — and the desktop may
         // have forgotten the tab in between (a respawn clears the stamp).
         assert!(input_report_due(Some(start), start + INPUT_REPORT_INTERVAL));
+    }
+
+    #[test]
+    fn a_bare_esc_or_ctrl_c_is_an_interrupt_and_nothing_else_is() {
+        assert!(is_interrupt_frame(b"\x1b"));
+        assert!(is_interrupt_frame(b"\x03"));
+        // An arrow key, Alt+x, a prompt ending in Enter: input, not an interrupt.
+        assert!(!is_interrupt_frame(b"\x1b[A"));
+        assert!(!is_interrupt_frame(b"\x1bx"));
+        assert!(!is_interrupt_frame(b"go on\r"));
+        assert!(!is_interrupt_frame(b""));
     }
 
     #[tokio::test]
@@ -1477,9 +1586,58 @@ mod tests {
             r#"{"type":"closing","reason":"access_revoked","retry":false}"#
         );
         assert_eq!(
-            TerminalEvent::Features { visibility: true }.to_frame(),
-            r#"{"type":"features","visibility":true}"#
+            TerminalEvent::Features { visibility: true, send_now: true }.to_frame(),
+            r#"{"type":"features","visibility":true,"send_now":true}"#
         );
+        assert_eq!(TerminalEvent::SendNow { sent: true }.to_frame(), r#"{"type":"send_now","sent":true}"#);
+    }
+
+    #[test]
+    fn send_now_reads_the_queue_hint_off_the_input_box_only() {
+        let hint = queue_hint("claude").expect("claude has a hint");
+        // Claude Code 2.1.310, a message waiting behind the turn.
+        assert!(queue_hint_shown("✻ Pondering… (9s · thinking)\n───\n❯ Press up to edit queued messages\n───\n", &hint));
+        // 2.1.310 draws the box's space after `❯` as a no-break space.
+        assert!(queue_hint_shown("───\n❯\u{a0}Press up to edit queued messages, Enter to send them immediately:\n───", &hint));
+        // Taken up by the turn at a tool call: the box is empty again.
+        assert!(!queue_hint_shown("❯ Reply only BANANA\n✽ Osmosing… (4s)\n───\n❯ \n───", &hint));
+        // The words in the conversation are not the box.
+        assert!(!queue_hint_shown("  it said Press up to edit queued messages\n❯ ", &hint));
+        // CLIs that take a mid-turn message in at once, or show no queue.
+        for family in ["codex", "copilot", "opencode", "gemini", "agent"] {
+            assert!(queue_hint(family).is_none(), "{family}");
+        }
+    }
+
+    /// The local check and press against the real tmux (run with
+    /// `--ignored`): the pane echoes the keys it gets, so the Esc shows as `^[`.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs the real tmux"]
+    fn local_send_now_presses_esc_into_the_pane_only_while_the_hint_shows() {
+        let name = format!("send-now-test-{}", std::process::id());
+        let tmux = |args: &[&str]| crate::services::tmux_local::tmux_command().args(args).output().expect("tmux runs");
+        let screen = |name: &str| {
+            String::from_utf8_lossy(&tmux(&["capture-pane", "-p", "-t", &format!("={name}:")]).stdout).to_string()
+        };
+        let wait = || std::thread::sleep(std::time::Duration::from_millis(400));
+        let hint = queue_hint("claude").unwrap();
+        let target = super::AttachTarget::Local { name: name.clone() };
+
+        tmux(&["new-session", "-d", "-s", &name, "-x", "80", "-y", "10", "printf '❯ \\n'; stty raw -echo; cat -v"]);
+        wait();
+        assert!(!target.send_now(hint));
+        wait();
+        assert!(!screen(&name).contains("^["));
+
+        tmux(&["kill-session", "-t", &format!("={name}")]);
+        tmux(&["new-session", "-d", "-s", &name, "-x", "80", "-y", "10", "printf '❯ Press up to edit queued messages\\n'; stty raw -echo; cat -v"]);
+        wait();
+        assert!(target.send_now(hint));
+        wait();
+        let after = screen(&name);
+        tmux(&["kill-session", "-t", &format!("={name}")]);
+        assert!(after.contains("^["), "{after}");
     }
 
     #[test]

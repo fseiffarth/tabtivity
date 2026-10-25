@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
-import { lastPrompt } from "../agentPrompts";
+import { draftPreview, lastPrompt } from "../agentPrompts";
+import { readDrafts } from "../drafts";
 import { getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
 import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass, lastWorkedAt } from "../components/AgentModeMarks";
@@ -85,12 +86,23 @@ export function Activity({ open, onConnection }: {
   /** Taken at each poll rather than at render, so the ages on the rows move
    * with the list and not with every re-render in between. */
   const [now, setNow] = useState(() => Date.now());
+  /** Messages typed on this phone and not sent, by tab (`drafts.ts`), re-read
+   * with every poll: a tab holding one rises under the working ones and its
+   * row shows the draft where the last prompt would be. */
+  const drafts = useMemo(() => {
+    const stored = readDrafts();
+    return Object.fromEntries(tabs.flatMap((tab) => {
+      const preview = draftPreview(stored[tab.id]);
+      return preview ? [[tab.id, preview]] : [];
+    })) as Record<string, string>;
+  }, [tabs]);
   const sorted = useMemo(() => sortAgentTabs(tabs, sort, (tab) => ({
     decision: tab.agent_status === "question",
     working: tab.agent_status === "working",
+    drafted: tab.id in drafts,
     workingAt: tab.working_at,
     doneAt: lastWorkedAt(tab),
-  })), [sort, tabs]);
+  })), [drafts, sort, tabs]);
   useEffect(() => {
     let disposed = false;
     const controller = new AbortController();
@@ -147,7 +159,9 @@ export function Activity({ open, onConnection }: {
       // list is read to decide which tab to open, and "claude 2 · Paper ·
       // worked 3m ago" says everything about that except the thing it was
       // asked. Two lines at most, then ellipsized — the card stays a card.
-      const asked = lastPrompt(tab);
+      // An unsent draft is what the reader was about to say there, so it
+      // takes the line — with no time, having gone nowhere yet.
+      const asked = drafts[tab.id] ? { text: drafts[tab.id] } : lastPrompt(tab);
       return <button
         // The tab's colour (#264) carries onto this list too, and this is the
         // list it earns most: a flat cross-project row of look-alike "claude"
@@ -158,7 +172,7 @@ export function Activity({ open, onConnection }: {
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}
         onClick={() => open(tab.project_id, tab)}
       >
-        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}</small>}</span>
+        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}{drafts[tab.id] && isUntested("mobile.project.draftLine") && <em> · {t("mobile.focus.untested")}</em>}</small>}</span>
         <span className="card-trailing"><AgentModeMarks tab={tab} /><SubagentCount tab={tab} /><TurnDuration tab={tab} finished={false} />{tab.agent_status && <AgentStatusPill status={tab.agent_status} />}<span>›</span></span>
       </button>;
     })}</section>

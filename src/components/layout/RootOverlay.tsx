@@ -43,7 +43,7 @@ import { NewTabMenu } from "../tabs/NewTabMenu";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { TabScopeContext } from "../tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
-import { TabAgentModeMarks, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
+import { TabAgentModeMarks, TabContinueButton, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
 import { pickEdge, previewInset } from "../tabs/dragGeometry";
 import { dragPreviewLayout } from "../tabs/dragPreview";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -1023,6 +1023,7 @@ function GroupStrip({
             <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
             <span className="tab-label">{tab.label}</span>
             <TabAgentModeMarks scope={ROOT_SCOPE} tab={tab} isActive={isActive} />
+            <TabContinueButton tab={tab} stateClass={stateClass} />
             {install && <UntestedTag id="rootConsole.installTabTitle" />}
             <button
               className="tab-close"

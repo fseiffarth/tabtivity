@@ -267,6 +267,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_agents", Core),
     ("node_runtime_status", Core),
     ("probe_binaries", Core),
+    ("remember_model_rows", Core),
+    ("remembered_model_rows", Core),
     ("uninstall_agent", Admin),
     ("update_agent", Admin),
     // commands/agent_tasks.rs
@@ -298,6 +300,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // feature (the server case is handled by not offering it), and
     // `assistant_set_search` is their own setting, which `admin` would lock a
     // hosted server's users out of.
+    ("assistant_claude_models", Core),
     ("assistant_new_chat", Core),
     ("assistant_options", Core),
     ("assistant_set_search", Core),
@@ -952,6 +955,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),
+    ("agent_tab_features", Core),
     ("copilot_fence_auth_status", Core),
     ("copilot_fence_sign_out", Core),
     ("local_tmux_kill", Core),

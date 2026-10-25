@@ -1,5 +1,6 @@
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
+import type { ModelRows } from "./terminal/modelRows";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -156,6 +157,10 @@ export interface ClosedTabRow { id: string; label: string; agent: string; closed
  * (the desktop's switch is on, and it is a project, not a box or root). */
 export interface ProjectDetail {
   project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  /** Whether the file browser also has a remote side: a remote project's tree
+   * on its host, read over the desktop's connection (`?on=host`). The host is
+   * never named. Absent (an older desktop) is none. */
+  host_files?: boolean;
   /** Whether the host has a folder to give the phone for this project (a remote
    * project before its first sync, a VM without a mirror: no). Without one the
    * project screen hides the files, Git and send-a-file entries and says why.
@@ -648,18 +653,51 @@ export function moveTabWorktree(tabId: string, worktree: string): Promise<{ move
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
 }
 
-/** The models a Tabby chat's model chip can switch it to (names the desktop's
- * own chip lists) and the one it runs now. */
-export interface AssistantModels { models: string[]; current?: string }
+/** One model of a Tabby chat's sheet: `id` is what a switch sends, the words
+ * are Claude's own picker's where the desktop read them. */
+export interface AssistantModelRow { id: string; label: string; description?: string }
+
+/** The models a Tabby chat's model chip can switch it to (the rows the
+ * desktop's own chip lists) and the one it runs now. */
+export interface AssistantModels { models: AssistantModelRow[]; current?: string }
+
+/** Past the sidecar's 32 s wait on the desktop, whose first list for a Claude
+ * chat comes from a probe that starts a CLI (`DesktopRequest::response_timeout`). */
+const ASSISTANT_MODELS_TIMEOUT = 36_000;
 
 /** `GET /api/v1/tabs/{id}/assistant-models` — asked when the chip's sheet opens
- * on a chat of the assistant scope, whose `/model` is off. */
+ * on a chat of the assistant scope, whose `/model` is off. A desktop that sends
+ * no rows yet is read from its names. */
 export async function getAssistantModels(tabId: string): Promise<AssistantModels> {
-  const body = await api<{ models?: unknown; current?: unknown }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-models`);
+  const body = await api<{ models?: unknown; rows?: unknown; current?: unknown }>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-models`, undefined, ASSISTANT_MODELS_TIMEOUT);
+  const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+  const rows: AssistantModelRow[] = Array.isArray(body.rows)
+    ? body.rows.flatMap((row: unknown) => {
+      const { id, label, description } = (row ?? {}) as Record<string, unknown>;
+      const [shownId, shownLabel, note] = [text(id), text(label), text(description)];
+      return shownId && shownLabel ? [note ? { id: shownId, label: shownLabel, description: note } : { id: shownId, label: shownLabel }] : [];
+    })
+    : [];
+  const names = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
   return {
-    models: Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [],
-    ...(typeof body.current === "string" && body.current ? { current: body.current } : {}),
+    models: rows.length > 0 ? rows : names.map((id) => ({ id, label: id })),
+    ...(text(body.current) ? { current: text(body.current) } : {}),
   };
+}
+
+/** `GET /api/v1/tabs/{id}/model-rows` — the rows the tab's CLI build's own
+ * model picker drew last time (`services::model_rows`), for the model sheet to
+ * list while the session draws its picker. `409 not_this_machine` for a tab
+ * whose CLI runs elsewhere. */
+export function getModelRows(tabId: string): Promise<ModelRows> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`);
+}
+
+/** `POST /api/v1/tabs/{id}/model-rows` — keep the rows just read off the
+ * tab's live model picker for its CLI build. */
+export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kept: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
 }
 
 /** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
@@ -986,6 +1024,55 @@ export async function getUncommitted(tabId: string, signal?: AbortSignal): Promi
   }
 }
 
+/** One file one call of the chat changed, as the diff its CLI recorded:
+ * unified-diff hunks, each opened by its `@@` line. `path` (and `moved_to`)
+ * is relative to its checkout; `worktree` names a linked worktree (or a box
+ * member's folder) it is in, never by path. */
+export interface ChatChange {
+  path: string;
+  worktree?: TabWorktree;
+  kind: "edit" | "add" | "delete" | "write";
+  diff: string;
+  added: number;
+  removed: number;
+  at?: string;
+  cut?: boolean;
+  moved_to?: string;
+}
+/** The Diffs view's feed. `outside` counts changes to files in no checkout
+ * of the project (left out). `available: false` with `reason` — `files_off`
+ * while the desktop's "Project files on the phone" switch is off. */
+export interface ChatChanges {
+  available: boolean;
+  reason?: string;
+  version?: string;
+  unchanged?: boolean;
+  changes: ChatChange[];
+  truncated: boolean;
+  outside?: number;
+}
+
+/** `GET /api/v1/tabs/{id}/changes` — the diffs the chat (or `subagent`'s
+ * conversation) recorded; `version` as `getTranscript`'s. The route sits
+ * behind the "Project files on the phone" switch: refused as `files_off`, it
+ * answers unavailable with that reason; a host older than the route (a
+ * bodiless 404) as `unsupported`. */
+export async function getChanges(tabId: string, version?: string, subagent?: string, signal?: AbortSignal): Promise<ChatChanges> {
+  const query = new URLSearchParams();
+  if (version) query.set("version", version);
+  if (subagent) query.set("subagent", subagent);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  try {
+    const body = await api<Partial<ChatChanges>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/changes${suffix}`, { signal });
+    return { ...body, available: body.available === true, changes: body.changes ?? [], truncated: body.truncated === true };
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && (reason.code === "files_off" || reason.code === "request_failed")) {
+      return { available: false, reason: reason.code === "files_off" ? "files_off" : "unsupported", changes: [], truncated: false };
+    }
+    throw reason;
+  }
+}
+
 /** A file the phone dropped into the tab's project inbox. `reference` is
  * project-relative (`.tabtivity/inbox/<file>`) — the one path shape that crosses
  * this boundary, because it carries no host component and is exactly what the
@@ -1153,11 +1240,19 @@ export function outboxFileUrl(scope: OutboxScope, name: string, download = false
   return `${outboxBase(scope)}/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
 }
 
+/** Which side of the file browser: this computer's folder, or (`host`) a
+ * remote project's tree on its host. */
+export type FilesSide = "here" | "host";
+
 /** Where the full-screen viewer reads a file from: one project's outbox (by
  * its tab or the project), `files` — the project's own tree through the
- * read-only file browser, where a file is fetched by its sealed `ref` — or
- * `inbox`, what the phone sent into a tab's project inbox (by the tab). */
-export type ViewerScope = OutboxScope | { files: string } | { inbox: string };
+ * read-only file browser, where a file is fetched by its sealed `ref`, on the
+ * remote side with `on: "host"` — or `inbox`, what the phone sent into a
+ * tab's project inbox (by the tab). */
+export type ViewerScope = OutboxScope | { files: string; on?: "host" } | { inbox: string };
+
+/** The query a file-browser request names its side by: none for this computer. */
+const sideQuery = (side: FilesSide | undefined) => side === "host" ? "on=host" : "";
 
 /** The URL a file the phone sent into a tab's project inbox loads from (its
  * leaf, out of the phone's own `@` reference) — same origin, so an `<img>`
@@ -1179,7 +1274,7 @@ export async function describeInbox(tabId: string, names: readonly string[], sig
 export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = false): string {
   if ("inbox" in scope) return inboxFileUrl(scope.inbox, file.name, download);
   if ("files" in scope) {
-    return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}`;
+    return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}${scope.on === "host" ? "&on=host" : ""}`;
   }
   return outboxFileUrl(scope, file.name, download);
 }
@@ -1227,12 +1322,14 @@ export interface ProjectFileEntry {
  * the way down starts with a dot. An older desktop omits it (no uploads). */
 export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
 
-/** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the
- * project; no `dir` is the project's root. Answers only while the desktop's
- * "Project files on the phone" switch is on (`files_off` else). */
-export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
-  const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
-  return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
+/** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
+ * the project; no `dir` is the project's root. Answers only while the
+ * desktop's "Project files on the phone" switch is on (`files_off` else). The
+ * remote side (`side` `host`) answers `host_offline` while the desktop holds
+ * no connection to the host. */
+export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileListing> {
+  const query = [dir ? `dir=${encodeURIComponent(dir)}` : "", sideQuery(side)].filter(Boolean).join("&");
+  return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query ? `?${query}` : ""}`, { signal });
 }
 
 /** A file or folder whose name matched a search: its row, and the sealed
@@ -1245,8 +1342,9 @@ export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean 
  * and folders whose names hold every word, any case, the closest first. In a
  * git repo what git ignores is not searched. Behind the same switch as the
  * listing. */
-export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
-  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileSearch> {
+  const on = sideQuery(side);
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal });
 }
 
 /** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the

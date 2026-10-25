@@ -66,6 +66,7 @@ import {
   TabAgentModeMarks,
   TabSourceBadge,
   TabStatusMark,
+  TabContinueButton,
   statusMarkSlots,
   TabTexLinkBadge,
   TabLocalityBadge,
@@ -388,6 +389,7 @@ const TabItem = memo(function TabItem({
       )}
       <TabMarkBadge tab={tab} />
       <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
+      <TabContinueButton tab={tab} stateClass={stateClass} />
       {tab.hostSession && (
         <span className="tab-host-session" title={t("tab.hostSessionBadgeTitle")}>
           {t("tab.hostSessionBadge")}

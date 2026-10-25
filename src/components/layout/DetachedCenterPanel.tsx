@@ -105,6 +105,7 @@ import {
   TabAgentModeMarks,
   TabSourceBadge,
   TabStatusMark,
+  TabContinueButton,
   TabTexLinkBadge,
   TabLocalityBadge,
   LocalityMenu,
@@ -1599,6 +1600,7 @@ export function DetachedCenterPanel({
                   <span className="tab-label">{tab.label}</span>
                   <TabMarkBadge tab={tab} inPopout />
                   <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
+                  <TabContinueButton tab={tab} stateClass={stateClass} />
                   {(tab.kind === "agent" || tab.kind === "local_agent") && tab.scheduleTargetId && (() => {
                     const enabled = (schedulesByTarget[scheduleCacheKey(scope, tab.scheduleTargetId)] ?? [])
                       .filter((schedule) => schedule.enabled);

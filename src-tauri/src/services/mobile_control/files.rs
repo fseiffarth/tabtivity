@@ -68,6 +68,9 @@ pub enum FilesError {
     NotFound,
     /// A file that is not text and is larger than the phone is handed.
     TooLarge,
+    /// The remote side (`host_files`): the desktop holds no connection to
+    /// the project's host the phone could ride.
+    HostOffline,
     Io(String),
 }
 
@@ -78,6 +81,7 @@ impl FilesError {
             FilesError::Unavailable => "project_unavailable",
             FilesError::NotFound => "file_not_found",
             FilesError::TooLarge => "file_too_large",
+            FilesError::HostOffline => "host_offline",
             FilesError::Io(_) => "read_failed",
         }
     }
@@ -125,7 +129,7 @@ pub fn hidden(name: &str) -> bool {
 
 /// A leaf the browser lists and resolves. The same test both ways, so nothing
 /// is listed that could not be opened again.
-fn valid_segment(name: &str) -> bool {
+pub(super) fn valid_segment(name: &str) -> bool {
     plain_segment(name) && !hidden(name)
 }
 
@@ -143,7 +147,7 @@ fn plain_segment(name: &str) -> bool {
         && !(cfg!(windows) && name.contains(['\\', ':']))
 }
 
-fn valid_rel(rel: &str) -> bool {
+pub(super) fn valid_rel(rel: &str) -> bool {
     rel.len() <= MAX_REL && (rel.is_empty() || rel.split('/').all(valid_segment))
 }
 
@@ -562,7 +566,7 @@ pub(crate) fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
     windows::path_identity(path).map(|(volume, id)| (volume, u128::from_le_bytes(id)))
 }
 
-fn child(rel: &str, name: &str) -> String {
+pub(super) fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
 }
 
@@ -767,7 +771,7 @@ pub struct Found {
 /// How well a leaf matches the query's words, lower is better, or `None`
 /// when some word is not in it: the whole name (or the name before its
 /// extension), then a name starting with the first word, then anywhere.
-fn rank(name: &str, words: &[String]) -> Option<u8> {
+pub(super) fn rank(name: &str, words: &[String]) -> Option<u8> {
     let lower = name.to_lowercase();
     if !words.iter().all(|word| lower.contains(word.as_str())) {
         return None;
