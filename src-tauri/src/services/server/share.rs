@@ -806,10 +806,7 @@ fn page_bounds(text: &str) -> Vec<(usize, usize)> {
     let mut bounds = Vec::new();
     let mut start = 0;
     while start < text.len() {
-        let mut end = (start + REVIEW_PAGE_BYTES).min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = text.floor_char_boundary(start + REVIEW_PAGE_BYTES);
         bounds.push((start, end));
         start = end;
     }

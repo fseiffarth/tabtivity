@@ -284,14 +284,6 @@ fn round(
     live
 }
 
-/// Seconds since the epoch, the timer lease's clock.
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 /// One round against the real state dir and ssh.
 fn round_now(state_dir: &Path, memory: &mut Memory) -> HostLive {
     let targets = super::discovery::host_probe_targets(state_dir);
@@ -300,7 +292,7 @@ fn round_now(state_dir: &Path, memory: &mut Memory) -> HostLive {
         return HostLive::default();
     }
     let lease = crate::services::timer_lease::lease_file(state_dir);
-    let window_up = crate::services::timer_lease::holder_in(&lease, unix_now()).is_some();
+    let window_up = crate::services::timer_lease::holder_in(&lease, crate::clock::now_secs()).is_some();
     let hpc = hpc_hosts(state_dir);
     round(&targets, window_up, hpc.as_ref(), memory, &SshProbe, Instant::now())
 }

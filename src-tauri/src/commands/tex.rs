@@ -481,11 +481,7 @@ fn tail(log: &str) -> String {
     if log.len() <= MAX {
         return log.to_string();
     }
-    let mut start = log.len() - MAX;
-    while start < log.len() && !log.is_char_boundary(start) {
-        start += 1;
-    }
-    format!("…\n{}", &log[start..])
+    format!("…\n{}", &log[log.ceil_char_boundary(log.len() - MAX)..])
 }
 
 /// The latexmk flag that selects `engine`'s pdf mode.

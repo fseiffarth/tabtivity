@@ -595,9 +595,7 @@ static FOLDERS_READ: std::sync::LazyLock<std::sync::Mutex<FoldersRead>> = std::s
 /// a handle the phone already holds must still match after a rename, and the
 /// string is never shown or written anywhere.
 pub fn subagent_token(id: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(format!("{}{id}", crate::brand::PINNED_SUBAGENT_TOKEN_CONTEXT).as_bytes());
-    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    crate::digest::sha256_hex(format!("{}{id}", crate::brand::PINNED_SUBAGENT_TOKEN_CONTEXT).as_bytes())[..16].to_string()
 }
 
 /// A well-formed [`subagent_token`]: sixteen lowercase hex digits.
@@ -1334,11 +1332,7 @@ fn newest_context_card(lines: &[&str], kind: TranscriptKind) -> Option<String> {
         if !card.trim_start().starts_with("Context Usage") {
             return None;
         }
-        let mut cut = card.len().min(MAX_CONTEXT_CARD);
-        while !card.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        Some(card[..cut].to_string())
+        Some(card[..card.floor_char_boundary(MAX_CONTEXT_CARD)].to_string())
     })
 }
 

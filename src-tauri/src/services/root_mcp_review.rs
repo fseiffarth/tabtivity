@@ -6,7 +6,6 @@ use super::root_mcp_security::{self as security, Access};
 use crate::{commands::calendar, storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -69,11 +68,8 @@ pub struct ReviewEntry {
     pub closed: bool,
 }
 
-pub fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
 pub fn digest(p: &Proposal) -> String {
-    hash(
+    crate::digest::sha256_hex(
         serde_json::to_string(&json!([
             p.id,
             p.tab,
@@ -97,7 +93,7 @@ pub fn sandbox(state: &Path, tab: &str) -> PathBuf {
     // PTY ids are opaque, never path components supplied by an agent.
     state
         .join("root_mcp/sandboxes")
-        .join(hash(tab.as_bytes()))
+        .join(crate::digest::sha256_hex(tab.as_bytes()))
         .join("calendar.json")
 }
 pub fn load(state: &Path) -> Result<Vec<Proposal>, String> {
@@ -182,7 +178,7 @@ pub fn list(stores: &Stores) -> Result<Vec<ReviewEntry>, String> {
     let mut proposals = load(stores.state)?;
     let real_bytes = std::fs::read(stores.calendar).unwrap_or_default();
     let pending: Vec<(&str, &str)> = proposals.iter().filter(|p| p.status == "pending").map(|p| (p.id.as_str(), p.created.as_str())).collect();
-    let signature = hash(serde_json::to_string(&json!([hash(&real_bytes), pending])).unwrap().as_bytes());
+    let signature = crate::digest::sha256_hex(serde_json::to_string(&json!([crate::digest::sha256_hex(&real_bytes), pending])).unwrap().as_bytes());
     let verified = LIST_SEEN.lock_ok().as_deref() == Some(signature.as_str());
     if !verified {
         let mut tabs = std::collections::HashSet::new();
@@ -381,8 +377,8 @@ fn rebuild(stores: &Stores, tab: &str, proposals: &mut [Proposal]) -> Result<Pat
         .iter()
         .filter(|p| p.tab == tab && p.status == "pending")
         .collect();
-    let signature = hash(
-        serde_json::to_string(&json!([hash(&real_bytes), pending, stores.access]))
+    let signature = crate::digest::sha256_hex(
+        serde_json::to_string(&json!([crate::digest::sha256_hex(&real_bytes), pending, stores.access]))
             .unwrap()
             .as_bytes(),
     );
@@ -391,7 +387,7 @@ fn rebuild(stores: &Stores, tab: &str, proposals: &mut [Proposal]) -> Result<Pat
         storage::read_json::<Value>(&stamp_path),
         std::fs::read(&path),
     ) {
-        if stamp["source"] == signature && stamp["copy"] == hash(&copy) {
+        if stamp["source"] == signature && stamp["copy"] == crate::digest::sha256_hex(&copy) {
             return Ok(path);
         }
     }
@@ -412,7 +408,7 @@ fn rebuild(stores: &Stores, tab: &str, proposals: &mut [Proposal]) -> Result<Pat
     let copy = std::fs::read(&path).map_err(|e| e.to_string())?;
     storage::write_json_atomic(
         &stamp_path,
-        &json!({"source": signature, "copy": hash(&copy)}),
+        &json!({"source": signature, "copy": crate::digest::sha256_hex(&copy)}),
     )
     .map_err(|e| e.to_string())?;
     Ok(path)
@@ -869,7 +865,7 @@ pub fn sweep_sandboxes(state: &Path) {
     let _guard = lock();
     let Ok(entries) = std::fs::read_dir(state.join("root_mcp/sandboxes")) else { return };
     let live: std::collections::HashSet<String> =
-        root_mcp::sessions().into_iter().map(|s| hash(s.tab.as_bytes())).collect();
+        root_mcp::sessions().into_iter().map(|s| crate::digest::sha256_hex(s.tab.as_bytes())).collect();
     for entry in entries.flatten() {
         if !entry.file_name().to_str().is_some_and(|name| live.contains(name)) {
             let _ = std::fs::remove_dir_all(entry.path());

@@ -318,13 +318,7 @@ pub mod pipe {
     /// [`pipe_name`] under a given prefix: the current one, or the one an
     /// older build's host listens on.
     pub fn pipe_name_with(prefix: &str, socket: &Path) -> String {
-        use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(socket.to_string_lossy().as_bytes());
-        let mut hex = String::with_capacity(32);
-        for byte in &digest[..16] {
-            use std::fmt::Write;
-            let _ = write!(hex, "{byte:02x}");
-        }
+        let hex = &crate::digest::sha256_hex(socket.to_string_lossy().as_bytes())[..32];
         format!(r"\\.\pipe\{prefix}{hex}")
     }
 
@@ -336,11 +330,7 @@ pub mod pipe {
     pub fn create_token(socket: &Path) -> Result<String, String> {
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
-        let mut token = String::with_capacity(64);
-        for byte in &bytes {
-            use std::fmt::Write;
-            let _ = write!(token, "{byte:02x}");
-        }
+        let token = crate::digest::hex(&bytes);
         crate::storage::write_private_atomic(&token_path(socket), token.as_bytes())
             .map_err(|e| format!("write control token: {e}"))?;
         Ok(token)

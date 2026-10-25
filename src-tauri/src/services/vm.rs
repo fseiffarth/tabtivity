@@ -1229,11 +1229,7 @@ pub fn seed_instance_id(project_id: &str, user_data: &str) -> String {
 }
 
 fn seed_instance_id_for(names: &VmNames, project_id: &str, user_data: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(user_data.as_bytes());
-    let digest = hasher.finalize();
-    let hash_hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    let hash_hex = &crate::digest::sha256_hex(user_data.as_bytes())[..8];
     let id8: String = project_id.chars().take(8).collect();
     format!("{}{id8}-{hash_hex}", names.instance_prefix)
 }

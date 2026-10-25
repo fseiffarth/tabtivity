@@ -788,71 +788,42 @@ pub fn rewrite_path_prefix(value: &mut serde_json::Value, old: &str, new: &str) 
     }
 }
 
-use crate::clock::now_secs;
-
 /// Current date in UTC as "YYYY-MM-DD".
 pub fn today_utc() -> String {
-    let (y, m, d, ..) = epoch_to_utc(now_secs());
-    format!("{y:04}-{m:02}-{d:02}")
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
 /// Current UTC hour as "YYYY-MM-DDTHH" — a sortable stamp whose first ten
 /// characters are exactly [`today_utc`], so an hour bucket always folds into the
 /// right day bucket.
 pub fn hour_utc() -> String {
-    let (y, m, d, h, ..) = epoch_to_utc(now_secs());
-    format!("{y:04}-{m:02}-{d:02}T{h:02}")
+    chrono::Utc::now().format("%Y-%m-%dT%H").to_string()
 }
 
-/// Current timestamp as ISO-8601 UTC string (seconds precision).
+/// Current timestamp as ISO-8601 UTC string (seconds precision), the `+00:00`
+/// form every persisted file carries (`2026-10-25T12:00:00+00:00`). The one
+/// copy: the crash log's stamps use it too.
 pub fn iso_now() -> String {
-    let (y, mo, d, h, mi, s) = epoch_to_utc(now_secs());
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00")
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
 /// Convert a Unix timestamp to UTC calendar fields:
-/// (year, month, day, hour, minute, second).
+/// (year, month, day, hour, minute, second). Allocation-free, so the crash
+/// handler may call it; a timestamp chrono cannot represent reads as the epoch.
 pub(crate) fn epoch_to_utc(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let mut days = secs / 86400;
-    let mut year = 1970u64;
-    loop {
-        let dy = if is_leap_year(year) { 366 } else { 365 };
-        if days < dy {
-            break;
-        }
-        days -= dy;
-        year += 1;
-    }
-    let month_lens: [u64; 12] = [
-        31,
-        if is_leap_year(year) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1u64;
-    for &ml in &month_lens {
-        if days < ml {
-            break;
-        }
-        days -= ml;
-        month += 1;
-    }
-    (year, month, days + 1, h, m, s)
-}
-
-pub(crate) fn is_leap_year(y: u64) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+    use chrono::{Datelike, Timelike};
+    let t = i64::try_from(secs)
+        .ok()
+        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+        .unwrap_or_default();
+    (
+        t.year() as u64,
+        u64::from(t.month()),
+        u64::from(t.day()),
+        u64::from(t.hour()),
+        u64::from(t.minute()),
+        u64::from(t.second()),
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -991,6 +962,31 @@ mod tests {
         assert!(s.ends_with("+00:00"), "must end with +00:00, got: {s}");
     }
 
+    /// The stamp older files carry (`+00:00`, written by the hand-rolled
+    /// formatter this replaced) and the `Z` form the crash log used to carry
+    /// both parse back, to the same instant, and `iso_now` reads back to now.
+    #[test]
+    fn iso_now_round_trips_in_both_spellings() {
+        let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
+        assert_eq!(parse("2024-06-03T11:34:56+00:00"), 1717414496);
+        assert_eq!(parse("2024-06-03T11:34:56Z"), 1717414496);
+        let before = crate::clock::now_secs() as i64;
+        let now = iso_now();
+        let after = crate::clock::now_secs() as i64;
+        assert_eq!(now.len(), "2024-06-03T11:34:56+00:00".len(), "{now}");
+        assert!((before..=after).contains(&parse(&now)), "{now}");
+        assert_eq!(parse(&now.replace("+00:00", "Z")), parse(&now));
+    }
+
+    #[test]
+    fn epoch_to_utc_matches_chrono_formatting_over_the_leap_years() {
+        for secs in [0u64, 86_399, 951_782_400, 1_078_099_199, 1_709_164_800, 4_107_542_400, 32_503_680_000] {
+            let (y, mo, d, h, mi, s) = epoch_to_utc(secs);
+            let want = chrono::DateTime::from_timestamp(secs as i64, 0).unwrap().format("%Y-%m-%dT%H:%M:%S").to_string();
+            assert_eq!(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"), want);
+        }
+    }
+
     #[test]
     fn iso_now_contains_t_separator() {
         let s = iso_now();
@@ -1006,29 +1002,6 @@ mod tests {
             now.starts_with(year),
             "iso_now year must match today: now={now} today={today}"
         );
-    }
-
-    // ── is_leap_year ───────────────────────────────────────────────────────
-
-    #[test]
-    fn year_divisible_by_4_is_leap() {
-        assert!(is_leap_year(2024));
-        assert!(is_leap_year(2000));
-        assert!(is_leap_year(1600));
-    }
-
-    #[test]
-    fn year_divisible_by_100_but_not_400_is_not_leap() {
-        assert!(!is_leap_year(1900));
-        assert!(!is_leap_year(1800));
-        assert!(!is_leap_year(2100));
-    }
-
-    #[test]
-    fn year_not_divisible_by_4_is_not_leap() {
-        assert!(!is_leap_year(2023));
-        assert!(!is_leap_year(2025));
-        assert!(!is_leap_year(1999));
     }
 
     // ── epoch_to_utc ───────────────────────────────────────────────────────

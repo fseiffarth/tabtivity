@@ -36,11 +36,7 @@ pub fn encode_body(chunk: &str) -> String {
     let folded: String = chunk.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let mut text = folded.trim();
     if text.len() > MAX_BODY_BYTES {
-        let mut end = MAX_BODY_BYTES;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text = &text[..end];
+        text = &text[..text.floor_char_boundary(MAX_BODY_BYTES)];
     }
     let stuffed = if text.starts_with('.') { format!(".{text}") } else { text.to_string() };
     format!("{stuffed}\r\n.\r\n")

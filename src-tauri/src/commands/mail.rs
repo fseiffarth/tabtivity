@@ -3350,11 +3350,7 @@ fn truncate_bytes(s: &str, cap: usize) -> String {
     if s.len() <= cap {
         return s.to_string();
     }
-    let mut end = cap;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
+    s[..s.floor_char_boundary(cap)].to_string()
 }
 
 /// Fetch a message's body as plain text for the local-model features.
@@ -3540,7 +3536,7 @@ pub async fn mail_extract_event(
     let state = ctx.get::<MailState>();
     let rt = state.clone();
     let (header, text) = fetch_message_text(&rt, &message_id, EXTRACT_BODY_CAP).await?;
-    let today = mail_ai::today_iso();
+    let today = crate::storage::today_utc();
     let user = mail_ai::event_user(
         &header.subject,
         &from_display(&header.from),
@@ -3569,7 +3565,7 @@ pub async fn mail_extract_task(
     let state = ctx.get::<MailState>();
     let rt = state.clone();
     let (header, text) = fetch_message_text(&rt, &message_id, EXTRACT_BODY_CAP).await?;
-    let today = mail_ai::today_iso();
+    let today = crate::storage::today_utc();
     let user = mail_ai::task_user(
         &header.subject,
         &from_display(&header.from),

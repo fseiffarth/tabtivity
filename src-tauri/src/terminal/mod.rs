@@ -467,11 +467,7 @@ fn trim_with_hysteresis(buf: &mut String, cap: usize) -> usize {
 /// front before dropping it.
 fn hysteresis_cut(buf: &str, cap: usize) -> Option<usize> {
     if buf.len() > cap * 2 {
-        let mut cut = buf.len() - cap;
-        while cut < buf.len() && !buf.is_char_boundary(cut) {
-            cut += 1;
-        }
-        return Some(cut);
+        return Some(buf.ceil_char_boundary(buf.len() - cap));
     }
     None
 }

@@ -265,9 +265,7 @@ pub fn clean_output(raw: &str, secret: Option<&str>) -> String {
 
 pub(crate) fn tail(s: &str, cap: usize) -> String {
     if s.len() <= cap { return s.to_string(); }
-    let mut start = s.len() - cap;
-    while !s.is_char_boundary(start) { start += 1; }
-    format!("…{}", &s[start..])
+    format!("…{}", &s[s.ceil_char_boundary(s.len() - cap)..])
 }
 
 /// Replace anything that looks like a token: the effective secret itself,

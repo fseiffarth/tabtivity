@@ -105,10 +105,7 @@ fn cap(text: &str) -> String {
     if text.len() <= MAX_TEXT {
         return text.to_string();
     }
-    let mut end = MAX_TEXT - '…'.len_utf8();
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(MAX_TEXT - '…'.len_utf8());
     format!("{}…", &text[..end])
 }
 

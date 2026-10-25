@@ -59,11 +59,7 @@ fn bounded(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();
     }
-    let mut end = max_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_string()
+    value[..value.floor_char_boundary(max_bytes)].to_string()
 }
 
 fn extra_string(extra: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> bool {

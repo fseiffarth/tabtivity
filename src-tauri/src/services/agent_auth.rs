@@ -176,11 +176,6 @@ fn registry() -> Vec<(&'static str, &'static [AuthPath])> {
     crate::commands::agents::auth_registry()
 }
 
-fn digest(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bytes))
-}
-
 /// The home's key in the store's records: its directory name, which is the
 /// scope's `project_key` (unique per scope, `host` for the Host session).
 fn home_key(home: &Path) -> String {
@@ -533,14 +528,14 @@ fn reconcile_file_now(
     if receive_only
         && home_bytes.as_ref().is_some_and(|b| {
             store_bytes.as_ref() != Some(b)
-                && read_placed(store_dir, home, leaf).as_deref() != Some(digest(b).as_str())
+                && read_placed(store_dir, home, leaf).as_deref() != Some(crate::digest::sha256_hex(b).as_str())
         })
     {
         // Held back, not settled: looked at again each pass.
         return false;
     }
     if let (Some(bytes), true, false) = (&home_bytes, step.adopts(), receive_only) {
-        let hash = digest(bytes);
+        let hash = crate::digest::sha256_hex(bytes);
         let placed = read_placed(store_dir, home, leaf);
         let changed = placed.as_deref() != Some(hash.as_str()) && store_bytes.as_deref() != Some(bytes.as_slice());
         if changed && adopt(cli, store_dir, store, home, bytes) {
@@ -560,7 +555,7 @@ fn reconcile_file_now(
         }
         return home_bytes.is_none();
     };
-    let hash = digest(&bytes);
+    let hash = crate::digest::sha256_hex(&bytes);
     let linked = copy.metadata().and_then(|m| m.ino).is_some_and(|ino| {
         #[cfg(unix)]
         {
@@ -797,7 +792,7 @@ fn beside_admin_key(cli: &str, state_dir: &Path, store_dir: &Path, paths: &[Auth
     // The bytes of a login file a tab wrote since the store last placed one.
     let written = |path: &AuthPath| -> Option<Vec<u8>> {
         let bytes = content(HomeFile::open_existing(home, path.rel)?.read())?;
-        let unchanged = read_placed(store_dir, home, &leaf_of(path.rel)).as_deref() == Some(digest(&bytes).as_str())
+        let unchanged = read_placed(store_dir, home, &leaf_of(path.rel)).as_deref() == Some(crate::digest::sha256_hex(&bytes).as_str())
             || content(std::fs::read(store_path_in(state_dir, cli, path)).ok()).as_deref() == Some(bytes.as_slice());
         (!unchanged).then_some(bytes)
     };
@@ -807,7 +802,7 @@ fn beside_admin_key(cli: &str, state_dir: &Path, store_dir: &Path, paths: &[Auth
             let Some(bytes) = written(path) else { continue };
             let store = store_path_in(state_dir, cli, path);
             if holds_key(cli, &bytes) == Some(false) && adopt(cli, store_dir, &store, home, &bytes) {
-                write_placed(store_dir, home, &leaf_of(path.rel), &digest(&bytes));
+                write_placed(store_dir, home, &leaf_of(path.rel), &crate::digest::sha256_hex(&bytes));
             }
         }
     }
@@ -1209,8 +1204,8 @@ pub fn retire_shared_paths_in(state_dir: &Path) {
         let leaf = leaf_of(rel);
         if let Some(copy) = HomeFile::open_existing(&host, rel) {
             if let Some(bytes) = copy.read() {
-                let hash = digest(&bytes);
-                let ours = std::fs::read(store_dir.join(&leaf)).is_ok_and(|s| digest(&s) == hash)
+                let hash = crate::digest::sha256_hex(&bytes);
+                let ours = std::fs::read(store_dir.join(&leaf)).is_ok_and(|s| crate::digest::sha256_hex(&s) == hash)
                     || read_placed(&store_dir, &host, &leaf).as_deref() == Some(hash.as_str());
                 if ours && !move_aside(cli, &copy) {
                     // Keep the store so the next start can tell again.
@@ -1417,7 +1412,7 @@ fn retire_dir_names(state_dir: &Path, cli: &str, rel: &str, names: DirNames, hom
         for name in dir.names().into_iter().filter(|n| !names.admits(n)) {
             let Some(placed) = read_placed(&store_dir, home, &format!("{prefix}{name}")) else { continue };
             let Some(copy) = dir.file(&name) else { continue };
-            if copy.read().is_some_and(|b| digest(&b) == placed) {
+            if copy.read().is_some_and(|b| crate::digest::sha256_hex(&b) == placed) {
                 move_aside(cli, &copy);
             }
         }
@@ -2394,7 +2389,7 @@ mod tests {
         // Cline: the store moved on; the Host copy is what it last placed there.
         put(&store("cline", cline), r#"{"v":2}"#);
         put(&host.join(cline), r#"{"v":1}"#);
-        write_placed(&store_dir_in(state, "cline"), &host, &leaf_of(cline), &digest(br#"{"v":1}"#));
+        write_placed(&store_dir_in(state, "cline"), &host, &leaf_of(cline), &crate::digest::sha256_hex(br#"{"v":1}"#));
         put(&a.join(cline), r#"{"v":2}"#);
         // Aider: the Host session wrote its own file, never adopted.
         put(&store("aider", aider), "AIDER_FIXTURE=store");
@@ -2522,9 +2517,9 @@ mod tests {
         for home in [&a, &b, &host] {
             std::fs::create_dir_all(home.join(kimi)).unwrap();
             std::fs::write(home.join(kimi).join("kimi-code.json"), "k1").unwrap();
-            write_placed(&store_dir, home, &leaf("kimi-code.json"), &digest(b"k1"));
+            write_placed(&store_dir, home, &leaf("kimi-code.json"), &crate::digest::sha256_hex(b"k1"));
             std::fs::write(home.join(kimi).join("x.env"), "GIT_CONFIG_COUNT=1").unwrap();
-            write_placed(&store_dir, home, &leaf("x.env"), &digest(b"GIT_CONFIG_COUNT=1"));
+            write_placed(&store_dir, home, &leaf("x.env"), &crate::digest::sha256_hex(b"GIT_CONFIG_COUNT=1"));
         }
         // b changed its copy since: its own write, kept.
         write_in_place(&b.join(kimi).join("x.env"), "OWN=1");

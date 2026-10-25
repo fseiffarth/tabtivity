@@ -24,7 +24,6 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::services::mobile_control::inbox::MAX_INBOX_FILE;
 
@@ -157,13 +156,7 @@ pub fn image_folders(os: crate::paths::OsKind, home: &Path, user_dirs: &HashMap<
 /// The opaque id of one file: a hash of its path, so the same file keeps the
 /// same id across two scans and nothing about the path can be read back.
 fn image_id(path: &Path) -> String {
-    let digest = Sha256::digest(path.as_os_str().as_encoded_bytes());
-    let mut hex = String::with_capacity(32);
-    for byte in &digest[..16] {
-        use std::fmt::Write;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
+    crate::digest::sha256_hex(path.as_os_str().as_encoded_bytes())[..32].to_string()
 }
 
 /// Whether `id` has the shape `image_id` produces (or is the clipboard's).

@@ -383,7 +383,7 @@ fn file_digest(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher).ok()?;
-    Some(format!("{:x}", hasher.finalize()))
+    Some(crate::digest::hex(&hasher.finalize()))
 }
 
 /// A git call's failure.

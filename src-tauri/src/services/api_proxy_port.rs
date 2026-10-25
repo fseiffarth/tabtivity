@@ -158,7 +158,7 @@ pub fn on_fallback(port: u16, new_port: u16) {
         }
     }
     eprintln!("[api-proxy] port {port} is held by {holder:?}; serving on {new_port}; ended {} agent session(s)", ended.len());
-    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let ts = crate::clock::now_secs();
     let _ = crate::storage::write_json_atomic(&notice_path(), &PortNotice { ts, port, new_port, holder, ended, failed });
 }
 

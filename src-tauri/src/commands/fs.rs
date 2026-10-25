@@ -1935,13 +1935,7 @@ pub fn file_mtime_local(path: &str, scope_id: Option<&str>) -> Result<u64, Strin
     let meta = open_confined(&p, &allowed_roots(scope_id), Confined::Stat)?
         .metadata()
         .map_err(|e| e.to_string())?;
-    let secs = meta
-        .modified()
-        .map_err(|e| e.to_string())?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    Ok(secs)
+    Ok(crate::clock::unix_secs(meta.modified().map_err(|e| e.to_string())?))
 }
 
 /// Return a file's size in bytes.

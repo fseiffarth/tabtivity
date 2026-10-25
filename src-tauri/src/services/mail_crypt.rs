@@ -289,13 +289,7 @@ fn hmac_hex(key: &Key, parts: &[&[u8]]) -> String {
         }
         mac.update(part);
     }
-    let out = mac.finalize().into_bytes();
-    let mut hex = String::with_capacity(out.len() * 2);
-    for b in out {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{b:02x}");
-    }
-    hex
+    crate::digest::hex(&mac.finalize().into_bytes())
 }
 
 /// The filename a blob is stored under: `HMAC-SHA256(k_addr, plaintext)`, hex.

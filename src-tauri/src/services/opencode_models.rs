@@ -81,13 +81,6 @@ fn load() -> Store {
     crate::storage::read_json(&store_path()).unwrap_or_default()
 }
 
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 fn stale(fetched: u64, now: u64) -> bool {
     now.saturating_sub(fetched) >= FRESH
 }
@@ -245,7 +238,7 @@ pub fn extra_for(providers: &[Provider]) -> HashMap<Provider, Vec<String>> {
 /// [`FRESH`]. Reads one small file.
 pub fn hidden_for(providers: &[Provider]) -> HashMap<Provider, Vec<String>> {
     let Store { mut catalog, mut keys } = load();
-    let now = now();
+    let now = crate::clock::now_secs();
     let catalog_stale = catalog.as_ref().is_none_or(|c| stale(c.fetched, now));
     if catalog_stale || providers.iter().any(|p| keys.get(p.id()).is_none_or(|l| stale(l.fetched, now))) {
         refresh(providers.to_vec());
@@ -285,7 +278,7 @@ pub fn refresh(providers: Vec<Provider>) {
 
 async fn refresh_now(providers: &[Provider]) {
     let before = load();
-    let now = now();
+    let now = crate::clock::now_secs();
     if before.catalog.as_ref().is_none_or(|c| stale(c.fetched, now)) {
         if let Some(providers) = fetch_catalog().await {
             let _guard = STORE.lock_ok();

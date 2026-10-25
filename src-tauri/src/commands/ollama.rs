@@ -3538,11 +3538,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
+    s[..s.floor_char_boundary(max)].to_string()
 }
 
 /// Build the read-only CONTEXT preamble from attached reference files, size-capped
@@ -3898,11 +3894,7 @@ pub async fn complete_text(
 }
 
 fn bounded_completion_prefix(prefix: &str) -> String {
-    let mut start = prefix.len().saturating_sub(16_384);
-    while !prefix.is_char_boundary(start) {
-        start += 1;
-    }
-    prefix[start..].to_string()
+    prefix[prefix.ceil_char_boundary(prefix.len().saturating_sub(16_384))..].to_string()
 }
 
 /// Result of preparing a local Ollama agent for vibe.

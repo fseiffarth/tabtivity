@@ -203,7 +203,7 @@ impl TokenStore {
             } else { true }
         });
         let session = Session {
-            id: super::root_mcp_review::hash(token.as_bytes()),
+            id: crate::digest::sha256_hex(token.as_bytes()),
             access: Access::initial(identity.caller), identity,
             revoked: Arc::new(AtomicBool::new(false)),
             read_mail: Arc::new(AtomicBool::new(read_mail)),
@@ -307,7 +307,7 @@ pub fn tab_active(tab: &str) -> bool {
 /// [`record_read_mail`] on the first read, read by [`tab_read_mail`] at the
 /// next spawn of the same tab. Never a token, never a path an agent chose.
 pub fn read_mail_marker(state: &Path, tab: &str) -> std::path::PathBuf {
-    state.join("root_mcp").join("read_mail").join(super::root_mcp_review::hash(tab.as_bytes()))
+    state.join("root_mcp").join("read_mail").join(crate::digest::sha256_hex(tab.as_bytes()))
 }
 /// The per-model half of the taint (gap 33): a local model's Vibe
 /// conversations live in its per-model `VIBE_HOME`, keyed by the model's
@@ -317,7 +317,7 @@ pub fn read_mail_marker(state: &Path, tab: &str) -> std::path::PathBuf {
 /// later tab of that model starts tainted (`docs/context/root_console.md`).
 pub fn model_read_mail_marker(state: &Path, model: &str) -> std::path::PathBuf {
     let alias = crate::commands::ollama::sanitize_alias(model.trim());
-    state.join("root_mcp").join("read_mail_model").join(super::root_mcp_review::hash(alias.as_bytes()))
+    state.join("root_mcp").join("read_mail_model").join(crate::digest::sha256_hex(alias.as_bytes()))
 }
 /// Write the taint markers for `tab` and, for a local model, its `model`.
 /// The read that latched the taint goes ahead only when this returns `Ok`
@@ -578,7 +578,7 @@ impl Session {
     /// The stable per-tab id ownership is keyed by (`root_mcp_mail` drafts):
     /// the tab's hash, the same one that names its sandbox copy, so a resumed
     /// tab finds what its earlier spawn wrote. [`Self::id`] is per spawn.
-    pub fn tab_key(&self) -> String { super::root_mcp_review::hash(self.identity.tab.as_bytes()) }
+    pub fn tab_key(&self) -> String { crate::digest::sha256_hex(self.identity.tab.as_bytes()) }
 }
 #[derive(serde::Serialize)]
 pub struct SessionInfo {
@@ -2991,8 +2991,8 @@ fn scope_name(names: &HashMap<String, String>, id: &str) -> String {
 /// A unix stamp as an ISO-8601 UTC string, for the "when did this last happen"
 /// fields. `None` stays `None` — a never-synced project must not read as 1970.
 fn iso_utc(secs: Option<u64>) -> Option<String> {
-    let (y, mo, d, h, mi, s) = crate::storage::epoch_to_utc(secs?);
-    Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z"))
+    let time = chrono::DateTime::from_timestamp(i64::try_from(secs?).ok()?, 0)?;
+    Some(time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 fn time_summary(stores: &Stores, args: &Value) -> Result<Value, String> {

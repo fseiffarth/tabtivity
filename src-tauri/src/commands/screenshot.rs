@@ -205,11 +205,7 @@ fn prune_stale_pending(dir: &Path) {
 
 /// `Screenshot-YYYYMMDD-HHMMSS.png` in UTC — sortable and collision-resistant.
 fn screenshot_filename() -> String {
-    let secs = crate::clock::unix_secs(SystemTime::now()) as i64;
-    let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
-    let tod = secs.rem_euclid(86_400);
-    let (h, mi, s) = (tod / 3600, (tod % 3600) / 60, tod % 60);
-    format!("Screenshot-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}.png")
+    chrono::Utc::now().format("Screenshot-%Y%m%d-%H%M%S.png").to_string()
 }
 
 /// Spawn a capture tool detached and, once it exits, copy the PNG it produced
@@ -291,20 +287,6 @@ fn locate_shot(
         })
         .max_by_key(|(mtime, _)| *mtime)
         .map(|(_, path)| path)
-}
-
-/// Civil date from days since the Unix epoch (Howard Hinnant's algorithm).
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 // ── Linux backend (drive an interactive native region tool) ──────────────────
@@ -871,12 +853,6 @@ mod tests {
         prune_stale_pending(dir);
         assert!(fresh.is_file());
         assert!(!stale.exists());
-    }
-
-    #[test]
-    fn civil_from_days_known_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(18_993), (2022, 1, 1));
     }
 
     #[cfg(target_os = "linux")]
