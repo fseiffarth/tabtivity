@@ -166,3 +166,19 @@ describe("i18n", () => {
     expect(dateLocale("fr", undefined)).toBe("fr");
   });
 });
+
+describe("translateNow", () => {
+  it("reads the live language each call and substitutes params", async () => {
+    const { translateNow, useI18nStore } = await import("../../lib/i18n");
+    const before = useI18nStore.getState().lang;
+    try {
+      useI18nStore.setState({ lang: "en" });
+      expect(translateNow("mobile.time.minutesAgo", { count: 3 })).toBe(translate("en", "mobile.time.minutesAgo", { count: 3 }));
+      expect(translateNow("mobile.time.minutesAgo", { count: 3 })).toContain("3");
+      useI18nStore.setState({ lang: "de" });
+      expect(translateNow("mobile.time.justNow")).toBe(translate("de", "mobile.time.justNow"));
+    } finally {
+      useI18nStore.setState({ lang: before });
+    }
+  });
+});

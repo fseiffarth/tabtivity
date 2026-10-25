@@ -8,7 +8,7 @@ import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
-import { translate, useI18nStore, useT } from "../../lib/i18n";
+import { useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
@@ -20,16 +20,6 @@ import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
-
-/** `translate` at the live language, for code that runs outside a render: the
- *  module-level parser below and the async callbacks, whose `useCallback`
- *  identity must not churn on a language switch (their effect re-invokes). */
-function tr(
-  key: Parameters<typeof translate>[1],
-  params?: Parameters<typeof translate>[2],
-): string {
-  return translate(useI18nStore.getState().lang, key, params);
-}
 
 interface RuntimeStatus {
   configured: boolean;
@@ -126,9 +116,9 @@ function detectServeSettingsFromJson(value: unknown): DetectedServeSettings {
   ])).values()];
   if (unique.length === 1) return unique[0];
   if (unique.length === 0) {
-    throw new Error(tr("mobile.errNoServeMapping"));
+    throw new Error(translateNow("mobile.errNoServeMapping"));
   }
-  throw new Error(tr("mobile.errMultiServeMappings"));
+  throw new Error(translateNow("mobile.errMultiServeMappings"));
 }
 
 /** A label whose explanation is its hover hint rather than a paragraph under
@@ -250,10 +240,10 @@ export function MobileSettings() {
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
       .map((result) => String(result.reason));
     if (statusReasons.some((reason) => /command .* not found/i.test(reason))) {
-      failures.push(tr("mobile.errBackendOld"));
+      failures.push(translateNow("mobile.errBackendOld"));
     } else {
-      if (runtimeResult.status === "rejected") failures.push(tr("mobile.errHostStatus", { reason: String(runtimeResult.reason) }));
-      if (serveResult.status === "rejected") failures.push(tr("mobile.errTailscaleStatus", { reason: String(serveResult.reason) }));
+      if (runtimeResult.status === "rejected") failures.push(translateNow("mobile.errHostStatus", { reason: String(runtimeResult.reason) }));
+      if (serveResult.status === "rejected") failures.push(translateNow("mobile.errTailscaleStatus", { reason: String(serveResult.reason) }));
     }
 
     const enteredOrigin = originRef.current.trim();
@@ -322,9 +312,9 @@ export function MobileSettings() {
    * spreads this render's `stored`, so a second write would undo the first. */
   const setProjectFiles = async (on: boolean) => {
     const uploads = on && await confirmAction({
-      title: tr("mobile.projectUploadsAskTitle"),
-      body: tr("mobile.projectUploadsAskBody"),
-      confirmLabel: tr("mobile.projectUploadsAskAllow"),
+      title: translateNow("mobile.projectUploadsAskTitle"),
+      body: translateNow("mobile.projectUploadsAskBody"),
+      confirmLabel: translateNow("mobile.projectUploadsAskAllow"),
     });
     setError(null);
     try {
@@ -346,10 +336,10 @@ export function MobileSettings() {
     try {
       const parsedPort = Number(port);
       if (enabled && (!Number.isInteger(parsedPort) || parsedPort < 1024 || parsedPort > 65535)) {
-        throw new Error(tr("mobile.errPortRange"));
+        throw new Error(translateNow("mobile.errPortRange"));
       }
       if (enabled && !origin.startsWith("https://")) {
-        throw new Error(tr("mobile.errOriginFirst"));
+        throw new Error(translateNow("mobile.errOriginFirst"));
       }
       if (enabled) {
         await invoke("mobile_verify_tailscale_serve", {
@@ -434,13 +424,13 @@ export function MobileSettings() {
   const setUpInTerminal = async () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
     const ok = await confirmAction({
-      title: tr("mobile.guideSummary"),
+      title: translateNow("mobile.guideSummary"),
       // The prose's blank lines set the command apart; a <p> collapses `\n`.
-      body: tr("mobile.setUpConfirm", { command }).split("\n").flatMap((line, index) => index === 0 ? [line] : [<br key={index} />, line]),
-      confirmLabel: tr("mobile.setUpInTerminal"),
+      body: translateNow("mobile.setUpConfirm", { command }).split("\n").flatMap((line, index) => index === 0 ? [line] : [<br key={index} />, line]),
+      confirmLabel: translateNow("mobile.setUpInTerminal"),
     });
     if (!ok) return;
-    runInstallInTab(tr("mobile.guideSummary"), command, "default");
+    runInstallInTab(translateNow("mobile.guideSummary"), command, "default");
   };
 
   const detectServeSettings = async () => {
@@ -450,7 +440,7 @@ export function MobileSettings() {
     try {
       const result = await invoke<ServeStatus>("mobile_tailscale_serve_status");
       setServeStatus(result);
-      if (!result.installed) throw new Error(tr("mobile.errNoTailscale"));
+      if (!result.installed) throw new Error(translateNow("mobile.errNoTailscale"));
       if (result.error) throw new Error(result.error);
       const detected = result.detected ?? detectServeSettingsFromJson(result.json);
       await invoke("mobile_verify_tailscale_serve", {
@@ -491,9 +481,9 @@ export function MobileSettings() {
 
   const lockDownNow = async () => {
     const ok = await confirmAction({
-      title: tr("mobile.lockdownNow"),
-      body: tr("mobile.lockdownConfirm"),
-      confirmLabel: tr("mobile.lockdownNow"),
+      title: translateNow("mobile.lockdownNow"),
+      body: translateNow("mobile.lockdownConfirm"),
+      confirmLabel: translateNow("mobile.lockdownNow"),
       danger: true,
     });
     if (!ok) return;
@@ -527,7 +517,7 @@ export function MobileSettings() {
       addDevice.clear();
       await refresh();
     } catch (reason) {
-      setError(tr("mobile.lockdownPartial", { reason: String(reason) }));
+      setError(translateNow("mobile.lockdownPartial", { reason: String(reason) }));
     } finally {
       setBusy(false);
     }
@@ -884,9 +874,9 @@ export function MobileSettings() {
         className="settings-btn sm danger"
         onClick={async () => {
           const ok = await confirmAction({
-            title: tr("mobile.forgetAll"),
-            body: tr("mobile.forgetAllConfirm"),
-            confirmLabel: tr("mobile.forgetAll"),
+            title: translateNow("mobile.forgetAll"),
+            body: translateNow("mobile.forgetAllConfirm"),
+            confirmLabel: translateNow("mobile.forgetAll"),
             danger: true,
           });
           if (!ok) return;

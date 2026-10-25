@@ -8,7 +8,7 @@
  * section that is the device's own, the poller pause — reads it. Inside the
  * Tauri window the flag stays off and the link is always `up`.
  */
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 
 export type LinkState = "connecting" | "up" | "down";
 
@@ -83,7 +83,7 @@ export class DisconnectedError extends Error {
   readonly code = "disconnected" as const;
 
   constructor() {
-    super(translate(useI18nStore.getState().lang, "server.disconnected"));
+    super(translateNow("server.disconnected"));
     this.name = "DisconnectedError";
   }
 }

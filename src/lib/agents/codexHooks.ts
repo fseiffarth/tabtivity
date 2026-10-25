@@ -1,7 +1,7 @@
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { AGENT_ITEMS, buildStaticTabSpec } from "../../components/tabs/newTabItems";
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 
 /**
  * Whether Codex is actually running Tabtivity's `SessionStart` hook — the precise
@@ -58,10 +58,10 @@ export function openCodexHooksTab(): void {
     // `item` is a built-in agent (no `labelKey`), so buildStaticTabSpec never
     // resolves a translation through this — the label below overrides it anyway.
     ...buildStaticTabSpec(item, rootDir, "", (key) => key),
-    label: translate(useI18nStore.getState().lang, "codexHooks.tabLabel"),
+    label: translateNow("codexHooks.tabLabel"),
     initialInput: "/hooks",
   });
   useProjectsStore.setState({
-    switchToast: translate(useI18nStore.getState().lang, "codexHooks.toast"),
+    switchToast: translateNow("codexHooks.toast"),
   });
 }

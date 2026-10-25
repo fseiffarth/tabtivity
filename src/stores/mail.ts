@@ -23,7 +23,7 @@ import {
   mailSyncCancel,
   planMailDelete,
 } from "../lib/mail";
-import { translate, useI18nStore } from "../lib/i18n";
+import { translateNow } from "../lib/i18n";
 import type {
   MailAccount,
   MailBody,
@@ -825,7 +825,7 @@ export const useMailStore = create<MailStore>((set, get) => ({
       // Outside React, so the imperative translator — the pattern
       // `stores/calendar/alarms` and `stores/projects` already use for a store-built
       // sentence.
-      set({ error: translate(useI18nStore.getState().lang, "mail.messageGone") });
+      set({ error: translateNow("mail.messageGone") });
     }
     await get().refreshPriorityCounts();
     // Unmarking from *inside* a priority list removes the row from that list, so

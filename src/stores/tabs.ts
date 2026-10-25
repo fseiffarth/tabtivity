@@ -16,7 +16,7 @@ import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
 import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
 import { useLinkRoutingStore } from "./linkRouting";
 import { bumpUsage } from "./usage";
-import { translate, useI18nStore } from "../lib/i18n";
+import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { newTmuxSessionName } from "../lib/terminal/tmuxSession";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
@@ -5593,7 +5593,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           layoutPersistFailureReported = true;
           console.warn("tab layout save failed", error);
           set({
-            layoutPersistNotice: translate(useI18nStore.getState().lang, "appShell.layoutSaveFailedToast"),
+            layoutPersistNotice: translateNow("appShell.layoutSaveFailedToast"),
           });
         }
       }

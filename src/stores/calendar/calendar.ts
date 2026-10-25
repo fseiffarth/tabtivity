@@ -21,7 +21,7 @@ import { mutedCalendarIds } from "../../lib/calendar/alarms";
 import { addDays, toStamp, todayStr } from "../../lib/calendar/calendarTime";
 import { parseIcs } from "../../lib/calendar/ics";
 import { markForPush, notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
-import { translate, useI18nStore } from "../../lib/i18n";
+import { translateNow } from "../../lib/i18n";
 
 /**
  * The native calendar's store: one global set of calendars, events and tasks,
@@ -210,7 +210,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       );
       if (split) {
         throw new Error(
-          translate(useI18nStore.getState().lang, "eventDialog.errMoveSyncedSeries", {
+          translateNow("eventDialog.errMoveSyncedSeries", {
             title: moved.title,
           }),
         );

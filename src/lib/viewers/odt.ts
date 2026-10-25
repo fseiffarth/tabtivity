@@ -55,7 +55,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  * is absent (not an ODF document). Accepts a plain `Record` so tests can pass a
  * hand-built map without fflate.
  */
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 import { escapeHtml } from "../textSafety";
 
 export function extractOdt(
@@ -63,7 +63,7 @@ export function extractOdt(
 ): { contentXml: string; images: Map<string, string> } {
   const contentBytes = entries["content.xml"];
   if (!contentBytes) {
-    throw new Error(translate(useI18nStore.getState().lang, "odt.errNotOpenDocument"));
+    throw new Error(translateNow("odt.errNotOpenDocument"));
   }
   const contentXml = new TextDecoder("utf-8").decode(contentBytes);
   const images = new Map<string, string>();
@@ -169,11 +169,11 @@ export function renderOdtDocument(
   const images = opts.images;
   const doc = new DOMParser().parseFromString(contentXml, "application/xml");
   if (doc.getElementsByTagName("parsererror").length > 0 || !doc.documentElement) {
-    throw new Error(translate(useI18nStore.getState().lang, "odt.errParse"));
+    throw new Error(translateNow("odt.errParse"));
   }
   const root = doc.documentElement;
   const body = byLocal(root, "text")[0]; // <office:text>
-  if (!body) throw new Error(translate(useI18nStore.getState().lang, "odt.errNoBody"));
+  if (!body) throw new Error(translateNow("odt.errNoBody"));
 
   const textStyles = collectTextStyles(root);
   const listStyles = collectListStyles(root);

@@ -7,7 +7,7 @@ import { AddDevicePanel, useAddDevice } from "../mobile/AddDevice";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
-import { translate, useI18nStore, useT } from "../../lib/i18n";
+import { useI18nStore, useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
@@ -18,15 +18,6 @@ import {
   type MobileHostRuntimeStatus,
 } from "../../stores/mobileHostStatus";
 import { usePoll } from "../../lib/usePoll";
-
-/** `translate` at the live language, for the async callbacks below (component
- *  `t` inside them would churn their identity on a language switch). */
-function tr(
-  key: Parameters<typeof translate>[1],
-  params?: Parameters<typeof translate>[2],
-): string {
-  return translate(useI18nStore.getState().lang, key, params);
-}
 
 const MENU_ID = "mobile";
 /** How often the open menu re-reads the device list: a phone signing in or
@@ -168,7 +159,7 @@ export function MobileIndicator() {
       const response = await invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } });
       if (response.status === "error") throw new Error(response.message);
     } catch (reason) {
-      setError(tr("mobile.indDisconnectError", { name: device.name, reason: String(reason) }));
+      setError(translateNow("mobile.indDisconnectError", { name: device.name, reason: String(reason) }));
     } finally {
       setDisconnecting(null);
       await loadDevices();
@@ -211,9 +202,9 @@ export function MobileIndicator() {
     try {
       await invoke("mobile_host_apply", { enabled: true });
       await host.refresh(true);
-      if (kind === "update") setUpdateNotice(tr("mobile.indUpdateReady"));
+      if (kind === "update") setUpdateNotice(translateNow("mobile.indUpdateReady"));
     } catch (reason) {
-      setError(kind === "update" ? tr("mobile.indUpdateError", { reason: String(reason) }) : String(reason));
+      setError(kind === "update" ? translateNow("mobile.indUpdateError", { reason: String(reason) }) : String(reason));
     } finally {
       host.endRestart();
       setRestarting(null);
@@ -223,9 +214,9 @@ export function MobileIndicator() {
   const lockDownNow = async () => {
     if (!mobileHost) return;
     const ok = await confirmAction({
-      title: tr("mobile.lockdownNow"),
-      body: tr("mobile.lockdownConfirm"),
-      confirmLabel: tr("mobile.lockdownNow"),
+      title: translateNow("mobile.lockdownNow"),
+      body: translateNow("mobile.lockdownConfirm"),
+      confirmLabel: translateNow("mobile.lockdownNow"),
       danger: true,
     });
     if (!ok) return;
@@ -233,13 +224,13 @@ export function MobileIndicator() {
     setError(null);
     try {
       const response = await invoke<{ status: string; message?: string }>("mobile_admin", { request: { type: "forget_all" } });
-      if (response.status === "error") throw new Error(response.message ?? tr("mobile.indRevokeError"));
+      if (response.status === "error") throw new Error(response.message ?? translateNow("mobile.indRevokeError"));
       await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, enabled: false } });
       await invoke("mobile_host_apply", { enabled: false });
       addDevice.clear();
       closeMenu(MENU_ID);
     } catch (reason) {
-      setError(tr("mobile.lockdownPartial", { reason: String(reason) }));
+      setError(translateNow("mobile.lockdownPartial", { reason: String(reason) }));
     } finally {
       setLockingDown(false);
     }

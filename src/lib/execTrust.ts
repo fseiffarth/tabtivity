@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { translate, useI18nStore } from "./i18n";
+import { translateNow } from "./i18n";
 import { useExecTrustStore } from "../stores/execTrust";
 import { NAMES } from "./brand";
 
@@ -44,7 +44,7 @@ export function parseTrustRequest(err: unknown): TrustRequest | null {
 /** Thrown when the user declines; its message is the localized "not run" note. */
 export class ExecTrustDeclinedError extends Error {
   constructor(readonly kind: TrustKind) {
-    super(translate(useI18nStore.getState().lang, "execTrust.declined"));
+    super(translateNow("execTrust.declined"));
     this.name = "ExecTrustDeclinedError";
   }
 

@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
+import { type TranslationKey, translateNow } from "../../src/lib/i18n";
 
 /**
  * Why Tabtivity Mobile could not reach the workspace, at the granularity the
@@ -89,7 +89,7 @@ export interface UnavailableCopy {
  */
 export function describeUnavailable(reason: UnavailableReason): UnavailableCopy {
   const [title, hint] = UNAVAILABLE_KEYS[reason];
-  return { title: tr(title), hint: tr(hint) };
+  return { title: translateNow(title), hint: translateNow(hint) };
 }
 
 /** The title and hint of each reason. With Tailscale off, the desktop's 100.x
@@ -107,13 +107,6 @@ const UNAVAILABLE_KEYS: Record<UnavailableReason, [TranslationKey, TranslationKe
   storage_blocked: ["mobile.unavailable.storageBlockedTitle", "mobile.unavailable.storageBlockedHint"],
   server_error: ["mobile.unavailable.serverErrorTitle", "mobile.unavailable.serverErrorHint"],
 };
-
-/** In the language the phone is set to, read when the copy is asked for —
- * these are plain functions called from render, so the next render after a
- * language switch reads the new one. */
-function tr(key: TranslationKey): string {
-  return translate(useI18nStore.getState().lang, key);
-}
 
 /**
  * The raw shape of the failure, for a bug report. Kept next to the human copy
@@ -283,7 +276,7 @@ export function describeFailure(source: unknown): string {
     if (reason !== "server_error") return describeUnavailable(reason).title;
   }
   const code = failureCode(source);
-  return tr((code && FAILURE_TEXT[code]) || GENERIC_FAILURE);
+  return translateNow((code && FAILURE_TEXT[code]) || GENERIC_FAILURE);
 }
 
 /** Every code the table knows, for the test that checks each reads as prose. */
@@ -299,7 +292,7 @@ export function knownFailureCodes(): string[] {
  */
 export function localFailureText(reason: unknown): string {
   if (reason instanceof Error && reason.message && !isCode(reason.message)) return reason.message;
-  return tr("mobile.failure.generic");
+  return translateNow("mobile.failure.generic");
 }
 
 /**

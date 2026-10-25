@@ -1,6 +1,6 @@
 import { NAMES } from "../../../src/lib/brand";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { translate, useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
+import { useI18nStore, useT, type TranslationKey, translateNow } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
@@ -1881,7 +1881,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       // which walked the screen away from what the reader was reading.
       if (!interrupted) {
         interrupted = true;
-        term.write(`\r\n\x1b[33m[${translate(useI18nStore.getState().lang, "mobile.terminal.interrupted")}]\x1b[0m\r\n`);
+        term.write(`\r\n\x1b[33m[${translateNow("mobile.terminal.interrupted")}]\x1b[0m\r\n`);
       }
       const delay = Math.min(1_000 * 2 ** reconnectAttempt, 15_000);
       reconnectAttempt += 1;

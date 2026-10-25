@@ -10661,6 +10661,14 @@ export function translate(
   );
 }
 
+/** `translate` at the live language — for code outside React (stores, plain
+ *  helpers, DOM-built dialogs, thrown error messages) that has no `useT`. It
+ *  reads the language when called, so a caller that runs again after a
+ *  language switch (the next render, the next dialog) speaks the new one. */
+export function translateNow(key: TranslationKey, params?: Record<string, string | number>): string {
+  return translate(useI18nStore.getState().lang, key, params);
+}
+
 /** The translator hook: `const t = useT(); t("settings.title")`. Re-renders the
  *  component whenever the language changes, so switching is live. */
 export function useT() {

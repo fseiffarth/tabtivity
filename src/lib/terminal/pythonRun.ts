@@ -31,7 +31,7 @@ import { basename, dirname, relativePathWithin } from "../paths";
 import { IS_WINDOWS } from "../platform";
 import { useTabsStore, isRemoteLocation, type TabEntry, type TabLocation } from "../../stores/tabs";
 import { guardLoginNodeRun } from "../remote/hpc/hpcGuard";
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 import { envName } from "../brand";
 
 /** How a run/debug tab is inserted into the layout. Given the built (keyless)
@@ -275,7 +275,7 @@ export function pythonRunPlan(opts: {
  *  the run is going is the strip's drawn status mark (`TabStatusMark`). */
 export function pyTabLabel(mode: PyRunMode, file: string): string {
   return mode === "debug"
-    ? translate(useI18nStore.getState().lang, "pythonRun.debugTabLabel", { file: basename(file) })
+    ? translateNow("pythonRun.debugTabLabel", { file: basename(file) })
     : basename(file);
 }
 
