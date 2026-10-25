@@ -403,6 +403,11 @@ fn whole(ran: Ran) -> Result<Output, String> {
     Ok(ran.output)
 }
 
+/// The stdout bytes [`run`] keeps: [`Opts::stdout_cap`], else [`DEFAULT_STDOUT_CAP`].
+fn stdout_cap(cap: Option<u64>) -> u64 {
+    cap.unwrap_or(DEFAULT_STDOUT_CAP)
+}
+
 /// Read `s` to its end, keeping the first and last `cap / 2` bytes and a
 /// marker for what was dropped between them.
 fn read_head_and_tail(mut s: impl Read, cap: u64) -> Vec<u8> {
@@ -472,7 +477,7 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, RunError> {
     let (done_tx, done_rx) = mpsc::channel::<bool>();
     let stdout = child.stdout.take().map(|s| {
         let tx = done_tx.clone();
-        let cap = opts.stdout_cap.unwrap_or(DEFAULT_STDOUT_CAP);
+        let cap = stdout_cap(opts.stdout_cap);
         let keep_ends = opts.keep_stdout_ends;
         std::thread::spawn(move || {
             if keep_ends {
@@ -808,20 +813,22 @@ mod tests {
     }
 
     /// A child writing without end (an agent-writable hook running `yes`)
-    /// is stopped at the default stdout cap instead of filling memory.
+    /// is stopped at its stdout cap instead of filling memory, and no cap set
+    /// means [`DEFAULT_STDOUT_CAP`], never unbounded. (A 1 MiB cap here: the
+    /// default's 256 MiB would be read twice per test run for the same check.)
     #[cfg(unix)]
     #[test]
     fn unbounded_stdout_is_cut_at_the_default_cap() {
+        let cap = 1024 * 1024;
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "exec yes"]);
-        let ran = run(&mut cmd, Opts { timeout: Some(NOT_A_HANG), ..Opts::default() }).expect("ran");
-        assert!(ran.cut, "not cut at the default cap");
-        assert_eq!(ran.output.stdout.len() as u64, DEFAULT_STDOUT_CAP);
+        let ran = run(&mut cmd, Opts { stdout_cap: Some(cap), timeout: Some(NOT_A_HANG), ..Opts::default() }).expect("ran");
+        assert!(ran.cut, "not cut at the cap");
+        assert_eq!(ran.output.stdout.len() as u64, cap);
         assert!(!ran.output.status.success(), "a cut child is stopped");
+        assert_eq!(stdout_cap(Opts::default().stdout_cap), DEFAULT_STDOUT_CAP);
         // The plain wrappers answer an error, not the cut output.
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "exec yes"]);
-        assert!(output_within(cmd, NOT_A_HANG).unwrap_err().contains("MiB"));
+        assert!(whole(ran).unwrap_err().contains("MiB"));
     }
 
     /// `keep_stdout_ends` drains stdout past its cap, keeping both ends, so a

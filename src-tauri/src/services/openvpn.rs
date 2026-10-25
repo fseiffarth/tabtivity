@@ -309,10 +309,19 @@ fn kill_root_pid(pid: i32) {
         &format!("kill -TERM {pid}"),
         concat!(crate::app_name!(), " needs to stop the OpenVPN tunnel."),
     );
-    let _ = crate::paths::command_no_window("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output();
+    let Ok(mut osascript) = osascript_command(crate::paths::system_executable) else { return };
+    let _ = osascript.arg("-e").arg(&script).output();
+}
+
+/// `osascript` for an administrator prompt, by absolute path from the
+/// root-owned system dirs (`/usr/bin/osascript`): a bare name resolves on the
+/// effective `PATH`, where a planted `~/.local/bin/osascript` could fake the
+/// password dialog and read what the user types. The macOS twin of Linux's
+/// `pkexec_argv`; `resolve` is [`crate::paths::system_executable`].
+#[cfg(any(target_os = "macos", test))]
+fn osascript_command(resolve: impl Fn(&str) -> Option<PathBuf>) -> Result<std::process::Command, String> {
+    let bin = resolve("osascript").ok_or_else(|| "no root-owned `osascript` in the system directories".to_string())?;
+    Ok(crate::paths::command_no_window(bin))
 }
 
 /// Windows analog: `taskkill /F`. A service-started tunnel's `openvpn.exe` runs
@@ -2758,10 +2767,8 @@ pub fn connect_streaming(
 
     // Blocks until the admin dialog is answered AND openvpn daemonizes (its
     // parent exits) — or fails. "User canceled." on stderr = dialog declined.
-    let output = crate::paths::command_no_window("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output();
+    let output = osascript_command(crate::paths::system_executable)
+        .and_then(|mut cmd| cmd.arg("-e").arg(&script).output().map_err(|e| e.to_string()));
     let output = match output {
         Ok(out) => out,
         Err(e) => {
@@ -3942,6 +3949,16 @@ mod tests {
         assert_eq!(applescript_escape(r#"a"b"#), r#"a\"b"#);
         assert_eq!(applescript_escape(r"a\b"), r"a\\b");
         assert_eq!(applescript_escape(r#"\""#), r#"\\\""#);
+    }
+
+    /// The admin prompt's `osascript` is the resolver's absolute path, and no
+    /// root-owned copy refuses instead of running a bare name off `PATH`.
+    #[test]
+    fn osascript_is_never_spawned_by_bare_name() {
+        let sys = if cfg!(windows) { Path::new(r"C:\sys") } else { Path::new("/usr/bin") };
+        let cmd = osascript_command(|bin: &str| Some(sys.join(bin))).unwrap();
+        assert_eq!(Path::new(cmd.get_program()), sys.join("osascript"));
+        assert!(osascript_command(|_: &str| None).is_err());
     }
 
     #[test]

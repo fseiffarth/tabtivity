@@ -1159,10 +1159,7 @@ fn rsync_ssh_transport_in(control_dir: &Path, port: Option<u16>) -> String {
         "-o".to_string(),
         "ControlMaster=no".to_string(),
         "-o".to_string(),
-        // rsync splits this string on spaces outside quotes. (It reads `\` as
-        // a literal, so a path holding `'` fails to parse and the pull falls
-        // back to SFTP.)
-        crate::quote::posix(&format!("ControlPath={}", control_path.to_string_lossy())),
+        rsync_e_quote(&format!("ControlPath={}", control_path.to_string_lossy())),
     ];
     for a in RSYNC_SSH_KEEPALIVE {
         parts.push((*a).to_string());
@@ -1172,6 +1169,15 @@ fn rsync_ssh_transport_in(control_dir: &Path, port: Option<u16>) -> String {
         parts.push(p.to_string());
     }
     parts.join(" ")
+}
+
+/// One word of rsync's `-e` string, in rsync's own syntax: rsync splits the
+/// string on spaces outside quotes, reads `\` as a literal, and takes a
+/// doubled `'` inside single quotes as one `'`. (A POSIX `'\''` is not that
+/// syntax: one `'` in the path left the string unterminated, two made rsync
+/// hand ssh a different ControlPath.)
+fn rsync_e_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', "''"))
 }
 
 /// rsync's transfer flags for a PULL, everything but the `-e` transport and the
@@ -1237,20 +1243,28 @@ pub fn rsync_pull_args(
 
 /// `path` as the remote rsync reads it literally. The sending rsync expands
 /// wildcards in its source argument itself (with `--protect-args` too), so
-/// a project dir `/srv/a[1]` would pull `/srv/a1` instead; it only does so
-/// when one of `*?[` is present, and then honours `\` escapes.
+/// a project dir `/srv/a[1]` would pull `/srv/a1` instead. It globs one
+/// `/`-separated segment at a time: a segment holding one of `*?[` is
+/// matched with `\` escapes honoured, any other is taken byte for byte — so
+/// only those segments are escaped (an escaped `x\]y` or `a\\b` elsewhere
+/// would name a dir that does not exist).
 fn rsync_literal_host_path(path: &str) -> String {
-    if !path.contains(['*', '?', '[']) {
-        return path.to_string();
-    }
-    let mut out = String::with_capacity(path.len() + 8);
-    for c in path.chars() {
-        if matches!(c, '*' | '?' | '[' | ']' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
+    path.split('/')
+        .map(|segment| {
+            if !segment.contains(['*', '?', '[']) {
+                return segment.to_string();
+            }
+            let mut out = String::with_capacity(segment.len() + 8);
+            for c in segment.chars() {
+                if matches!(c, '*' | '?' | '[' | ']' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Whether a host file of `host_size` bytes may ride the rsync fast path at
@@ -2283,19 +2297,50 @@ mod tests {
         assert_eq!(args[transport + 3], "/local/mirror/");
     }
 
-    /// rsync splits `-e` on spaces outside quotes: a ControlPath under a dir
-    /// with a space must stay one word. Checked through `sh`, which splits
-    /// single-quoted words the way rsync does.
+    /// The PATH's `rsync` is the samba one at 3.0 or later (`--protect-args`):
+    /// macOS's 2.6.9 and openrsync lack it, so the fast path never runs there.
+    #[cfg(unix)]
+    fn samba_rsync_3() -> bool {
+        let Ok(out) = std::process::Command::new("rsync").arg("--version").output() else { return false };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let first = text.lines().next().unwrap_or_default();
+        first.starts_with("rsync ")
+            && first
+                .split_whitespace()
+                .skip_while(|w| *w != "version")
+                .nth(1)
+                .and_then(|v| v.split('.').next()?.parse::<u32>().ok())
+                .is_some_and(|major| major >= 3)
+    }
+
+    /// rsync splits `-e` on spaces outside quotes and doubles a `'` inside
+    /// them: a ControlPath under a dir with a space or apostrophes reaches ssh
+    /// as one word, unchanged. Checked through the real rsync, with a stand-in
+    /// `ssh` that records its argv.
     #[cfg(unix)]
     #[test]
-    fn rsync_transport_quotes_a_control_path_with_a_space() {
-        let dir = Path::new("/run/user/1000/my dir");
-        let e = rsync_ssh_transport_in(dir, Some(2222));
-        let out = std::process::Command::new("sh").arg("-c").arg(format!("printf '%s\\n' {e}")).output().unwrap();
-        let words: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect();
-        assert!(words.contains(&format!("ControlPath={}", dir.join("cm-%C").display())), "{words:?}");
-        assert_eq!(words[0], "ssh");
-        assert!(words.windows(2).any(|w| w[0] == "-p" && w[1] == "2222"), "{words:?}");
+    fn rsync_transport_hands_ssh_the_control_path_whole() {
+        if !samba_rsync_3() {
+            eprintln!("no rsync >= 3 on PATH; skipping the -e parsing check");
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let ssh = root.path().join("fake-ssh");
+        let seen = root.path().join("argv");
+        std::fs::write(&ssh, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 1\n", seen.display())).unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for dir in ["/run/user/1000/my dir", "/home/o'neil/ssh", "/home/a'b'c/ssh"] {
+            let _ = std::fs::remove_file(&seen);
+            let e = rsync_ssh_transport_in(Path::new(dir), Some(2222));
+            let fake = e.replacen("ssh", &ssh.display().to_string(), 1);
+            let dest = root.path().join("dest");
+            let _ = std::process::Command::new("rsync").arg("-e").arg(&fake).arg("h:/x/").arg(&dest).output().unwrap();
+            let argv = std::fs::read_to_string(&seen).unwrap_or_else(|_| panic!("rsync never ran ssh for {dir}: {e}"));
+            let words: Vec<&str> = argv.lines().collect();
+            assert!(words.contains(&format!("ControlPath={}", Path::new(dir).join("cm-%C").display()).as_str()), "{dir}: {words:?}");
+            assert!(words.windows(2).any(|w| w[0] == "-p" && w[1] == "2222"), "{words:?}");
+        }
     }
 
     /// The host path is sent without the remote shell parsing it, so a
@@ -2314,14 +2359,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rsync_pull_reads_a_wildcard_host_dir_literally() {
-        if !rsync_available_local() {
-            eprintln!("rsync not on PATH; skipping the local transfer check");
+        if !samba_rsync_3() {
+            eprintln!("no rsync >= 3 on PATH; skipping the local transfer check");
             return;
         }
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let r = root.path();
-        for (dir, body) in [("a[1]", "right"), ("a1", "wrong"), ("q?", "right"), ("qz", "wrong"), ("b\\x[2]", "right"), ("bx2", "wrong")] {
+        // A wildcard segment below a plain one holding `]` or `\`: only the
+        // wildcard segment is escaped.
+        for (dir, body) in [
+            ("a[1]", "right"),
+            ("a1", "wrong"),
+            ("q?", "right"),
+            ("qz", "wrong"),
+            ("b\\x[2]", "right"),
+            ("bx2", "wrong"),
+            ("x]y/c[1]", "right"),
+            ("x]y/c1", "wrong"),
+            ("p\\q/d[1]", "right"),
+            ("p\\q/d1", "wrong"),
+        ] {
             std::fs::create_dir_all(r.join(dir)).unwrap();
             std::fs::write(r.join(dir).join("f.txt"), body).unwrap();
         }
@@ -2329,7 +2387,7 @@ mod tests {
         std::fs::write(&ssh, "#!/bin/sh\nshift\neval \"$*\"\n").unwrap();
         std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
         let list = rsync_files_from(&["f.txt".into()]).unwrap();
-        for dir in ["a[1]", "q?", "b\\x[2]"] {
+        for dir in ["a[1]", "q?", "b\\x[2]", "x]y/c[1]", "p\\q/d[1]"] {
             let dest = tempfile::tempdir().unwrap();
             let src = format!("{}/", r.join(dir).display());
             let mut args = rsync_pull_args(&None, "h", None, &src, &format!("{}/", dest.path().display()), list.path());
@@ -2403,8 +2461,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rsync_pull_flags_land_only_listed_regular_files_within_the_cap() {
-        if !rsync_available_local() {
-            eprintln!("rsync not on PATH; skipping the local transfer check");
+        if !samba_rsync_3() {
+            eprintln!("no rsync >= 3 on PATH; skipping the local transfer check");
             return;
         }
         let src = tempfile::tempdir().unwrap();
@@ -2495,8 +2553,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_pull_reports_files_over_the_cap_on_the_rsync_path() {
-        if !rsync_available_local() {
-            eprintln!("rsync not on PATH; skipping the local transfer check");
+        if !samba_rsync_3() {
+            eprintln!("no rsync >= 3 on PATH; skipping the local transfer check");
             return;
         }
         let host = tempfile::tempdir().unwrap();
