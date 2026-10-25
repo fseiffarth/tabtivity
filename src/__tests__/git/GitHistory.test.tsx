@@ -90,6 +90,27 @@ describe("#8 commit-message window", () => {
     );
   });
 
+  it("a slow message load does not overwrite what the user already typed", async () => {
+    const user = userEvent.setup();
+    let resolveMessage!: (message: string) => void;
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) =>
+      cmd === "git_commit_message"
+        ? new Promise<string>((resolve) => {
+            resolveMessage = resolve;
+          })
+        : base(cmd, args),
+    );
+    await renderHistory();
+    await user.click(await screen.findByText("feat: add widget"));
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await user.type(textarea, "my words");
+    await act(async () => {
+      resolveMessage("feat: add widget\n\nbody");
+    });
+    expect(textarea.value).toBe("my words");
+  });
+
   it("an older commit is read-only with no amend action", async () => {
     const user = userEvent.setup();
     await renderHistory();

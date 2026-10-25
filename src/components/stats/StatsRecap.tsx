@@ -41,8 +41,8 @@ import {
 } from "../../lib/tokenStats";
 
 /** Human duration, matching the header timer's phrasing. */
-function formatTime(secs: number): string {
-  if (secs < 60) return secs > 0 ? "< 1m" : "0m";
+function formatTime(t: (key: TranslationKey) => string, secs: number): string {
+  if (secs < 60) return secs > 0 ? t("projectHoverCard.timeUnderMinute") : "0m";
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
@@ -572,7 +572,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
               <Metric label={t("stats.metricTabsOpened")} value={String(openedTabs)} />
               <Metric
                 label={t("stats.metricAgentsWorking")}
-                value={formatTime(workedS)}
+                value={formatTime(t, workedS)}
                 sub={t("stats.metricSummedAcrossTabs")}
               />
               <Metric
@@ -603,7 +603,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
                     label={projectName(pid)}
                     value={secs}
                     max={rankedProjects[0][1]}
-                    suffix={formatTime(secs)}
+                    suffix={formatTime(t, secs)}
                   />
                 ))}
               </div>
@@ -611,7 +611,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
               <p className="settings-help">{t("stats.noTrackedTime")}</p>
             )}
             <div className="stats-metrics">
-              <Metric label={t("stats.metricAppOpen")} value={formatTime(appSecs)} />
+              <Metric label={t("stats.metricAppOpen")} value={formatTime(t, appSecs)} />
               <Metric
                 label={t("stats.metricCommandsRun")}
                 value={String(shellCommands)}

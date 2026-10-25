@@ -107,11 +107,11 @@ const NEAR_FADE = 240;
 const DBL_CLICK_MS = 260; // window to detect a double-click before the single fires
 
 /** Human-readable total time tracked on a project. */
-function fmtWorked(secs?: number): string {
-  if (!secs || secs <= 0) return "untracked";
+function fmtWorked(t: ReturnType<typeof useT>, secs?: number): string {
+  if (!secs || secs <= 0) return t("blob.untracked");
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m worked` : `${m}m worked`;
+  return h > 0 ? t("blob.workedHm", { h, m }) : t("blob.workedM", { m });
 }
 
 /** Where the right-click menu is anchored, plus the project it targets. */
@@ -708,15 +708,18 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
     return () => window.removeEventListener("pointerdown", dismiss);
   }, [menu]);
 
-  // Esc steps back up / exits the file viewer.
+  // Esc closes the context menu first, then steps back up / exits the file
+  // viewer. Not while the pane is hidden or another handler already took it.
   useEffect(() => {
-    if (!focus) return;
+    if (!focus && !menu) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") ascend();
+      if (e.key !== "Escape" || !visible || e.defaultPrevented) return;
+      if (menu) setMenu(null);
+      else ascend();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focus, ascend]);
+  }, [focus, menu, visible, ascend]);
 
   // Drop the pending single-click timer if the pane unmounts.
   useEffect(() => () => clearClickTimer(), [clearClickTimer]);
@@ -831,7 +834,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
                 {t(projects.length === 1 ? "blob.projectCountOne" : "blob.projectCountMany", { count: projects.length })}
               </text>
               <text className="blob-pie-center-sub" x="160" y="173" textAnchor="middle">
-                {fmtWorked(pieSlices.reduce((a, s) => a + s.secs, 0))}
+                {fmtWorked(t, pieSlices.reduce((a, s) => a + s.secs, 0))}
               </text>
             </svg>
           </div>
@@ -1006,7 +1009,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
                   ? hover.node.rel
                     ? `/${hover.node.rel}`
                     : t("blob.projectRoot")
-                  : `${hover.node.project.status} · ${fmtWorked(totals[hover.node.project.id])}`}
+                  : `${hover.node.project.status} · ${fmtWorked(t, totals[hover.node.project.id])}`}
               </div>
               {hover.node.kind === "project" && (
                 <div className="blob-hover-desc">

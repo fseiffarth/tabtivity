@@ -3879,6 +3879,9 @@ function CodeEditor({
       spellReported.current = false;
       return;
     }
+    // A check still in flight when the draft changes (or the feature is turned
+    // off) is superseded: its answer must not land over the newer one.
+    let stale = false;
     const id = window.setTimeout(async () => {
       try {
         const issues = await invoke<GrammarIssue[]>("spell_check", {
@@ -3886,8 +3889,9 @@ function CodeEditor({
           language: spellCheck.language ?? "",
           doc: lang === "plain" ? "" : lang,
         });
-        setSpellIssues(issues);
+        if (!stale) setSpellIssues(issues);
       } catch (e) {
+        if (stale) return;
         setSpellIssues([]);
         if (!spellReported.current) {
           spellReported.current = true;
@@ -3899,7 +3903,10 @@ function CodeEditor({
         }
       }
     }, SPELL_DEBOUNCE_MS);
-    return () => window.clearTimeout(id);
+    return () => {
+      stale = true;
+      window.clearTimeout(id);
+    };
     // Primitive deps (the config object's identity changes every render) so the
     // idle-check timer isn't reset by unrelated re-renders.
   }, [spellCheck?.enabled, spellCheck?.language, loaded, draft, lang, t]);

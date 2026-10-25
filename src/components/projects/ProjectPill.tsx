@@ -5,7 +5,7 @@ import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { IdeMenuItems } from "./IdeMenuItems";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   resolveProjectDirectory,
   type GitHostingInfo,
@@ -1332,15 +1332,15 @@ export function ProjectPill({
     const doomed = tabs.filter((t) => t.kind === "agent" && !isResumableAgentTab(t));
     if (doomed.length > 0) {
       const names = [...new Set(doomed.map((t) => t.cmd))].join(", ");
-      const ok = await confirm(
-        t(
+      const ok = await confirmAction({
+        title: t("pill.containerRestartTitle"),
+        body: t(
           doomed.length > 1
             ? "pill.containerRestartConfirm"
             : "pill.containerRestartConfirmOne",
           { state: t(enabling ? "common.on" : "common.off"), count: doomed.length, names },
         ),
-        { title: t("pill.containerRestartTitle"), kind: "warning" },
-      );
+      });
       if (!ok) return;
     }
     let outcome = await setProjectSandbox(project.id, enabling);
@@ -1348,9 +1348,9 @@ export function ProjectPill({
       // O#143: the repo declares its own Dockerfile/devcontainer image —
       // never adopted silently, since `docker build` runs it as root.
       const { source } = outcome;
-      const adopt = await confirm(describeDetectedSpecSource(source), {
+      const adopt = await confirmAction({
         title: t("scaffold.adoptTitle"),
-        kind: "warning",
+        body: describeDetectedSpecSource(source),
       });
       outcome = await setProjectSandbox(project.id, enabling, { hash: source.hash, adopt });
     }
@@ -1374,7 +1374,7 @@ export function ProjectPill({
     } catch {
       // Preflight is advisory; a real problem still surfaces in the next tab spawn.
     }
-  }, [project.id, project.sandbox?.enabled, setProjectSandbox, t]);
+  }, [project.id, project.sandbox?.enabled, setProjectSandbox, t, confirmAction]);
 
   const setProjectAutoConnect = useProjectsStore((s) => s.setProjectAutoConnect);
   const setProjectPersistSessions = useProjectsStore((s) => s.setProjectPersistSessions);

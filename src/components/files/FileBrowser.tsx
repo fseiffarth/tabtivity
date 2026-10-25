@@ -17,7 +17,7 @@ import {
   relFromAbs,
   visibleEntries,
 } from "../../lib/viewers/fileUtils";
-import { basename, dirname, isAbsolute } from "../../lib/paths";
+import { basename, dirname, isAbsolute, resolvePath } from "../../lib/paths";
 import { openErrorText } from "../../lib/openExternal";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import { openFileEntry } from "./openFileEntry";
@@ -319,7 +319,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
     // Retarget any open viewer tab of this file (main + detached) to the new
     // path — swap the basename on the entry's own absolute path (== embedPath).
     const oldAbs = target.path;
-    const newAbs = `${oldAbs.slice(0, oldAbs.lastIndexOf("/") + 1)}${nextName}`;
+    const newAbs = resolvePath(dirname(oldAbs), nextName);
     retargetTabsForRenamedPath(oldAbs, newAbs);
     setRenameTarget(null);
     await load(relPath, { replace: true });

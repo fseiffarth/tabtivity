@@ -78,6 +78,7 @@ import { AGENT_TAB_ACTIONS, chordLabel, modifierLabel, resolveChord } from "../.
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
+import { runWithProgress } from "../../lib/runWithProgress";
 
 interface OllamaModelInfo {
   name: string;
@@ -2433,30 +2434,28 @@ export function AgentsPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [logs, installing]);
 
+  const appendAgentLog = (id: string, p: { id: string; line: string }) => {
+    if (p.id !== id) return;
+    setLogs((l) => ({ ...l, [id]: l[id] ? `${l[id]}\n${p.line}` : p.line }));
+  };
+
   const installAgent = async (id: string) => {
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
-    // Stream the installer's output, filtering to this agent's events.
-    const unlisten = await listen<{ id: string; line: string }>(
-      "agent-install-progress",
-      (e) => {
-        if (e.payload.id !== id) return;
-        setLogs((l) => ({
-          ...l,
-          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
-        }));
-      },
-    );
     try {
-      await invoke<string>("install_agent", { id });
+      // Stream the installer's output, filtering to this agent's events.
+      await runWithProgress<{ id: string; line: string }, string>(
+        "agent-install-progress",
+        (p) => appendAgentLog(id, p),
+        () => invoke<string>("install_agent", { id }),
+      );
       refresh();
       notifyAgentRegistryChanged();
       loadVersions(true);
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
-      unlisten();
       setInstalling(null);
     }
   };
@@ -2495,18 +2494,12 @@ export function AgentsPanel({
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
-    const unlisten = await listen<{ id: string; line: string }>(
-      "agent-install-progress",
-      (e) => {
-        if (e.payload.id !== id) return;
-        setLogs((l) => ({
-          ...l,
-          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
-        }));
-      },
-    );
     try {
-      await invoke<string>("update_agent", { id });
+      await runWithProgress<{ id: string; line: string }, string>(
+        "agent-install-progress",
+        (p) => appendAgentLog(id, p),
+        () => invoke<string>("update_agent", { id }),
+      );
       setUpdates(({ [id]: _drop, ...rest }) => rest);
       setLogs(({ [id]: _drop, ...rest }) => rest);
       refresh();
@@ -2515,7 +2508,6 @@ export function AgentsPanel({
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
-      unlisten();
       setInstalling(null);
     }
   };
@@ -3593,16 +3585,16 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const installVibe = async () => {
     setVibeInstalling(true);
     setVibeInstallLog("");
-    const unlisten = await listen<{ line: string }>("vibe-install-progress", (e) => {
-      setVibeInstallLog((prev) => (prev ? `${prev}\n${e.payload.line}` : e.payload.line));
-    });
     try {
-      await invoke<string>("install_vibe");
+      await runWithProgress<{ line: string }, string>(
+        "vibe-install-progress",
+        (p) => setVibeInstallLog((prev) => (prev ? `${prev}\n${p.line}` : p.line)),
+        () => invoke<string>("install_vibe"),
+      );
       setVibeInstalled(true);
     } catch (e) {
       setError(String(e));
     } finally {
-      unlisten();
       setVibeInstalling(false);
     }
   };
@@ -3617,12 +3609,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     setInstalling(true);
     setError(null);
     setInstallLog("");
-    // Stream the installer's output line-by-line so the user sees live progress.
-    const unlisten = await listen<{ line: string }>("ollama-install-progress", (e) => {
-      setInstallLog((prev) => (prev ? `${prev}\n${e.payload.line}` : e.payload.line));
-    });
     try {
-      await invoke<string>("install_ollama");
+      // Stream the installer's output line-by-line so the user sees live progress.
+      await runWithProgress<{ line: string }, string>(
+        "ollama-install-progress",
+        (p) => setInstallLog((prev) => (prev ? `${prev}\n${p.line}` : p.line)),
+        () => invoke<string>("install_ollama"),
+      );
       setInstalled(true);
       // Start the server and load the model catalog so the user can immediately
       // pick what to install next.
@@ -3631,7 +3624,6 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     } catch (e) {
       setError(String(e));
     } finally {
-      unlisten();
       setInstalling(false);
     }
   };

@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from "react";
+import { useT } from "../../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -110,6 +111,7 @@ const adoptTerm = (term: LoginTerm | undefined): LoginTerm | null =>
  * header lamps and the restore gate observe the same state this panel drives.
  */
 export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
+  const t = useT();
   const projectId = project.id;
   // Multi-host remote (`docs/multi_host_remote_plan.md`): the dialog can target the
   // primary remote or an extra "worker" host. `hostId` keys the pool + lamp state;
@@ -389,7 +391,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   const browseVpnConfig = async () => {
     const picked = await open({
       multiple: false,
-      filters: [{ name: "OpenVPN config", extensions: ["ovpn", "conf"] }],
+      filters: [{ name: t("remoteProjectSection.vpnConfigLabel"), extensions: ["ovpn", "conf"] }],
     });
     if (typeof picked !== "string") return;
     try {

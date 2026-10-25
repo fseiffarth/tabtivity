@@ -454,7 +454,7 @@ export function VpnIndicator() {
     setError("");
     const picked = await openDialog({
       multiple: false,
-      filters: [{ name: "OpenVPN config", extensions: ["ovpn", "conf"] }],
+      filters: [{ name: t("remoteProjectSection.vpnConfigLabel"), extensions: ["ovpn", "conf"] }],
     }).catch(() => null);
     if (typeof picked !== "string") return;
     let stored: string;
@@ -469,7 +469,7 @@ export function VpnIndicator() {
         ? prev
         : [...prev, { path: stored, name: fileOf(stored) }],
     );
-  }, []);
+  }, [t]);
 
   /**
    * Remove a stored config: delete Tabtivity's copy and forget its saved

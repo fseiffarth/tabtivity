@@ -106,3 +106,31 @@ describe("blob pane file clicks", () => {
     expect(useOpenExternalStore.getState().pending?.request).toMatchObject({ kind: "confirm", name: "data.xyz" });
   });
 });
+
+describe("blob pane Escape", () => {
+  it("steps up out of the file viewer on Escape, but not while the pane is hidden", async () => {
+    const { rerender } = render(<ProjectBlobPane visible />);
+    fireEvent.click(screen.getByText("Thesis"));
+    for (let i = 0; i < 40; i++) {
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+      });
+    }
+    expect(screen.getByText("paper.pdf")).toBeTruthy();
+
+    rerender(<ProjectBlobPane visible={false} />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByText("paper.pdf")).toBeTruthy();
+
+    rerender(<ProjectBlobPane visible />);
+    const taken = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    taken.preventDefault();
+    act(() => {
+      window.dispatchEvent(taken);
+    });
+    expect(screen.getByText("paper.pdf")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText("paper.pdf")).toBeNull();
+  });
+});

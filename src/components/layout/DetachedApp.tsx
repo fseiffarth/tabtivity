@@ -5,23 +5,15 @@ import { detachedWindowVisible } from "../../lib/window/detachedVisibility";
 import { answerRetireRequests } from "../../lib/window/unsavedWork";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { subscribeTauri } from "../../hooks/useTauriListener";
+import { useCrossWindowAppearance } from "../../hooks/useCrossWindowAppearance";
 import {
   useSettingsStore,
-  applyTheme,
-  applyAccent,
-  applyCorners,
-  applyCursor,
-  applyThemeVars,
   applyZoom,
   clampZoom,
   listenSettingsChanged,
   stepZoom,
-  THEME_CHANGED_EVENT,
-  LANGUAGE_CHANGED_EVENT,
-  APPEARANCE_CHANGED_EVENT,
-  type AppearancePayload,
 } from "../../stores/settings";
-import { applyLanguage, useT } from "../../lib/i18n";
+import { useT } from "../../lib/i18n";
 import {
   DETACHED_BOUNDS,
   DETACHED_CLOSE,
@@ -316,57 +308,9 @@ export function DetachedApp({ param }: Props) {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [param.scope, param.groupId]);
 
-  // This window is its own JS runtime with its own `document` and its own copy
-  // of the settings store — a theme change made in the main window's Settings
-  // dialog only ever touches ITS document, so without this a popout keeps
-  // whatever theme it had at open time. Re-apply live via the cross-window
-  // broadcast (see THEME_CHANGED_EVENT in stores/settings).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<string>(THEME_CHANGED_EVENT, (e) => {
-      applyTheme(e.payload);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
-
-  // Same story for the appearance overrides (custom accent, corner style, the
-  // cursor pack):
-  // they are inline vars on each window's own root element, so a change in the
-  // main window's Settings needs the broadcast to reach this document too. The
-  // initial values arrive with the settings load above.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<AppearancePayload>(APPEARANCE_CHANGED_EVENT, (e) => {
-      applyAccent(e.payload.accent);
-      // After the accent, as everywhere else: an explicit token override wins
-      // over the value applyAccent derives from the accent.
-      applyThemeVars(e.payload.themeVars);
-      applyCorners(e.payload.corners);
-      // Last: the cursor art is drawn from the palette the three above set.
-      applyCursor(e.payload.cursor);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
-
-  // Same story for the UI language: this popout holds its own i18n store, so a
-  // language switch in the main window's Settings only re-renders that window
-  // without the cross-window broadcast. Re-apply live (see LANGUAGE_CHANGED_EVENT).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<string>(LANGUAGE_CHANGED_EVENT, (e) => {
-      applyLanguage(e.payload);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  // Theme, accent/corners/cursor and language follow the main window's
+  // Settings live (this popout is its own runtime; see the hook).
+  useCrossWindowAppearance();
 
   // #42: when a PDF tab is popped out into THIS window, a SyncTeX forward search
   // from a TeX editor in the main (or another) window reaches us only over a

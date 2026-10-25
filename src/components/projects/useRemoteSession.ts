@@ -444,7 +444,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   const browseVpnConfig = async () => {
     const picked = await open({
       multiple: false,
-      filters: [{ name: "OpenVPN config", extensions: ["ovpn", "conf"] }],
+      filters: [{ name: t("remoteProjectSection.vpnConfigLabel"), extensions: ["ovpn", "conf"] }],
     });
     if (typeof picked !== "string") return;
     try {

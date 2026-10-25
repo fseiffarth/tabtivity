@@ -1,7 +1,7 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { confirm as dialogConfirm, open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
 import { listen } from "@tauri-apps/api/event";
@@ -938,7 +938,7 @@ export function FileTree({
   const [renamePrompt, setRenamePrompt] = useState<RenamePrompt>(null);
   // The panel's other questions — New File/Folder/Presentation — in the same
   // chrome the rename above wears, rather than in the browser's native boxes.
-  const { promptText, dialogs } = useDialogs();
+  const { promptText, confirmAction, dialogs } = useDialogs();
   // SSH-sync Phase 2: project-relative paths whose push was blocked by a stale
   // host base, awaiting the user's keep-local / take-host / skip choice. The
   // first is shown in the conflict modal; resolving advances the queue.
@@ -2901,15 +2901,15 @@ export function FileTree({
       });
       const dest = await openDialog({ directory: true, multiple: false });
       if (typeof dest !== "string") return;
-      const ok = await dialogConfirm(
-        t("fileTree.downloadToConfirm", {
+      const ok = await confirmAction({
+        title: t("fileTree.downloadToTitle"),
+        body: t("fileTree.downloadToConfirm", {
           name: entry.name,
           files: size.files,
           size: fmtSize(size.bytes),
           dest,
         }),
-        { title: t("fileTree.downloadToTitle") },
-      );
+      });
       if (!ok) return;
       setLoading(true);
       await invoke("remote_download_to", { projectId, relPath: rel, destDir: dest });

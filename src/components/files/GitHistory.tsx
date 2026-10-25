@@ -1753,6 +1753,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
 
       {selected && createPortal(
         <CommitWindow
+          key={selected.hash}
           projectDir={projectDir}
           worktree={worktreeSelection}
           commit={selected}
@@ -1786,10 +1787,21 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Set once the user types or generates: a slower load must not replace it.
+  const edited = useRef(false);
+
   useEffect(() => {
+    let stale = false;
     invoke<string>("git_commit_message", { projectDir, ...gitWorktreeArgs(worktree), hash: commit.hash })
-      .then(setMessage)
-      .catch((e) => setError(String(e)));
+      .then((m) => {
+        if (!stale && !edited.current) setMessage(m);
+      })
+      .catch((e) => {
+        if (!stale) setError(String(e));
+      });
+    return () => {
+      stale = true;
+    };
   }, [projectDir, worktree, commit.hash]);
 
   async function generate() {
@@ -1797,6 +1809,7 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
     setError(null);
     try {
       const msg = await invoke<string>("git_generate_commit_message", { projectDir, ...gitWorktreeArgs(worktree) });
+      edited.current = true;
       setMessage(msg);
     } catch (e) {
       setError(String(e));
@@ -1833,7 +1846,10 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
         <textarea
           className="commit-window-message"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            edited.current = true;
+            setMessage(e.target.value);
+          }}
           rows={8}
           readOnly={!commit.is_head}
           spellCheck={false}

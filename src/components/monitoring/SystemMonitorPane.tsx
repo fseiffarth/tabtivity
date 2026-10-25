@@ -381,6 +381,7 @@ function Meter({
 
 /** One GPU's detail card: identity, memory + utilization meters, live sensors. */
 function GpuSection({ gpu }: { gpu: GpuSample }) {
+  const t = useT();
   const { used, total } = gpuTotals([gpu]);
   const link = gpuLinkLabel(gpu);
   const tip = gpuAdapterTooltip(gpu);
@@ -422,7 +423,7 @@ function GpuSection({ gpu }: { gpu: GpuSample }) {
         />
         {/* `busy_percent` is null when the driver won't report it — omit the meter
             rather than show a misleading 0%. */}
-        {gpu.busy_percent != null && <Meter label="Util" pct={gpu.busy_percent} />}
+        {gpu.busy_percent != null && <Meter label={t("sysmon.utilLabel")} pct={gpu.busy_percent} />}
       </div>
       {sensors.length > 0 && (
         <div className="sysmon-stats sysmon-gpu-sensors">
