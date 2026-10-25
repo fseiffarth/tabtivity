@@ -1120,8 +1120,8 @@ pub fn record_pull(
 // rsync gives delta transfer + a single connection for BULK (folder / whole-
 // project) PULLS, riding the existing ControlMaster so it never re-authenticates.
 // It is a pure-optimisation fast-path over the SFTP-native walker, which remains
-// the floor (used whenever rsync is missing on either end, and on any rsync
-// failure). Only PULLS use rsync: a push must honour the per-file block-on-stale
+// the floor (used whenever rsync is missing on either end or older than 3.0
+// there — [`rsync_fast_path`] — and on any rsync failure). Only PULLS use rsync: a push must honour the per-file block-on-stale
 // guard (product decision 5 — never clobber), which a bulk rsync would bypass, so
 // pushes stay on the guarded SFTP path.
 
@@ -1136,10 +1136,57 @@ const RSYNC_SSH_KEEPALIVE: &[&str] = &[
     "BatchMode=yes",
 ];
 
-/// Whether the bulk rsync fast-path applies: rsync present on BOTH ends and the
-/// transfer is a directory (single files just use SFTP). Pure, unit-tested.
-pub fn should_use_rsync(rsync_local: bool, rsync_host: bool, is_dir: bool) -> bool {
-    rsync_local && rsync_host && is_dir
+/// An rsync's `major.minor`, read from its `rsync --version` output by
+/// [`parse_rsync_version`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RsyncVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+/// The first rsync release with `--protect-args` (`-s`), which the fast path
+/// cannot run without: macOS's `/usr/bin/rsync` (2.6.9, or openrsync on 15+)
+/// and any host rsync before it reject the flag.
+const RSYNC_PROTECT_ARGS_SINCE: RsyncVersion = RsyncVersion { major: 3, minor: 0 };
+
+/// The version in `rsync --version` output (`rsync  version 3.2.7  protocol
+/// version 31`), or `None` when the output is not the samba rsync's — openrsync
+/// (`openrsync: protocol version 29`, even with an `rsync version 2.6.9
+/// compatible` line after it), an empty answer, or anything else. A login
+/// banner the host's shell prints first is skipped: only the line shaped as
+/// rsync's own counts.
+pub fn parse_rsync_version(output: &str) -> Option<RsyncVersion> {
+    if output.lines().any(|line| line.trim_start().starts_with("openrsync")) {
+        return None;
+    }
+    output.lines().find_map(|line| {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.first() != Some(&"rsync") || words.get(1) != Some(&"version") || !line.contains("protocol version") {
+            return None;
+        }
+        let version = words.get(2)?.trim_start_matches('v');
+        let mut parts = version.split('.');
+        let major = parts.next()?.parse().ok()?;
+        // `3.4.1`, `3.0.0pre1`: the minor is the leading digits.
+        let minor = parts.next()?;
+        let minor = minor[..minor.find(|c: char| !c.is_ascii_digit()).unwrap_or(minor.len())].parse().ok()?;
+        Some(RsyncVersion { major, minor })
+    })
+}
+
+/// Proof that the rsync spawned here and the host's rsync both take
+/// `--protect-args`; [`rsync_pull_args`] needs one, so no argv is ever built
+/// for an rsync that would read the host path through the remote shell. Only
+/// [`rsync_fast_path`] makes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RsyncFastPath(());
+
+/// The fast path for a pull, given what each end's `rsync --version` said
+/// (`None`: missing, unparseable, openrsync or the probe failed). `None` back
+/// means the SFTP floor. Pure, unit-tested.
+pub fn rsync_fast_path(local: Option<RsyncVersion>, host: Option<RsyncVersion>) -> Option<RsyncFastPath> {
+    let protects = |v: Option<RsyncVersion>| v.is_some_and(|v| v >= RSYNC_PROTECT_ARGS_SINCE);
+    (protects(local) && protects(host)).then_some(RsyncFastPath(()))
 }
 
 /// Build the `ssh …` string for rsync's `-e` so the transfer rides the shared
@@ -1215,8 +1262,10 @@ pub fn rsync_pull_flags(files_from: &Path) -> Vec<String> {
 
 /// Build the full rsync argv for a host→local PULL: [`rsync_pull_flags`], then
 /// the ControlMaster transport and the two endpoints. Pure, unit-tested (it
-/// never touches the network).
+/// never touches the network). `_fast` is the proof both ends take
+/// `--protect-args`.
 pub fn rsync_pull_args(
+    _fast: RsyncFastPath,
     user: &Option<String>,
     host: &str,
     port: Option<u16>,
@@ -1364,17 +1413,48 @@ pub fn rsync_available_local() -> bool {
     which_on_path("rsync")
 }
 
-/// Whether `rsync` is present on the HOST (`command -v rsync` over SSH, riding the
-/// master). Best-effort: any ssh/probe failure → `false` (fall back to SFTP).
-/// Blocking; call from `spawn_blocking`.
-pub fn rsync_available_host(spec: &crate::schema::project::RemoteSpec) -> bool {
-    match crate::services::ssh_exec::run_remote_shell(
-        spec,
-        concat!("command -v rsync >/dev/null 2>&1 && echo ", crate::app_slug!(), "-rsync-yes"),
-    ) {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).contains(concat!(crate::app_slug!(), "-rsync-yes")),
-        Err(_) => false,
+/// How long the local `rsync --version` may take.
+const RSYNC_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The version of the rsync a pull spawns — [`crate::paths::command_no_window`]'s,
+/// so the root-owned system copy where there is one (macOS: `/usr/bin/rsync`,
+/// even with a newer one on `PATH`), not whichever `which` finds. Asked once per
+/// process; `None` (missing, openrsync, unparseable) keeps every pull on SFTP.
+/// Blocking on the first call.
+pub fn rsync_version_local() -> Option<RsyncVersion> {
+    static LOCAL: std::sync::OnceLock<Option<RsyncVersion>> = std::sync::OnceLock::new();
+    *LOCAL.get_or_init(|| {
+        let mut cmd = crate::paths::command_no_window("rsync");
+        cmd.arg("--version").stdin(std::process::Stdio::null());
+        let out = crate::paths::output_within(cmd, RSYNC_PROBE_TIMEOUT).ok()?;
+        parse_rsync_version(&String::from_utf8_lossy(&out.stdout))
+    })
+}
+
+/// The host's rsync version, cached per `user@host:port` for the process: the
+/// pull's rsync runs `rsync --server` through the same non-interactive remote
+/// shell, so this asks the same binary. An answer (a version, or none: missing,
+/// openrsync, too old) is kept; an ssh failure is not, so the next pull asks
+/// again. A host upgraded later is seen after a restart; one downgraded makes
+/// its pulls fail and fall back to SFTP, as before. Blocking; call from
+/// `spawn_blocking`.
+pub fn rsync_version_host(spec: &crate::schema::project::RemoteSpec) -> Option<RsyncVersion> {
+    type HostKey = (Option<String>, String, Option<u16>);
+    static HOSTS: std::sync::OnceLock<std::sync::Mutex<HashMap<HostKey, Option<RsyncVersion>>>> =
+        std::sync::OnceLock::new();
+    let hosts = HOSTS.get_or_init(Default::default);
+    let key = (spec.user.clone(), spec.host.clone(), spec.port);
+    if let Some(known) = hosts.lock_ok().get(&key) {
+        return *known;
     }
+    let out = crate::services::ssh_exec::run_remote_shell(spec, "rsync --version 2>/dev/null").ok()?;
+    // 255 is ssh's own failure (no master, link down), not the host's answer.
+    if out.status.code() == Some(255) || out.status.code().is_none() {
+        return None;
+    }
+    let version = parse_rsync_version(&String::from_utf8_lossy(&out.stdout));
+    hosts.lock_ok().insert(key, version);
+    version
 }
 
 /// Cross-platform `command -v` check for a binary on `PATH`.
@@ -1394,6 +1474,7 @@ fn which_on_path(bin: &str) -> bool {
 /// dest. Best-effort fast-path: returns `Err` on any failure so the caller falls
 /// back to the SFTP walker. Blocking shell-out, so call from `spawn_blocking`.
 pub fn rsync_pull_dir(
+    fast: RsyncFastPath,
     user: &Option<String>,
     host: &str,
     port: Option<u16>,
@@ -1413,7 +1494,7 @@ pub fn rsync_pull_dir(
             .trim_end_matches(['/', '\\'])
     );
     let files_from = rsync_files_from(files)?;
-    let args = rsync_pull_args(user, host, port, &src, &dest, files_from.path());
+    let args = rsync_pull_args(fast, user, host, port, &src, &dest, files_from.path());
     let out = crate::paths::command_no_window("rsync")
         .args(&args)
         .output()
@@ -2232,12 +2313,56 @@ mod tests {
         assert_eq!(push_decision(&e, None), PushDecision::Stale);
     }
 
+    fn v(major: u32, minor: u32) -> Option<RsyncVersion> {
+        Some(RsyncVersion { major, minor })
+    }
+
+    /// A fast-path proof, as the probes give one for two 3.x rsyncs.
+    fn fast() -> RsyncFastPath {
+        rsync_fast_path(v(3, 2), v(3, 4)).unwrap()
+    }
+
     #[test]
-    fn should_use_rsync_requires_both_ends_and_a_dir() {
-        assert!(should_use_rsync(true, true, true));
-        assert!(!should_use_rsync(true, true, false)); // single file → SFTP
-        assert!(!should_use_rsync(false, true, true)); // missing locally
-        assert!(!should_use_rsync(true, false, true)); // missing on host
+    fn rsync_version_parses_samba_rsync() {
+        assert_eq!(parse_rsync_version("rsync  version 3.2.7  protocol version 31\nCopyright (C) 1996-2022\n"), v(3, 2));
+        assert_eq!(parse_rsync_version("rsync  version v3.4.1  protocol version 32\n"), v(3, 4));
+        assert_eq!(parse_rsync_version("rsync  version 3.0.0pre1  protocol version 30\n"), v(3, 0));
+        assert_eq!(parse_rsync_version("rsync  version 2.6.9  protocol version 29\n"), v(2, 6));
+        // A login banner the host's shell prints first is skipped.
+        assert_eq!(parse_rsync_version("Welcome to the cluster\nrsync  version 3.1.3  protocol version 31\n"), v(3, 1));
+    }
+
+    #[test]
+    fn rsync_version_refuses_openrsync_and_garbage() {
+        assert_eq!(parse_rsync_version("openrsync: protocol version 29\n"), None);
+        // macOS 15's /usr/bin/rsync: openrsync, whatever it claims to match.
+        assert_eq!(parse_rsync_version("openrsync: protocol version 29\nrsync version 2.6.9 compatible\n"), None);
+        assert_eq!(parse_rsync_version("openrsync: protocol version 29\nrsync  version 3.0.0  protocol version 30\n"), None);
+        for garbage in [
+            "",
+            "\n",
+            "sh: rsync: command not found\n",
+            "rsync version 2.6.9 compatible\n",
+            "rsync  version   protocol version 31\n",
+            "rsync  version x.y  protocol version 31\n",
+            "rsync  version 3  protocol version 31\n",
+            "my rsync  version 3.2.7  protocol version 31\n",
+        ] {
+            assert_eq!(parse_rsync_version(garbage), None, "{garbage:?}");
+        }
+    }
+
+    /// The fast path needs `--protect-args` on BOTH ends; either side older
+    /// than 3.0, openrsync, missing or unprobed keeps the pull on SFTP.
+    #[test]
+    fn rsync_fast_path_needs_protect_args_on_both_ends() {
+        assert!(rsync_fast_path(v(3, 0), v(3, 0)).is_some());
+        assert!(rsync_fast_path(v(3, 4), v(4, 0)).is_some());
+        let openrsync = parse_rsync_version("openrsync: protocol version 29\n");
+        let old = parse_rsync_version("rsync  version 2.6.9  protocol version 29\n");
+        for (local, host) in [(old, v(3, 2)), (v(3, 2), old), (openrsync, v(3, 2)), (v(3, 2), openrsync), (None, v(3, 2)), (v(3, 2), None), (None, None)] {
+            assert_eq!(rsync_fast_path(local, host), None, "{local:?} / {host:?}");
+        }
     }
 
     #[test]
@@ -2261,6 +2386,7 @@ mod tests {
     fn rsync_pull_args_build_target_and_flags() {
         let files_from = Path::new(concat!("/tmp/", crate::app_slug!(), "-rsync-files"));
         let args = rsync_pull_args(
+            fast(),
             &Some("alice".to_string()),
             "host.example",
             None,
@@ -2300,15 +2426,7 @@ mod tests {
     #[cfg(unix)]
     fn samba_rsync_3() -> bool {
         let Ok(out) = std::process::Command::new("rsync").arg("--version").output() else { return false };
-        let text = String::from_utf8_lossy(&out.stdout);
-        let first = text.lines().next().unwrap_or_default();
-        first.starts_with("rsync ")
-            && first
-                .split_whitespace()
-                .skip_while(|w| *w != "version")
-                .nth(1)
-                .and_then(|v| v.split('.').next()?.parse::<u32>().ok())
-                .is_some_and(|major| major >= 3)
+        parse_rsync_version(&String::from_utf8_lossy(&out.stdout)).is_some_and(|v| v >= RSYNC_PROTECT_ARGS_SINCE)
     }
 
     /// rsync splits `-e` on spaces outside quotes and doubles a `'` inside
@@ -2345,7 +2463,7 @@ mod tests {
     /// space or `$` in a project dir is one path, not two words or an expansion.
     #[test]
     fn rsync_pull_args_protect_the_host_path() {
-        let args = rsync_pull_args(&None, "host.example", None, "/srv/my $proj/", "/m/", Path::new("/tmp/list"));
+        let args = rsync_pull_args(fast(), &None, "host.example", None, "/srv/my $proj/", "/m/", Path::new("/tmp/list"));
         assert!(args.iter().any(|arg| arg == "--protect-args"), "{args:?}");
         assert!(args.iter().any(|arg| arg == "host.example:/srv/my $proj/"));
     }
@@ -2388,7 +2506,7 @@ mod tests {
         for dir in ["a[1]", "q?", "b\\x[2]", "x]y/c[1]", "p\\q/d[1]"] {
             let dest = tempfile::tempdir().unwrap();
             let src = format!("{}/", r.join(dir).display());
-            let mut args = rsync_pull_args(&None, "h", None, &src, &format!("{}/", dest.path().display()), list.path());
+            let mut args = rsync_pull_args(fast(), &None, "h", None, &src, &format!("{}/", dest.path().display()), list.path());
             let e = args.iter().position(|a| a == "-e").unwrap();
             args[e + 1] = ssh.display().to_string();
             let out = std::process::Command::new("rsync").args(&args).output().unwrap();
@@ -2402,6 +2520,7 @@ mod tests {
     #[test]
     fn rsync_pull_args_omit_user_when_absent() {
         let args = rsync_pull_args(
+            fast(),
             &None,
             "host.example",
             None,

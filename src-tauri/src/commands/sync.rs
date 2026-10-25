@@ -1969,13 +1969,15 @@ async fn pull_subtree(
     Ok(outcome)
 }
 
-/// Attempt the rsync fast-path for a directory pull of `rel`: probe rsync on both
-/// ends, and if present run `rsync_pull_dir` on a blocking thread. Returns `true`
-/// when rsync actually transferred (the caller then just stats locally); `false`
-/// to fall back to the SFTP walker. Best-effort — any probe/transfer failure
-/// returns `false`.
+/// Attempt the rsync fast-path for a directory pull of `rel`: probe rsync's
+/// version on both ends (cached), and if both take `--protect-args` (3.0 or
+/// later) run `rsync_pull_dir` on a blocking thread. Returns `true` when rsync
+/// actually transferred (the caller then just stats locally); `false` to fall
+/// back to the SFTP walker. Best-effort — any probe/transfer failure returns
+/// `false`.
 async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::HostFile]) -> bool {
-    if !remote_sync::rsync_available_local() {
+    let local_rsync = app_core::rt::spawn_blocking(remote_sync::rsync_version_local).await.ok().flatten();
+    if local_rsync.is_none() {
         return false;
     }
     // The floor refuses a file over the cap; so does the fast path (gap 35).
@@ -1998,10 +2000,11 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
         return false;
     };
     app_core::rt::spawn_blocking(move || {
-        if !remote_sync::rsync_available_host(&spec) {
+        let Some(fast) = remote_sync::rsync_fast_path(local_rsync, remote_sync::rsync_version_host(&spec)) else {
             return false;
-        }
+        };
         remote_sync::rsync_pull_dir(
+            fast,
             &spec.user,
             &spec.host,
             spec.port,
