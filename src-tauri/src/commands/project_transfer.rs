@@ -903,7 +903,7 @@ pub async fn preview_project_export(project_id: String) -> Result<ExportPreview,
     app_core::rt::try_blocking("export", move || preview_project_export_blocking(project_id)).await
 }
 
-fn preview_project_export_blocking(project_id: String) -> Result<ExportPreview, String> {
+pub fn preview_project_export_blocking(project_id: String) -> Result<ExportPreview, String> {
     validate_project_id(&project_id)?;
     let entry = &crate::services::remote::project_entry(&project_id)?;
 
@@ -1939,7 +1939,7 @@ pub async fn inspect_project_export(bundle_path: String) -> Result<BundleInfo, S
     app_core::rt::try_blocking("import", move || inspect_project_export_blocking(bundle_path)).await
 }
 
-fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo, String> {
+pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo, String> {
     let (_zip, manifest) = open_bundle(&bundle_path)?;
     let list = read_projects_list()?;
     let id_in_use = list.iter().any(|p| p.id == manifest.entry.id);
