@@ -363,15 +363,10 @@ pub(crate) fn conflict_message(conflict: &ProjectConflict) -> String {
     }
 }
 
+/// The registry as an owned list (reserved ids dropped): a copy of the cached
+/// read, [`crate::services::remote::projects`], for a caller that edits it.
 pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
-    let path = storage::projects_path();
-    if path.exists() {
-        let mut list: ProjectsList = storage::read_json(&path).map_err(|e| e.to_string())?;
-        drop_reserved_projects(&mut list);
-        Ok(list)
-    } else {
-        Ok(vec![])
-    }
+    crate::services::remote::projects().map(|list| ProjectsList::clone(&list))
 }
 
 /// Apply one serialized read-modify-write to the project registry. Existing
@@ -982,12 +977,7 @@ pub async fn archive_project(project_id: String, archived_at: String) -> Result<
 pub fn archive_project_blocking(project_id: String, archived_at: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
 
-    let list = read_projects_list()?;
-    let idx = list
-        .iter()
-        .position(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
-    let entry = list[idx].clone();
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let remote = entry_is_remote(&entry);
 
     let dest = paths::archive_root().join(&project_id);
@@ -1070,12 +1060,7 @@ pub async fn forget_project(project_id: String) -> Result<(), String> {
 
 pub fn forget_project_blocking(project_id: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?
-        .clone();
+    let entry = crate::services::remote::project_entry(&project_id)?;
     if entry_is_vm(&entry) {
         return Err(concat!("A VM project's disk lives in ", crate::app_name!(), "'s state, so there is no folder to \
                     keep — use \"Delete project…\", which archives the disk with it.")
@@ -1831,11 +1816,7 @@ pub fn set_project_sandbox_blocking(
     enabled: bool,
     source_decision: Option<SandboxSourceDecision>,
 ) -> Result<SandboxToggleOutcome, String> {
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
 
     // The trust tiers are exclusive (`docs/vm_projects_plan.md`): a project
     // living inside a VM must never also enable the Docker sandbox — the
@@ -2689,11 +2670,7 @@ pub fn set_project_git_disabled_blocking(project_id: String, disabled: bool) -> 
     static GIT_TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _toggle = GIT_TOGGLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // projects.json — locate the entry and resolve its on-disk directory.
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let directory = entry
         .directory()
         .map(PathBuf::from)
@@ -3744,12 +3721,7 @@ pub async fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffo
 }
 
 pub fn repair_project_scaffold_blocking(project_id: String) -> Result<ProjectScaffoldRepair, String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let entry = list
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let (target, with_git) = scaffold_target_for_entry(&entry)
         .ok_or_else(|| "Project has no local scaffold target".to_string())?;
     let report = repair_project_scaffold_at(&target, with_git).map_err(|e| e.to_string())?;
@@ -3773,13 +3745,9 @@ pub async fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>
 }
 
 pub fn repair_all_project_scaffolds_blocking() -> Result<Vec<ProjectScaffoldRepair>, String> {
-    let list_path = storage::projects_path();
-    if !list_path.exists() {
-        return Ok(vec![]);
-    }
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
+    let list = crate::services::remote::projects()?;
     let mut results = Vec::new();
-    for entry in &list {
+    for entry in list.iter() {
         let Some((target, with_git)) = scaffold_target_for_entry(entry) else {
             continue;
         };
@@ -3934,12 +3902,7 @@ pub async fn project_agents_empty(project_id: String) -> Result<bool, String> {
 }
 
 fn project_agents_empty_blocking(project_id: String) -> Result<bool, String> {
-    let list_path = storage::projects_path();
-    if !list_path.exists() {
-        return Ok(false);
-    }
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let Some(entry) = list.into_iter().find(|p| p.id == project_id) else {
+    let Some(entry) = crate::services::remote::projects()?.iter().find(|p| p.id == project_id).cloned() else {
         return Ok(false);
     };
     let Some((target, _)) = scaffold_target_for_entry(&entry) else {
@@ -3966,12 +3929,7 @@ pub async fn project_scaffold_missing(project_id: String) -> Result<bool, String
 }
 
 fn project_scaffold_missing_blocking(project_id: String) -> Result<bool, String> {
-    let list_path = storage::projects_path();
-    if !list_path.exists() {
-        return Ok(false);
-    }
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let Some(entry) = list.into_iter().find(|p| p.id == project_id) else {
+    let Some(entry) = crate::services::remote::projects()?.iter().find(|p| p.id == project_id).cloned() else {
         return Ok(false);
     };
     let Some((target, with_git)) = scaffold_target_for_entry(&entry) else {
@@ -4162,12 +4120,7 @@ pub async fn project_migration_plan(project_id: String) -> Result<MigrationPlan,
 }
 
 pub fn project_migration_plan_blocking(project_id: String) -> Result<MigrationPlan, String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let entry = list
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let mut steps = Vec::new();
     let entry_details = entry_migration_details(&entry);
     if !entry_details.is_empty() {
@@ -4215,18 +4168,13 @@ pub fn project_migration_apply_blocking(
             let entry = list
                 .iter_mut()
                 .find(|p| p.id == project_id)
-                .ok_or_else(|| "Project not found".to_string())?;
+                .ok_or_else(|| format!("project '{project_id}' not found"))?;
             Ok(normalize_entry(entry))
         })?;
     }
     // Re-read after the entry step: normalization can backfill the very
     // `directory` the scaffold target resolves from.
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let entry = list
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let mut report = ScaffoldRepairReport::default();
     if let Some((target, with_git)) = scaffold_target_for_entry(&entry) {
         if target.is_dir() {
@@ -4925,15 +4873,11 @@ struct ExtendPrep {
 /// effects (the remote root, the state dir) — in that order, so a refused or
 /// unreadable `project.json` stops extend before anything is touched.
 fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
+    let entry = crate::services::remote::project_entry(&req.project_id)?;
     let list = read_projects_list()?;
 
-    let idx = list
-        .iter()
-        .position(|p| p.id == req.project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
-
     // Guard: only local projects can be extended.
-    if list[idx].extra.contains_key("remote") {
+    if entry.extra.contains_key("remote") {
         return Err("Project is already remote".to_string());
     }
 
@@ -4951,12 +4895,12 @@ fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep
     }
 
     // The current local tree becomes the mirror (working copy), unchanged.
-    let old_dir = entry_directory(&list[idx])
+    let old_dir = entry_directory(&entry)
         .ok_or_else(|| "Project has no local directory".to_string())?;
 
     // Whether this project carries git — only then is lockstep meaningful. `none`
     // (or a missing tag) means no repo to keep in step, so we leave lockstep off.
-    let git_backed = list[idx]
+    let git_backed = entry
         .extra
         .get("git_type")
         .and_then(Value::as_str)
@@ -4988,7 +4932,7 @@ fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep
     std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
     let new_directory = state_dir.to_string_lossy().to_string();
     Ok(ExtendPrep {
-        name: list[idx].name.clone(),
+        name: entry.name.clone(),
         req,
         old_dir,
         old_path,
@@ -5032,7 +4976,7 @@ fn extend_finish_blocking(prep: ExtendPrep) -> Result<ProjectEntry, String> {
         let entry = list
             .iter_mut()
             .find(|entry| entry.id == req.project_id)
-            .ok_or_else(|| "Project not found".to_string())?;
+            .ok_or_else(|| format!("project '{}' not found", req.project_id))?;
         if entry.extra.contains_key("remote") {
             return Err("Project is already remote".to_string());
         }
@@ -5125,20 +5069,15 @@ struct DetachPrep {
 /// The guards of [`detach_project_from_remote`], then `project.json` moved
 /// back into the mirror and the saved tabs re-pointed at it.
 fn detach_prepare_blocking(project_id: String) -> Result<DetachPrep, String> {
-    let list = read_projects_list()?;
-
-    let idx = list
-        .iter()
-        .position(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
 
     // Guard: only remote projects can be detached.
-    if !list[idx].extra.contains_key("remote") {
+    if !entry.extra.contains_key("remote") {
         return Err("Project is not remote".to_string());
     }
 
     // The local mirror (working copy) becomes the project directory again.
-    let mirror = list[idx]
+    let mirror = entry
         .extra
         .get("mirror")
         .and_then(Value::as_str)
@@ -5152,10 +5091,10 @@ fn detach_prepare_blocking(project_id: String) -> Result<DetachPrep, String> {
     // Move project.json from the state dir back into the (now local) tree,
     // dropping the remote/mirror fields. Read the existing one so tabs/time/
     // created_at/etc. survive.
-    let state_local_file = list[idx].local_file.clone();
+    let state_local_file = entry.local_file.clone();
     let mut project = read_project_to_move(Path::new(&state_local_file))?;
     project.id = project_id.clone();
-    project.name = list[idx].name.clone();
+    project.name = entry.name.clone();
     project.directory = mirror.clone();
     project.remote = None;
     project.mirror = None;
@@ -5475,17 +5414,7 @@ mod tests {
     /// it still works from both ends.
     #[test]
     fn a_renamed_folder_repairs_the_worktree_inside_it() {
-        fn git(dir: &Path, args: &[&str]) -> String {
-            let out = crate::commands::git::hardened_git_command_in(dir, args)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
-                .output()
-                .expect("git runs");
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
+        use crate::test_util::git;
         let tmp = tempfile::tempdir().unwrap();
         // Resolved (macOS' /var symlink), without Windows' `\\?\` prefix.
         let root = PathBuf::from(crate::commands::fs::display_path(&tmp.path().canonicalize().unwrap()));

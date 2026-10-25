@@ -4242,6 +4242,7 @@ async fn detect_and_sync_on(
 mod tests {
     use crate::brand::SLUG;
     use super::*;
+    use crate::test_util::git_output;
 
     /// Returns true when `git` is on PATH; probe tests skip gracefully otherwise.
     fn git_available() -> bool {
@@ -5868,16 +5869,8 @@ mod tests {
             .to_string()
     }
 
-    fn git_in(dir: &Path, args: &[&str]) -> std::process::Output {
-        crate::paths::command_no_window("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git")
-    }
-
     fn rev(dir: &Path, r: &str) -> String {
-        String::from_utf8_lossy(&git_in(dir, &["rev-parse", r]).stdout)
+        String::from_utf8_lossy(&git_output(dir, &["rev-parse", r]).stdout)
             .trim()
             .to_string()
     }
@@ -5892,9 +5885,9 @@ mod tests {
         let dir = tmp.path();
         let first = init_repo_with_file(dir, "a.txt", b"one\n");
         std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
-        git_in(dir, &["commit", "-qam", "two"]);
+        git_output(dir, &["commit", "-qam", "two"]);
         let second = rev(dir, "HEAD");
-        let branch = String::from_utf8_lossy(&git_in(dir, &["branch", "--show-current"]).stdout)
+        let branch = String::from_utf8_lossy(&git_output(dir, &["branch", "--show-current"]).stdout)
             .trim()
             .to_string();
         let peer = Peer::Local(dir.to_path_buf());
@@ -5913,7 +5906,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
         let head = init_repo_with_file(dir, "a.txt", b"one\n");
-        let branch = String::from_utf8_lossy(&git_in(dir, &["branch", "--show-current"]).stdout)
+        let branch = String::from_utf8_lossy(&git_output(dir, &["branch", "--show-current"]).stdout)
             .trim()
             .to_string();
         let peer = Peer::Local(dir.to_path_buf());
@@ -5936,7 +5929,7 @@ mod tests {
     /// batch's own name leaves no room for refs below it.
     fn block_backup_batch(dir: &Path, ts: u64, sha: &str) {
         let batch = format!("{}/{ts}", crate::brand::GIT_REF_BACKUP);
-        assert!(git_in(dir, &["update-ref", &batch, sha]).status.success());
+        assert!(git_output(dir, &["update-ref", &batch, sha]).status.success());
     }
 
     #[test]
@@ -5949,9 +5942,9 @@ mod tests {
         let dir = tmp.path();
         let first = init_repo_with_file(dir, "a.txt", b"one\n");
         std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
-        git_in(dir, &["commit", "-qam", "two"]);
+        git_output(dir, &["commit", "-qam", "two"]);
         let second = rev(dir, "HEAD");
-        let branch = String::from_utf8_lossy(&git_in(dir, &["branch", "--show-current"]).stdout)
+        let branch = String::from_utf8_lossy(&git_output(dir, &["branch", "--show-current"]).stdout)
             .trim()
             .to_string();
         let peer = Peer::Local(dir.to_path_buf());
@@ -5972,9 +5965,9 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
         let first = init_repo_with_file(dir, "a.txt", b"one\n");
-        git_in(dir, &["tag", "v1"]);
+        git_output(dir, &["tag", "v1"]);
         std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
-        git_in(dir, &["commit", "-qam", "two"]);
+        git_output(dir, &["commit", "-qam", "two"]);
         let second = rev(dir, "HEAD");
         let peer = Peer::Local(dir.to_path_buf());
         block_backup_batch(dir, 1_700_000_004, &first);
@@ -6019,9 +6012,9 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
         let first = init_repo_with_file(dir, "a.txt", b"one\n");
-        git_in(dir, &["tag", "v1"]);
+        git_output(dir, &["tag", "v1"]);
         std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
-        git_in(dir, &["commit", "-qam", "two"]);
+        git_output(dir, &["commit", "-qam", "two"]);
         let second = rev(dir, "HEAD");
         let peer = Peer::Local(dir.to_path_buf());
 
@@ -6044,9 +6037,9 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
         let first = init_repo_with_file(dir, "a.txt", b"one\n");
-        git_in(dir, &["branch", "side"]);
+        git_output(dir, &["branch", "side"]);
         std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
-        git_in(dir, &["commit", "-qam", "two"]);
+        git_output(dir, &["commit", "-qam", "two"]);
         let second = rev(dir, "HEAD");
         let peer = Peer::Local(dir.to_path_buf());
 
@@ -6084,15 +6077,15 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path();
         let first = init_repo_with_file(dir, "a.txt", b"one\n");
-        git_in(dir, &["branch", "side"]);
+        git_output(dir, &["branch", "side"]);
         std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
-        git_in(dir, &["commit", "-qam", "two"]);
+        git_output(dir, &["commit", "-qam", "two"]);
         let second = rev(dir, "HEAD");
         std::fs::write(dir.join("a.txt"), b"three\n").unwrap();
-        git_in(dir, &["commit", "-qam", "three"]);
+        git_output(dir, &["commit", "-qam", "three"]);
         let third = rev(dir, "HEAD");
         // The probe saw `side` at `first`; something moved it on since.
-        git_in(dir, &["branch", "-f", "side", &second]);
+        git_output(dir, &["branch", "-f", "side", &second]);
         let peer = Peer::Local(dir.to_path_buf());
 
         let err = fast_forward_branch_ref(&peer, "side", &third, &first).expect_err("a stale old value");

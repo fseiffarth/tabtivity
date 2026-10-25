@@ -540,6 +540,7 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
 
     const KEY: [u8; 32] = [7; 32];
 
@@ -753,16 +754,6 @@ mod tests {
         assert_eq!(cache.get("p1", now + Duration::from_secs(1)), Some(overview));
         assert_eq!(cache.get("p1", now + TTL), None);
         assert_eq!(cache.get("p2", now), None);
-    }
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = crate::paths::command_no_window("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]

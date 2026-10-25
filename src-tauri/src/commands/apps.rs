@@ -1240,12 +1240,8 @@ pub(crate) fn project_apps_for_id(project_id: Option<&str>) -> HashMap<String, S
     let Some(id) = project_id else {
         return HashMap::new();
     };
-    let list_path = crate::storage::projects_path();
-    let list: Vec<crate::schema::ProjectEntry> =
-        crate::storage::read_json(&list_path).unwrap_or_default();
-    list.iter()
-        .find(|e| e.id == id)
-        .map(project_apps_from_entry)
+    crate::services::remote::project_entry(id)
+        .map(|e| project_apps_from_entry(&e))
         .unwrap_or_default()
 }
 

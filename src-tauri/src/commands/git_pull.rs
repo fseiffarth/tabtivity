@@ -566,17 +566,8 @@ fn git_merge_sides_blocking(path: String) -> Result<MergeSides, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
     use std::fs;
-
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = crate::paths::command_no_window("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).to_string()
-    }
 
     fn init(dir: &Path) {
         git(dir, &["init", "-q", "-b", "main"]);

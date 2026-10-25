@@ -148,7 +148,7 @@ const ROUND_CONFIG: &[&str] = &[
 /// Variables a caller's environment (a git hook running the app's tests, a
 /// shell with `GIT_DIR` exported) could carry into a call and point it at
 /// another repo, index or attribute source.
-const FOREIGN_GIT_ENV: &[&str] = &[
+pub(crate) const FOREIGN_GIT_ENV: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
@@ -1656,22 +1656,8 @@ fn prune(state_dir: &Path, keep: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
     use std::fs;
-
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let mut cmd = Command::new("git");
-        for name in FOREIGN_GIT_ENV {
-            cmd.env_remove(name);
-        }
-        let out = cmd
-            .args(["-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
 
     const MAIN: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n";
 

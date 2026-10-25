@@ -3,6 +3,7 @@
 //! own uid (only a mapped uid can be named in an ACL), so one hub instance
 //! per account answers as that account; they share one root and table.
 use super::*;
+use crate::test_util::git;
 use app_gateway::hub::{Hub, HubPeers};
 
 struct As(&'static str);
@@ -68,19 +69,6 @@ impl Server {
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 fn commit(dir: &Path, file: &str, text: &str) -> String {

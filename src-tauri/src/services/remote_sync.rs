@@ -165,9 +165,7 @@ pub fn default_mirror_dir_in(state_dir: &Path, project_id: &str) -> PathBuf {
 /// global list rather than the per-project `project.json` for the same reason as
 /// `remote::remote_target_for`: the global list is always on the local disk.
 fn mirror_override(project_id: &str) -> Option<PathBuf> {
-    let list_path = crate::storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = crate::storage::read_json(&list_path).ok()?;
-    let entry = list.iter().find(|e| e.id == project_id)?;
+    let entry = crate::services::remote::project_entry(project_id).ok()?;
     let raw = entry.extra.get("mirror")?.as_str()?.trim();
     (!raw.is_empty()).then(|| PathBuf::from(raw))
 }

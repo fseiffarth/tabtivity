@@ -1553,10 +1553,7 @@ pub fn project_dir_for(project_id: &str) -> Option<String> {
     if storage::is_reserved_scope(project_id) {
         return None;
     }
-    let list_path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.iter().find(|e| e.id == project_id)?;
-    entry.directory().map(str::to_string)
+    crate::services::remote::project_entry(project_id).ok()?.directory().map(str::to_string)
 }
 
 /// The project id whose tabs at `project_dir` would run **inside a container** —
@@ -1575,8 +1572,7 @@ pub fn project_dir_for(project_id: &str) -> Option<String> {
 /// therefore the same rule that decides where we look for its interpreter, rather
 /// than two conditions that can drift apart.
 pub fn containerized_project_for_dir(project_dir: &str) -> Option<String> {
-    let list_path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
+    let list = crate::services::remote::projects().ok()?;
     let entry = list.iter().find(|e| e.directory() == Some(project_dir.trim()))?;
     if crate::services::remote::remote_target_for(&entry.id).is_some() {
         return None;
@@ -1608,10 +1604,7 @@ pub fn run_in_container(project_id: &str, cwd: &str, script: &str) -> Option<Str
 }
 
 fn project_entry_value(project_id: &str, key: &str) -> Option<serde_json::Value> {
-    let list_path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.iter().find(|e| e.id == project_id)?;
-    entry.extra.get(key).cloned()
+    crate::services::remote::project_entry(project_id).ok()?.extra.get(key).cloned()
 }
 
 /// Detect in-repo container sources for a project: a root `Dockerfile` wins,

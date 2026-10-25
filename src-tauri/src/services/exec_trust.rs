@@ -726,6 +726,8 @@ fn prettier_subjects(start: &Path) -> Vec<Subject> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_util::init_repo;
 
     /// Hosted plan §6.5 gate 3: trust never crosses users (each daemon's own
     /// store in its own state dir), and a merge that changes a trust-gated
@@ -907,11 +909,6 @@ mod tests {
     fn is_root() -> bool {
         // SAFETY: geteuid has no preconditions.
         unsafe { libc::geteuid() == 0 }
-    }
-
-    #[cfg(unix)]
-    fn init_repo(repo: &Path) {
-        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(repo).status().unwrap().success());
     }
 
     #[cfg(unix)]

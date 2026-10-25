@@ -1025,8 +1025,7 @@ pub fn status() -> Vec<LoginStatus> {
     let mut logins =
         status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered());
     if logins.iter().any(|l| !l.wellknown_homes.is_empty()) {
-        let projects: crate::schema::projects::ProjectsList =
-            storage::read_json(&storage::projects_path()).unwrap_or_default();
+        let projects = crate::services::remote::projects().unwrap_or_default();
         for home in logins.iter_mut().flat_map(|l| l.wellknown_homes.iter_mut()) {
             home.label = projects.iter().find(|p| storage::project_key(&p.id) == home.key).map(|p| p.name.clone());
         }

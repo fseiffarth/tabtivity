@@ -839,12 +839,10 @@ pub fn migrate_project_sessions_once() {
     if marker.exists() {
         return;
     }
-    let list_path = storage::projects_path();
-    let projects: crate::schema::projects::ProjectsList =
-        storage::read_json(&list_path).unwrap_or_default();
+    let projects = crate::services::remote::projects().unwrap_or_default();
 
     let mut migrated = 0usize;
-    for entry in &projects {
+    for entry in projects.iter() {
         if entry.local_file.is_empty() {
             continue;
         }

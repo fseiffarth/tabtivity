@@ -242,16 +242,7 @@ pub fn remember(key: &str, answer: ChatUncommitted, now: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = crate::paths::command_no_window("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
+    use crate::test_util::git;
 
     #[test]
     fn status_rows_name_the_kind_of_change_and_skip_ignored_files() {

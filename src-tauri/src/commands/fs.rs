@@ -2939,6 +2939,7 @@ pub fn list_local_dir(path: &str, dirs_only: bool) -> Result<FileListing, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::init_repo;
     use std::path::PathBuf;
 
     #[test]
@@ -3279,24 +3280,6 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
-    }
-
-    fn init_repo(dir: &Path) {
-        let run = |args: &[&str]| {
-            assert!(
-                crate::paths::command_no_window("git")
-                    .args(args)
-                    .current_dir(dir)
-                    .output()
-                    .expect("git command should run")
-                    .status
-                    .success(),
-                "git {args:?} failed"
-            );
-        };
-        run(&["init"]);
-        run(&["config", "user.email", "test@example.com"]);
-        run(&["config", "user.name", "Test User"]);
     }
 
     #[test]

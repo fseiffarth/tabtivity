@@ -713,6 +713,7 @@ mod launcher_tests {
     use std::time::{Duration, SystemTime};
 
     use crate::brand::{BIN_NAME, DEV_BIN_NAME, DEV_LAUNCHER_SCRIPT, ENV_PREFIX, LEGACY_ENV_PREFIX, STATE_DIR_NAME};
+    use crate::test_util::git;
 
     fn repo() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -919,21 +920,6 @@ mod launcher_tests {
         let (ok, log) = f.launch();
         assert!(ok, "{log}");
         assert_eq!(f.ran(), "old", "{log}");
-    }
-
-    /// `git` in the fixture's checkout, blind to the user's own config.
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"])
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
     #[test]

@@ -4,9 +4,7 @@
 
 use crate::commands::apps::WindowRegistryState;
 use crate::commands::workspace::WorkspaceStateArc;
-use crate::schema::projects::ProjectsList;
 use crate::services::project_runtime::PreviousProjectSnapshot;
-use crate::storage;
 use crate::tauri_host::Ctx;
 
 /// Switch the active project runtime.
@@ -94,13 +92,7 @@ pub fn switch_project_session(
 /// The `local_file` of the previous and the next project, from the global
 /// project list.
 fn local_files(previous_project_id: Option<&str>, project_id: Option<&str>) -> (Option<String>, Option<String>) {
-    let list_path = storage::projects_path();
-    let projects: ProjectsList = if list_path.exists() {
-        storage::read_json(&list_path).unwrap_or_default()
-    } else {
-        vec![]
-    };
-    let find_local_file = |id: &str| projects.iter().find(|p| p.id == id).map(|p| p.local_file.clone());
+    let find_local_file = |id: &str| crate::services::remote::project_entry(id).ok().map(|p| p.local_file);
     (previous_project_id.and_then(find_local_file), project_id.and_then(find_local_file))
 }
 

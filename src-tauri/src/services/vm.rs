@@ -56,7 +56,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::schema::project::{RemoteSpec, VmEgress, VmSpec};
-use crate::schema::projects::ProjectsList;
 use crate::storage;
 
 /// The guest account every VM project runs as; its home holds the tree.
@@ -431,9 +430,7 @@ pub fn is_vm_spec(spec: &RemoteSpec) -> bool {
 /// The `VmSpec` mirrored into a `projects.json` entry's `extra["vm"]`, or
 /// `None` for a non-VM project. The always-local copy, like `sandbox`'s.
 pub fn vm_spec_for(project_id: &str) -> Option<VmSpec> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.into_iter().find(|e| e.id == project_id)?;
+    let entry = crate::services::remote::project_entry(project_id).ok()?;
     let value = entry.extra.get("vm")?;
     serde_json::from_value(value.clone()).ok()
 }

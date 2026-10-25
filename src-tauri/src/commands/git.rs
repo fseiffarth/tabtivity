@@ -3708,15 +3708,10 @@ pub async fn detect_git_providers() -> Result<HashMap<String, DetectedOrigin>, S
 fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, String> {
     use serde_json::Value;
 
-    let path = crate::storage::projects_path();
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let list: crate::schema::projects::ProjectsList =
-        crate::storage::read_json(&path).map_err(|e| e.to_string())?;
+    let list = crate::services::remote::projects()?;
 
     let mut out = HashMap::new();
-    for entry in &list {
+    for entry in list.iter() {
         // Local projects only: a remote project's `origin` lives on the host,
         // and sniffing it would be a network call.
         if entry.extra.contains_key("remote") {
@@ -3763,6 +3758,7 @@ fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::init_repo;
     use std::fs;
 
     /// Tests skip gracefully when `git` isn't on PATH.
@@ -3796,22 +3792,6 @@ mod tests {
         assert_eq!(git_folder_origin_blocking(&repo).as_deref(), Some(url));
         assert_eq!(git_folder_origin_blocking(&inner), None, "an enclosing repo's origin");
         assert_eq!(git_folder_origin_blocking(&tmp.path().join("missing")), None);
-    }
-
-    fn init_repo(dir: &std::path::Path) {
-        let run = |args: &[&str]| {
-            let ok = crate::paths::command_no_window("git")
-                .args(args)
-                .current_dir(dir)
-                .output()
-                .expect("git command should run")
-                .status
-                .success();
-            assert!(ok, "git {args:?} failed");
-        };
-        run(&["init"]);
-        run(&["config", "user.email", "test@example.com"]);
-        run(&["config", "user.name", "Test User"]);
     }
 
     /// #2347: the remote exclude script appends the rule once to a plain

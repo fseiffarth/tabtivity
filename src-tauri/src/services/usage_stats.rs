@@ -355,15 +355,12 @@ fn watch_pruned(
 /// size walk reads (`commands::fs::excluded_rel_set`). Never the in-folder
 /// `project.json` copy, which anything working in the tree can rewrite.
 fn user_excluded_dirs(project_id: &str) -> std::collections::HashSet<String> {
-    let list_path = crate::storage::projects_path();
-    let Ok(list) = crate::storage::read_json::<crate::schema::projects::ProjectsList>(&list_path)
-    else {
+    let Ok(entry) = crate::services::remote::project_entry(project_id) else {
         return Default::default();
     };
-    let list: Vec<String> = list
-        .iter()
-        .find(|e| e.id == project_id)
-        .and_then(|e| e.extra.get("scan_excluded_paths"))
+    let list: Vec<String> = entry
+        .extra
+        .get("scan_excluded_paths")
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()

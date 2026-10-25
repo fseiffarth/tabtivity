@@ -610,11 +610,7 @@ fn failed_status() -> std::process::ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git").args(args).current_dir(dir).output().expect("git");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
+    use crate::test_util::git;
 
     fn repo() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
