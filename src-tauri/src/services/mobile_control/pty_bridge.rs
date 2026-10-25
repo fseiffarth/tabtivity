@@ -493,6 +493,14 @@ fn input_report_due(last: Option<std::time::Instant>, now: std::time::Instant) -
     last.is_none_or(|at| now.duration_since(at) >= INPUT_REPORT_INTERVAL)
 }
 
+/// Whether an input frame is a bare Esc or Ctrl+C — the desktop's
+/// `isInterruptInput`. Such a frame is reported whatever the burst window: it
+/// can end a turn that fires no `Stop` (a dismissed question, an interrupted
+/// tool), and only the report tells the desktop the turn is over.
+fn is_interrupt_frame(bytes: &[u8]) -> bool {
+    bytes == [MouseReportFilter::ESC] || bytes == [0x03]
+}
+
 /// Whether a close for `reason` tells the phone to come back. `replaced` means
 /// another viewer took over; that client must not fight its way back in a
 /// reconnect loop. `session_expired` retries through the phone's silent
@@ -773,9 +781,10 @@ pub async fn attach(
     // The tab runs an agent: its input obeys the AI switch.
     ai: bool,
     // Called on the leading edge of each burst of typing from this viewer (see
-    // `INPUT_REPORT_INTERVAL`). A callback rather than a desktop call of its
+    // `INPUT_REPORT_INTERVAL`), and on every interrupt key with `true` (see
+    // `is_interrupt_frame`). A callback rather than a desktop call of its
     // own, so this module keeps knowing nothing about the desktop socket.
-    on_input: impl Fn(),
+    on_input: impl Fn(bool),
     // Called at each moment the screen was last, or is again, in front of
     // somebody: when the phone reports its page hidden or visible, and at
     // detach unless the page was hidden by then (see `host::terminal`).
@@ -903,6 +912,9 @@ pub async fn attach(
     // when a held Esc goes out as the key it is.
     let mut mouse = MouseReportFilter::default();
     let mut flush_at: Option<tokio::time::Instant> = None;
+    // The held Esc came as a frame of its own: the Esc key, an interrupt once
+    // it goes out.
+    let mut held_esc_key = false;
     // The phone spoke: its session slides (`auth::SESSION_IDLE`). Every frame
     // it sends, not the tick — a tick is the sidecar checking, not the phone.
     let touch = |auth: &Arc<Mutex<AuthStore>>| {
@@ -967,6 +979,12 @@ pub async fn attach(
                 if !held.is_empty() {
                     let held = ai_input_kept(ai, &state_dir, &held).unwrap_or(held);
                     if !held.is_empty() && (writer.write_all(&held).is_err() || writer.flush().is_err()) { break Ok(()); }
+                    // The Esc key the frame path held back: told here, once
+                    // it reached the pane.
+                    if !held.is_empty() {
+                        last_input_report = Some(std::time::Instant::now());
+                        on_input(std::mem::take(&mut held_esc_key));
+                    }
                 }
             }
             Some((cols, rows)) = window_rx.recv() => {
@@ -987,10 +1005,12 @@ pub async fn attach(
                     last_client_message = std::time::Instant::now();
                     touch(&auth);
                     if bytes.len() > MAX_INPUT_FRAME { break Err("input_frame_too_large".into()); }
+                    let interrupt = is_interrupt_frame(&bytes);
                     // Before anything else reads the frame: a mouse report is
                     // dropped here (acked, as the AI switch's drops are), so it
                     // neither reaches tmux nor counts as the phone commanding it.
                     let bytes = mouse.feed(&bytes);
+                    held_esc_key = interrupt && mouse.pending();
                     flush_at = mouse.pending().then(|| tokio::time::Instant::now() + ESC_HOLD);
                     if bytes.is_empty() {
                         input_frames += 1;
@@ -1015,9 +1035,9 @@ pub async fn attach(
                     // never reported as having commanded it — and never acked.
                     input_frames += 1;
                     if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
-                    if input_report_due(last_input_report, last_client_message) {
+                    if interrupt || input_report_due(last_input_report, last_client_message) {
                         last_input_report = Some(last_client_message);
-                        on_input();
+                        on_input(interrupt);
                     }
                 }
                 Some(Ok(Message::Text(text))) => {
@@ -1106,7 +1126,7 @@ mod tests {
         tmux_window_size_command, MOBILE_SCROLLBACK_LINES,
     };
     use super::{
-        ack_frame, closing_retries, deliver, input_report_due, replay_frames, OutputQueue, IDLE_TIMEOUT,
+        ack_frame, closing_retries, deliver, input_report_due, is_interrupt_frame, replay_frames, OutputQueue, IDLE_TIMEOUT,
         INPUT_REPORT_INTERVAL, REPLAY_CHUNK, WRITE_TIMEOUT,
     };
     use super::MouseReportFilter;
@@ -1274,6 +1294,17 @@ mod tests {
         // Typing again after the window is a new burst — and the desktop may
         // have forgotten the tab in between (a respawn clears the stamp).
         assert!(input_report_due(Some(start), start + INPUT_REPORT_INTERVAL));
+    }
+
+    #[test]
+    fn a_bare_esc_or_ctrl_c_is_an_interrupt_and_nothing_else_is() {
+        assert!(is_interrupt_frame(b"\x1b"));
+        assert!(is_interrupt_frame(b"\x03"));
+        // An arrow key, Alt+x, a prompt ending in Enter: input, not an interrupt.
+        assert!(!is_interrupt_frame(b"\x1b[A"));
+        assert!(!is_interrupt_frame(b"\x1bx"));
+        assert!(!is_interrupt_frame(b"go on\r"));
+        assert!(!is_interrupt_frame(b""));
     }
 
     #[tokio::test]

@@ -25,7 +25,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(), emit: vi.fn() }));
 
 import { MobileBridgeHost } from "../../components/mobile/MobileBridgeHost";
-import { _clearPtyActivityForTest, notePtyOutput, useActivityStore } from "../../stores/activity";
+import { _clearPtyActivityForTest, noteAgentTurn, notePtyOutput, useActivityStore } from "../../stores/activity";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
@@ -234,6 +234,20 @@ describe("Mobile bridge — the status of a tab the phone is driving", () => {
     expect(done?.status).toBe("done");
     expect(done?.done_at).toBeLessThanOrEqual(quietFrom);
     expect(done?.done_at).toBe(useActivityStore.getState().lastDoneByTab[PTY]);
+  });
+
+  it("stops reporting working once the phone's Esc ends a turn that fires no Stop", async () => {
+    // A question dismissed on the phone: Claude's turn ends with no Stop hook,
+    // so the `working` its last tool left would stand — and every phone prompt
+    // would be held behind it — unless the Esc is relayed as an interrupt.
+    await ask({ type: "tab_input", request_id: "i4", project_id: project.id, tmux_session: TMUX });
+    noteAgentTurn(PTY, "working");
+    notePtyOutput(PTY, "status line\n");
+    expect((await tabStatus("c7"))?.status).toBe("working");
+
+    vi.advanceTimersByTime(1000);
+    await ask({ type: "tab_input", request_id: "i5", project_id: project.id, tmux_session: TMUX, interrupt: true });
+    expect((await tabStatus("c8"))?.status).not.toBe("working");
   });
 
   it("reports nothing at all when the typing is never relayed", async () => {

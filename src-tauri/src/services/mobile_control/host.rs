@@ -5116,8 +5116,9 @@ fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: St
 /// Tell the desktop a phone typed into this agent tab, so its activity store
 /// counts the session as commanded and classifies what follows (see
 /// `noteUserInput`). Fire-and-forget for the same reason `mark_tab_seen` is:
-/// nothing in the terminal path may wait on the desktop.
-fn mark_tab_input(socket: &std::path::Path, project_id: Option<String>, tmux_session: String) {
+/// nothing in the terminal path may wait on the desktop. `interrupt`: the input
+/// was a bare Esc or Ctrl+C.
+fn mark_tab_input(socket: &std::path::Path, project_id: Option<String>, tmux_session: String, interrupt: bool) {
     let Some(project_id) = project_id else {
         return;
     };
@@ -5130,6 +5131,7 @@ fn mark_tab_input(socket: &std::path::Path, project_id: Option<String>, tmux_ses
                 request_id,
                 project_id,
                 tmux_session,
+                interrupt,
             },
         )
         .await;
@@ -5218,8 +5220,8 @@ async fn terminal(
                 tab_id,
                 catalog,
                 ai,
-                move || {
-                    mark_tab_input(&input_socket, input_project.clone(), input_tmux.clone());
+                move |interrupt| {
+                    mark_tab_input(&input_socket, input_project.clone(), input_tmux.clone(), interrupt);
                 },
                 seen,
             )

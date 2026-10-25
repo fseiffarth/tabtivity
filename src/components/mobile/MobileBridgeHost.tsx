@@ -295,7 +295,7 @@ type DesktopRequest =
   | { type: "agent_status"; request_id: string; project_id: string; tmux_session: string; refresh: boolean }
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
-  | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string; interrupt?: boolean }
   | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
@@ -2775,15 +2775,18 @@ async function switchTabAssistantModel(projectId: string, tmuxSession: string, m
  * from reading as a finished turn). Without this report a tab driven entirely
  * from the phone produced status for nobody: the pills stayed blank on the very
  * surface that asked for the work. Throttled sidecar-side to the leading edge of
- * each burst of typing, so a held key is one report, not forty. */
-function markTabInput(projectId: string, tmuxSession: string): DesktopResponse {
+ * each burst of typing, so a held key is one report, not forty. `interrupt`: a
+ * bare Esc or Ctrl+C, always reported — a question dismissed on the phone ends
+ * Claude's turn with no `Stop`, and without it the tab read as working until
+ * the next hook, holding every phone prompt behind it. */
+function markTabInput(projectId: string, tmuxSession: string, interrupt = false): DesktopResponse {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (tab) {
-    noteUserInput(`${scope.id}:${tab.key}`);
+    noteUserInput(`${scope.id}:${tab.key}`, interrupt);
     // `tabtivity-send` from this tab now puts files on the phone.
     noteInputFrom(`${scope.id}:${tab.key}`, "phone");
   }
@@ -2968,7 +2971,7 @@ async function handleRequest(
     case "agent_status": return agentStatusFor(request.project_id, request.tmux_session, request.refresh);
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
-    case "tab_input": return markTabInput(request.project_id, request.tmux_session);
+    case "tab_input": return markTabInput(request.project_id, request.tmux_session, request.interrupt === true);
     case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);

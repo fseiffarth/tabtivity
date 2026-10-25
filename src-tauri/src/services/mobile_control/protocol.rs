@@ -1211,6 +1211,12 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
         tmux_session: String,
+        /// The input was a bare Esc or Ctrl+C, reported whatever the burst
+        /// window: it can end a turn that fires no `Stop` (a dismissed
+        /// question), and the desktop retires its `working` verdict on it
+        /// (`noteUserInput`'s `interrupt`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interrupt: bool,
     },
     /// The phone's composer sent `message` to this agent tab. Keystrokes reach
     /// tmux through the sidecar's own client, so the desktop never sees the
