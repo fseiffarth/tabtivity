@@ -2661,11 +2661,24 @@ fn reset_collisions(source_peer: &Peer, dest_peer: &Peer, target_sha: &str) -> V
 /// the order written and nothing between them changes. A panic resumes on the
 /// caller, as it did when the operation ran inline; `Err` only when the runtime
 /// is shutting down and never started it.
+///
+/// `held` is the caller's project mutation lock ([`sync_op`](crate::services::sync_op)),
+/// moved onto the blocking thread and released only when the operation ends. Once
+/// started, the operation runs to the end even when its caller is dropped (a
+/// runtime shutting down drops every task, blocking ones excepted): a lock still
+/// owned by the dropped caller would be released while the operation kept
+/// writing, letting the next pass or the other process (window or sidecar) run
+/// beside it.
 async fn off_worker<T: Send + 'static>(
+    held: Option<crate::services::sync_op::SyncOp>,
     op: impl std::future::Future<Output = T> + Send + 'static,
 ) -> Result<T, String> {
     let handle = tokio::runtime::Handle::current();
-    match tokio::task::spawn_blocking(move || handle.block_on(op)).await {
+    let run = move || {
+        let _held = held;
+        handle.block_on(op)
+    };
+    match tokio::task::spawn_blocking(run).await {
         Ok(value) => Ok(value),
         Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => Err(format!("lockstep task did not run: {e}")),
@@ -2676,7 +2689,7 @@ async fn off_worker<T: Send + 'static>(
 /// probe), as [`probe`] would read an unreadable mirror when the task never ran.
 async fn local_signature_off_worker(project_id: &str) -> String {
     let id = project_id.to_owned();
-    off_worker(async move { local_signature(&id) })
+    off_worker(None, async move { local_signature(&id) })
         .await
         .unwrap_or_else(|_| refs_signature(&probe_error_snapshot()))
 }
@@ -2693,14 +2706,18 @@ async fn local_signature_off_worker(project_id: &str) -> String {
 /// populated from it (remote import → mirror from remote; extend-local → remote from
 /// local). If *both* already exist and diverge, no side is guessed — that is the
 /// normal diverged→`Desynchronized` path, resolved by the explicit authority choice.
+///
+/// `op` is the caller's project mutation lock, held until the operation ends
+/// (see `off_worker`).
 pub async fn reconcile(
+    op: crate::services::sync_op::SyncOp,
     pool: &RemotePoolState,
     manifest: &remote_sync::SyncManifestState,
     project_id: &str,
     spec: &RemoteSpec,
 ) -> GitPeerState {
     let (pool, manifest, id, spec2) = (pool.clone(), manifest.clone(), project_id.to_owned(), spec.clone());
-    off_worker(async move { reconcile_with(&pool, &manifest, &id, &spec2, ReconcileOpts::default()).await })
+    off_worker(Some(op), async move { reconcile_with(&pool, &manifest, &id, &spec2, ReconcileOpts::default()).await })
         .await
         .unwrap_or_else(|_| load_state(project_id))
 }
@@ -3150,7 +3167,11 @@ async fn seed_manifest_after_pairing(
 /// side (unless already done), reconcile so the peer has the commits, check the same
 /// target out on the peer (a **guarded** checkout — never `-f`), re-stamp file-sync
 /// bases, and resume. `initiating_side` is `"local"` or `"remote"`.
+///
+/// `op` is the caller's project mutation lock, held until the operation ends
+/// (see `off_worker`).
 pub async fn checkout_lockstep(
+    op: crate::services::sync_op::SyncOp,
     pool: &RemotePoolState,
     manifest: &remote_sync::SyncManifestState,
     auto: &crate::services::sync_auto::AutoSyncState,
@@ -3162,7 +3183,7 @@ pub async fn checkout_lockstep(
 ) -> Result<GitPeerState, String> {
     let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
     let (id, spec, target, side) = (project_id.to_owned(), spec.clone(), target.to_owned(), initiating_side.to_owned());
-    off_worker(async move {
+    off_worker(Some(op), async move {
         checkout_lockstep_on(&pool, &manifest, &auto, &id, &spec, &target, &side, already_checked_out).await
     })
     .await?
@@ -3332,7 +3353,11 @@ pub fn winner_is_local(authority: &str) -> bool {
 /// tracked-file bases are re-stamped afterward (a losing local branch is `reset --hard`,
 /// rewriting the mirror tree), then a normal reconcile recomputes the (now
 /// `Synchronized`) status. A no-op reconcile is returned if either side lacks a repo.
+///
+/// `op` is the caller's project mutation lock, held until the operation ends
+/// (see `off_worker`).
 pub async fn resolve(
+    op: crate::services::sync_op::SyncOp,
     pool: &RemotePoolState,
     manifest: &remote_sync::SyncManifestState,
     auto: &crate::services::sync_auto::AutoSyncState,
@@ -3342,7 +3367,7 @@ pub async fn resolve(
 ) -> Result<GitPeerState, String> {
     let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
     let (id, spec, authority) = (project_id.to_owned(), spec.clone(), authority.to_owned());
-    off_worker(async move {
+    off_worker(Some(op), async move {
         if !connected(&pool, &id).await {
             return Err("Not connected to the remote host".to_string());
         }
@@ -3535,7 +3560,11 @@ pub fn list_backups(project_id: &str, spec: &RemoteSpec) -> Vec<BackupRef> {
 ///
 /// This deliberately leaves the peers diverged (one side moved, the other didn't); the
 /// next reconcile reports that, and the user resolves it with the authority they meant.
+///
+/// `op` is the caller's project mutation lock, held until the operation ends
+/// (see `off_worker`).
 pub async fn restore_backup(
+    op: crate::services::sync_op::SyncOp,
     pool: &RemotePoolState,
     manifest: &remote_sync::SyncManifestState,
     auto: &crate::services::sync_auto::AutoSyncState,
@@ -3546,7 +3575,7 @@ pub async fn restore_backup(
 ) -> Result<GitPeerState, String> {
     let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
     let (id, spec, label, refname) = (project_id.to_owned(), spec.clone(), peer_label.to_owned(), refname.to_owned());
-    off_worker(async move { restore_backup_on(&pool, &manifest, &auto, &id, &spec, &label, &refname).await })
+    off_worker(Some(op), async move { restore_backup_on(&pool, &manifest, &auto, &id, &spec, &label, &refname).await })
         .await?
 }
 
@@ -3943,6 +3972,7 @@ async fn poll_loop(
                 return;
             }
             let s = detect_and_sync(
+                op,
                 &pool,
                 &manifest,
                 &auto,
@@ -3954,7 +3984,6 @@ async fn poll_loop(
                 },
             )
             .await;
-            drop(op);
             emit_status(&ctx, &project_id, &s);
         }
         Err(e) => eprintln!("git_peer: {project_id}: {e}"),
@@ -4047,8 +4076,7 @@ async fn guarded_pass(
             if stopping.load(std::sync::atomic::Ordering::SeqCst) {
                 return false;
             }
-            let s = detect_and_sync(pool, manifest, auto, project_id, spec, ReconcileOpts::default()).await;
-            drop(op);
+            let s = detect_and_sync(op, pool, manifest, auto, project_id, spec, ReconcileOpts::default()).await;
             emit_status(ctx, project_id, &s);
         }
         Err(e) => eprintln!("git_peer: {project_id}: {e}"),
@@ -4103,7 +4131,11 @@ fn target_of(head: &Option<HeadRef>) -> Option<String> {
 /// One detection pass: if either side's HEAD moved since the last observed state,
 /// treat it as a checkout on that side and lock the peer to the same target;
 /// otherwise just fast-forward-reconcile refs. Persists + returns the new state.
+///
+/// `op` is the caller's project mutation lock, held until the operation ends
+/// (see `off_worker`).
 pub async fn detect_and_sync(
+    op: crate::services::sync_op::SyncOp,
     pool: &RemotePoolState,
     manifest: &SyncManifestState,
     auto: &AutoSyncState,
@@ -4113,7 +4145,7 @@ pub async fn detect_and_sync(
 ) -> GitPeerState {
     let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
     let (id, spec) = (project_id.to_owned(), spec.clone());
-    off_worker(async move { detect_and_sync_on(&pool, &manifest, &auto, &id, &spec, opts).await })
+    off_worker(Some(op), async move { detect_and_sync_on(&pool, &manifest, &auto, &id, &spec, opts).await })
         .await
         .unwrap_or_else(|_| load_state(project_id))
 }
@@ -5211,7 +5243,7 @@ mod tests {
     async fn a_lockstep_operation_runs_off_the_async_workers_and_still_awaits() {
         let worker = std::thread::current().id();
         let pool = crate::services::remote::new_pool();
-        let (ran_on, answer) = off_worker(async move {
+        let (ran_on, answer) = off_worker(None, async move {
             let here = std::thread::current().id();
             tokio::time::sleep(Duration::from_millis(5)).await;
             (here, connected(&pool, "no-such-project").await)
@@ -5221,13 +5253,52 @@ mod tests {
         assert_ne!(ran_on, worker, "the operation must not run on the async worker");
         assert!(!answer);
 
-        let joined = tokio::spawn(off_worker(async {
+        let joined = tokio::spawn(off_worker(None, async {
             if true {
                 panic!("lockstep boom");
             }
         }))
         .await;
         assert!(joined.is_err_and(|e| e.is_panic()), "a panic must reach the caller");
+    }
+
+    /// A lockstep operation keeps running when its caller is dropped (it is on a
+    /// blocking thread), so it must keep the project's mutation lock until it
+    /// ends: released with the dropped caller, the next pass — or the other
+    /// process — would take the project while this one is still writing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_caller_leaves_the_mutation_lock_with_the_running_operation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = crate::services::sync_op::acquire_in(dir.path(), "off-worker-lock-test").await.expect("lock");
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let caller = tokio::spawn(off_worker(Some(held), async move {
+            started_tx.send(()).unwrap();
+            // A blocking git step, still running after the caller went away.
+            release_rx.recv().unwrap();
+            let _ = done_tx.send(());
+        }));
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap()).await.unwrap();
+        caller.abort();
+        let _ = caller.await;
+
+        let second = tokio::time::timeout(
+            Duration::from_millis(300),
+            crate::services::sync_op::acquire_in(dir.path(), "off-worker-lock-test"),
+        )
+        .await;
+        assert!(second.is_err(), "the lock must stay with the operation its dropped caller started");
+
+        release_tx.send(()).unwrap();
+        done_rx.await.expect("the operation ran to its end");
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            crate::services::sync_op::acquire_in(dir.path(), "off-worker-lock-test"),
+        )
+        .await
+        .expect("released once the operation ended")
+        .expect("lock");
     }
 
     #[test]
