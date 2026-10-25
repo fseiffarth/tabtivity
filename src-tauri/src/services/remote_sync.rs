@@ -1431,12 +1431,26 @@ pub fn rsync_version_local() -> Option<RsyncVersion> {
     })
 }
 
+/// How long the host's `rsync --version` may take, ssh's own connect included
+/// (`ConnectTimeout=10`); riding the master it answers at once.
+const RSYNC_HOST_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The host probe's stdout kept: far over `rsync --version` and a login
+/// banner, a bound on a host that writes forever.
+const RSYNC_HOST_PROBE_CAP: u64 = 64 * 1024;
+
+/// The command the host probe runs, fixed: nothing of the host's or the
+/// project's is in it. stderr is ssh's own pipe, so no redirect is needed
+/// (a `2>/dev/null` is a syntax error under a csh login shell).
+const RSYNC_HOST_PROBE: &str = "rsync --version";
+
 /// The host's rsync version, cached per `user@host:port` for the process: the
 /// pull's rsync runs `rsync --server` through the same non-interactive remote
 /// shell, so this asks the same binary. An answer (a version, or none: missing,
-/// openrsync, too old) is kept; an ssh failure is not, so the next pull asks
-/// again. A host upgraded later is seen after a restart; one downgraded makes
-/// its pulls fail and fall back to SFTP, as before. Blocking; call from
+/// openrsync, too old) is kept; an ssh failure or a probe past its deadline is
+/// not, so the next pull asks again. A host upgraded later is seen after a
+/// restart; one downgraded makes its pulls fail and fall back to SFTP, as
+/// before (the argv always carries `--protect-args`). Blocking; call from
 /// `spawn_blocking`.
 pub fn rsync_version_host(spec: &crate::schema::project::RemoteSpec) -> Option<RsyncVersion> {
     type HostKey = (Option<String>, String, Option<u16>);
@@ -1447,14 +1461,29 @@ pub fn rsync_version_host(spec: &crate::schema::project::RemoteSpec) -> Option<R
     if let Some(known) = hosts.lock_ok().get(&key) {
         return *known;
     }
-    let out = crate::services::ssh_exec::run_remote_shell(spec, "rsync --version 2>/dev/null").ok()?;
-    // 255 is ssh's own failure (no master, link down), not the host's answer.
-    if out.status.code() == Some(255) || out.status.code().is_none() {
-        return None;
-    }
-    let version = parse_rsync_version(&String::from_utf8_lossy(&out.stdout));
+    let cmd = crate::services::ssh_exec::remote_shell_command(spec, RSYNC_HOST_PROBE).ok()?;
+    let version = probe_rsync_version(cmd, RSYNC_HOST_PROBE_TIMEOUT).ok()?;
     hosts.lock_ok().insert(key, version);
     version
+}
+
+/// Run a host probe `cmd` bounded (`timeout`, [`RSYNC_HOST_PROBE_CAP`]; the
+/// subtree is killed at either) and read its answer. `Err`: no answer to keep
+/// — the probe did not finish, or ssh itself failed (255, or killed).
+fn probe_rsync_version(mut cmd: std::process::Command, timeout: std::time::Duration) -> Result<Option<RsyncVersion>, ()> {
+    let opts = crate::services::git_bounded::Opts {
+        stdout_cap: Some(RSYNC_HOST_PROBE_CAP),
+        timeout: Some(timeout),
+        no_precheck: true,
+        ..Default::default()
+    };
+    let ran = crate::services::git_bounded::run(&mut cmd, opts).map_err(|_| ())?;
+    // A host that writes past the cap has answered; what it wrote first is read.
+    // 255 is ssh's own failure (no master, link down), not the host's answer.
+    if !ran.cut && matches!(ran.output.status.code(), Some(255) | None) {
+        return Err(());
+    }
+    Ok(parse_rsync_version(&String::from_utf8_lossy(&ran.output.stdout)))
 }
 
 /// Cross-platform `command -v` check for a binary on `PATH`.
@@ -2354,6 +2383,47 @@ mod tests {
 
     /// The fast path needs `--protect-args` on BOTH ends; either side older
     /// than 3.0, openrsync, missing or unprobed keeps the pull on SFTP.
+    #[cfg(unix)]
+    fn sh_probe(script: &str) -> std::process::Command {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", script]);
+        cmd
+    }
+
+    /// The host probe is bounded: a host that writes forever is cut at the cap
+    /// and a hung one stopped at the deadline, neither cached; ssh's own 255 is
+    /// no answer, a host without rsync (127) is one.
+    #[cfg(unix)]
+    #[test]
+    fn rsync_host_probe_is_bounded_and_keeps_only_answers() {
+        use std::time::Duration;
+        let answer = sh_probe("echo 'rsync  version 3.2.7  protocol version 31'");
+        assert_eq!(probe_rsync_version(answer, Duration::from_secs(10)), Ok(v(3, 2)));
+        assert_eq!(probe_rsync_version(sh_probe("echo nope >&2; exit 127"), Duration::from_secs(10)), Ok(None));
+        assert_eq!(probe_rsync_version(sh_probe("exit 255"), Duration::from_secs(10)), Err(()));
+
+        let started = std::time::Instant::now();
+        assert_eq!(probe_rsync_version(sh_probe("while :; do echo rsync; done"), Duration::from_secs(30)), Ok(None));
+        assert!(started.elapsed() < Duration::from_secs(15), "{:?}", started.elapsed());
+
+        let started = std::time::Instant::now();
+        assert_eq!(probe_rsync_version(sh_probe("sleep 30"), Duration::from_millis(300)), Err(()));
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    /// The host probe runs one fixed command, with no redirect a csh login
+    /// shell would reject.
+    #[test]
+    fn rsync_host_probe_is_a_fixed_command() {
+        assert_eq!(RSYNC_HOST_PROBE, "rsync --version");
+    }
+
+    /// CRLF output (a Windows-side or odd host shell) and a `v` prefix parse.
+    #[test]
+    fn rsync_version_parses_crlf_output() {
+        assert_eq!(parse_rsync_version("rsync  version v3.2.7  protocol version 31\r\nCopyright\r\n"), v(3, 2));
+    }
+
     #[test]
     fn rsync_fast_path_needs_protect_args_on_both_ends() {
         assert!(rsync_fast_path(v(3, 0), v(3, 0)).is_some());

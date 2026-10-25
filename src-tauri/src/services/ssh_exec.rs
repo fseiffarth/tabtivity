@@ -1207,14 +1207,21 @@ pub fn run_git_remote(
 /// Run a single shell command on `spec`'s host over SSH (riding the shared
 /// ControlMaster) and capture its `Output`. The command string is handed to the
 /// remote `$SHELL -c`, so the caller MUST `shell_quote` any path/argument it
-/// embeds. Used for cheap host capability probes (e.g. `command -v rsync`).
+/// embeds. Used for cheap host capability probes.
 pub fn run_remote_shell(spec: &RemoteSpec, command: &str) -> Result<std::process::Output, String> {
-    let mut args = ssh_base_args(&spec.user, &spec.host, spec.port)?;
-    args.push(command.to_string());
-    crate::paths::command_no_window("ssh")
-        .args(&args)
+    remote_shell_command(spec, command)?
         .output()
         .map_err(|e| format!("failed to run command over ssh: {e}"))
+}
+
+/// The `ssh` command [`run_remote_shell`] runs, for a caller that bounds its
+/// run itself (`services::git_bounded::run`). Same quoting duty on `command`.
+pub fn remote_shell_command(spec: &RemoteSpec, command: &str) -> Result<std::process::Command, String> {
+    let mut args = ssh_base_args(&spec.user, &spec.host, spec.port)?;
+    args.push(command.to_string());
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    Ok(cmd)
 }
 
 /// Run a POSIX-`sh` script inside the project's remote directory (`cd <path> && <script>`),
