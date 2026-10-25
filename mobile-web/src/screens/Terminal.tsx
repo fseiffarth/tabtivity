@@ -89,6 +89,7 @@ import { createVisibilityReporter } from "../terminal/visibility";
 import { installTerminalTouchScroll } from "../terminal/touchScroll";
 import { installWideOutputHint, type WideOutputHint } from "../terminal/wideOutput";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
+import { readPromptSuggestion } from "../terminal/promptSuggestion";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
 import { sessionLimits } from "../terminal/sessionUsage";
@@ -4174,6 +4175,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       : null),
     [liveTail, liveScreen, agentLabel],
   );
+  /** Claude Code's prompt suggestion, dimmed in its own empty box, which the
+   * chat hides (`promptSuggestion.ts`): a row over the composer that a tap
+   * puts into the field — never sent. The terminal view shows the CLI's box. */
+  const promptSuggestion = useMemo(
+    () => (view === "focus" && tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
+    [view, tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
+  );
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -5007,6 +5015,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             </button>
             {suggestion.used && <button className="slash-forget" onPointerDown={(event) => event.preventDefault()} onClick={() => forgetSlash(suggestion.line)} aria-label={t("mobile.slash.forget", { command: suggestion.line })} title={t("mobile.slash.forget", { command: suggestion.line })}>✕</button>}
           </div>)}
+        </div>}
+        {promptSuggestion && connected && !draft && !subagentTarget && pending.length === 0 && <div className="slash-menu prompt-suggestion" role="group" aria-label={t("terminal.reader.suggestion")}>
+          <div className="slash-menu-head">{t("terminal.reader.suggestion")} {isUntested("mobile.composer.promptSuggestion") && <em>{t("mobile.focus.untested")}</em>}</div>
+          {/* As the `/` menu's rows: the tap keeps the keyboard up. */}
+          <div className="slash-row">
+            <button className="slash-pick" onPointerDown={(event) => event.preventDefault()} onClick={() => { setDraft(promptSuggestion); composerInput.current?.focus(); }} title={t("mobile.composer.suggestionHint")}>
+              <strong>{promptSuggestion}</strong>
+            </button>
+          </div>
         </div>}
         <div className="composer-field">
           <textarea ref={composerInput} value={draft} disabled={!connected} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={() => setComposerTyping(true)} onBlur={typingStopped} onKeyDown={(event) => {

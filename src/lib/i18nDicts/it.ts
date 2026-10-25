@@ -181,6 +181,7 @@ export const dict: Dict = {
   "mobile.slash.title": "Comandi",
   "mobile.slash.recent": "Già inviato",
   "mobile.slash.forget": "Dimentica {command}",
+  "mobile.composer.suggestionHint": "Tocca per metterlo nel campo del messaggio: non viene inviato nulla finché non lo invii",
   "mobile.signIn.banner": "{agent} aspetta che tu acceda.",
   "mobile.signIn.open": "Accedi",
   "mobile.signIn.hide": "Nascondi l’avviso di accesso",

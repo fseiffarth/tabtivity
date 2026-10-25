@@ -44,8 +44,10 @@ cursor 2 27                          ← the cursor sits at the START of the tex
    one of the box's own hints. Returns the text or `""`.
 2. `lib/agents/readerLive.ts` — `ReaderLive.suggestion` filled in the
    no-dialog branch (a dialog replaces the box), compared in `sameReaderLive`.
-   The phone's Focus reads the same lines, so it can take the function later;
-   not wired there (no phone UI asked for).
+   The phone's Focus chat reads the same lines (`Terminal.tsx`
+   `promptSuggestion`, Focus view only, idle, no dialog): a "Claude suggests"
+   row in the `/` menu's look over the empty field; a tap fills the field,
+   never sends (2026-10-25, `MobilePromptSuggestion.test.tsx`).
 3. `TerminalReaderView.tsx` — `ReaderComposer` gets `suggestion`; a one-row
    panel in the slash menu's look (`terminal-reader-slash*` classes — copy the
    working sibling, no new CSS) shows it above the box while the composer is
