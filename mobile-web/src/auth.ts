@@ -1,4 +1,4 @@
-import { ApiError, api, traceConnect } from "./api";
+import { ApiError, api, hopOf, traceConnect } from "./api";
 import { classifyUnavailable, unavailableDetail, type UnavailableReason } from "./connection";
 import { loadDevice as load, loadPendingKey, saveDevice as save, savePendingKey, type AuthRecord } from "./authStore";
 
@@ -28,7 +28,7 @@ async function traced<T>(name: string, request: () => Promise<T>): Promise<T> {
   const took = () => `${Math.round(performance.now() - started)} ms`;
   try {
     const answer = await request();
-    traceConnect(`${name} ok after ${took()}`);
+    traceConnect(`${name} ok after ${took()}${hopOf(`/api/v1/auth/${name}`)}`);
     return answer;
   } catch (error) {
     traceConnect(`${name} ${error instanceof ApiError ? `${error.status} ${error.code}` : "failed"} after ${took()}`);

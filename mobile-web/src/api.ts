@@ -1,5 +1,6 @@
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
+import { storageKey } from "../../src/lib/brand";
 import type { ModelRows } from "./terminal/modelRows";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
@@ -466,10 +467,10 @@ function withTimeout(signal: AbortSignal | null | undefined, ms: number): AbortS
  */
 export function primeConnection(): void {
   const started = performance.now();
-  traceConnect("warm-up sent");
+  traceConnect(navigator.onLine === false ? "warm-up sent (browser says offline)" : "warm-up sent");
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT);
   void fetch("/healthz", { cache: "no-store", signal })
-    .then((response) => traceConnect(`warm-up ${response.status} after ${Math.round(performance.now() - started)} ms`))
+    .then((response) => traceConnect(`warm-up ${response.status} after ${Math.round(performance.now() - started)} ms${hopOf("/healthz")}`))
     .catch((error: unknown) => traceConnect(`warm-up ${aborted(error, signal) ? "timed out" : "failed"} after ${Math.round(performance.now() - started)} ms`));
 }
 
@@ -479,22 +480,71 @@ export function primeConnection(): void {
  * or last came to the front. The slow "Connecting…" splash and the failure
  * splash show it, so a slow unlock can be read off the phone instead of
  * guessed at from the desktop.
+ *
+ * A new stamp origin keeps the lines before it: coming to the front used to
+ * clear them, and a fingerprint sheet that hid the page took the warm-up's
+ * outcome with it. The reload a failed connect asks for carries them across
+ * (`carryConnectTrace`), so the splash after it shows both pages' attempts.
  */
 let traceOrigin = 0;
 let trace: string[] = [];
-const TRACE_LINES = 24;
+const TRACE_LINES = 32;
+const CARRIED_TRACE_KEY = storageKey("mobile.connectTrace");
 
 export function traceConnect(event: string, restart = false): void {
   const now = performance.now();
   if (restart) {
     traceOrigin = now;
-    trace = [];
+    if (trace.length > 0) trace = [...trace, "—"];
+    // Lookups by path (`hopOf`) read the newest entry; a full buffer would
+    // stop taking new ones and leave them reading a stale one.
+    try { performance.clearResourceTimings(); } catch { /* no resource timing */ }
   }
   trace = [...trace, `${((now - traceOrigin) / 1000).toFixed(1)} s  ${event}`].slice(-TRACE_LINES);
 }
 
 export function connectTrace(): readonly string[] {
   return trace;
+}
+
+/** Keep this page's trace for the next one: the reload a failed connect asks for. */
+export function carryConnectTrace(): void {
+  try {
+    sessionStorage.setItem(CARRIED_TRACE_KEY, JSON.stringify(trace));
+  } catch {
+    // The next page starts its own trace, as it always did.
+  }
+}
+
+/** Start this page's trace from the one the page before it carried, if any. One-shot. */
+export function takeCarriedTrace(): void {
+  try {
+    const carried: unknown = JSON.parse(sessionStorage.getItem(CARRIED_TRACE_KEY) ?? "null");
+    sessionStorage.removeItem(CARRIED_TRACE_KEY);
+    if (Array.isArray(carried)) trace = carried.filter((line): line is string => typeof line === "string").slice(-TRACE_LINES);
+  } catch {
+    // Unreadable: nothing carried.
+  }
+}
+
+/**
+ * The protocol the newest request to `path` went over, for the trace: `h2`
+ * means it rode the one shared connection that may be the stale one from
+ * before the phone slept, `http/1.1` a pooled socket of its own. Empty when
+ * the browser recorded no timing for it (a cancelled request, an old browser).
+ */
+export function hopOf(path: string): string {
+  try {
+    const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      if (new URL(entries[index].name, location.href).pathname !== path) continue;
+      const protocol = entries[index].nextHopProtocol;
+      return protocol ? ` (${protocol})` : "";
+    }
+  } catch {
+    // No resource timing here.
+  }
+  return "";
 }
 
 /** `timeoutMs` overrides the default deadline for the routes that need a

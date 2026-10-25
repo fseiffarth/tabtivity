@@ -6,7 +6,7 @@ import { finishOidcReturn, hasPairedDevice, logoutAuth, resumeAuth } from "./aut
 import { newCodeAdvised, releaseSecrets } from "./secrets";
 import { SecretsNewCodeSheet } from "./screens/SecretsNewCodeSheet";
 import { SecretsRepinSheet } from "./screens/SecretsRepinSheet";
-import { connectTrace, getMobileStatus, primeConnection, setProjectGoneHandler, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
+import { carryConnectTrace, connectTrace, getMobileStatus, primeConnection, setProjectGoneHandler, setUnauthorizedHandler, takeCarriedTrace, traceConnect, type TabRow } from "./api";
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
 import { parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
 import { forgetDeviceData } from "./forgetDeviceData";
@@ -304,10 +304,12 @@ export function App() {
   }, [reset]);
   const fail = useCallback((reason: UnavailableReason, detail?: string) => {
     // A path the phone wedged gets one fresh page before the splash
-    // (`takeConnectReload`). An unlock from moments ago rides across it on
-    // the reload grace, so the new page signs in without asking again.
+    // (`takeConnectReload`), with this page's trace carried across. An unlock
+    // from moments ago rides across it on the reload grace, so the new page
+    // signs in without asking again.
     if (suspectsTunnel(reason) && takeConnectReload()) {
       if (Date.now() - unlockedAt.current < LOCK_AFTER_IDLE_MS) noteUnlockedLeave();
+      carryConnectTrace();
       location.reload();
       return;
     }
@@ -351,6 +353,7 @@ export function App() {
     // the connection the browser kept from before the phone slept, and it
     // waited out the browser's ~10 s check that the connection is dead. Sent
     // now, that check runs while the reader is still at the lock.
+    takeCarriedTrace();
     traceConnect("app started", true);
     if (isConnectReload()) traceConnect("reloaded after a failed connect");
     primeConnection();
