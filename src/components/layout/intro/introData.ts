@@ -40,8 +40,11 @@ export function readIntroPage(): IntroPage {
 
 export function writeIntroPage(page: IntroPage): void {
   try {
-    if (page === "welcome") localStorage.removeItem(PAGE_KEY);
-    else localStorage.setItem(PAGE_KEY, page);
+    // The stored value is the table's own literal, never the caller's string:
+    // a page name is no secret, whatever it was derived from.
+    const known = INTRO_PAGES.find((p) => p === page);
+    if (!known || known === "welcome") localStorage.removeItem(PAGE_KEY);
+    else localStorage.setItem(PAGE_KEY, known);
   } catch {
     // Private window / blocked storage: the wizard simply starts at Welcome.
   }

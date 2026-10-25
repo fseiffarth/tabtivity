@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   parseNotebook,
   outputToBlocks,
-  stripAnsi,
   type NbCell,
 } from "../../lib/viewers/notebook";
 
@@ -113,9 +112,9 @@ describe("outputToBlocks", () => {
   });
 });
 
-describe("stripAnsi", () => {
-  it("removes SGR colour escape codes", () => {
-    expect(stripAnsi("\x1b[0;31mred\x1b[0m text")).toBe("red text");
-    expect(stripAnsi("plain")).toBe("plain");
+describe("outputToBlocks — ANSI", () => {
+  it("strips colour codes from stream text and tracebacks", () => {
+    expect(outputToBlocks({ output_type: "stream", text: "\x1b[0;31mred\x1b[0m text" })).toEqual([{ kind: "text", text: "red text" }]);
+    expect(outputToBlocks({ output_type: "error", traceback: ["\x1b[0;31mBoom\x1b[0m"] })).toEqual([{ kind: "text", text: "Boom" }]);
   });
 });

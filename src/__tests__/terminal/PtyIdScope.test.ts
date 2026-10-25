@@ -103,3 +103,14 @@ describe("isDetachedPtyId in a box scope", () => {
     expect(isDetachedPtyId(`box:${b.key}`)).toBe(false);
   });
 });
+
+describe("projectIdOfScope", () => {
+  it("maps only the root scope to no project; the assistant and box scopes stay their own ids", async () => {
+    const { ROOT_SCOPE, projectIdOfScope } = await import("../../lib/terminal/ptyId");
+    expect(ROOT_SCOPE).toBe("root");
+    expect(projectIdOfScope("root")).toBeNull();
+    expect(projectIdOfScope("p-1")).toBe("p-1");
+    expect(projectIdOfScope("assistant")).toBe("assistant");
+    expect(projectIdOfScope("box:abc")).toBe("box:abc");
+  });
+});

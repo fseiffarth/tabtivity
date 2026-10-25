@@ -30,7 +30,7 @@
 import mermaid from "mermaid";
 import katex from "katex";
 import "katex/dist/katex.min.css";
-import { escapeHtml } from "./highlight";
+import { escapeHtml } from "../textSafety";
 
 // Initialize mermaid once at module load. `startOnLoad:false` keeps mermaid from
 // scanning the DOM on its own — we drive rendering explicitly per <pre> node.

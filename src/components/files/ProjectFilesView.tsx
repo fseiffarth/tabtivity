@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { invokeTrusted } from "../../lib/execTrust";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { GitHistory } from "./GitHistory";
@@ -1340,25 +1341,19 @@ export function ProjectFilesView({
       !inGitView && dotProject && projectDir
         ? coalescedRun(() => useGitDirtyStore.getState().refresh(dotProject, projectDir), GIT_WATCH_COALESCE_MS)
         : null;
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-    if (local) {
-      void listen<string>("fs-change", (event) => {
-        if (projectDir && !fsChangeIsUnder(event?.payload, projectDir)) return;
-        // No project to hang a dot on (the root scope): the counts, coalesced.
-        (inGitView || !dot ? full : dot).request();
-      }).then((un) => {
-        if (cancelled) un();
-        else unlisten = un;
-      });
-    }
+    const unlisten = local
+      ? subscribeTauri(() => listen<string>("fs-change", (event) => {
+          if (projectDir && !fsChangeIsUnder(event?.payload, projectDir)) return;
+          // No project to hang a dot on (the root scope): the counts, coalesced.
+          (inGitView || !dot ? full : dot).request();
+        }))
+      : null;
     if (inGitView) {
       refreshGit(root);
       // The backstop poll below asks this coalesced reading.
       if (local) gitViewFullRef.current = full;
     }
     return () => {
-      cancelled = true;
       unlisten?.();
       full.cancel();
       dot?.cancel();

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useTauriListener } from "../../hooks/useTauriListener";
 import { useT } from "../../lib/i18n";
 import { formatSize } from "../../lib/mail";
 import { UntestedTag } from "../common/UntestedTag";
@@ -89,14 +90,13 @@ export function UpdatesPanel({
       .catch(() => {});
   }, [runCheck]);
 
-  useEffect(() => {
-    const un = listen<UpdateProgress>("app-update-progress", (e) => {
-      if (alive.current) setProgress(e.payload);
-    });
-    return () => {
-      void un.then((f) => f());
-    };
-  }, []);
+  useTauriListener(
+    () =>
+      listen<UpdateProgress>("app-update-progress", (e) => {
+        if (alive.current) setProgress(e.payload);
+      }),
+    [],
+  );
 
   const download = async () => {
     setBusy("download");

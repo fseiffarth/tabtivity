@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   needsSeparateKeyPassphrase,
   type SshTooling,
@@ -26,14 +24,14 @@ import {
 } from "../../lib/remote/loginTarget";
 import { useSettingsStore } from "../../stores/settings";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import type { LogLine } from "../common/ConnectionLog";
+import {
+  forgetVpnPassword as forgetStoredVpnPassword,
+  pickAndStoreOvpnConfig,
+  useOpenVpnLog,
+  useVpnReadyMarker,
+} from "../../hooks/useOpenVpn";
 
 type ConnStatus = "idle" | "connecting" | "connected" | "error";
-
-// OpenVPN prints this once the tunnel is fully up (mirrors the backend's
-// READY_MARKER in services/openvpn.rs). The embedded VPN login terminal is
-// watched for it to flip the lamp green (see the readiness watcher below).
-const VPN_READY_MARKER = "Initialization Sequence Completed";
 
 // What the bounded ControlMaster poll says when it runs out. A give-up has to be
 // *stated*: the lamp is the only thing the user can see, and an amber one that
@@ -41,13 +39,6 @@ const VPN_READY_MARKER = "Initialization Sequence Completed";
 // sentence is produced, rather than in `RemoteProjectSection`, which renders these
 // alongside raw backend errors it has no key for.
 const POLL_GAVE_UP: TranslationKey = "remoteSession.pollGaveUp";
-
-// Shape of the `terminal-output` event payload (PTY id + a raw output chunk),
-// matching the backend emit and TerminalView's own listener.
-interface TerminalOutput {
-  id: string;
-  data: string;
-}
 
 /** Steps of the remote-project flow: connect (SSH + VPN) → browse a remote
  *  folder → fill in name/details. Local projects bypass these entirely. */
@@ -153,11 +144,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // Live OpenVPN handshake output for the headless connect, streamed from the
   // backend (`openvpn-progress`) and shown in a read-only log so the connect
   // isn't an opaque spinner. Reset at the start of each connect attempt.
-  const [vpnLog, setVpnLog] = useState<LogLine[]>([]);
-  // Monotonic id source for `vpnLog` lines. A dedicated counter (never reset on
-  // slice) gives each pushed line a stable React key so the `.slice(-500)` cap
-  // trims only the head without re-creating surviving line nodes.
-  const vpnLogSeq = useRef(0);
+  const { log: vpnLog, clearLog: clearVpnLog } = useOpenVpnLog(vpnConfig);
   // Previously-used `.ovpn` configs (newest first), offered for reuse so a
   // config need only be browsed for once. Refreshed when the VPN section opens
   // and after a new config is stored.
@@ -339,7 +326,11 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
 
   const forgetVpnPassword = async () => {
     if (!vpnConfig) return;
-    await invoke("vpn_forget_password", { config: vpnConfig }).catch(() => {});
+    const failed = await forgetStoredVpnPassword(vpnConfig);
+    if (failed) {
+      setVpnError(failed);
+      return;
+    }
     setVpnSaved(false);
     setVpnRemember(false);
   };
@@ -390,27 +381,6 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
     rememberRemotePath(suggestionHost, target);
   };
 
-  // Stream the live OpenVPN handshake into `vpnLog` while the VPN section is
-  // open. The backend tags each line with the config it belongs to, so we keep
-  // only lines for the config currently selected here (the dialog connects one
-  // tunnel at a time). Capped so a chatty handshake can't grow unbounded.
-  useEffect(() => {
-    if (!vpnConfig) return;
-    let cancelled = false;
-    let un: (() => void) | undefined;
-    void listen<{ config: string; line: string }>("openvpn-progress", (ev) => {
-      if (ev.payload.config !== vpnConfig) return;
-      setVpnLog((prev) => [...prev, { id: vpnLogSeq.current++, text: ev.payload.line }].slice(-500));
-    }).then((u) => {
-      if (cancelled) u();
-      else un = u;
-    });
-    return () => {
-      cancelled = true;
-      un?.();
-    };
-  }, [vpnConfig]);
-
   // Which secrets does the chosen config need (an `auth-user-pass` account, an
   // encrypted key's passphrase, or both)? Drives which fields are shown/required —
   // a field OpenVPN wants but we don't supply becomes an unanswered stdin prompt
@@ -435,24 +405,20 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
     setVpnConfig(path);
     setVpnStatus("idle");
     setVpnError("");
-    setVpnLog([]); // drop the previous config's handshake output
+    clearVpnLog(); // drop the previous config's handshake output
   };
 
   // Pick a `.ovpn` config and copy it into Tabtivity so the project no longer
   // depends on the original file's location (stored on first use). The new copy
   // joins the recent-configs list for future reuse.
   const browseVpnConfig = async () => {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "OpenVPN config", extensions: ["ovpn", "conf"] }],
-    });
-    if (typeof picked !== "string") return;
     try {
-      const stored = await invoke<string>("openvpn_store_config", { config: picked });
+      const stored = await pickAndStoreOvpnConfig(t("remoteProjectSection.vpnConfigLabel"));
+      if (stored === null) return;
       setVpnConfig(stored);
       setVpnStatus("idle");
       setVpnError("");
-      setVpnLog([]); // drop the previous config's handshake output
+      clearVpnLog(); // drop the previous config's handshake output
       refreshVpnConfigs();
     } catch (e) {
       setVpnError(String(e));
@@ -479,7 +445,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
     if (!vpnConfig) return;
     setVpnStatus("connecting");
     setVpnError("");
-    setVpnLog([]);
+    clearVpnLog();
     useVpnStatusStore.getState().setState(vpnConfig, "connecting");
     try {
       await invoke("openvpn_connect", {
@@ -512,7 +478,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   };
 
   // Non-headless: bring the OpenVPN tunnel up in a terminal embedded in the
-  // dialog. The connect (`pkexec openvpn … --auth-nocache`) is the PTY's own
+  // dialog. The connect (`pkexec openvpn …`) is the PTY's own
   // program, so the user types the passphrase in that visible terminal —
   // Tabtivity never handles it. The PTY persists past the dialog so the tunnel
   // stays up for the new project; we pre-mark the dedupe key so activation's
@@ -547,38 +513,13 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // login spawns `pkexec openvpn` inside its own PTY, so the tunnel is *not* in
   // the backend's tunnel registry — `openvpn_status` can't see it. Instead we
   // watch that terminal's own output for OpenVPN's ready marker (the same string
-  // the headless backend waits on). Output arrives in chunks, so we keep a small
-  // rolling buffer in case the marker straddles two `terminal-output` events.
-  useEffect(() => {
-    if (!vpnTerm) return;
-    const termId = vpnTerm.id;
-    let cancelled = false;
-    let un: (() => void) | undefined;
-    let buf = "";
-    // Visible-only streaming: a hidden pane's PTY stops emitting
-    // terminal-output entirely, and this dialog terminal can be hidden while
-    // the tunnel comes up — the watch keeps its raw stream flowing so the
-    // marker scan below still sees it.
-    void invoke("pty_watch", { id: termId }).catch(() => {});
-    void listen<TerminalOutput>("terminal-output", (ev) => {
-      if (ev.payload.id !== termId) return;
-      buf = (buf + ev.payload.data).slice(-512);
-      if (buf.includes(VPN_READY_MARKER)) {
-        setVpnStatus("connected");
-        // Same reason as `startVpnTerm`'s "connecting": the tunnel is up and the
-        // machine is rerouted, so the header must say so.
-        useVpnStatusStore.getState().setState(vpnConfig, "connected");
-      }
-    }).then((u) => {
-      if (cancelled) u();
-      else un = u;
-    });
-    return () => {
-      cancelled = true;
-      un?.();
-      void invoke("pty_unwatch", { id: termId }).catch(() => {});
-    };
-  }, [vpnTerm, vpnConfig]);
+  // the headless backend waits on).
+  useVpnReadyMarker(vpnTerm?.id, () => {
+    setVpnStatus("connected");
+    // Same reason as `startVpnTerm`'s "connecting": the tunnel is up and the
+    // machine is rerouted, so the header must say so.
+    if (vpnConfig) useVpnStatusStore.getState().setState(vpnConfig, "connected");
+  });
 
   // Tear the embedded VPN terminal down (explicit disconnect / config change /
   // leaving remote mode). Kills the PTY and drops the dedupe mark so a later

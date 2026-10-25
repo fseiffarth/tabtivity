@@ -17,6 +17,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
 import { Dropdown } from "../common/Dropdown";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
+import { projectIdOfScope } from "../../lib/terminal/ptyId";
 
 /**
  * The Reader's Changes panel: the files the conversation on screen changed,
@@ -322,7 +323,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     openFileEntry({
       entry,
       projectDir: base ?? "",
-      projectId: scope === "root" ? null : scope,
+      projectId: projectIdOfScope(scope),
       origin: "reader_changes",
       external: false,
       disabled,

@@ -982,6 +982,27 @@ describe(`${BRAND.display} Mobile input frame`, () => {
     )).toEqual(["● Done — the reading view now stops above the box."]);
   });
 
+  it("finds the box over Claude Code's agent list, however many agents it lists", () => {
+    // Four background subagents put the box past the frame window counted
+    // from the screen's bottom: no box found, and the phone read the box and
+    // its footer as a dialog waiting for an answer.
+    const screen = lines(
+      "\u273b Waiting for 4 background agents to finish",
+      "",
+      `${"\u2500".repeat(40)} Project${BRAND.display} \u2500`,
+      "\u276f put the merged findings in a plan in docs/",
+      `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop*) \u00b7 Opus 5.5 \u00b7 ctx 94%`,
+      "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u25ef 1 agent",
+      "  \u25cf main",
+      "  \u25ef general-purpose  Screen Rust services/ code",
+      "  \u25ef general-purpose  Screen Rust commands/terminal",
+      "  \u25ef general-purpose  Screen frontend components",
+      "  \u25ef general-purpose  Screen frontend lib/stores",
+    );
+    expect(screen.slice(0, inputFrameStart(screen)).map((row) => row.text)).toEqual(["\u273b Waiting for 4 background agents to finish"]);
+    expect(sessionStatus(screen)).toMatchObject({ mode: "auto", model: "Opus 5.5" });
+  });
+
   it("keeps a dialog the session is waiting on", () => {
     // `\u276f 1. Yes` opens with the input line's own marker. Cutting there
     // would hide the question and leave the reader tapping at nothing.

@@ -283,7 +283,7 @@ describe("SyncTeX on the PDF side", () => {
   it("asks SyncTeX nothing for a PDF read from the remote host, and says so", async () => {
     await shown("remote");
     // No map or source probe over SFTP either: the source is looked for on a click.
-    expect(io.invoke).not.toHaveBeenCalledWith("file_mtime", expect.objectContaining({ path: expect.stringMatching(/synctex|\.tex$/) }));
+    expect(io.invoke).not.toHaveBeenCalledWith("file_mtime", expect.objectContaining({ path: expect.stringMatching(/(?:synctex|\.tex$)/) }));
     await act(async () => {
       fireEvent.click(document.querySelector(".file-viewer-pdf-page-wrap")!, { ctrlKey: true, clientX: 50, clientY: 50 });
     });

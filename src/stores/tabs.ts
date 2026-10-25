@@ -9,13 +9,14 @@ import type { InternalViewer } from "../lib/viewers/fileUtils";
 import type { AutocompleteMode } from "../types";
 import type { LoginTarget } from "../lib/remote/loginTarget";
 import { forgetPty } from "../lib/agents/promptCount";
+import { forgetTypedLine } from "../lib/agents/typedClear";
 import { forgetPromptTrail } from "./agents/promptTrail";
-import { BOX_SCOPE_PREFIX, splitPtyId } from "../lib/terminal/ptyId";
+import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
 import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
 import { useLinkRoutingStore } from "./linkRouting";
 import { bumpUsage } from "./usage";
-import { translate, useI18nStore } from "../lib/i18n";
+import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { newTmuxSessionName } from "../lib/terminal/tmuxSession";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
@@ -218,13 +219,9 @@ export function workerRunnable(h: LocalityHost): boolean {
   return !!h.shared_fs || h.sync_code !== false;
 }
 
-/**
- * The scope that belongs to no project: the root control terminal's, and the
- * scope every tab opened outside a project lands in. Its working directory is
- * `~/tabtivity/root` (`root_work_dir`), which the side panel browses as the app's
- * unfiled/scratch area.
- */
-export const ROOT_SCOPE = "root";
+// The scope that belongs to no project (the root control terminal's, and where
+// every tab opened outside a project lands) is defined in `lib/terminal/ptyId`.
+export { ROOT_SCOPE };
 
 export const FILES_TAB_CMD = tabCommand("files");
 
@@ -2549,8 +2546,10 @@ let layoutPersistFailureReported = false;
  */
 function forgetClosedTab(scope: string, key: string): void {
   useLinkRoutingStore.getState().purgeForTab(key);
-  forgetPty(`${scope}:${key}`);
-  forgetPromptTrail(`${scope}:${key}`);
+  const ptyId = `${scope}:${key}`;
+  forgetPty(ptyId);
+  forgetPromptTrail(ptyId);
+  forgetTypedLine(ptyId);
 }
 
 /** Persist a scope's tabs+layout+focus into the per-scope maps, mirroring the
@@ -3407,13 +3406,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       get().removeTabInScope(owner, key);
       return;
     }
-    // Discard any session-only link routes that pointed FROM this tab (#50).
-    useLinkRoutingStore.getState().purgeForTab(key);
     bumpUsage(get().scope, METRIC.TAB_CLOSED);
-    // The PTY is gone; drop its half-typed-prompt state so a recycled id can
-    // never inherit it.
-    forgetPty(`${get().scope}:${key}`);
-    forgetPromptTrail(`${get().scope}:${key}`);
+    forgetClosedTab(get().scope, key);
     set((s) => {
       const { tabs, layout, focusedGroupId } = currentScopeState(s);
       const nextTabs = tabs.filter((t) => t.key !== key);
@@ -3458,10 +3452,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         invoke("pty_kill", { id: `${scope}:${key}` }).catch(() => {});
       }
     }
-    useLinkRoutingStore.getState().purgeForTab(key);
     bumpUsage(scope, METRIC.TAB_CLOSED);
-    forgetPty(`${scope}:${key}`);
-    forgetPromptTrail(`${scope}:${key}`);
+    forgetClosedTab(scope, key);
     const emptiesPopout =
       !!detached && orderedTabKeys(detached.subtree).length === 1;
     set((s) => {
@@ -3541,14 +3533,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       }
       invoke("attach_subwindow", { registryId: entry.label }).catch(() => {});
     }
-    // Discard any session-only link routes from the closing tabs (#50), and the
-    // half-typed-prompt state a recycled id must never inherit.
-    const purge = useLinkRoutingStore.getState().purgeForTab;
-    for (const t of tabs) {
-      purge(t.key);
-      forgetPty(`${target}:${t.key}`);
-      forgetPromptTrail(`${target}:${t.key}`);
-    }
+    for (const t of tabs) forgetClosedTab(target, t.key);
     set((s) => {
       // Empty the scope entirely: no tabs, no layout, no detached/hidden records
       // (a hidden group's keys would otherwise dangle against dropped payloads).
@@ -3576,12 +3561,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const tabs = state.tabsByScope[scope] ?? [];
     const detached = state.detachedGroupsByScope[scope] ?? [];
 
-    const purge = useLinkRoutingStore.getState().purgeForTab;
-    for (const tab of tabs) {
-      purge(tab.key);
-      forgetPty(`${scope}:${tab.key}`);
-      forgetPromptTrail(`${scope}:${tab.key}`);
-    }
+    for (const tab of tabs) forgetClosedTab(scope, tab.key);
 
     set((s) => {
       const without = <T,>(record: Record<string, T>): Record<string, T> => {
@@ -5304,11 +5284,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     }
     if (doomedByScope.size === 0) return;
     for (const [scope, keys] of doomedByScope) {
-      for (const key of keys) {
-        useLinkRoutingStore.getState().purgeForTab(key);
-        forgetPty(`${scope}:${key}`);
-        forgetPromptTrail(`${scope}:${key}`);
-      }
+      for (const key of keys) forgetClosedTab(scope, key);
     }
     set((s) => {
       // Fold scope by scope: `writeScope` derives its maps from the state it is
@@ -5617,7 +5593,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           layoutPersistFailureReported = true;
           console.warn("tab layout save failed", error);
           set({
-            layoutPersistNotice: translate(useI18nStore.getState().lang, "appShell.layoutSaveFailedToast"),
+            layoutPersistNotice: translateNow("appShell.layoutSaveFailedToast"),
           });
         }
       }
@@ -6748,24 +6724,34 @@ export function localTabCwd(
   return `${opts.projectDirectory.replace(/[/\\]+$/, "")}/mirror`;
 }
 
+/** The host shape {@link hostTabId} and {@link hostTabCwd} read. */
+type TabHostProject = {
+  remote?: { remote_path: string };
+  compute_hosts?: readonly { id: string; remote_path: string }[];
+  vm?: { enabled?: boolean };
+};
+
+/**
+ * The host a PTY tab of a remote `project` runs on — `"primary"` or a worker
+ * id — or `null` for a tab that runs locally (or a local project). A worker id
+ * the project no longer has falls back to the primary, as the backend does.
+ */
+export function hostTabId(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
+  if (!project?.remote) return null;
+  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
+  if (!hostId || hostId === "primary") return hostId;
+  return project.compute_hosts?.some((h) => h.id === hostId) ? hostId : "primary";
+}
+
 /**
  * The folder a PTY tab that runs ON a host starts in: that host's `remote_path`
  * (`ssh_exec::wrap_pty_options` cds into the project root there), or `null` for
  * a tab that runs locally. Its spawn cwd is only the local state folder the
- * backend resolves to the host, so it is no path to show. A worker id the
- * project no longer has falls back to the primary, as the backend does.
+ * backend resolves to the host, so it is no path to show.
  */
-export function hostTabCwd(
-  tab: { kind: TabKind; location?: TabLocation },
-  project: {
-    remote?: { remote_path: string };
-    compute_hosts?: readonly { id: string; remote_path: string }[];
-    vm?: { enabled?: boolean };
-  } | undefined,
-): string | null {
-  if (!project) return null;
-  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
-  if (!hostId) return null;
+export function hostTabCwd(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
+  const hostId = hostTabId(tab, project);
+  if (!hostId || !project) return null;
   const worker = hostId === "primary" ? undefined : project.compute_hosts?.find((h) => h.id === hostId);
   return (worker ?? project.remote)?.remote_path || null;
 }

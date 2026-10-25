@@ -1,6 +1,7 @@
 import { useProjectsStore } from "../../stores/projects";
 import { resolveProjectDirectory } from "../../types";
 import { SkillsLibraryView } from "./SkillsLibraryView";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 
 interface Props {
   /** The tab's scope: a project id, or `"root"` — where there is no project to
@@ -30,5 +31,5 @@ export function SkillsLibraryTab({ scope, cwd, visible = true }: Props) {
   const project = projects.find((p) => p.id === scope) ?? null;
   const projectDir = (project ? resolveProjectDirectory(project) : cwd) || null;
 
-  return <SkillsLibraryView projectDir={scope === "root" ? null : projectDir} visible={visible} />;
+  return <SkillsLibraryView projectDir={scope === ROOT_SCOPE ? null : projectDir} visible={visible} />;
 }

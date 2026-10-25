@@ -1,7 +1,7 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useOpenVpnLog } from "../../hooks/useOpenVpn";
 import { UntestedTag } from "../common/UntestedTag";
 import { SavePasswordRow } from "../projects/SavePasswordRow";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../projects/useSavedCredential";
 import { useVpnPromptStore } from "../../stores/remote/vpn/vpnPrompt";
 import { useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
-import { ConnectionLog, type LogLine } from "../common/ConnectionLog";
+import { ConnectionLog } from "../common/ConnectionLog";
 import { PasswordInput } from "../common/PasswordInput";
 import { needsSeparateKeyPassphrase, type VpnAuthNeeds } from "../../types";
 import { useT } from "../../lib/i18n";
@@ -71,11 +71,7 @@ export function VpnPasswordPrompt() {
   const credential = useSavedCredentialSource(vpnConfig, readVpnCredential, forgetVpnCredential);
   // Live OpenVPN handshake output streamed from the backend, shown read-only so
   // the connect isn't an opaque spinner. Reset per prompt and per attempt.
-  const [log, setLog] = useState<LogLine[]>([]);
-  // Monotonic id source for `log` lines: a dedicated counter (never reset on
-  // slice) gives each line a stable React key so the `.slice(-500)` cap trims
-  // only the head without re-creating the surviving line nodes.
-  const logSeq = useRef(0);
+  const { log, clearLog } = useOpenVpnLog(pending?.config);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Reset + focus whenever a new prompt opens (keyed on config so a superseding
@@ -86,7 +82,7 @@ export function VpnPasswordPrompt() {
       setPassword("");
       setKeyPassphrase("");
       setUsername(pending.username ?? "");
-      setLog([]);
+      clearLog();
       inputRef.current?.focus();
       const config = pending.config;
       let cancelled = false;
@@ -104,7 +100,7 @@ export function VpnPasswordPrompt() {
         cancelled = true;
       };
     }
-  }, [pending?.config]);
+  }, [pending?.config, clearLog]);
 
   // Seed the box from the *resolved* credential, once per prompt. Gated on a ref
   // rather than run on every state change so a later `applyOutcome`/`refresh`
@@ -126,25 +122,6 @@ export function VpnPasswordPrompt() {
     setRemember(credential.saved);
   }, [pending, credential.checking, credential.saved]);
 
-  // Stream the live handshake for this prompt's config into the log.
-  useEffect(() => {
-    const config = pending?.config;
-    if (!config) return;
-    let cancelled = false;
-    let un: (() => void) | undefined;
-    void listen<{ config: string; line: string }>("openvpn-progress", (ev) => {
-      if (ev.payload.config !== config) return;
-      setLog((prev) => [...prev, { id: logSeq.current++, text: ev.payload.line }].slice(-500));
-    }).then((u) => {
-      if (cancelled) u();
-      else un = u;
-    });
-    return () => {
-      cancelled = true;
-      un?.();
-    };
-  }, [pending?.config]);
-
   // Watchdog for the "it connected but the modal didn't notice" case that `submit`'s
   // own `openvpn_status` re-check cannot cover: that one only runs when the connect
   // *rejects*. A connect that neither resolves nor rejects — the handshake completed
@@ -162,7 +139,7 @@ export function VpnPasswordPrompt() {
   const connected = status === "connected";
   const onSubmit = () => {
     if (!connecting && !connected) {
-      setLog([]);
+      clearLog();
       void submit(password, remember, username, keyPassphrase);
     }
   };

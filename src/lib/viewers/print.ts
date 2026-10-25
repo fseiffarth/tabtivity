@@ -15,8 +15,9 @@
 
 import { createElement } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 import { isUntested, type UntestedId } from "../untested";
+import { escapeHtml } from "../textSafety";
 import { initialPages, isPristine, type PageList } from "./pageModel";
 import {
   mountPageStrip,
@@ -429,15 +430,6 @@ export function sanitizePrintOptions(
   };
 }
 
-/** `translate` at the live language — this dialog is DOM-built outside React,
- *  so its strings are read here (once, when it opens) rather than via `useT`. */
-function tr(
-  key: Parameters<typeof translate>[1],
-  params?: Parameters<typeof translate>[2],
-): string {
-  return translate(useI18nStore.getState().lang, key, params);
-}
-
 export function clampScale(n: number): number {
   if (!Number.isFinite(n)) return 100;
   return Math.min(400, Math.max(10, Math.round(n)));
@@ -467,7 +459,7 @@ export function buildPrintDoc(bodyHtml: string, css: string, title = "Print"): s
     `font-size:12px;line-height:1.5}`;
   return (
     `<!doctype html><html><head><meta charset="utf-8">` +
-    `<title>${escapeAttr(title)}</title>` +
+    `<title>${escapeHtml(title)}</title>` +
     `<style>${base}\n${css}</style>` +
     `</head><body>${bodyHtml}</body></html>`
   );
@@ -514,7 +506,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
     const title = document.createElement("span");
     title.className = "print-preview-title";
-    title.textContent = tr("print.title");
+    title.textContent = translateNow("print.title");
 
     const actions = document.createElement("div");
     actions.className = "print-preview-actions";
@@ -526,7 +518,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     // viewer toolbar's PrintButton busy state.
     printBtn.disabled = true;
     printBtn.innerHTML =
-      `<span class="file-viewer-save-spinner" aria-hidden="true"></span>${escapeAttr(tr("print.preparing"))}`;
+      `<span class="file-viewer-save-spinner" aria-hidden="true"></span>${escapeHtml(translateNow("print.preparing"))}`;
 
     // Where the last job is once it has left for the printer (see `followJob`).
     const progressEl = document.createElement("span");
@@ -538,11 +530,11 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     const closeBtn = document.createElement("button");
     closeBtn.className = "dialog-close-btn print-preview-close";
     closeBtn.type = "button";
-    closeBtn.textContent = tr("common.close");
+    closeBtn.textContent = translateNow("common.close");
 
     const iframe = document.createElement("iframe");
     iframe.className = "print-preview-frame";
-    iframe.setAttribute("title", tr("print.title"));
+    iframe.setAttribute("title", translateNow("print.title"));
     // The sandbox is load-bearing and the token list is exactly two, deliberately.
     //
     // What lands in `srcdoc` is not always a document Tabtivity assembled: for an
@@ -580,44 +572,44 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     optionsRow.className = "print-preview-options";
 
     const paper = selectField(
-      tr("print.paper"),
+      translateNow("print.paper"),
       (Object.keys(PAPER_CM) as PaperSize[]).sort().map((p) => [p, p] as const),
       opts.paper,
       (v) => set({ paper: v as PaperSize }),
     );
     const orientation = selectField(
-      tr("print.layout"),
+      translateNow("print.layout"),
       [
-        ["portrait", tr("print.portrait")],
-        ["landscape", tr("print.landscape")],
+        ["portrait", translateNow("print.portrait")],
+        ["landscape", translateNow("print.landscape")],
       ],
       opts.orientation,
       (v) => set({ orientation: v as Orientation }),
     );
     const margin = selectField(
-      tr("print.margins"),
+      translateNow("print.margins"),
       [
-        ["none", tr("print.marginNone")],
-        ["narrow", tr("print.marginNarrow")],
-        ["normal", tr("print.marginNormal")],
-        ["wide", tr("print.marginWide")],
+        ["none", translateNow("print.marginNone")],
+        ["narrow", translateNow("print.marginNarrow")],
+        ["normal", translateNow("print.marginNormal")],
+        ["wide", translateNow("print.marginWide")],
       ],
       opts.margin,
       (v) => set({ margin: v as MarginPreset }),
     );
     const scale = selectField(
-      tr("print.scale"),
+      translateNow("print.scale"),
       SCALE_CHOICES.map((s) => [String(s), `${s}%`] as const),
       String(opts.scale),
       (v) => set({ scale: Number(v) }),
     );
     const pages = selectField(
-      tr("print.pages"),
+      translateNow("print.pages"),
       [
-        ["all", tr("print.pagesAll")],
-        ["odd", tr("print.pagesOdd")],
-        ["even", tr("print.pagesEven")],
-        ["custom", tr("print.pagesCustom")],
+        ["all", translateNow("print.pagesAll")],
+        ["odd", translateNow("print.pagesOdd")],
+        ["even", translateNow("print.pagesEven")],
+        ["custom", translateNow("print.pagesCustom")],
       ],
       opts.pages,
       (v) => set({ pages: v as PageSelection }),
@@ -626,23 +618,23 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     const rangeInput = document.createElement("input");
     rangeInput.className = "print-opt-range";
     rangeInput.type = "text";
-    rangeInput.placeholder = tr("print.rangePlaceholder");
+    rangeInput.placeholder = translateNow("print.rangePlaceholder");
     rangeInput.value = opts.range;
-    rangeInput.setAttribute("aria-label", tr("print.rangeAria"));
+    rangeInput.setAttribute("aria-label", translateNow("print.rangeAria"));
     rangeInput.addEventListener("input", () => set({ range: rangeInput.value }));
 
-    const background = checkField(tr("print.backgrounds"), opts.background, (v) =>
+    const background = checkField(translateNow("print.backgrounds"), opts.background, (v) =>
       set({ background: v }),
     );
-    const grayscale = checkField(tr("print.grayscale"), opts.grayscale, (v) => set({ grayscale: v }));
-    const pageNumbers = checkField(tr("print.pageNumbers"), opts.pageNumbers, (v) =>
+    const grayscale = checkField(translateNow("print.grayscale"), opts.grayscale, (v) => set({ grayscale: v }));
+    const pageNumbers = checkField(translateNow("print.pageNumbers"), opts.pageNumbers, (v) =>
       set({ pageNumbers: v }),
     );
 
     // A number rather than a select: 1–99 is too long a list to scroll. It is
     // clamped on commit, not per keystroke, so clearing the box to type "12"
     // does not snap back to 1 in between.
-    const copies = numberField(tr("print.copies"), opts.copies, (v) => set({ copies: v }));
+    const copies = numberField(translateNow("print.copies"), opts.copies, (v) => set({ copies: v }));
 
     optionsRow.append(
       copies.wrap,
@@ -664,12 +656,12 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
     const stripHint = document.createElement("span");
     stripHint.className = "print-strip-hint";
-    stripHint.textContent = tr("print.stripHint");
+    stripHint.textContent = translateNow("print.stripHint");
 
     const resetBtn = document.createElement("button");
     resetBtn.className = "print-strip-reset";
     resetBtn.type = "button";
-    resetBtn.textContent = tr("print.resetPages");
+    resetBtn.textContent = translateNow("print.resetPages");
     resetBtn.addEventListener("click", () => {
       arrangement = initialPages(pageEls.length);
       opts = { ...opts, pages: "all", range: "" };
@@ -712,7 +704,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
      *  depend on any other option, so they are only rebuilt when this changes). */
     let flowCopies = 1;
 
-    const NO_PAGES_HINT = tr("print.noPagesHint");
+    const NO_PAGES_HINT = translateNow("print.noPagesHint");
 
     /** Push the arrangement + options into the previewed document and the UI. */
     const apply = () => {
@@ -768,16 +760,16 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       const empty = paged && sequence.length === 0;
       printBtn.disabled = empty;
       if (empty) {
-        printBtn.textContent = tr("print.noneSelected");
+        printBtn.textContent = translateNow("print.noneSelected");
       } else {
         const label =
           (paged && sequence.length < pageEls.length
             ? sequence.length === 1
-              ? tr("print.printOnePage")
-              : tr("print.printPages", { count: sequence.length })
-            : tr("print.print")) +
-          (opts.copies > 1 ? tr("print.copiesSuffix", { count: opts.copies }) : "");
-        printBtn.innerHTML = `${PRINTER_SVG} ${escapeAttr(label)}`;
+              ? translateNow("print.printOnePage")
+              : translateNow("print.printPages", { count: sequence.length })
+            : translateNow("print.print")) +
+          (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "");
+        printBtn.innerHTML = `${PRINTER_SVG} ${escapeHtml(label)}`;
       }
     };
 
@@ -890,8 +882,8 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
             : "—",
         isExcluded: (ref) => !printing.has(ref.id),
         titleFor: (ref) =>
-          tr("print.pageOf", { page: ref.page }) +
-          (ref.rot ? ` · ${tr("print.turned", { deg: ref.rot })}` : ""),
+          translateNow("print.pageOf", { page: ref.page }) +
+          (ref.rot ? ` · ${translateNow("print.turned", { deg: ref.rot })}` : ""),
       };
       if (stripUi) stripUi.update(props);
       else stripUi = mountPageStrip(stripPages, props);
@@ -936,7 +928,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       text.textContent = progressText(progress);
       progressEl.title =
         progress.phase === "printing" && progress.page !== null
-          ? `${text.textContent}\n${tr("print.progressPagesNote")}`
+          ? `${text.textContent}\n${translateNow("print.progressPagesNote")}`
           : text.textContent;
       progressEl.append(steps, text, ...untestedTag("print.queueProgress"));
     };
@@ -1034,7 +1026,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       progressEl.dataset.phase = "failed";
       const text = document.createElement("span");
       text.className = "print-progress-text";
-      text.textContent = tr("print.failed", { msg: e instanceof Error ? e.message : String(e) });
+      text.textContent = translateNow("print.failed", { msg: e instanceof Error ? e.message : String(e) });
       progressEl.title = text.textContent;
       progressEl.replaceChildren(text);
     };
@@ -1191,8 +1183,8 @@ function untestedTag(id: UntestedId): HTMLSpanElement[] {
   if (!isUntested(id)) return [];
   const tag = document.createElement("span");
   tag.className = "untested-tag";
-  tag.title = tr("untested.title");
-  tag.textContent = tr("untested.label");
+  tag.title = translateNow("untested.title");
+  tag.textContent = translateNow("untested.label");
   return [tag];
 }
 
@@ -1213,41 +1205,41 @@ const PROGRESS_STEPS: Record<PrintProgress["phase"], number> = {
  *  it is an estimate, and more digits would claim otherwise. */
 function formatEta(secs: number): string {
   return secs < 60
-    ? tr("print.durationSecs", { count: Math.max(5, Math.ceil(secs / 5) * 5) })
-    : tr("print.durationMins", { count: Math.ceil(secs / 60) });
+    ? translateNow("print.durationSecs", { count: Math.max(5, Math.ceil(secs / 5) * 5) })
+    : translateNow("print.durationMins", { count: Math.ceil(secs / 60) });
 }
 
 function progressText(progress: PrintProgress): string {
   switch (progress.phase) {
     case "waiting":
-      return tr("print.progressWaiting");
+      return translateNow("print.progressWaiting");
     case "queued":
       return progress.ahead > 0
-        ? tr("print.progressAhead", { printer: progress.printer, count: progress.ahead })
-        : tr("print.progressQueued", { printer: progress.printer });
+        ? translateNow("print.progressAhead", { printer: progress.printer, count: progress.ahead })
+        : translateNow("print.progressQueued", { printer: progress.printer });
     case "printing": {
-      const parts = [tr("print.progressPrinting", { printer: progress.printer })];
+      const parts = [translateNow("print.progressPrinting", { printer: progress.printer })];
       if (progress.page !== null) {
         parts.push(
           progress.total !== null
-            ? tr("print.progressPage", { page: progress.page, total: progress.total })
-            : tr("print.progressPageOnly", { page: progress.page }),
+            ? translateNow("print.progressPage", { page: progress.page, total: progress.total })
+            : translateNow("print.progressPageOnly", { page: progress.page }),
         );
       }
       if (progress.etaSecs !== null) {
-        parts.push(tr("print.progressEta", { time: formatEta(progress.etaSecs) }));
+        parts.push(translateNow("print.progressEta", { time: formatEta(progress.etaSecs) }));
       }
       if (progress.behind > 0) {
-        parts.push(tr("print.progressBehind", { count: progress.behind }));
+        parts.push(translateNow("print.progressBehind", { count: progress.behind }));
       }
       return parts.join(" · ");
     }
     case "held":
-      return tr("print.progressHeld", { printer: progress.printer });
+      return translateNow("print.progressHeld", { printer: progress.printer });
     case "done":
-      return tr("print.progressDone");
+      return translateNow("print.progressDone");
     case "unseen":
-      return tr("print.progressUnseen");
+      return translateNow("print.progressUnseen");
   }
 }
 
@@ -1379,11 +1371,6 @@ export async function renderPdfPagesToImages(
     page.cleanup();
   }
   return urls;
-}
-
-/** Escape a string for use inside a double-quoted HTML attribute. */
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 // ── Print stylesheets ────────────────────────────────────────────────────────

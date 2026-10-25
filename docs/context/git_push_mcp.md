@@ -106,7 +106,10 @@ is `auth_failed` up front.
 
 `admit` validates arguments and takes the budget before any git runs: six
 `git_push` calls per tab per rolling hour (`Session::admit_push_rate`), at most
-two pending/running requests per tab. A `git_push` creates a proposal record
+two pending/running requests per tab. A request that gets staged dismisses the
+tab's older still-pending ones of the same kind (`supersede_older`; the card
+no longer matches the branch), so a pending push never counts against a new
+push. A `git_push` creates a proposal record
 and runs plan → preflight → stage-or-push on a worker under a per-project lock;
 the call waits up to 18 s (the listener's sockets live 30 s) and otherwise
 answers `running` with the id. **propose** stages after the preflight, so the

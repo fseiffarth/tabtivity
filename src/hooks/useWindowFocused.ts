@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeTauri } from "./useTauriListener";
 
 /**
  * Whether THIS OS window currently holds focus. Backs the "exactly one active
@@ -15,8 +16,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 export function useWindowFocused(): boolean {
   const [focused, setFocused] = useState(true);
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
     let cancelled = false;
+    let unlisten = () => {};
     try {
       const win = getCurrentWindow();
       win
@@ -25,21 +26,17 @@ export function useWindowFocused(): boolean {
           if (!cancelled && typeof f === "boolean") setFocused(f);
         })
         .catch(() => {});
-      win
-        .onFocusChanged(({ payload }) => {
+      unlisten = subscribeTauri(() =>
+        win.onFocusChanged(({ payload }) => {
           if (typeof payload === "boolean") setFocused(payload);
-        })
-        .then((fn) => {
-          if (cancelled) fn();
-          else unlisten = fn;
-        })
-        .catch(() => {});
+        }),
+      );
     } catch {
       // No Tauri window (tests): keep the single-window default.
     }
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlisten();
     };
   }, []);
   return focused;

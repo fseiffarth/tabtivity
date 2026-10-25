@@ -2,7 +2,7 @@ import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { GitProvider, ProjectEntry, SandboxToggleOutcome, VmDoctorReport } from "../../types";
 import { resolveProjectDirectory } from "../../types";
 import { basename } from "../../lib/paths";
@@ -34,6 +34,7 @@ import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../lib/platform";
 import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 
@@ -87,6 +88,7 @@ export function ProjectDialog({
   onProject: (project: ProjectEntry) => void | Promise<void>;
 }) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
   const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
   // A GitHub/GitLab "connection through Tabtivity" = a global access token saved in
   // Settings → Git Hosting (the credential publishing actually uses). Used to
@@ -938,9 +940,9 @@ export function ProjectDialog({
             // O#143: the repo declares its own Dockerfile/devcontainer image —
             // never adopted silently, since `docker build` runs it as root.
             const { source } = outcome;
-            const adopt = await confirm(describeDetectedSpecSource(source), {
+            const adopt = await confirmAction({
               title: t("scaffold.adoptTitle"),
-              kind: "warning",
+              body: describeDetectedSpecSource(source),
             });
             outcome = await invoke<SandboxToggleOutcome>("set_project_sandbox", {
               projectId: project.id,
@@ -1761,6 +1763,7 @@ export function ProjectDialog({
         </div>
         </div>
       </div>
+      {dialogs}
     </div>
   );
 }

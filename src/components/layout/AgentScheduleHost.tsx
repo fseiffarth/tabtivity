@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { deliveryRecordId, isFinishedOneTime } from "../../lib/agents/prompt/send";
 import { promptOfSchedule } from "../../lib/agents/prompt/scheduled";
 import { nextAfter } from "../../lib/agents/prompt/links";
@@ -367,7 +368,6 @@ export function AgentScheduleHost() {
     ensureLiveTargetIds();
     let disposed = false;
     const notifiedProposals = new Set<string>();
-    let unlisten: (() => void) | undefined;
 
     const loadBindings = async () => {
       await Promise.all(bindings().map((binding) =>
@@ -563,13 +563,12 @@ export function AgentScheduleHost() {
     // Backend reads prune proposals after seven days, even when no MCP client
     // or schedule dialog has been opened since they arrived.
     const proposalPruneTimer = setInterval(() => void loadBindings().then(tick), 60 * 60_000);
-    void listen("agent-schedules-changed", () => {
-      for (const projectId of new Set(bindings().map((b) => b.projectId))) void persistScopeLayout(projectId);
-      void useAgentSchedulesStore.getState().refreshLoaded().then(tick);
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
+    const unlisten = subscribeTauri(() =>
+      listen("agent-schedules-changed", () => {
+        for (const projectId of new Set(bindings().map((b) => b.projectId))) void persistScopeLayout(projectId);
+        void useAgentSchedulesStore.getState().refreshLoaded().then(tick);
+      }),
+    );
 
     // Delete schedules when their tab disappears from the live store. All tab
     // movement/locality/detach operations retain the binding, so they never hit
@@ -623,7 +622,7 @@ export function AgentScheduleHost() {
       clearInterval(proposalPruneTimer);
       clearTimeout(cleanupTimer);
       unsubscribe();
-      unlisten?.();
+      unlisten();
     };
   }, []);
 

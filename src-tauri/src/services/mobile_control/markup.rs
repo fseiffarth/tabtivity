@@ -57,6 +57,10 @@ pub const MAX_COMMENT: usize = 500;
 /// it. The phone shows this text as the setting's starting point
 /// (`mobile-web/src/markupInstruction.ts`, kept equal by a test below).
 pub const DEFAULT_INSTRUCTION: &str = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.";
+/// Appended to the user's own instruction when an `apply` round fell back to
+/// `list` (no snapshot could be taken): their text may say to edit and rebuild,
+/// but with no Undo behind it the round must stop at the list.
+pub const LIST_FALLBACK_GUARD: &str = "No undo snapshot could be taken for this round, so do not change any file yet — not this one, not the sources it is built from, not any other file — whatever is said above: list the changes the marks ask for and wait until I tell you which to make.";
 /// What the agent is told in an `apply` round with no instruction of the
 /// user's own: make the changes and rebuild in one turn. Safe because the
 /// round's snapshot (`services::markup_rounds`) backs an **Undo**. Mirrored
@@ -701,10 +705,15 @@ fn bake_and_prompt(
     let sources = if is_pdf { source_lines(root, source, &request.pages) } else { BTreeMap::new() };
     // An `apply` round with no instruction of the user's own makes the
     // changes; the user's own text is sent as written in either mode.
-    let instruction = request
-        .instruction
+    let custom = request.instruction.as_deref().filter(|text| !text.trim().is_empty());
+    // An `apply` round that fell back to `list` has no Undo: a custom text
+    // that edits files is held to the list.
+    let guarded = (request.mode == Mode::Apply && mode == Mode::List)
+        .then(|| custom.map(|text| format!("{}\n\n{LIST_FALLBACK_GUARD}", text.trim_end())))
+        .flatten();
+    let instruction = guarded
         .as_deref()
-        .filter(|text| !text.trim().is_empty())
+        .or(custom)
         .or((mode == Mode::Apply).then_some(DEFAULT_APPLY_INSTRUCTION));
     let prompt = prompt(&Prompt {
         source: &source.rel(),
@@ -2017,6 +2026,18 @@ mod tests {
         let plain = submit_with_undo(root, &source, &req, false, Ok(UndoTarget { state_dir: state.path(), owner: owner.clone() })).unwrap();
         assert_eq!((plain.mode, plain.undo.as_deref(), plain.no_undo), (Mode::List, None, Some(NoUndo::NotGit)));
         assert!(plain.prompt.contains(DEFAULT_INSTRUCTION) && !plain.prompt.contains(DEFAULT_APPLY_INSTRUCTION));
+        assert!(!plain.prompt.contains(LIST_FALLBACK_GUARD));
+        // A custom text that edits and rebuilds is held to the list when no
+        // snapshot backs an Undo — and left alone when the round asked for list.
+        req.instruction = Some("Fix the typos and rebuild.".into());
+        let held = submit_with_undo(root, &source, &req, false, Ok(UndoTarget { state_dir: state.path(), owner: owner.clone() })).unwrap();
+        assert_eq!(held.mode, Mode::List);
+        assert!(held.prompt.contains("Fix the typos and rebuild.") && held.prompt.contains(LIST_FALLBACK_GUARD), "{}", held.prompt);
+        req.mode = Mode::List;
+        let asked = submit_with_undo(root, &source, &req, false, Ok(UndoTarget { state_dir: state.path(), owner: owner.clone() })).unwrap();
+        assert!(asked.prompt.contains("Fix the typos and rebuild.") && !asked.prompt.contains(LIST_FALLBACK_GUARD));
+        req.instruction = None;
+        req.mode = Mode::Apply;
         // The caller's own refusal (a remote project).
         let remote = submit_with_undo(root, &source, &req, false, Err(NoUndo::Remote)).unwrap();
         assert_eq!((remote.mode, remote.no_undo), (Mode::List, Some(NoUndo::Remote)));

@@ -31,6 +31,7 @@ import { firstGrapheme } from "../components/TabCard";
 import { AssistantIcon } from "../../../src/components/common/icons/Icon";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
+import { useVisiblePoll } from "../visiblePoll";
 
 /** A reorder hint with the drag grip drawn where its `{grip}` stands, so the
  * sentence stays one translatable string. The project screen's hint too. */
@@ -180,34 +181,14 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   }, []);
   /** While the last load failed, try again on a slow clock — the project
    * screen's own poll does this for its tab list (`Project.tsx`). */
-  useEffect(() => {
-    if (!offline) return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") setReload((count) => count + 1);
-    }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [offline]);
-  useEffect(() => {
-    // Alerts are rows of Needs you, which only the active view draws: the
-    // agents mode shows agent tabs and nothing else, and a search result is
-    // an answer to a query. Polling a feed no view draws would be a
-    // minute-timer for nobody.
-    if (view !== "active") return;
-    let disposed = false;
-    const load = () => {
-      void api<{ alerts: MobileAlerts }>("/api/v1/alerts")
-        .then((body) => { if (!disposed) setAlerts(body.alerts); })
-        .catch(() => { if (!disposed) setAlerts(null); });
-    };
-    load();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 60_000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [view]);
+  useVisiblePoll(() => setReload((count) => count + 1), 30_000, { enabled: !!offline, immediate: false, catchUp: false });
+  // Alerts are rows of Needs you, which only the active view draws: the
+  // agents mode shows agent tabs and nothing else, and a search result is
+  // an answer to a query. Polling a feed no view draws would be a
+  // minute-timer for nobody.
+  useVisiblePoll((signal) => api<{ alerts: MobileAlerts }>("/api/v1/alerts")
+    .then((body) => { if (!signal.aborted) setAlerts(body.alerts); })
+    .catch(() => { if (!signal.aborted) setAlerts(null); }), 60_000, { enabled: view === "active", catchUp: false }, []);
   /** The rows as they are drawn. The active list is the reader's own order with
    * the host's as the fallback; a search result is not arranged at all — it is
    * an answer to a query, and the best match belongs at the top of it. */

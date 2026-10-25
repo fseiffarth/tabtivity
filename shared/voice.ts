@@ -166,3 +166,11 @@ export function speechChunks(text: string, max: number): string[] {
   close();
   return chunks;
 }
+
+/** The microphone's level goes straight onto the dictate button as a CSS
+ * variable (desktop `ReaderVoice`, phone `Terminal`): it changes a dozen times
+ * a second and nothing else reads it. `null` clears it. */
+export function paintMicLevel(button: HTMLElement | null, level: number | null): void {
+  if (level === null) button?.style.removeProperty("--mic-level");
+  else button?.style.setProperty("--mic-level", level.toFixed(2));
+}

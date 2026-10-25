@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { storageKey } from "../../lib/brand";
+import { cappedMap, readJson, writeJson } from "../../lib/persist";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 
 /**
  * The TeX editor's two chrome switches — the beamer overlay bar (#tex-beamer)
@@ -37,16 +39,13 @@ const MAX_PERSISTED = 200;
 
 /** The store key for a file scope: a project id, or the root scope. */
 export function texViewScopeKey(projectId: string | null | undefined): string {
-  return projectId ?? "root";
+  return projectId ?? ROOT_SCOPE;
 }
 
 function readPersisted(): Record<string, TexViewPref> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
+  return readJson(STORAGE_KEY, (parsed) => {
     const out: Record<string, TexViewPref> = {};
+    if (!parsed || typeof parsed !== "object") return out;
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       if (!v || typeof v !== "object") continue;
       const row: TexViewPref = {};
@@ -56,27 +55,18 @@ function readPersisted(): Record<string, TexViewPref> {
       if (Object.keys(row).length) out[k] = row;
     }
     return out;
-  } catch {
-    return {};
-  }
+  }, {});
 }
 
 /** Merge one project's row into the persisted map. Re-reads first, so two
  *  windows (main + a popout share one origin, hence one localStorage) can't
- *  clobber each other's rows with a stale in-memory snapshot. */
+ *  clobber each other's rows with a stale in-memory snapshot. Without
+ *  localStorage the choice still holds for this session. */
 function persistRow(key: string, row: TexViewPref) {
-  try {
-    const stored = readPersisted();
-    delete stored[key]; // re-insert last, so the cap drops the oldest
-    stored[key] = row;
-    const keys = Object.keys(stored);
-    const kept = keys.length > MAX_PERSISTED ? keys.slice(keys.length - MAX_PERSISTED) : keys;
-    const out: Record<string, TexViewPref> = {};
-    for (const k of kept) out[k] = stored[k];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
-  } catch {
-    // localStorage unavailable — the choice still holds for this session.
-  }
+  const stored = readPersisted();
+  delete stored[key]; // re-insert last, so the cap drops the oldest
+  stored[key] = row;
+  writeJson(STORAGE_KEY, cappedMap(stored, MAX_PERSISTED));
 }
 
 interface TexViewPrefStore {

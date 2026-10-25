@@ -79,6 +79,14 @@ Referenced from `AGENTS.md`.
   within `REAP_TIMEOUT` (5 s); a child still alive then is **registered** like an up
   tunnel, never left running unregistered. A refused kill in `disconnect` keeps the
   entry and reports an error instead of forgetting a live tunnel (screen 2026-10-15 #9).
+- **A tunnel survives the hourly rekey.** OpenVPN renegotiates TLS every
+  `reneg-sec` (3600 s default) and re-authenticates the `auth-user-pass` account
+  each time. Tabtivity deletes the credential files right after connect, so the
+  old `--auth-nocache` made every tunnel die at exactly one hour (2026-10-25).
+  OpenVPN now keeps the account in its own root memory for the tunnel's life
+  (`--mlock` on Linux keeps it out of swap), `--persist-key` keeps the decrypted
+  key across a reconnect, and rekeying stays on. A config with its own
+  `auth-nocache` still drops unless its server pushes an `auth-token`.
 - **A VPN-only mail or CalDAV account** (`require_vpn` on `MailAccount` /
   `CalDavAccount`, 2026-09-09) is the tunnel's one consumer outside remote projects.
   An institutional mailbox or calendar server is often reachable only from inside

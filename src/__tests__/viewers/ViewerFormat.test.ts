@@ -177,6 +177,16 @@ describe("withPreviewGuards", () => {
     expect(withPreviewGuards("<!-- c --><!doctype html><p>")).toBe(`<!-- c --><!doctype html>${PREVIEW_CSP_TAG}<p>`);
   });
 
+  it("cannot be pushed past markup between two comments", () => {
+    const doc = withPreviewGuards("<!-- a --><script>x()</script><!-- --><!doctype html><p>");
+    expect(doc.startsWith(PREVIEW_CSP_TAG)).toBe(true);
+  });
+
+  it("stays fast on many comments and no doctype", () => {
+    const html = "<!---->".repeat(20000) + "<!--" + "--><!--".repeat(20000);
+    expect(withPreviewGuards(html).startsWith(PREVIEW_CSP_TAG)).toBe(true);
+  });
+
   it("is case-insensitive about the doctype", () => {
     expect(withPreviewGuards("<!DocType HTML>\n<p>")).toBe(`<!DocType HTML>${PREVIEW_CSP_TAG}\n<p>`);
   });

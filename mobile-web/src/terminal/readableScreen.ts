@@ -13,7 +13,7 @@
  * whenever earlier output is left out.
  */
 
-import { translate, useI18nStore } from "../../../src/lib/i18n";
+import { translateNow } from "../../../src/lib/i18n";
 
 export interface ReadableSpan {
   text: string;
@@ -413,7 +413,7 @@ function capLine(line: ReadableLine): ReadableLine {
   if (line.text.length <= MAX_LINE) return line;
   const spans = line.spans.slice();
   trimSpansRight(spans, line.text.length - MAX_LINE);
-  const marker = `… ${translate(useI18nStore.getState().lang, "mobile.focus.lineTruncated")}`;
+  const marker = `… ${translateNow("mobile.focus.lineTruncated")}`;
   spans.push({ text: marker, className: "d" });
   return { ...line, text: `${line.text.slice(0, MAX_LINE)}${marker}`, spans };
 }

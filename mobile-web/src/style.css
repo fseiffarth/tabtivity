@@ -1238,6 +1238,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .slash-pick strong { flex:0 0 auto; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86rem; font-weight:600; color:#dcd6ff; }
 .slash-pick small { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#9498aa; font-size:.76rem; }
 .slash-row.used .slash-pick small { color:#b3a9f5; }
+/* Claude's one suggestion: the `/` menu's look, as tall as its text, which wraps. */
+.prompt-suggestion { height:auto; max-height:min(30vh,180px); }
+.prompt-suggestion .slash-pick strong { max-width:none; white-space:normal; overflow-wrap:anywhere; font-family:inherit; font-weight:500; }
 .slash-forget { flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:50%; background:transparent; color:#767a8b; }
 .composer-dictate { color:#dcd6ff; background:transparent; }
 .composer-dictate.listening { color:#fff; background:#7a3151; box-shadow:0 0 0 2px rgba(227,107,154,.22); }

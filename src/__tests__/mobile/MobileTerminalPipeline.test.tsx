@@ -144,7 +144,8 @@ describe(`${BRAND.display} Mobile terminal pipeline`, () => {
   });
 
   it("keeps following scrollback trims after a replay reset the emulator", async () => {
-    render(<Terminal tab={TAB} back={() => {}} />);
+    // A shell's Focus paints the screen's history; an agent's is its session.
+    render(<Terminal tab={{ ...TAB, label: "Shell", kind: "shell" }} back={() => {}} />);
     await act(async () => {});
     expect(terminalState.emitters).toHaveLength(1);
     expect(terminalState.emitters[0].listeners).toHaveLength(1);

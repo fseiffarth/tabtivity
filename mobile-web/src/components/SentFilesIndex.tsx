@@ -1,7 +1,8 @@
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { inboxFileUrl, outboxFileUrl, sentName, type OutboxFile } from "../api";
-import { ageLabel, sizeLabel } from "../terminal/fileLabels";
+import { ageLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { fileBadge, viewableFile } from "./InboxPreview";
 
 /** Who put a file into the conversation: the agent (`tabtivity-send` from this
@@ -75,7 +76,7 @@ export function SentFilesIndex({ tabId, files, open, onToggle, onOpen }: {
                     : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
                 </span>
                 <span className="sent-index-name">{name}</span>
-                <small>{ageLabel(Math.max(0, now - file.modified))} · {sizeLabel(file.size)}</small>
+                <small>{ageLabel(Math.max(0, now - file.modified))} · {formatBytes(file.size)}</small>
               </>;
               const label = `${t("mobile.outbox.open", { name })} · ${t(from === "agent" ? "mobile.sentIndex.fromAgent" : "mobile.sentIndex.fromYou")}`;
               return <li key={file.name}>

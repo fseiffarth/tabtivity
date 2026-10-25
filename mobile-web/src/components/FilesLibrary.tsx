@@ -7,8 +7,8 @@ import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uplo
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
-import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS, tabColorCss } from "../tabColors";
-import { sizeLabel } from "../terminal/fileLabels";
+import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { useThumb } from "../thumbs";
 import { OptionSheet } from "./OptionSheet";
@@ -112,7 +112,7 @@ type T = ReturnType<typeof useT>;
  * (where the desktop's filesystem says) and last edited. */
 function rowMeta(entry: ProjectFileEntry, t: T, lang: Language): string {
   return [
-    entry.kind !== "dir" ? sizeLabel(entry.size) : null,
+    entry.kind !== "dir" ? formatBytes(entry.size) : null,
     entry.created ? t("mobile.files.created", { when: stampLabel(entry.created, lang) }) : null,
     entry.modified > 0 ? t("mobile.files.edited", { when: stampLabel(entry.modified, lang) }) : null,
   ].filter(Boolean).join(" · ");
@@ -129,7 +129,7 @@ function itemsLabel(items: number | undefined, t: T): string {
 /** The line under a grid tile's name: a folder's item count, a file's date and size. */
 function tileMeta(entry: ProjectFileEntry, t: T, lang: Language): string {
   if (entry.kind === "dir") return itemsLabel(entry.items, t);
-  return [entry.modified > 0 ? stampLabel(entry.modified, lang) : null, sizeLabel(entry.size)].filter(Boolean).join(" · ");
+  return [entry.modified > 0 ? stampLabel(entry.modified, lang) : null, formatBytes(entry.size)].filter(Boolean).join(" · ");
 }
 
 /** The message for a listing (or a search) the sidecar refused. */
@@ -805,7 +805,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           {TAB_COLOR_IDS.map((id) => <button key={id} type="button" className={`tab-color-chip${current === id ? " is-current" : ""}`} aria-pressed={current === id}
             onClick={() => setFolderColor(placeId, place, id)}>
             <span className="tab-color-chip-dot" style={{ background: TAB_COLORS[id] }} aria-hidden="true" />
-            {TAB_COLOR_LABELS[id] ? t(TAB_COLOR_LABELS[id]) : id}
+            {t(`tabColor.${id}`)}
           </button>)}
         </div>
         <div className="mobile-schedule-form">

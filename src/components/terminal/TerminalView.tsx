@@ -16,7 +16,8 @@ import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
 import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
-import { ROOT_SCOPE, bumpUsage, markAgentActive } from "../../stores/usage";
+import { bumpUsage, markAgentActive } from "../../stores/usage";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import {
   onTerminalExit,
   onTerminalOutput,
@@ -2286,7 +2287,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // through the owner's input registration (`scheduledAgentInput`).
   const readerIds = splitPtyId(id);
   const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
-  const readerAvailable = readerOffered(readerTab);
+  // A tab on a remote project's host: its conversation is read off that host.
+  const readerOnHost = !localOnly && !!remoteHostId;
+  const readerAvailable = readerOffered(readerTab, readerOnHost);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
   const readerTopBar = readerAvailable && !readerAlways;
@@ -2294,7 +2297,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
    * (per CLI) — a full-pane view must not take over every pane of the CLI,
    * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
   const [changesPicked, setChangesPicked] = useState(false);
-  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent);
+  // Diffs reads the conversation's files here, which a host tab's are not.
+  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
   const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
   const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
@@ -2453,11 +2457,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
-          changes: changesOffered(readerAgent) ? { open: changesOn, onToggle: () => {
+          changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, onToggle: () => {
             if (changesOn) showReaderChat();
             else setChangesPicked(true);
           } } : undefined,
           cwd,
+          onHost: readerOnHost,
         } : undefined}
       />
     )}

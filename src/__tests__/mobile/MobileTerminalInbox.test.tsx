@@ -406,28 +406,25 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     expect(composer().value).toBe("");
   });
 
-  it("holds the reading view still while a composer sheet is up and resumes when it closes", async () => {
+  it("lets a composer sheet read the live screen while it is up", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
     await paint("Earlier answer\n> \n? for shortcuts");
-    expect(screen.getByText("Earlier answer")).toBeTruthy();
 
     // Claude's silent default earns the mode sheet from the label alone.
     fireEvent.click(screen.getByTitle("Choose the permission mode"));
     expect(screen.getByRole("dialog", { name: "Permission mode" })).toBeTruthy();
 
-    // The session repaints under the sheet; the reading view does not follow.
+    // The session repaints under the sheet, and the sheet reads it: Plan is
+    // now the current mode. An agent's chat is its stored session, so none
+    // of the screen is painted behind it.
     await paint("Earlier answer\nLater answer\n> \nplan mode on (shift+tab to cycle)");
-    expect(screen.queryByText("Later answer")).toBeNull();
-    // …but the sheet read the live screen: Plan is now the current mode.
     const plan = screen.getAllByRole("button").find((button) => button.querySelector("strong")?.textContent === "Plan");
     expect(plan?.getAttribute("aria-current")).toBe("true");
+    expect(screen.queryByText("Later answer")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText("Later answer")).toBeTruthy();
-    // The input box and the status line under it are the composer's own job:
-    // the chips carry those facts, so the reading view never paints them.
     expect(screen.queryByText("plan mode on (shift+tab to cycle)")).toBeNull();
   });
 });

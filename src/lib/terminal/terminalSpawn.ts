@@ -2,6 +2,7 @@ import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type Ta
 import { envName } from "../brand";
 import type { LoginTarget } from "../remote/loginTarget";
 import { ASSISTANT_SCOPE, assistantPromptTarget, type AssistantLaunch } from "../assistant";
+import { projectIdOfScope } from "./ptyId";
 
 /**
  * The kind a `TerminalView` acts as: its declared `kind` prop, else a
@@ -119,7 +120,7 @@ export function tabTerminalSpawn(
     login: tab.login ?? null,
     cwd: derived.terminalCwd,
     localOnly: location === "local",
-    projectId: scope === "root" ? null : scope,
+    projectId: projectIdOfScope(scope),
     // Multi-host: the worker id (or "primary") this tab runs on, so the
     // backend resolves the right host's RemoteSpec (null for a local tab).
     remoteHostId: remoteHostIdOf(location),

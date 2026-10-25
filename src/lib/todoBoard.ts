@@ -54,6 +54,7 @@ import {
 import { dayAgenda, visibleCalendarIds } from "../stores/calendar/calendar";
 import type { TranslationKey } from "./i18n";
 import { dropSlot } from "./listReorder";
+import { fallbackColumnId } from "../../shared/todoColumns";
 import type { ProjectRemark } from "./projects/projectRemarks";
 
 /** Gap between adjacent ranks. Mirrors the backend's `RANK_GAP`. */
@@ -161,28 +162,9 @@ export function todayColumnId(columns: TaskColumn[]): string | null {
   return columns.find((c) => c.due_today)?.id ?? null;
 }
 
-/**
- * The column an unplaced card is shown in, and the one every conversion files
- * into: the column flagged `intake`, and failing that the leftmost that is
- * neither Done, nor an archive, nor date-governed. Mirrors the backend's
- * `col_fallback` exactly, including the order of its two rules.
- *
- * The flag is what carries this now. The old *leftmost open column* rule read
- * the intent off the layout, and the layout changed: with Overdue and Today
- * leading the board and Backlog behind Doing, "leftmost open" is **Doing**, and
- * every unplaced card would have been filed as work in progress. Neither date
- * column can be the fallback either — landing there is a statement about a
- * deadline, and a card with no home has made no such statement.
- */
-export function fallbackColumnId(columns: TaskColumn[]): string {
-  const dateGoverned = (c: TaskColumn) => !!c.overdue || !!c.due_today;
-  return (
-    columns.find((c) => c.intake) ??
-    columns.find((c) => !c.done && !c.archived && !dateGoverned(c)) ??
-    columns.find((c) => !c.done && !c.archived) ??
-    columns[0]
-  ).id;
-}
+/** The column an unplaced card is shown in, and the one every conversion files
+ *  into — the rule is shared with the phone (`shared/todoColumns`). */
+export { fallbackColumnId };
 
 // ── Bucketing and ordering ──────────────────────────────────────────────────
 

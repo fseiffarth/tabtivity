@@ -1,19 +1,20 @@
-/** How a file's age and size read on the phone: the same words wherever a
- * file is listed — the composer's desktop pictures and the agent's gallery —
- * in the phone's language. */
+/** How a file's or a tab's age reads on the phone: the same words wherever
+ * something is dated — the composer's desktop pictures, the agent's gallery,
+ * the Activity rows — in the phone's language. */
 
-import { translate, useI18nStore } from "../../../src/lib/i18n";
+import { translateNow, type TranslationKey } from "../../../src/lib/i18n";
 
-export function ageLabel(seconds: number) {
-  const lang = useI18nStore.getState().lang;
-  if (seconds < 60) return translate(lang, "mobile.time.justNow");
-  if (seconds < 3_600) return translate(lang, "mobile.time.minutesAgo", { count: Math.round(seconds / 60) });
-  if (seconds < 86_400) return translate(lang, "mobile.time.hoursAgo", { count: Math.round(seconds / 3_600) });
-  return translate(lang, "mobile.time.daysAgo", { count: Math.round(seconds / 86_400) });
-}
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
-export function sizeLabel(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+/** "3 min ago" from an age in seconds — a rough one: minutes up to 90 of
+ * them, hours up to 36 of them, then days. `t` defaults to the phone's
+ * current language; a component passes its own `useT()` to re-render on a switch. */
+export function ageLabel(seconds: number, t?: Translate) {
+  const say: Translate = t ?? ((key, vars) => translateNow(key, vars));
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  if (minutes < 1) return say("mobile.time.justNow");
+  if (minutes < 90) return say("mobile.time.minutesAgo", { count: minutes });
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return say("mobile.time.hoursAgo", { count: hours });
+  return say("mobile.time.daysAgo", { count: Math.round(hours / 24) });
 }

@@ -17,7 +17,7 @@ import {
   relFromAbs,
   visibleEntries,
 } from "../../lib/viewers/fileUtils";
-import { basename, dirname, isAbsolute } from "../../lib/paths";
+import { basename, dirname, isAbsolute, resolvePath } from "../../lib/paths";
 import { openErrorText } from "../../lib/openExternal";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import { openFileEntry } from "./openFileEntry";
@@ -29,6 +29,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { FileIcon } from "../common/icons/FileIcon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 
 type ProjectJson = Record<string, unknown>;
 
@@ -118,20 +119,6 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
     if (!projectDir) return;
     load("", { replace: true });
   }, [projectDir]);
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [contextMenu]);
 
   const displayed = useMemo(
     () => visibleEntries(entries, {
@@ -319,7 +306,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
     // Retarget any open viewer tab of this file (main + detached) to the new
     // path — swap the basename on the entry's own absolute path (== embedPath).
     const oldAbs = target.path;
-    const newAbs = `${oldAbs.slice(0, oldAbs.lastIndexOf("/") + 1)}${nextName}`;
+    const newAbs = resolvePath(dirname(oldAbs), nextName);
     retargetTabsForRenamedPath(oldAbs, newAbs);
     setRenameTarget(null);
     await load(relPath, { replace: true });
@@ -561,11 +548,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
             );
           })()}
           {contextMenu && (
-            <div
-              className="context-menu file-browser-context-menu"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
+            <ContextMenuPortal x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
               {contextMenu.kind === "entry" ? (
                 <>
                   <button onClick={() => runContextAction(() => firstSelectedEntry() && activate(firstSelectedEntry()!))}>{t("fileBrowser.open")}</button>
@@ -602,7 +585,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
                   <button onClick={() => runContextAction(() => load(relPath, { replace: true }))}>{t("common.refresh")}</button>
                 </>
               )}
-            </div>
+            </ContextMenuPortal>
           )}
         </div>
       </div>

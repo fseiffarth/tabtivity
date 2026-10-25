@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { HIGHLIGHT_MAX_CHARS, escapeHtml, highlight, languageForPath, type Lang } from "../../lib/viewers/highlight";
+import { escapeHtml } from "../../lib/textSafety";
+import { HIGHLIGHT_MAX_CHARS, highlight, languageForPath, type Lang } from "../../lib/viewers/highlight";
 import { BRAND } from "../../lib/brand";
 
 describe("languageForPath", () => {

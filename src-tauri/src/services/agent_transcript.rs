@@ -637,8 +637,9 @@ fn claude_transcript(
     claude_transcript_at(&main, subagent, version, limit)
 }
 
-/// [`claude_transcript`] of the session stored in `main`.
-fn claude_transcript_at(main: &Path, subagent: Option<&str>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+/// [`claude_transcript`] of the session stored in `main` — a host tab's
+/// local copy too (`services::remote_transcript`).
+pub(crate) fn claude_transcript_at(main: &Path, subagent: Option<&str>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
     let folder = main.with_extension("").join("subagents");
     let spawns = Spawns::Claude(&folder);
     match subagent {

@@ -25,12 +25,13 @@
  * submit. It over-counts a little in that case. Stated in the recap rather than
  * hidden.
  */
+import { stripAnsi } from "./prompt/prompt";
 
 /** Whether a chunk of terminal input contains any printable content. */
 export function hasContent(data: string): boolean {
   // Strip escape sequences first: an arrow key is "\x1b[A", whose "[A" would
   // otherwise read as two printable characters.
-  const withoutEscapes = data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b./g, "");
+  const withoutEscapes = stripAnsi(data).replace(/\x1b./g, "");
   for (const ch of withoutEscapes) {
     const code = ch.codePointAt(0) ?? 0;
     // C0 controls (incl. \r, \n, \t, backspace, Ctrl-*) and DEL are not content.

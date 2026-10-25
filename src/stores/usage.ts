@@ -27,8 +27,6 @@ const DETACHED_USAGE_EVENT = "detached-usage";
  * chats; the recap labels the last two (`StatsRecap`).
  */
 
-/** The scope the root terminal's counters are filed under. */
-export const ROOT_SCOPE = "root";
 
 /** scope → metric → count, pending flush. Prototype-free: scope and metric
  *  names are used as keys, so `__proto__` must be an ordinary key here. */

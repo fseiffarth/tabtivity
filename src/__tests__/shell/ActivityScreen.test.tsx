@@ -84,6 +84,18 @@ describe("Mobile activity list — what it says when it cannot answer", () => {
     expect(onConnection).toHaveBeenLastCalledWith("desktop_down");
   });
 
+  it("keeps the last good list when an answer carries no tab list", async () => {
+    answer([tab("Claude", "done")]);
+    render(<Activity open={() => {}} onConnection={() => {}} />);
+    await screen.findByText("Claude");
+
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ desktop_available: true }), { status: 200 }));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("Showing the last list this session loaded.")).toBeTruthy());
+    expect(screen.getByText("Claude")).toBeTruthy();
+  });
+
   it("distinguishes the desktop being closed from nothing happening", async () => {
     answer([], false);
     const { unmount } = render(<Activity open={() => {}} onConnection={() => {}} />);
@@ -113,20 +125,20 @@ describe("Mobile activity list — rows", () => {
     // lastWorking (default): the tiers, then the reading each tier carries.
     expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Asking", "Working", "Done", "Fresh"]);
     expect(small("Working")).toBe("Aurora · working now");
-    expect(small("Done")).toBe("Aurora · finished 3m ago");
-    expect(small("Asking")).toBe("Aurora · worked 10m ago");
+    expect(small("Done")).toBe("Aurora · finished 3 min ago");
+    expect(small("Asking")).toBe("Aurora · worked 10 min ago");
     expect(small("Fresh")).toBe("Aurora");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Sort agent tabs" }), { target: { value: "lastDone" } });
     expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Asking", "Done", "Working", "Fresh"]);
-    expect(small("Working")).toBe("Aurora · finished 60m ago");
-    expect(small("Asking")).toBe("Aurora · finished 1m ago");
+    expect(small("Working")).toBe("Aurora · finished 60 min ago");
+    expect(small("Asking")).toBe("Aurora · finished 1 min ago");
     expect(small("Fresh")).toBe("Aurora");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Sort agent tabs" }), { target: { value: "native" } });
     expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Working", "Done", "Asking", "Fresh"]);
     expect(small("Working")).toBe("Aurora · working now");
-    expect(small("Asking")).toBe("Aurora · worked 10m ago");
+    expect(small("Asking")).toBe("Aurora · worked 10 min ago");
   });
 
   it("rounds ages the way a glance reads them", async () => {
@@ -139,8 +151,8 @@ describe("Mobile activity list — rows", () => {
     render(<Activity open={() => {}} onConnection={() => {}} />);
     await screen.findByText("Now");
     expect(small("Now")).toBe("Aurora · finished just now");
-    expect(small("Hour")).toBe("Aurora · finished 2h ago");
-    expect(small("Days")).toBe("Aurora · finished 2d ago");
+    expect(small("Hour")).toBe("Aurora · finished 2 h ago");
+    expect(small("Days")).toBe("Aurora · finished 2 d ago");
   });
 
   it("remembers the sort choice for the next mount, and offers no sort for a single tab", async () => {

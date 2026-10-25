@@ -223,6 +223,7 @@ export const enSource = {
   "mobile.slash.title": "Commands",
   "mobile.slash.recent": "Sent before",
   "mobile.slash.forget": "Forget {command}",
+  "mobile.composer.suggestionHint": "Tap to put it in the message box — nothing is sent until you send it",
   "mobile.signIn.banner": "{agent} is waiting for you to sign in.",
   "mobile.signIn.open": "Sign in",
   "mobile.signIn.hide": "Hide the sign-in notice",
@@ -452,10 +453,6 @@ export const enSource = {
   "mobile.app.tryAgain": "Try again",
   "mobile.activity.sortStatus": "Status",
   "mobile.activity.sortAria": "Sort agent tabs",
-  "mobile.activity.justNow": "just now",
-  "mobile.activity.minutesAgo": "{count}m ago",
-  "mobile.activity.hoursAgo": "{count}h ago",
-  "mobile.activity.daysAgo": "{count}d ago",
   "mobile.activity.finished": "finished {ago}",
   "mobile.activity.worked": "worked {ago}",
   "mobile.activity.workingNow": "working now",
@@ -948,10 +945,6 @@ export const enSource = {
   "mobile.focus.altScreen": "Full-screen program",
   "mobile.focus.altScreenHint": "This session is drawing its own screen, which has no scrollback to read. Switch to Terminal to see it.",
   "mobile.focus.altScreenOpen": "Open Terminal view",
-  "mobile.focus.session": "Session",
-  "mobile.focus.screen": "Screen",
-  "mobile.focus.sessionHint": "Read the agent's stored conversation",
-  "mobile.focus.screenHint": "Read the terminal screen",
   "mobile.focus.diffsHint": "What this chat changed, file by file",
   "mobile.changes.filesOff": "Diffs show file content: turn on “Project files on the phone” on the desktop to see them here.",
   "mobile.changes.remote": "Diffs of a remote project's chats are shown on the desktop only.",
@@ -972,7 +965,6 @@ export const enSource = {
   "mobile.link.copy": "Copy link",
   "mobile.focus.sessionLoading": "Reading the stored session…",
   "mobile.focus.starting": "Starting {agent}…",
-  "mobile.focus.startingScreen": "Show the screen",
   "mobile.focus.cloudOpen": "Open the cloud session",
   "mobile.focus.cloudTeleport": "Teleport into a worktree",
   "mobile.focus.cloudTeleportNote": "Teleport copies the session onto the desktop as a new agent tab, in a worktree of its own on the session's branch — the project folder and its other tabs stay as they are. The cloud session keeps running; the two do not sync.",
@@ -994,7 +986,6 @@ export const enSource = {
   "mobile.facts.limitToggle": "Click to switch between percent and bar",
   "mobile.focus.lastPrompt": "Your prompt for this answer — show it",
   "mobile.focus.modeFixed": "OpenCode settles its agent when the session starts — nothing on the phone switches it. Start the tab with `opencode --mini --agent plan` for the other one.",
-  "mobile.focus.openCodeMini": "OpenCode has a readable mode: start the tab with `opencode --mini` and Reader can show this session as a chat.",
   "mobile.transcript.earlier": "Show earlier turns",
   "mobile.transcript.truncated": "Earlier turns are not shown.",
   "mobile.transcript.cut": "Cut here — the full text is in the session.",
@@ -4246,6 +4237,10 @@ export const enSource = {
   "sendToProject.successTitle": "Copied",
   "sendToProject.successBody": "{name} → {dest}",
   "blob.noProjectsYet": "No projects yet — create one to populate the cloud.",
+  "blob.untracked": "untracked",
+  "blob.workedHm": "{h}h {m}m worked",
+  "blob.workedM": "{m}m worked",
+  "sysmon.utilLabel": "Util",
   "blob.backToProjects": "Back to projects",
   "blob.sphereView": "Sphere",
   "blob.sphereViewTitle": "3D project sphere",
@@ -10689,6 +10684,14 @@ export function translate(
   return raw.replace(/\{(\w+)\}/g, (m, name) =>
     name in params ? String(params[name]) : m,
   );
+}
+
+/** `translate` at the live language — for code outside React (stores, plain
+ *  helpers, DOM-built dialogs, thrown error messages) that has no `useT`. It
+ *  reads the language when called, so a caller that runs again after a
+ *  language switch (the next render, the next dialog) speaks the new one. */
+export function translateNow(key: TranslationKey, params?: Record<string, string | number>): string {
+  return translate(useI18nStore.getState().lang, key, params);
 }
 
 /** The translator hook: `const t = useT(); t("settings.title")`. Re-renders the

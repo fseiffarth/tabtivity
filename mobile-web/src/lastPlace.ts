@@ -1,5 +1,6 @@
 import { api, type TabRow } from "./api";
 import { storageKey } from "../../src/lib/brand";
+import { readJson, writeJson } from "../../src/lib/persist";
 
 /**
  * The key predates sections, when this slot held a bare `{ projectId, tabId }`
@@ -58,28 +59,17 @@ export function parsePlace(value: unknown): LastPlace | null {
 }
 
 export function readLastPlace(storage?: LastPlaceStorage): LastPlace | null {
-  try {
-    return parsePlace(JSON.parse((storage ?? localStorage).getItem(LAST_PLACE_KEY) ?? "null"));
-  } catch {
-    return null;
-  }
+  return readJson(LAST_PLACE_KEY, parsePlace, null, storage);
 }
 
+/** Storage can be unavailable in a private browser; navigation still works
+ * for the current session. */
 export function rememberLastPlace(place: LastPlace, storage?: LastPlaceStorage): void {
-  try {
-    (storage ?? localStorage).setItem(LAST_PLACE_KEY, JSON.stringify(place));
-  } catch {
-    // Storage can be unavailable in a private browser; navigation still works
-    // for the current session.
-  }
+  writeJson(LAST_PLACE_KEY, place, storage);
 }
 
 export function forgetLastPlace(storage?: LastPlaceStorage): void {
-  try {
-    (storage ?? localStorage).removeItem(LAST_PLACE_KEY);
-  } catch {
-    // See rememberLastPlace.
-  }
+  writeJson(LAST_PLACE_KEY, undefined, storage);
 }
 
 /**

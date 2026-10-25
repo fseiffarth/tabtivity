@@ -5,6 +5,7 @@ import { Toggle } from "../common/Toggle";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
@@ -15,6 +16,7 @@ import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
 import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
+import { basename } from "../../lib/paths";
 import { NAMES, storageKey } from "../../lib/brand";
 
 interface GitCommit {
@@ -142,11 +144,6 @@ interface Props {
   onWorktreeChanged?: (selection: GitWorktreeSelection | null) => void;
   actionsBusy?: boolean;
   connected?: boolean;
-}
-
-function basename(p: string): string {
-  const parts = p.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] ?? p;
 }
 
 /**
@@ -681,12 +678,14 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
     invoke<GitPeerState>("git_peer_status", { projectId })
       .then((s) => alive && setLockstep(s))
       .catch(() => {});
-    const un = listen<{ projectId: string; state: GitPeerState }>("git-peer-status", (e) => {
-      if (alive && e.payload.projectId === projectId) setLockstep(e.payload.state);
-    });
+    const un = subscribeTauri(() =>
+      listen<{ projectId: string; state: GitPeerState }>("git-peer-status", (e) => {
+        if (alive && e.payload.projectId === projectId) setLockstep(e.payload.state);
+      }),
+    );
     return () => {
       alive = false;
-      un.then((f) => f());
+      un();
     };
   }, [lockstepEligible, projectId, connected]);
 
@@ -1753,6 +1752,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
 
       {selected && createPortal(
         <CommitWindow
+          key={selected.hash}
           projectDir={projectDir}
           worktree={worktreeSelection}
           commit={selected}
@@ -1786,10 +1786,21 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Set once the user types or generates: a slower load must not replace it.
+  const edited = useRef(false);
+
   useEffect(() => {
+    let stale = false;
     invoke<string>("git_commit_message", { projectDir, ...gitWorktreeArgs(worktree), hash: commit.hash })
-      .then(setMessage)
-      .catch((e) => setError(String(e)));
+      .then((m) => {
+        if (!stale && !edited.current) setMessage(m);
+      })
+      .catch((e) => {
+        if (!stale) setError(String(e));
+      });
+    return () => {
+      stale = true;
+    };
   }, [projectDir, worktree, commit.hash]);
 
   async function generate() {
@@ -1797,6 +1808,7 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
     setError(null);
     try {
       const msg = await invoke<string>("git_generate_commit_message", { projectDir, ...gitWorktreeArgs(worktree) });
+      edited.current = true;
       setMessage(msg);
     } catch (e) {
       setError(String(e));
@@ -1833,7 +1845,10 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
         <textarea
           className="commit-window-message"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            edited.current = true;
+            setMessage(e.target.value);
+          }}
           rows={8}
           readOnly={!commit.is_head}
           spellCheck={false}

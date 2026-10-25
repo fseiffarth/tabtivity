@@ -1391,7 +1391,7 @@ in-place-rewritten mirror (§1.1).
 
 **Assumes** `pkexec openvpn --config --daemon --writepid --log --management
 --verb --mute --connect-retry-max --connect-timeout --persist-tun
---auth-nocache` and, depending on the config, `--auth-user-pass` (file) or
+--persist-key --mlock` (no `--auth-nocache`: the hourly rekey needs the account) and, depending on the config, `--auth-user-pass` (file) or
 `--askpass`; the management-interface protocol (`>PASSWORD:`, `>STATE:`, <!-- privacy-check: ok — OpenVPN management-protocol tokens, not a credential -->
 `>HOLD:` lines) for status and teardown; `openvpn.exe` on Windows; config
 directives `auth-user-pass` / encrypted key detection by text.

@@ -116,7 +116,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
-import { subscribeTauri } from "../../hooks/useTauriListener";
+import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { useT, useI18nStore, translate } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
@@ -731,23 +731,11 @@ export function AppShell() {
 
   // Apply tab layout / side-panel restores emitted by the backend's
   // project-runtime switch (which runs off the UI thread).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listenProjectRuntimeSwitched()
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
-    return () => { unlisten?.(); };
-  }, []);
+  useTauriListener(listenProjectRuntimeSwitched, []);
 
   // SSH-sync Phase 1: subscribe to the backend's mirror-sync progress stream so
   // the remote file view reflects transfers + refreshes status on completion.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listenSyncProgress()
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
-    return () => { unlisten?.(); };
-  }, []);
+  useTauriListener(listenSyncProgress, []);
 
   // #42: register the MAIN window's host side of the detached-subwindow
   // protocol exactly once. This responds to a popped-out window's seed request
@@ -757,21 +745,14 @@ export function AppShell() {
   // the main window. Without this wiring a detached window hangs on
   // "Loading subwindow…" forever.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenDetachedHost()
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {});
+    const unlisten = subscribeTauri(() => listenDetachedHost());
     // Group B #225: a reload of THIS window leaves its popouts on screen as
     // zombies — they re-request a seed forever while the restored layout opens
     // fresh ones beside them under new labels. Take them down before the restore
     // respawns; run once, here, where the store is still empty and every live
     // popout is therefore known to be a leftover.
     void closeOrphanedPopouts();
-    return () => { cancelled = true; unlisten?.(); };
+    return unlisten;
   }, []);
 
   // Group B #226: adopt settings written in another window. The main window is
@@ -779,67 +760,31 @@ export function AppShell() {
   // toggle, a custom agent, a Python run-args edit) — and without this its write
   // would be invisible here until the next launch, while this window's own next
   // write would silently spread its stale copy back over the popout's change.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenSettingsChanged()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenSettingsChanged, []);
 
   // #42: SyncTeX forward search may reveal a PDF that's popped out into a detached
   // window (a separate webview/store). Listen for cross-window reveal broadcasts
   // so this window's PdfCanvas reveals the box even when the TeX editor that asked
   // lives in another window. (The detached window registers its own listener.)
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenPdfReveal()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenPdfReveal, []);
 
   // #42: the mirror image — SyncTeX reverse search (Ctrl+click in a popped-out
   // PDF) lands the source-line jump here, the window that owns the editor layout.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenSourceJump()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenSourceJump, []);
 
   // #42: a reverse-search jump applied in another window (e.g. a detached PDF
   // that owns its source editor) broadcasts here so an editor for that path in
   // THIS window scrolls too. Mirror image of the detached window's listener.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenEditorJump()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenEditorJump, []);
 
   // #42: a reverse-search center switch aimed at a TeX workspace mounted in THIS
   // window (e.g. a popped-out PDF's click resolved in its own window, which does
   // not render the workspace). The registry-side twin of the two listeners above.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenTexCenter()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenTexCenter, []);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
     const win = getCurrentWindow();
-    win.onCloseRequested(async (event) => {
+    return subscribeTauri(() => win.onCloseRequested(async (event) => {
       event.preventDefault();
       // Tear down any live OpenVPN tunnel *before* anything else and before the window
       // goes away. The backend also does this in RunEvent::Exit, but that runs only
@@ -893,8 +838,7 @@ export function AppShell() {
       // persist + re-open at their saved bounds next launch (see the helper).
       await shutdownDetachedWindows().catch(() => {});
       await win.destroy();
-    }).then((fn) => { unlisten = fn; }).catch(() => {});
-    return () => { unlisten?.(); };
+    }));
   }, [flushTimer]);
 
   // Periodically commit elapsed time so a crash doesn't lose the whole session.
@@ -996,7 +940,6 @@ export function AppShell() {
   // One global listener covers background projects too (their PTYs keep
   // emitting even while their tab views are unmounted).
   useEffect(() => {
-    let unlistenDigest: (() => void) | undefined;
     // Off the terminal bus's one `terminal-output` listener rather than a
     // second `listen()` of our own: Tauri evaluates a script per listener with
     // the payload inlined, so a second one parsed every chunk twice.
@@ -1018,37 +961,35 @@ export function AppShell() {
     // (`terminal-replay`, the show-again catch-up, is deliberately NOT fed in
     // here: its bytes were already digested live, and re-noting them would
     // flash a quiet tab "working" on every show.)
-    listen<ActivityDigest[]>("terminal-activity-batch", (ev) => {
-      noteActivityDigests(ev.payload);
-    })
-      .then((fn) => { unlistenDigest = fn; })
-      .catch(() => {});
+    const unlistenDigest = subscribeTauri(() =>
+      listen<ActivityDigest[]>("terminal-activity-batch", (ev) => {
+        noteActivityDigests(ev.payload);
+      }),
+    );
     // What the agent's OWN hooks say its turn is doing (working / decision /
     // done), relayed by `services::agent_turn` off the per-tab record the hook
     // script writes. The authority for the tab's marks wherever it speaks; the
     // byte classifier above stays for agents that fire no hooks.
-    let unlistenTurn: (() => void) | undefined;
-    listen<{ id: string; state: AgentTurnState; job?: boolean; replay?: boolean }>("agent-turn", (ev) => {
-      noteAgentTurn(ev.payload.id, ev.payload.state, !!ev.payload.job, !!ev.payload.replay);
-      // A prompt went into the new conversation: the clear is no longer undone
-      // by resuming — that would leave the prompt behind.
-      if (ev.payload.state === "working") useAgentClearUndoStore.getState().dismiss(ev.payload.id);
-      // …and a resume's cold-cache cost is spent by the first prompt.
-      if (ev.payload.state === "working") useAgentResumeCostStore.getState().dismiss(ev.payload.id);
-    })
-      .then((fn) => { unlistenTurn = fn; })
-      .catch(() => {});
+    const unlistenTurn = subscribeTauri(() =>
+      listen<{ id: string; state: AgentTurnState; job?: boolean; replay?: boolean }>("agent-turn", (ev) => {
+        noteAgentTurn(ev.payload.id, ev.payload.state, !!ev.payload.job, !!ev.payload.replay);
+        // A prompt went into the new conversation: the clear is no longer undone
+        // by resuming — that would leave the prompt behind.
+        if (ev.payload.state === "working") useAgentClearUndoStore.getState().dismiss(ev.payload.id);
+        // …and a resume's cold-cache cost is spent by the first prompt.
+        if (ev.payload.state === "working") useAgentResumeCostStore.getState().dismiss(ev.payload.id);
+      }),
+    );
     // How a tab's session just (re)started, off the same hook's source record:
     // a `/clear` offers "Undo clear" on that terminal until the next prompt.
-    let unlistenRoll: (() => void) | undefined;
-    listen<{ id: string; source: string; resume?: ResumeCost | null }>("agent-session-roll", (ev) => {
-      useAgentClearUndoStore.getState().noteRoll(ev.payload.id, ev.payload.source);
-      useAgentResumeCostStore.getState().noteRoll(ev.payload.id, ev.payload.source, ev.payload.resume);
-      noteAgentSessionStart(ev.payload.id, ev.payload.source);
-    })
-      .then((fn) => { unlistenRoll = fn; })
-      .catch(() => {});
-    return () => { unlisten(); unlistenDigest?.(); unlistenTurn?.(); unlistenRoll?.(); };
+    const unlistenRoll = subscribeTauri(() =>
+      listen<{ id: string; source: string; resume?: ResumeCost | null }>("agent-session-roll", (ev) => {
+        useAgentClearUndoStore.getState().noteRoll(ev.payload.id, ev.payload.source);
+        useAgentResumeCostStore.getState().noteRoll(ev.payload.id, ev.payload.source, ev.payload.resume);
+        noteAgentSessionStart(ev.payload.id, ev.payload.source);
+      }),
+    );
+    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); };
   }, []);
 
   // The running-task indicators recompute on demand — a chunk, a keystroke, a

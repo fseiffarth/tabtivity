@@ -15,6 +15,7 @@
  * error tracebacks are emitted. Stream/error text is ANSI-stripped here so the
  * viewer's escaping isn't fed raw escape sequences.
  */
+import { stripAnsi } from "../agents/prompt/prompt";
 
 export interface NbCell {
   type: "markdown" | "code";
@@ -34,16 +35,6 @@ export interface NbOutput {
 export interface ParsedNotebook {
   language: string;
   cells: NbCell[];
-}
-
-/**
- * Strip ANSI SGR / CSI escape sequences from `s`. nbformat stream and error
- * outputs commonly embed colour codes (`\x1b[0;31m`); we render them as plain
- * text, so the codes are noise. Covers CSI sequences (`\x1b[ ... <final>`),
- * which subsumes the common `\x1b[0;31m` colour form.
- */
-export function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
 /** Join an nbformat `source`/`text` value, which is either a string or an array

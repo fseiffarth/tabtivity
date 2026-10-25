@@ -20,14 +20,7 @@ import { sentTurnOver, useAgentTurn } from "../../lib/voice/agentTurn";
 import { createSendGuard, type GuardPhase, type SendGuard } from "../../../shared/handsFree";
 import { useSettingsStore } from "../../stores/settings";
 import { UntestedTag } from "../common/UntestedTag";
-
-/** The microphone's level goes straight onto the mic button as a CSS
- * variable, as on the phone: it changes many times a second and nothing else
- * reads it. */
-function paintMicLevel(button: HTMLElement | null, level: number | null) {
-  if (level === null) button?.style.removeProperty("--mic-level");
-  else button?.style.setProperty("--mic-level", level.toFixed(2));
-}
+import { paintMicLevel } from "../../../shared/voice";
 
 type Phase = "off" | "starting" | "preparing" | "listening";
 

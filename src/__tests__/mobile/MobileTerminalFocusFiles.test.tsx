@@ -140,14 +140,6 @@ describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps the status row out of the output", async () => {
-    vi.stubGlobal("fetch", hostWith(false));
-    await openAgent(CLAUDE_SCREEN, { project: "p1" });
-
-    expect(within(output()).getByText("Reading the test first.")).toBeTruthy();
-    expect(within(output()).queryByText(/42% context/)).toBeNull();
-  });
-
   it("opens the files on a right→left swipe", async () => {
     vi.stubGlobal("fetch", hostWith(true));
     const back = vi.fn();

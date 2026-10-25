@@ -9,13 +9,13 @@
  * backend command's own argument names; nothing here reaches the server.
  */
 import type { WsClient } from "./wsClient";
-import { translate, useI18nStore, type TranslationKey } from "../i18n";
+import { type TranslationKey, translateNow } from "../i18n";
 
 type Args = Record<string, unknown>;
 
 /** A rejection the UI shows as-is: in the app language. */
 function clientError(key: TranslationKey): Error {
-  return new Error(translate(useI18nStore.getState().lang, key));
+  return new Error(translateNow(key));
 }
 
 async function openContentUrl(client: WsClient, path: string, download: boolean): Promise<void> {

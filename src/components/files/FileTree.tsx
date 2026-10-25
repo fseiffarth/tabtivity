@@ -1,10 +1,11 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { confirm as dialogConfirm, open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useDragStore, type EmbedCap, type FileDragItem } from "../../stores/drag/drag";
@@ -81,6 +82,7 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { normalizeScanPath } from "./ProjectFilesSettings";
 import { FileTreeSearch } from "./FileTreeSearch";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
 import { SyncMirrorSkips } from "./SyncMirrorSkips";
@@ -904,28 +906,11 @@ export function FileTree({
   const dragClickGuard = useRef(0);
   const [moveTargetRel, setMoveTargetRel] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<EntryContextMenu>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   // The focusable tree root. File rows preventDefault on pointerdown to arm the
   // drag, which suppresses the browser's default focus-the-ancestor — so we move
   // focus here explicitly on selection, or the tree's key handlers (Enter/Delete/
   // Escape) would only fire after a manual Tab-in (notably in the docked sidebar).
   const treeRootRef = useRef<HTMLDivElement | null>(null);
-  useClampToViewport(contextMenuRef, contextMenu, setContextMenu);
-  // Close on any click outside the menu, not just inside this tree: the tree's
-  // own `onMouseDown={() => setContextMenu(null)}` only fires for a click that
-  // bubbles through the `.file-tree` root, so a click in the terminal, another
-  // tab, or anywhere else in the window left a stale menu floating (it's
-  // portaled to document.body, so it stays visually on top regardless).
-  useEffect(() => {
-    if (!contextMenu) return;
-    const onDocMouseDown = (ev: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(ev.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [contextMenu]);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirm>(null);
   const [autoConfirm, setAutoConfirm] = useState<AutoConfirm>(null);
   const [defaultAppFor, setDefaultAppFor] = useState<FileEntry | null>(null);
@@ -938,7 +923,7 @@ export function FileTree({
   const [renamePrompt, setRenamePrompt] = useState<RenamePrompt>(null);
   // The panel's other questions — New File/Folder/Presentation — in the same
   // chrome the rename above wears, rather than in the browser's native boxes.
-  const { promptText, dialogs } = useDialogs();
+  const { promptText, confirmAction, dialogs } = useDialogs();
   // SSH-sync Phase 2: project-relative paths whose push was blocked by a stale
   // host base, awaiting the user's keep-local / take-host / skip choice. The
   // first is shown in the conflict modal; resolving advances the queue.
@@ -1794,14 +1779,12 @@ export function FileTree({
       void refresh(relPath);
     }
     const absDir = relPath ? `${projectDir}/${relPath}` : projectDir;
-    let unlisten: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
 
     // `repoDir` points the backend's `.git` watch at the project's repo, so
     // add/commit/push (which only write `.git/`) re-read the markers too.
     invoke("watch_dir", { path: absDir, repoDir: projectDir }).catch(() => {});
-    listen<string>("fs-change", (event) => {
+    const unlisten = subscribeTauri(() => listen<string>("fs-change", (event) => {
       // The payload is the watched folder as asked for (`fs_watch.rs`); the one
       // backend slot is shared by every tree in every window, so an event for
       // another tree's folder is not this tree's to re-list (perf plan §3.4).
@@ -1810,15 +1793,11 @@ export function FileTree({
       // Coalesce the burst of events a single write emits into one reload.
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => refresh(relPath), 250);
-    }).then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
-    });
+    }));
 
     return () => {
-      cancelled = true;
       if (timer) clearTimeout(timer);
-      if (unlisten) unlisten();
+      unlisten();
       invoke("unwatch_dir").catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2714,14 +2693,12 @@ export function FileTree({
     // the backend reports the drop (or the user's abort) that ends the whole
     // gesture. NOT fired by the cancel we ourselves issue on re-entry — that
     // hands control back to the in-app drag, which is still very much alive.
-    void listen(NAMES.fileDragEndedEvent, () => {
+    // `listen` is async: the gesture can already be over when it resolves, and
+    // `subscribeTauri` unlistens then.
+    unlistenEnded = subscribeTauri(() => listen(NAMES.fileDragEndedEvent, () => {
       unbindRelease();
       onAbort();
-    }).then((un) => {
-      // `listen` is async: the gesture can already be over when it resolves.
-      if (gestureOver) un();
-      else unlistenEnded = un;
-    });
+    }));
   }
 
   function relForEntry(entry: FileEntry): string {
@@ -2901,15 +2878,15 @@ export function FileTree({
       });
       const dest = await openDialog({ directory: true, multiple: false });
       if (typeof dest !== "string") return;
-      const ok = await dialogConfirm(
-        t("fileTree.downloadToConfirm", {
+      const ok = await confirmAction({
+        title: t("fileTree.downloadToTitle"),
+        body: t("fileTree.downloadToConfirm", {
           name: entry.name,
           files: size.files,
           size: fmtSize(size.bytes),
           dest,
         }),
-        { title: t("fileTree.downloadToTitle") },
-      );
+      });
       if (!ok) return;
       setLoading(true);
       await invoke("remote_download_to", { projectId, relPath: rel, destDir: dest });
@@ -3987,7 +3964,6 @@ export function FileTree({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onKeyDown={handleTreeKeyDown}
-      onMouseDown={() => setContextMenu(null)}
       onContextMenu={showRootContextMenu}
     >
       {/* Sticky header: the remote/refresh bar, the in-tree search box and the
@@ -4694,13 +4670,8 @@ export function FileTree({
           </div>,
           document.body,
         )}
-      {contextMenu && createPortal(
-        <div
-          ref={contextMenuRef}
-          className="context-menu file-browser-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
+      {contextMenu && (
+        <ContextMenuPortal x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
           {!contextMenu.entry && (
             <>
               {onOpenFolderTab && (
@@ -5047,8 +5018,7 @@ export function FileTree({
             );
           })()}
           <button onClick={() => setContextMenu(null)}>{t("common.cancel")}</button>
-        </div>,
-        document.body,
+        </ContextMenuPortal>
       )}
       {deleteConfirm && createPortal(
         <div className="modal-backdrop" onMouseDown={() => setDeleteConfirm(null)}>

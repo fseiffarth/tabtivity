@@ -280,11 +280,11 @@ fn antigravity(home: &Path, directory: &str, since: Option<i64>, own: Option<(&s
     }
 }
 
-/// The conversation `id`'s prompts and answers; `salt` is what else the
+/// The conversation `id`'s prompts and answers; `went_by` is what else the
 /// read went by, part of its version.
-fn agy_read(store: &AgyStore, id: &str, salt: &str, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+fn agy_read(store: &AgyStore, id: &str, went_by: &str, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
     let (file, conn) = agy_conversation(store, id)?;
-    let mut current = format!("agy:{id}:{}:{}:{limit}", stamp(&file)?, key(salt));
+    let mut current = format!("agy:{id}:{}:{}:{limit}", stamp(&file)?, key(went_by));
     // SQLite can keep new turns only in the WAL until a checkpoint.
     if let Some(wal) = store.conversations.file(&format!("{id}.db-wal")).and_then(|file| stamp(&file)) {
         current.push_str(&format!(":{wal}"));

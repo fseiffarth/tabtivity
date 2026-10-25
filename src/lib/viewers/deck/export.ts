@@ -21,7 +21,7 @@
  * a remote one.
  */
 
-import { translate, useI18nStore } from "../../i18n";
+import { translate, useI18nStore, translateNow } from "../../i18n";
 import {
   PDFDocument,
   degrees,
@@ -227,7 +227,7 @@ export async function exportDeck(input: ExportInputs): Promise<ExportResult> {
     // pdf-lib refuses to save a document with no pages, and a deck with no
     // slides should produce an empty-looking PDF rather than an exception.
     out.addPage([deck.pageWidth, deck.pageHeight]);
-    warnings.push(translate(useI18nStore.getState().lang, "deckExport.noSlides"));
+    warnings.push(translateNow("deckExport.noSlides"));
   }
 
   return { bytes: await out.save(), pages: out.getPageCount(), warnings };

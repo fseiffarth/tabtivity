@@ -1,3 +1,4 @@
+import { basename } from "../../lib/paths";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -973,6 +974,6 @@ function shiftBy(start: string, minutes: number): string {
 
 /** The bare filename, for naming an imported calendar. */
 function fileStem(path: string): string {
-  const base = path.split(/[\\/]/).pop() ?? "";
+  const base = basename(path);
   return base.replace(/\.(ics|ical|ifb)$/i, "");
 }

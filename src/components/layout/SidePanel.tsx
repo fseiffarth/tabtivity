@@ -16,12 +16,12 @@ import { useShallow } from "zustand/react/shallow";
 import { useActivityStore, type AttentionKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
 import { useT } from "../../lib/i18n";
+import { formatBytes } from "../../lib/gpu";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import { terminalCharsPerSecond } from "../../dev/terminalOutputRate";
 import {
   RENDERER_CEILING_MB,
   ensureOwnRendererPid,
-  formatRssKib,
   readRendererRss,
   rendererName,
   type RendererRss,
@@ -151,7 +151,7 @@ function RendererRssDisplay() {
       className={hot ? "renderer-rss hot" : "renderer-rss"}
       title={t("sidePanel.rendererRssTitle")}
     >
-      RSS {rows.map((r) => `${rendererName(r)} ${formatRssKib(r.rss_kib)}`).join(" · ")}
+      RSS {rows.map((r) => `${rendererName(r)} ${formatBytes(r.rss_kib * 1024)}`).join(" · ")}
     </span>
   );
 }

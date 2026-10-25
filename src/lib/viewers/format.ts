@@ -127,8 +127,10 @@ export const PREVIEW_CSP_TAG = `<meta http-equiv="Content-Security-Policy" conte
  *  "after the first `<head>`", which a file can park inside a comment or a
  *  `<title>` to push the policy somewhere inert. Right after a leading doctype
  *  (the only thing that may precede it without dropping the page into quirks
- *  mode; closed comments before it are harmless), else at the very top. */
-const LEADING_DOCTYPE = /^(?:\s|<!--[\s\S]*?-->)*<!doctype\b[^>]*>/i;
+ *  mode; closed comments before it are harmless), else at the very top. A
+ *  comment ends at its first `-->`: a lazy `[\s\S]*?` would backtrack across
+ *  it and pass markup between two comments off as one comment. */
+const LEADING_DOCTYPE = /^(?:\s|<!--(?:[^-]|-(?!->))*-->)*<!doctype\b[^>]*>/i;
 
 /** In-page anchors need no `<base>` (the policy forbids one). A srcdoc
  *  document's base URL falls back to the embedding page's — the app's own

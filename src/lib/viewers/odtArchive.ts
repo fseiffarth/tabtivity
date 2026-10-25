@@ -30,7 +30,7 @@
  */
 import { Inflate, unzipSync, type UnzipFileInfo } from "fflate";
 import { formatBytes } from "../formatBytes";
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 
 /** Total bytes the viewer inflates from one `.odt`. */
 export const ODT_MAX_INFLATED_BYTES = 64 * 1024 * 1024;
@@ -44,7 +44,7 @@ const cost = (f: UnzipFileInfo): number => Math.max(f.size, f.originalSize);
 
 function tooLarge(): Error {
   return new Error(
-    translate(useI18nStore.getState().lang, "odt.errTooLarge", {
+    translateNow("odt.errTooLarge", {
       size: formatBytes(ODT_MAX_INFLATED_BYTES),
     }),
   );

@@ -80,7 +80,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
   // only), so the root console's "+" carries it too. A popout's projects store
   // is inert and empty, which keeps it out of every popout's copy.
   const hasProjects = useProjectsStore((s) => s.projects.length > 0);
-  const showProjects3d = scope === "root" && hasProjects;
+  const showProjects3d = scope === ROOT_SCOPE && hasProjects;
 
   // All the probe/registry/settings plumbing behind the entries is the shared
   // hook — one implementation with TabBar's "+" menu, so the two cannot drift.

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useTauriListener } from "../../hooks/useTauriListener";
 import { useProjectsStore } from "../../stores/projects";
 import { useScreenshotPendingStore } from "../../stores/screenshotPending";
 import { resolveProjectDirectory } from "../../types";
@@ -62,14 +63,13 @@ export function ScreenshotSaveOverlay() {
 
   // An OS-tool capture reports itself from the backend once its PNG lands in the
   // staging area; a cancelled capture writes nothing and so reports nothing.
-  useEffect(() => {
-    const un = listen<{ path: string; name: string }>("screenshot-captured", (ev) => {
-      show({ kind: "staged", path: ev.payload.path, name: ev.payload.name });
-    });
-    return () => {
-      void un.then((f) => f());
-    };
-  }, [show]);
+  useTauriListener(
+    () =>
+      listen<{ path: string; name: string }>("screenshot-captured", (ev) => {
+        show({ kind: "staged", path: ev.payload.path, name: ev.payload.name });
+      }),
+    [show],
+  );
 
   // Fresh defaults per shot: the capture's own file name, and the project it
   // came from when it knows one (a PDF crop does) — else the active project.

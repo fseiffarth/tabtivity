@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import {
   buildPromptChart,
   occupiedTargets,
@@ -248,13 +249,12 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   useEffect(() => {
     if (activeRef.current) reload();
     else staleRef.current = true;
-    let disposed = false;
-    let stop: (() => void) | undefined;
-    void listen("agent-prompts-changed", () => {
-      if (activeRef.current) reload();
-      else staleRef.current = true;
-    }).then((unlisten) => disposed ? unlisten() : (stop = unlisten));
-    return () => { disposed = true; stop?.(); };
+    return subscribeTauri(() =>
+      listen("agent-prompts-changed", () => {
+        if (activeRef.current) reload();
+        else staleRef.current = true;
+      }),
+    );
   }, [reload]);
   useEffect(() => {
     if (!active || !staleRef.current) return;

@@ -667,7 +667,7 @@ export function PdfMarkupBar({
               ptyId={target.ptyId}
               label={target.label}
               model={markup.targetModelTag}
-              agent={markup.agent}
+              agent={markup.chipAgent}
               disabled={busy}
             />
           )}
@@ -705,7 +705,7 @@ export function PdfMarkupBar({
               <span>{roundWords}</span>
             </span>
           )}
-          {markup.tabDialog && target && (
+          {markup.tabDialog && markup.roundTarget && (
             <>
               {markup.tabDialog.line && (
                 <span className="file-viewer-pdf-markup-dialog" title={markup.tabDialog.line}>
@@ -715,8 +715,8 @@ export function PdfMarkupBar({
               <button
                 type="button"
                 className="file-viewer-zoom-btn file-viewer-zoom-text active"
-                onClick={markup.showTarget}
-                title={t("pdfMarkup.answerInTabTitle", { tab: target.label })}
+                onClick={markup.showRoundTarget}
+                title={t("pdfMarkup.answerInTabTitle", { tab: markup.roundTarget.label })}
               >
                 {t("pdfMarkup.answerInTab")} <UntestedTag id="desktop.markup.tabDialog" />
               </button>

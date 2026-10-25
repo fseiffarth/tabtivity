@@ -14,6 +14,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { projectTypeTags } from "./projectTypeTags";
 import { OrbitSpinner } from "../common/OrbitSpinner";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { formatWorkedTime } from "../../lib/formatWorkedTime";
 
 type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -21,14 +22,6 @@ export function statusLabel(t: Translator, status: string): string {
   if (status === "current") return t("projectHoverCard.statusCurrent");
   if (status === "active") return t("projectHoverCard.statusActive");
   return t("projectHoverCard.statusInactive");
-}
-
-export function formatTime(t: Translator, secs: number): string {
-  if (secs < 60) return t("projectHoverCard.timeUnderMinute");
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 export function formatCpu(t: Translator, pct: number): string {
@@ -242,7 +235,7 @@ export function ProjectHoverCard({
       </span>
       {timeToday !== null && (
         <span className="pill-popup-time">
-          {t("projectHoverCard.todayPrefix")} {formatTime(t, timeToday)}
+          {t("projectHoverCard.todayPrefix")} {formatWorkedTime(t, timeToday)}
           {isLiveProject && timerPaused && ` ${t("projectHoverCard.pausedSuffix")}`}
           {isLiveProject && !timerPaused && <OrbitSpinner />}
         </span>

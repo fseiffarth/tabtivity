@@ -4,7 +4,8 @@ import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icon
 import { useT } from "../../../src/lib/i18n";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
 import { shareAs, useOutboxShare } from "../outboxShare";
-import { ageLabel, sizeLabel } from "../terminal/fileLabels";
+import { ageLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 
 /**
  * The files themselves: a thumbnail for every picture, a card for everything
@@ -65,7 +66,7 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
       const isImage = file.kind.startsWith("image/");
       const download = !isImage && !file.kind.startsWith("text/") && file.kind !== "application/pdf";
       const label = t("mobile.outbox.open", { name: sentName(file) });
-      const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${sizeLabel(file.size)}`;
+      const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${formatBytes(file.size)}`;
       const content = <>
         {isImage
           ? <img src={outboxFileUrl(scope, file.name)} alt="" loading="lazy" decoding="async" />

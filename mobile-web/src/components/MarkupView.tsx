@@ -24,7 +24,7 @@ import { canApply, canUndo, followRound, holdsUndo, nextCheck, startRound, stepR
 import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
 import { readMarkupOpen } from "../markupOpen";
 import { keepMarkupTab, type FileTabFile } from "../filesPlace";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import type { MarkupBack, MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
@@ -826,7 +826,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     void fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then((response) => (response.ok ? readBody(response, MAX_INBOX_FILE, (got, total) => {
         arm();
-        const label = sizeLabel(got);
+        const label = formatBytes(got);
         if (label === shown) return;
         shown = label;
         setDownload({ got, total: total || file.size });
@@ -2169,7 +2169,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <small>
           {marking
             ? t("mobile.markup.subtitle")
-            : `${sizes && isPdf ? `${t("mobile.outbox.pdfPage", { n: current, count: sizes.length })} · ` : ""}${sizeLabel(file.size)}`}
+            : `${sizes && isPdf ? `${t("mobile.outbox.pdfPage", { n: current, count: sizes.length })} · ` : ""}${formatBytes(file.size)}`}
           {untested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </small>
       </div>
@@ -2244,7 +2244,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={() => setPopover(null)}>
       {isPdf ? <>
         {!sizes && !failure && <p className="markup-loading">{download && download.total > 0
-          ? t("mobile.markup.downloading", { got: sizeLabel(download.got), size: sizeLabel(download.total) })
+          ? t("mobile.markup.downloading", { got: formatBytes(download.got), size: formatBytes(download.total) })
           : t("mobile.markup.loading")}</p>}
         {sizes && <div className="markup-pages" style={{ width: cssWidth, height: contentHeight, marginLeft: insetAt(zoom) }}>
           {sizes.map((size, i) => {

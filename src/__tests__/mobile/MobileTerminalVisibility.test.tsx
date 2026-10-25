@@ -202,6 +202,17 @@ describe(`${BRAND.display} Mobile terminal visibility`, () => {
     view.unmount();
   });
 
+  it("ignores a frame that parses to null or a plain value", async () => {
+    const view = render(<Terminal tab={TAB} back={() => {}} />);
+    await tick(50);
+    for (const frame of [null, 7, "text", true]) {
+      expect(() => act(() => socket().control(frame))).not.toThrow();
+    }
+    expect(socket().readyState).toBe(FakeWebSocket.OPEN);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    view.unmount();
+  });
+
   it("ignores an event type it does not know, so a newer desktop can add one", async () => {
     const view = render(<Terminal tab={TAB} back={() => {}} />);
     await tick(50);

@@ -397,33 +397,32 @@ describe(`${BRAND.display} Mobile auth — pair and logout`, () => {
     await expect(hasPairedDevice()).resolves.toBe(false);
   });
 
-  it("holds the next sign-in until the lock's logout has settled", async () => {
+  it("cancels the lock's logout when the next sign-in starts, rather than waiting on it", async () => {
     // The logout's answer clears the session cookie. Landing after the next
-    // sign-in, it wiped the session the unlock had just made.
+    // sign-in, it wiped the session the unlock had just made; waiting for it
+    // put a stuck DELETE's whole deadline in front of the unlock. Cancelled,
+    // its answer is never applied.
     await seedDevice();
     const order: string[] = [];
-    let finishLogout: (() => void) | undefined;
+    let logoutSignal: AbortSignal | undefined;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const key = `${init?.method ?? "GET"} ${String(input)}`;
       order.push(key);
       if (key === "DELETE /api/v1/auth/session") {
-        await new Promise<void>((resolve) => { finishLogout = resolve; });
-        order.push("logout answered");
-        return json({ ok: true })();
+        logoutSignal = init?.signal ?? undefined;
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        });
       }
       if (key === "POST /api/v1/auth/challenge") return json({ nonce: "n", payload: "p" })();
       return json({ ok: true })();
     }));
     const logout = logoutAuth();
-    const resumed = resumeAuth();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(order).toEqual(["DELETE /api/v1/auth/session"]);
-    finishLogout?.();
-    await logout;
-    await expect(resumed).resolves.toEqual({ kind: "paired" });
+    await expect(resumeAuth()).resolves.toEqual({ kind: "paired" });
+    expect(logoutSignal?.aborted).toBe(true);
+    await expect(logout).rejects.toBeInstanceOf(ApiError);
     expect(order).toEqual([
       "DELETE /api/v1/auth/session",
-      "logout answered",
       "POST /api/v1/auth/challenge",
       "POST /api/v1/auth/session",
     ]);

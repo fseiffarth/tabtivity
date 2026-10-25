@@ -244,18 +244,18 @@ describe("the app forgets on a definite unpaired only", () => {
     fetchMock.mockImplementation(async () => lapsed());
     vi.mocked(resumeAuth)
       .mockResolvedValueOnce({ kind: "paired" })
-      .mockResolvedValueOnce({ kind: "unavailable", reason: "unreachable" });
+      .mockResolvedValueOnce({ kind: "unavailable", reason: "desktop_down" });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Unlock now" }));
     await waitFor(() => expect(resumeAuth).toHaveBeenCalledTimes(2));
-    await screen.findByRole("button", { name: "Unlock now" });
+    await screen.findByRole("button", { name: "Retry" });
     expect(forgotten.device).not.toHaveBeenCalled();
 
     vi.mocked(resumeAuth).mockReset();
     vi.mocked(resumeAuth)
       .mockResolvedValueOnce({ kind: "paired" })
       .mockResolvedValueOnce({ kind: "unpaired" });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("Pair this phone");
     expect(forgotten.device).toHaveBeenCalledOnce();
   });

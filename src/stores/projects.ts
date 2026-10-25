@@ -60,7 +60,7 @@ import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../component
 import type { SavedPasswordState } from "../components/projects/useSavedCredential";
 import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
-import { translate, useI18nStore } from "../lib/i18n";
+import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
 
 function connectionsHeadless(): boolean {
@@ -75,7 +75,7 @@ function connectionsHeadless(): boolean {
  * on the auto-connect path, where this toast is the *only* thing the user sees.
  */
 function vpnToast(name: string): string {
-  return translate(useI18nStore.getState().lang, "vpnAutoConnect.upToast", { config: name });
+  return translateNow("vpnAutoConnect.upToast", { config: name });
 }
 
 const deactivatingProjects = new Set<string>();
@@ -1458,7 +1458,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             // (AppShell adds a `multiline` class when it sees the newline).
             const local =
               resolveLocalMirror(proj) || resolveProjectDirectory(proj) || proj.name;
-            toastPath = translate(useI18nStore.getState().lang, "projectsStore.switchToastRemote", {
+            toastPath = translateNow("projectsStore.switchToastRemote", {
               local,
               remote: formatRemoteTarget(proj.remote),
             });
@@ -1673,7 +1673,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       );
       if (failures.length > 0) {
         throw new Error(
-          translate(useI18nStore.getState().lang, "projectsStore.stopSessionsFailed", {
+          translateNow("projectsStore.stopSessionsFailed", {
             failures: failures.join("\n"),
           }),
         );
@@ -1712,9 +1712,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       if (project.remote) dropRemotePool(id);
     } catch (error) {
       await message(String(error), {
-        title: translate(
-          useI18nStore.getState().lang,
-          "projectSwitcher.stopError",
+        title: translateNow("projectSwitcher.stopError",
         ),
         kind: "error",
       });
@@ -1766,7 +1764,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       await get().deactivateProject(id);
       if (get().projects.find((project) => project.id === id)?.status !== "inactive") {
         throw new Error(
-          translate(useI18nStore.getState().lang, "pill.folderRenameStillOpen"),
+          translateNow("pill.folderRenameStillOpen"),
         );
       }
     }

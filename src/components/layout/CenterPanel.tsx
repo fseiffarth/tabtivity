@@ -1,4 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { subscribeTauri } from "../../hooks/useTauriListener";
+import { usePaneRects, type PaneRegionRect } from "./usePaneRects";
+import { useDividerDrag } from "./useDividerDrag";
 import { createPortal, flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -65,7 +68,7 @@ import {
   type PhysPoint,
   type WindowFrame,
 } from "../../lib/window/coords";
-import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
+import { dragPlatform } from "../../lib/window/dragPlatform";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, restoreBoxScope, useBoxesStore } from "../../stores/boxes";
@@ -78,13 +81,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
 import { mobileAgentTmuxReady } from "../../lib/terminal/mobileTmuxReady";
 
-/** Pixel coordinates of a group's pane region, relative to the center panel. */
-interface Rect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
+type Rect = PaneRegionRect;
 
 function CenterPanelImpl() {
   const t = useT();
@@ -168,10 +165,6 @@ function CenterPanelImpl() {
   // Measured pane regions per group id (current scope only). The flat pane
   // layer positions each active pane over its group's body so PTYs never
   // unmount on scope switch / re-tile.
-  const [groupRects, setGroupRects] = useState<Record<string, Rect>>({});
-  // Whole-subwindow rects (tab bar + body), used by the focus frame so it wraps
-  // the current subwindow's tab header too — not just its pane region.
-  const [groupFrameRects, setGroupFrameRects] = useState<Record<string, Rect>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const groupBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -376,88 +369,14 @@ function CenterPanelImpl() {
   }, [scope, pendingRespawn, consumePendingRespawn, detachGroup]);
 
   // ── Pane-region measurement ───────────────────────────────────────────────
-  // Recompute every group body's rect (relative to the panel) so the flat pane
-  // layer can position each active pane over its subwindow. Runs after layout
-  // changes and on resize.
-  const measure = useCallback(() => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    const base = panel.getBoundingClientRect();
-    const next: Record<string, Rect> = {};
-    const frames: Record<string, Rect> = {};
-    for (const [id, el] of groupBodyRefs.current) {
-      if (!el.isConnected) continue;
-      const r = el.getBoundingClientRect();
-      next[id] = {
-        left: r.left - base.left,
-        top: r.top - base.top,
-        width: r.width,
-        height: r.height,
-      };
-      // The enclosing subwindow box spans the tab header bar + body, so the
-      // focus frame drawn from it wraps the current tab strip too. Clamp the
-      // right edge to the pane region's right (`r`) so a docked files sidebar —
-      // which lives in the same body, to the right of the pane — is excluded.
-      const sub = el.closest(".subwindow");
-      if (sub) {
-        const sr = sub.getBoundingClientRect();
-        frames[id] = {
-          left: sr.left - base.left,
-          top: sr.top - base.top,
-          width: r.right - sr.left,
-          height: sr.height,
-        };
-      }
-    }
-    // Skip state writes when a map is unchanged (a write re-renders every pane).
-    const sameRects = (
-      a: Record<string, Rect>,
-      b: Record<string, Rect>,
-    ): boolean => {
-      const keys = Object.keys(a);
-      if (keys.length !== Object.keys(b).length) return false;
-      for (const k of keys) {
-        const x = a[k];
-        const y = b[k];
-        if (!y || x.left !== y.left || x.top !== y.top || x.width !== y.width || x.height !== y.height) {
-          return false;
-        }
-      }
-      return true;
-    };
-    setGroupRects((prev) => (sameRects(next, prev) ? prev : next));
-    setGroupFrameRects((prev) => (sameRects(frames, prev) ? prev : frames));
-  }, []);
-
-  // Re-measure when the rendered layout tree changes — including the live drag
-  // collapse/restore, so siblings' reflowed rects are picked up immediately.
-  useLayoutEffect(() => {
-    measure();
-  }, [measure, renderLayout, scope]);
-
-  // Re-measure on panel resize (split drags resize children without remount).
-  useEffect(() => {
-    const panel = panelRef.current;
-    if (!panel || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => measure());
-    ro.observe(panel);
-    for (const el of groupBodyRefs.current.values()) ro.observe(el);
-    return () => ro.disconnect();
-  }, [measure, renderLayout, scope]);
-
-  // Re-measure on OS-window resize. The ResizeObserver above misses OS-level
-  // resizes on older WebKitGTK builds (it fires for split drags but not for the
-  // window growing/shrinking), so panes — positioned at a JS-measured pixel
-  // width/height — would keep their stale size and the file viewers
-  // (markdown/text/PDF, sized off the pane box) never reflow to the new window
-  // width. AppShell bridges Tauri's reliable onResized/onScaleChanged into a DOM
-  // 'resize' event; listening for it here re-runs the measurement. (The detached
-  // window sidesteps this entirely by sizing its single pane with CSS insets.)
-  useEffect(() => {
-    const onResize = () => measure();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [measure]);
+  // Every group body's rect (relative to the panel) so the flat pane layer can
+  // position each active pane over its subwindow.
+  const { groupRects, groupFrameRects, measure } = usePaneRects(
+    panelRef,
+    groupBodyRefs,
+    renderLayout,
+    scope,
+  );
 
   const registerGroupBody = useCallback(
     (id: string) => (el: HTMLDivElement | null) => {
@@ -717,16 +636,9 @@ function CenterPanelImpl() {
     };
 
     const unsubs: Array<() => void> = [];
-    let cancelled = false;
-    const reg = (p: Promise<() => void>) =>
-      p
-        .then((fn) => {
-          if (cancelled) fn();
-          else unsubs.push(fn);
-        })
-        .catch(() => {});
+    const reg = (subscribe: () => Promise<() => void>) => unsubs.push(subscribeTauri(subscribe));
 
-    reg(
+    reg(() =>
       listen<DetachedDragStart>(DETACHED_DRAG_START, (ev) => {
         const { scope: dScope, groupId, label, cursorPhysX, cursorPhysY, tabKey, paneId } =
           ev.payload;
@@ -769,7 +681,7 @@ function CenterPanelImpl() {
       }),
     );
 
-    reg(
+    reg(() =>
       listen<DetachedDragMove>(DETACHED_DRAG_MOVE, (ev) => {
         if (useDragStore.getState().drag?.kind !== "detached") return;
         net.touch();
@@ -964,7 +876,7 @@ function CenterPanelImpl() {
       done();
     };
 
-    reg(
+    reg(() =>
       listen<DetachedDragEnd>(DETACHED_DRAG_END, (ev) => {
         const d = useDragStore.getState().drag;
         if (d?.kind !== "detached") {
@@ -1012,7 +924,7 @@ function CenterPanelImpl() {
     // `detached` state the geometric START uses, so the pane layer stops eating
     // the crossing event and the ladder in `settle` runs unchanged. No claim
     // within the timeout leaves the tab in its source popout.
-    reg(
+    reg(() =>
       listen<DetachedDropProbe>(DETACHED_DROP_PROBE, (ev) => {
         const probe = ev.payload;
         // A main-window drag probes for popouts itself (`TabBar` consumes the
@@ -1065,7 +977,7 @@ function CenterPanelImpl() {
         );
       }),
     );
-    reg(
+    reg(() =>
       listen<DetachedDropClaim>(DETACHED_DROP_CLAIM, (ev) => {
         const claim = ev.payload;
         if (!claimToken || claim.token !== claimToken || !claim.groupId) return;
@@ -1082,7 +994,6 @@ function CenterPanelImpl() {
     );
 
     return () => {
-      cancelled = true;
       endSession();
       window.removeEventListener("pointerdown", onMainPointerDown, true);
       for (const fn of unsubs) fn();
@@ -1697,16 +1608,14 @@ function SplitView(props: TreeProps & { node: Extract<LayoutNode, { type: "split
   const minWidth = useSettingsStore((s) => s.settings?.min_subwindow_width) ?? DEFAULT_MIN_SUBWINDOW_PX;
   const minHeight = useSettingsStore((s) => s.settings?.min_subwindow_height) ?? DEFAULT_MIN_SUBWINDOW_PX;
 
-  // A mid-flight divider drag's teardown, so unmounting this subtree (scope
-  // switch, group close) unbinds the window listeners instead of leaking them.
-  const activeDragTeardown = useRef<(() => void) | null>(null);
-  useEffect(() => () => activeDragTeardown.current?.(), []);
+  // Capture, window listeners and the engine-correct release (also torn down
+  // when this subtree unmounts mid-gesture: scope switch, group close).
+  const beginDividerDrag = useDividerDrag();
 
   const startDrag = (dividerIndex: number) => (e: React.PointerEvent) => {
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
 
     // The container is not itself resized by a divider drag, so its rect is
     // constant for the gesture — measure it once instead of forcing a reflow to
@@ -1760,15 +1669,7 @@ function SplitView(props: TreeProps & { node: Extract<LayoutNode, { type: "split
       // per frame, not once per pointermove).
       scheduleResize();
     };
-    const teardown = () => {
-      activeDragTeardown.current = null;
-      unbindRelease();
-      window.removeEventListener("pointermove", onMove);
-      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-      if (rafId != null) cancelAnimationFrame(rafId);
-    };
     const commit = () => {
-      teardown();
       // Commit the final position to the store ONCE. The next render writes these
       // same sizes via `node.sizes`, matching the DOM, so there's no visual jump;
       // clear the override first so the layout effect stops re-asserting it.
@@ -1778,7 +1679,6 @@ function SplitView(props: TreeProps & { node: Extract<LayoutNode, { type: "split
       props.onResized();
     };
     const abort = () => {
-      teardown();
       // No store change happened, so no re-render will overwrite the drag's DOM
       // flex writes — re-assert the committed store sizes ourselves.
       dragSizesRef.current = null;
@@ -1787,16 +1687,17 @@ function SplitView(props: TreeProps & { node: Extract<LayoutNode, { type: "split
       }
       props.onResized();
     };
-    // Engine-correct release semantics (the same policy every other drag path
-    // routes through): pointerup commits; on WebKitGTK — which frequently fires
-    // `pointercancel` INSTEAD of `pointerup` (see the in-window tab-drag effect
-    // above) — a cancel commits too, while on engines with a real pointerup a
-    // cancel is a genuine capture loss and aborts; Escape always aborts. The
-    // bare-`pointerup` pair this replaces left the gesture STUCK mid-drag on
-    // Linux whenever the release arrived as a cancel.
-    const unbindRelease = bindDragRelease({ onCommit: commit, onAbort: abort });
-    window.addEventListener("pointermove", onMove);
-    activeDragTeardown.current = teardown;
+    // Release semantics: pointerup commits; on WebKitGTK a cancel commits too,
+    // while on engines with a real pointerup a cancel is a genuine capture loss
+    // and aborts; Escape always aborts (see `useDividerDrag`).
+    beginDividerDrag(e, {
+      onMove,
+      onCommit: commit,
+      onAbort: abort,
+      onTeardown: () => {
+        if (rafId != null) cancelAnimationFrame(rafId);
+      },
+    });
   };
 
   return (

@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
+  hostTabId,
   isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
@@ -2897,7 +2899,7 @@ async function agentTranscriptFor(
     // never read (the backend's `unsupported`, decided by the same list) hands
     // Focus to the terminal; a tab that has no session id *yet* — every tab
     // the phone just created, until the agent's hook records one — keeps
-    // Focus reading the screen until the session reads.
+    // Focus on its loading row until the session reads.
     const reason = TRANSCRIPT_AGENTS.has(agent) ? "no_session" : "unsupported";
     return { status: "agent_transcript", transcript: { available: false, reason, entries: [], truncated: false } };
   }
@@ -2916,6 +2918,8 @@ async function agentTranscriptFor(
     limit: limit ?? null,
     // A local-model tab's agent runs in the scope's local-model home.
     localModel: tab.kind === "local_agent",
+    // A tab on a remote project's host keeps its conversation there.
+    remoteHost: hostTabId(tab, scope.project),
   }).catch((): MobileAgentTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
   return { status: "agent_transcript", transcript };
 }
@@ -3074,9 +3078,8 @@ export function MobileBridgeHost() {
   }, [mobileHostOn]);
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
     refreshRootFacts();
-    void listen<DesktopRequest>(MOBILE_DESKTOP_EVENT, (event) => {
+    const unlisten = subscribeTauri(() => listen<DesktopRequest>(MOBILE_DESKTOP_EVENT, (event) => {
       const request = event.payload;
       const run = async () => {
         let response: DesktopResponse;
@@ -3095,13 +3098,10 @@ export function MobileBridgeHost() {
       const domain = mutationDomain(request.type);
       if (domain) void enqueueMutation(domain, run);
       else void run();
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
+    }));
     return () => {
       disposed = true;
-      unlisten?.();
+      unlisten();
     };
   }, []);
   return null;

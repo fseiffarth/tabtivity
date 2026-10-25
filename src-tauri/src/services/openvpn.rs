@@ -454,8 +454,10 @@ fn display_name(file_name: &str) -> String {
 ///
 /// Linux launches it elevated via `pkexec` (the tun device / routing need root);
 /// the polkit prompt comes first, then OpenVPN prompts for the passphrase on the
-/// same tty. `--auth-nocache` keeps the passphrase out of OpenVPN's memory across
-/// re-keys. Windows runs `openvpn.exe` directly (it must be started elevated);
+/// same tty. No `--auth-nocache`: OpenVPN keeps what was typed for the hourly TLS
+/// renegotiation, and `--persist-key` keeps the decrypted key across a reconnect,
+/// so neither re-prompts mid-session on a tty nobody watches (see
+/// [`openvpn_args`]). Windows runs `openvpn.exe` directly (it must be started elevated);
 /// macOS runs it under `sudo` on the visible tty. Each item is one argv entry, so
 /// no quoting is involved and a path with spaces stays one argument on every OS.
 ///
@@ -478,10 +480,11 @@ pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
         arm.config,
         "--script-security".to_string(),
         "1".to_string(),
-        "--auth-nocache".to_string(),
+        "--persist-key".to_string(),
         "--writepid".to_string(),
         arm.pidfile.to_string_lossy().into_owned(),
     ]);
+    argv.extend(mlock_args());
     argv.extend(arm.management);
     Ok(argv)
 }
@@ -640,8 +643,21 @@ pub fn openvpn_available() -> bool {
 ///   encrypted private key.
 ///
 /// Shape: `--config <cfg> --script-security 1 [--auth-user-pass <f>]
-///         [--askpass <f>] --auth-nocache --writepid <pidfile>
+///         [--askpass <f>] --persist-key --writepid <pidfile>
 ///         --connect-timeout 20 --persist-tun --verb 3 --mute 0`.
+///
+/// **No `--auth-nocache`.** It made OpenVPN forget the account the moment it was
+/// used, so the TLS renegotiation every `reneg-sec` (3600 s by default, and the
+/// server's own schedule) re-read `--auth-user-pass` — a file deleted right after
+/// connect — failed auth and took the tunnel down after exactly one hour. The
+/// credentials now live in the root OpenVPN process's memory for the tunnel's
+/// life, as with any OpenVPN client; nothing is written back to disk.
+/// `--persist-key` is the passphrase's twin: a reconnect (ping-restart after a
+/// blip) keeps the decrypted key instead of re-reading the deleted `--askpass`.
+/// A config that carries its own `auth-nocache` still drops at the first rekey
+/// unless its server pushes an `auth-token` — OpenVPN has no option to undo it.
+/// Rekeying itself stays on (no `--reneg-sec 0`), and on Linux `--mlock` keeps
+/// the held account and key out of swap ([`mlock_args`]).
 ///
 /// `--script-security 1` (#868): OpenVPN runs elevated, so a config's `up`,
 /// `down`, `route-up`, `tls-verify`, … scripts would run **as root** — and the
@@ -678,7 +694,7 @@ pub fn openvpn_args(
         args.push(f.to_string_lossy().into_owned());
     }
     args.extend([
-        "--auth-nocache".to_string(),
+        "--persist-key".to_string(),
         "--writepid".to_string(),
         pidfile.to_string_lossy().into_owned(),
         "--connect-timeout".to_string(),
@@ -716,7 +732,20 @@ pub fn openvpn_args(
         "--mute".to_string(),
         "0".to_string(),
     ]);
+    args.extend(mlock_args());
     Ok(args)
+}
+
+/// `--mlock` where OpenVPN supports it: the tunnel now holds the account (and the
+/// decrypted key) in memory for its whole life, and this keeps those pages out of
+/// swap. Linux only — Windows builds have no `mlockall`, and macOS is unverified.
+/// OpenVPN 2.6+ raises `RLIMIT_MEMLOCK` itself when a config's `user` drops root.
+fn mlock_args() -> Vec<String> {
+    if cfg!(target_os = "linux") {
+        vec!["--mlock".to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Whether `config` uses server-side username+password auth that OpenVPN would
@@ -3146,7 +3175,10 @@ mod tests {
         // #868: the config's own scripts never run as root — and the override
         // follows the config, so the file's `script-security 2` cannot win.
         assert_eq!(&argv[4..6], ["--script-security", "1"]);
-        assert!(argv.iter().any(|a| a == "--auth-nocache"));
+        // No --auth-nocache: it made the hourly rekey re-prompt and drop the tunnel.
+        assert!(!argv.iter().any(|a| a == "--auth-nocache"));
+        assert!(argv.iter().any(|a| a == "--persist-key"));
+        assert!(argv.iter().any(|a| a == "--mlock"));
         assert!(!argv.iter().any(|a| a == "--askpass"));
         // An argv, not a shell line: nothing is quoted.
         assert!(!argv.iter().any(|a| a.contains('\'')), "{argv:?}");
@@ -3450,7 +3482,10 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--auth-user-pass"));
         let pi = args.iter().position(|a| a == "--writepid").unwrap();
         assert_eq!(args[pi + 1], concat!("/run/", crate::app_slug!(), "/openvpn/x.pid"));
-        assert!(args.iter().any(|a| a == "--auth-nocache"));
+        // Credentials stay cached for the rekey; the key survives a reconnect.
+        assert!(!args.iter().any(|a| a == "--auth-nocache"));
+        assert!(args.iter().any(|a| a == "--persist-key"));
+        assert_eq!(args.iter().any(|a| a == "--mlock"), cfg!(target_os = "linux"));
     }
 
     /// #868: OpenVPN runs as root, so a config's `up`/`down` scripts would too.
@@ -3585,7 +3620,10 @@ mod tests {
         // …and the tail options survive both being present.
         let pi = args.iter().position(|a| a == "--writepid").unwrap();
         assert_eq!(args[pi + 1], concat!("/run/", crate::app_slug!(), "/openvpn/x.pid"));
-        assert!(args.iter().any(|a| a == "--auth-nocache"));
+        // Credentials stay cached for the rekey; the key survives a reconnect.
+        assert!(!args.iter().any(|a| a == "--auth-nocache"));
+        assert!(args.iter().any(|a| a == "--persist-key"));
+        assert_eq!(args.iter().any(|a| a == "--mlock"), cfg!(target_os = "linux"));
     }
 
     #[test]

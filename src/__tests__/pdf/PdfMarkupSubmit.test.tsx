@@ -366,6 +366,47 @@ describe("desktop markup Undo (apply rounds)", () => {
     expect(screen.queryByRole("button", { name: /Make these changes/ })).toBeNull();
   });
 
+  it("keeps the round with the tab it went to when the picker moves mid-round", async () => {
+    backend();
+    useTabsStore.setState({ tabsByScope: { p1: [agentTab("t1", "s1", "Claude"), agentTab("t2", "s2", "Codex")] } });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalledWith("sched-1"));
+    act(() => useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} }));
+    expect(await screen.findByText("Agent is working…")).toBeTruthy();
+    // The picker moves to an idle tab: the round still reads the tab it went to.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "s2" } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(screen.getByText("Agent is working…")).toBeTruthy();
+    expect(calls("pdf_markup_undo_settle")).toHaveLength(0);
+    act(() => useActivityStore.setState({ busyByTab: {}, attentionByTab: {} }));
+    await screen.findByText(/^Agent finished/, undefined, { timeout: SETTLE_MS + 2_000 });
+    await waitFor(() => expect(calls("pdf_markup_undo_settle")).toHaveLength(1));
+    // The undo's note goes to the round's tab, not the picked one.
+    mocks.queuePromptForTab.mockResolvedValueOnce({ pruned: 0, id: "sched-2" });
+    fireEvent.click(undoButton()!);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenLastCalledWith("sched-2"));
+    expect(mocks.queuePromptForTab).toHaveBeenLastCalledWith("p1", "s1", markupUndoNote(["paper.tex"], 0));
+  });
+
+  it("sends Make these changes to the tab the round went to", async () => {
+    backend({ pdf_markup_submit: () => ({ prompt: "Look at the marked copy.", marked: null, mode: "list", undo: null, noUndo: null }) });
+    useTabsStore.setState({ tabsByScope: { p1: [agentTab("t1", "s1", "Claude"), agentTab("t2", "s2", "Codex")] } });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalledWith("sched-1"));
+    act(() => useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} }));
+    expect(await screen.findByText("Agent is working…")).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "s2" } });
+    act(() => useActivityStore.setState({ busyByTab: {}, attentionByTab: {} }));
+    const apply = await screen.findByRole("button", { name: /Make these changes/ }, { timeout: SETTLE_MS + 2_000 });
+    fireEvent.click(apply);
+    await waitFor(() => expect(mocks.queuePromptForTab).toHaveBeenLastCalledWith("p1", "s1", DEFAULT_PDF_MARKUP_APPLY));
+  });
+
   it("says which files changed since when the undo is refused, and reloads nothing", async () => {
     backend({ pdf_markup_undo: () => { throw { code: "undo_conflict", files: ["paper.tex"], more: 0 }; } });
     const onReload = await finishedRound();

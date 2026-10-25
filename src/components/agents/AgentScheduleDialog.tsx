@@ -24,6 +24,7 @@ import {
   type ScheduledAgentPrompt,
 } from "../../lib/agents/agentSchedule";
 import { formatTime, todayStr } from "../../lib/calendar/calendarTime";
+import { delayMinutes } from "../../../shared/scheduleDelay";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
@@ -63,16 +64,6 @@ function pad(value: number): string {
 
 function defaultOnce(): string {
   return localOccurrenceKey(new Date(Date.now() + 60 * 60 * 1000));
-}
-
-/** The form's "In … h … min": whole minutes ahead, or null for anything the
- *  two boxes should not accept (blank both, negative, fractional, zero). */
-function delayMinutes(hours: string, minutes: string): number | null {
-  const h = hours.trim() === "" ? 0 : Number(hours);
-  const m = minutes.trim() === "" ? 0 : Number(minutes);
-  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || m < 0) return null;
-  const total = h * 60 + m;
-  return total > 0 ? total : null;
 }
 
 /** The kinds the form offers: the stored rule types, plus "in", which is a

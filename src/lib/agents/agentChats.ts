@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { submitScheduledAgentCommand } from "./scheduledAgentInput";
 import { relaunch, runsLocally, useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import type { TabEntry } from "../../stores/tabs";
+import { projectIdOfScope } from "../terminal/ptyId";
 
 /**
  * The Reader's Resume menu (the prompt strip, beside Diffs): the earlier
@@ -56,7 +57,7 @@ export function chatsOffered(scope: string, tab: TabEntry | undefined): tab is T
 function chatArgs(scope: string, tab: TabEntry, cwd: string | undefined) {
   return {
     agent: tab.cmd,
-    projectId: scope === "root" ? null : scope,
+    projectId: projectIdOfScope(scope),
     tabDir: cwd || tab.cwd || null,
     sessionId: tab.sessionId ?? "",
   };

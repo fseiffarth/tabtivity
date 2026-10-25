@@ -54,7 +54,7 @@ import {
 } from "../../lib/shortcuts/newTabChord";
 import { useAgentWorktreePicker } from "./agentWorktrees";
 import type { CloudLaunch } from "../../lib/agents/cloudSessions";
-import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
+import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { CustomAgentDialog } from "./CustomAgentDialog";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
 import { TabHoverCard, shellLaunch } from "./TabHoverCard";
@@ -504,7 +504,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // tab" (the tab menu, the + menu's Recently closed) brings back.
   const closedAgentTabs = useClosedAgentTabs(scope);
   const hasProjects = useProjectsStore((s) => s.projects.length > 0);
-  const showBlobItem = scope === "root" && hasProjects;
+  const showBlobItem = scope === ROOT_SCOPE && hasProjects;
   const focusGroup = useTabsStore((s) => s.focusGroup);
   const setGroupActive = useTabsStore((s) => s.setGroupActive);
   // Cross-group activation, for the TeX ⇄ PDF jump: the partner tab usually
@@ -846,7 +846,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Cloud sessions clone a project's repository, so they are offered in a
   // project's menu only — not the root console's or a box's.
   const handleAddCloud =
-    scope !== "root" && !scope.startsWith(BOX_SCOPE_PREFIX)
+    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX)
       ? (item: StaticMenuItem, launch: CloudLaunch) => {
           setMenuPos(null);
           const place = placement();

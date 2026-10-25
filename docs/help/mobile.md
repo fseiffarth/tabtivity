@@ -92,10 +92,11 @@ Shell tabs on the host follow the **shell tabs** switch, as local ones do. A
 host tab is only typed into: sending a file from the phone or the desktop,
 **Submit** of a markup and **Sign in** are not offered on it (they work through
 the project's inbox and this computer, which the host cannot see), and with no
-window open its schedules are not offered either. Recaps and the reading view
-fall back to the screen for it, as the desktop has no transcript of a session
-on the host. A tab on the host has a session to attach to only while the
-project's **Persistent sessions (tmux)** (its pill's menu) is on, the default.
+window open its schedules are not offered either. Recaps fall back to the
+screen for it, and its Chat has no conversation to show — use **Terminal** —
+as the desktop has no transcript of a session on the host. A tab on the host
+has a session to attach to only while the project's **Persistent sessions
+(tmux)** (its pill's menu) is on, the default.
 
 A **container** or **VM** project is
 listed on the phone with its tabs that run on this computer; the tabs inside the
@@ -154,11 +155,12 @@ is refused. Works with the desktop window closed.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box
   to write the next one, and the agent's questions as buttons to tap. The
   pill at the top right names the view on screen; tap it to switch to
-  **Terminal** (the real terminal) and back, and, in Chat, to choose whether
-  it shows the stored conversation (**Session**) or the screen as text
-  (**Screen**). A shell tab has no conversation, so its pill offers
-  **Reader** (the screen as text) and **Terminal**. The desktop offers the
-  same chat on its agent tabs (help topic `agent-clis`).
+  **Terminal** (the real terminal) and back. Chat shows the agent's stored
+  conversation; for an agent Tabtivity cannot read one of (Kimi, Qwen, Aider
+  and most other CLIs) Chat is dimmed and the tab opens in Terminal. A shell
+  tab has no conversation, so its pill offers **Reader** (the screen as text)
+  and **Terminal**. The desktop offers the same chat on its agent tabs (help
+  topic `agent-clis`).
 - Over the chat, **Files (n)** lists every file the conversation carried —
   what the agent sent from this tab and what you sent with your prompts —
   newest first, with who sent it; tap one to open it. It sits beside

@@ -18,6 +18,7 @@
  */
 
 import { storageKey } from "../../../src/lib/brand";
+import { readJson, writeJson } from "../../../src/lib/persist";
 import type { TextMarkMode } from "./anchors";
 import { MARK_COLORS, MARKER_FACTOR, PEN_STYLES, STAMP_SYMBOLS, type MarkColor, type PenStyle, type StampSymbol } from "./layer";
 
@@ -265,20 +266,12 @@ const PEN_PREFS_KEY = storageKey("markup.pen");
 type PrefStorage = Pick<Storage, "getItem" | "setItem">;
 
 export function readPenPrefs(storage?: PrefStorage): PenPrefs {
-  try {
-    const stored = (storage ?? localStorage).getItem(PEN_PREFS_KEY);
-    return stored ? parsePenPrefs(JSON.parse(stored)) : DEFAULT_PEN_PREFS;
-  } catch {
-    return DEFAULT_PEN_PREFS;
-  }
+  return readJson(PEN_PREFS_KEY, parsePenPrefs, DEFAULT_PEN_PREFS, storage);
 }
 
+/** A convenience only: the choices hold for this view. */
 export function writePenPrefs(prefs: PenPrefs, storage?: PrefStorage): void {
-  try {
-    (storage ?? localStorage).setItem(PEN_PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // A convenience only: the choices hold for this view.
-  }
+  writeJson(PEN_PREFS_KEY, prefs, storage);
 }
 
 /** A cursor that shows what the next stroke draws — a dot of the pen's colour

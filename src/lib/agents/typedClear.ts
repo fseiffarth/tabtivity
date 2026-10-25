@@ -73,7 +73,7 @@ export function screenAtCursor(buffer: {
   return { input: row(y), below };
 }
 
-const lineByPty: Record<string, string | null> = {};
+const lineByPty = new Map<string, string | null>();
 
 /** Feed one chunk of the user's input; true when its Enter submitted a
  * new-conversation command. `screen` is read only for a lone Enter the line
@@ -82,10 +82,10 @@ export function noteTypedLine(ptyId: string, data: string, screen?: () => TypedS
   // Bracketed-paste markers carry no text; a paste is typing done at once.
   const text = data.replace(/\x1b\[20[01]~/gu, "");
   // `null` is a line that is no longer known (see above); absent is empty.
-  let line: string | null = ptyId in lineByPty ? lineByPty[ptyId] : "";
+  let line: string | null = lineByPty.has(ptyId) ? (lineByPty.get(ptyId) ?? null) : "";
   let cleared = false;
   if (text.includes("\x1b")) {
-    lineByPty[ptyId] = null;
+    lineByPty.set(ptyId, null);
     return false;
   }
   for (const ch of text) {
@@ -108,11 +108,11 @@ export function noteTypedLine(ptyId: string, data: string, screen?: () => TypedS
       line = null;
     }
   }
-  lineByPty[ptyId] = line;
+  lineByPty.set(ptyId, line);
   return cleared;
 }
 
 /** Forget a pane's line (tab closed). */
 export function forgetTypedLine(ptyId: string): void {
-  delete lineByPty[ptyId];
+  lineByPty.delete(ptyId);
 }

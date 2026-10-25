@@ -6,14 +6,14 @@ import { finishOidcReturn, hasPairedDevice, logoutAuth, resumeAuth } from "./aut
 import { newCodeAdvised, releaseSecrets } from "./secrets";
 import { SecretsNewCodeSheet } from "./screens/SecretsNewCodeSheet";
 import { SecretsRepinSheet } from "./screens/SecretsRepinSheet";
-import { connectTrace, getMobileStatus, primeConnection, setProjectGoneHandler, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
+import { carryConnectTrace, connectTrace, getMobileStatus, primeConnection, setProjectGoneHandler, setUnauthorizedHandler, takeCarriedTrace, traceConnect, type TabRow } from "./api";
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
 import { parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
 import { forgetDeviceData } from "./forgetDeviceData";
 import { forgetProjectCovers } from "./thumbs";
 import { refreshPush } from "./push";
 import { hasLocalUnlock } from "./localLock";
-import { clearConnectReload, isConnectReload, noteUnlockedLeave, takeConnectReload, takeReloadGrace } from "./reloadGrace";
+import { clearConnectGrace, clearConnectReload, isConnectReload, noteConnectGrace, noteUnlockedLeave, takeConnectGrace, takeConnectReload, takeReloadGrace } from "./reloadGrace";
 import { noteDesktopTheme } from "./theme";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
 import { useT, type TranslationKey } from "../../src/lib/i18n";
@@ -271,10 +271,19 @@ export function App() {
   /** When the reader last touched the glass — the idle lock's clock, and the
    * silent re-login's test of whether anyone is still here. */
   const lastActive = useRef(Date.now());
-  /** When the reader last passed the local lock. The unavailable splash's
-   * Retry signs in again without asking for it a second time while this is
-   * recent; past the idle window it goes back through the lock. */
+  /** When the reader last passed the local lock; 0 once the app locks. */
   const unlockedAt = useRef(0);
+  /** Whether this page's unlock still holds: passed, and someone here within
+   * the idle window since — the rule the running app locks by. The failure
+   * splash's Retry signs in again without the lock while it holds, and a page
+   * failing to connect in it stamps the connect grace for the next one. */
+  const unlockHolds = useCallback(() => unlockedAt.current > 0
+    && Date.now() - Math.max(unlockedAt.current, lastActive.current) < LOCK_AFTER_IDLE_MS, []);
+  /** Hand a still-holding unlock to the next page, dated from when someone was
+   * last here, so it runs out when this page's would have. */
+  const keepUnlock = useCallback(() => {
+    if (unlockHolds()) noteConnectGrace(Math.max(unlockedAt.current, lastActive.current));
+  }, [unlockHolds]);
   /** A place a tapped notification asked for, waiting on the unlock; it wins
    * over the remembered place, because it is what the reader just chose. */
   const pendingPlace = useRef<LastPlace | null>(launchPlace);
@@ -303,23 +312,27 @@ export function App() {
     }
   }, [reset]);
   const fail = useCallback((reason: UnavailableReason, detail?: string) => {
+    // The unlock is not spent on a failed connect: this page's Retry, the
+    // reload below, or a relaunch from the Tailscale app all sign in without
+    // asking again (`noteConnectGrace`).
+    if (reason !== "storage_blocked") keepUnlock();
     // A path the phone wedged gets one fresh page before the splash
-    // (`takeConnectReload`). An unlock from moments ago rides across it on
-    // the reload grace, so the new page signs in without asking again.
+    // (`takeConnectReload`), with this page's trace carried across.
     if (suspectsTunnel(reason) && takeConnectReload()) {
-      if (Date.now() - unlockedAt.current < LOCK_AFTER_IDLE_MS) noteUnlockedLeave();
+      carryConnectTrace();
       location.reload();
       return;
     }
     setUnavailable({ reason, detail });
     setAuth("unavailable");
-  }, []);
+  }, [keepUnlock]);
 
   const resume = useCallback(() => {
     setAuth("loading");
     void resumeAuth().then(async (result) => {
       if (result.kind === "paired") {
         clearConnectReload();
+        clearConnectGrace();
         const pending = pendingPlace.current;
         pendingPlace.current = null;
         const restored = pending ? await resolvePlace(pending) : await restoreLastPlace();
@@ -351,6 +364,7 @@ export function App() {
     // the connection the browser kept from before the phone slept, and it
     // waited out the browser's ~10 s check that the connection is dead. Sent
     // now, that check runs while the reader is still at the lock.
+    takeCarriedTrace();
     traceConnect("app started", true);
     if (isConnectReload()) traceConnect("reloaded after a failed connect");
     primeConnection();
@@ -362,15 +376,19 @@ export function App() {
       noteOidcOutcome(outcome ?? null);
       return Promise.all([hasPairedDevice(), hasLocalUnlock()]);
     }).then(([paired, locked]) => {
+      // Both read once, whichever way this open goes.
+      const reloaded = takeReloadGrace();
+      const connectGrace = takeConnectGrace(LOCK_AFTER_IDLE_MS);
       if (!paired) {
         void forgetDeviceData();
         setPairNeedsLock(!locked);
         setAuth("unpaired");
-      } else if (locked && takeReloadGrace()) {
-        // Pull-to-refresh on a page that was unlocked and in use seconds ago:
-        // the session carries on, signed in afresh with the device key.
+      } else if (locked && (reloaded || connectGrace)) {
+        // Pull-to-refresh on a page that was unlocked and in use seconds ago,
+        // or an open right after an unlock whose connect failed: the session
+        // carries on, signed in afresh with the device key.
         unlockedAt.current = Date.now();
-        traceConnect("reloaded unlocked");
+        traceConnect(reloaded ? "reloaded unlocked" : "unlock kept after a failed connect");
         resume();
       } else {
         // Every other open asks: a launch, a page the browser restored, an app
@@ -442,12 +460,15 @@ export function App() {
     // by design), or the sliding session ran out. With the reader still
     // active, renew it silently — the device key signs a fresh challenge —
     // and tell `api()` to send the request again. A device the desktop no
-    // longer knows is sent to pair rather than around this loop; anything
-    // else that fails, or a reader who has been away, meets the lock screen.
+    // longer knows is sent to pair rather than around this loop; a reader who
+    // has been away meets the lock screen. A renewal the network failed shows
+    // the failure splash, whose Retry signs in without the lock: it used to
+    // lock, and a tunnel waking up cost the reader an unlock.
     setUnauthorizedHandler(() => {
       if (authRef.current !== "paired") return Promise.resolve(false);
       if (Date.now() - lastActive.current >= LOCK_AFTER_IDLE_MS) {
         reset();
+        unlockedAt.current = 0;
         setAuth("locked");
         return Promise.resolve(false);
       }
@@ -458,18 +479,18 @@ export function App() {
           void forgetDeviceData();
           setAuth("unpaired");
         } else {
-          setAuth("locked");
+          fail(result.reason, result.detail);
         }
         return false;
-      }, () => {
+      }, (error: unknown) => {
         reset();
-        setAuth("locked");
+        fail(classifyUnavailable(error), unavailableDetail(error));
         return false;
       }).finally(() => { renewing.current = null; });
       return renewing.current;
     });
     return () => setUnauthorizedHandler(undefined);
-  }, [reset]);
+  }, [reset, fail]);
 
   useEffect(() => {
     // A project the host no longer knows to this phone is off its list for
@@ -490,6 +511,7 @@ export function App() {
       // normal way to leave a PWA, so the place was always already forgotten by
       // the time the user unlocked.
       reset();
+      unlockedAt.current = 0;
       setAuth("locked");
       void logoutAuth().catch(() => undefined);
     };
@@ -522,8 +544,18 @@ export function App() {
       // far enough to matter — the timer above re-arms itself when it fires early.
       if (lastActive.current - previous >= 5_000) arm();
     };
+    // An unlocked page left while it cannot connect — the reader gone to the
+    // Tailscale app, or swiping the app away — keeps its unlock for the next
+    // page (`noteConnectGrace`). A page swiped away gets no `pagehide`, so
+    // going hidden stamps it as well.
+    const leaveConnecting = () => {
+      if (authRef.current === "loading" || authRef.current === "unavailable") keepUnlock();
+    };
     const onVisibility = () => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible") {
+        leaveConnecting();
+        return;
+      }
       traceConnect("back in front", true);
       primeConnection();
       if (Date.now() - lastActive.current >= LOCK_AFTER_IDLE_MS) lock();
@@ -537,6 +569,7 @@ export function App() {
     document.addEventListener("visibilitychange", onVisibility);
     const onPageHide = () => {
       if (authRef.current === "paired" && Date.now() - lastActive.current < LOCK_AFTER_IDLE_MS) noteUnlockedLeave();
+      leaveConnecting();
     };
     window.addEventListener("pagehide", onPageHide);
     return () => {
@@ -550,7 +583,7 @@ export function App() {
     // never touches this document — so after it `lastActive` still dated from
     // before the lock, no timer was armed, and the next glance away and back
     // (`onVisibility`) locked the app again seconds after it was unlocked.
-  }, [reset, auth]);
+  }, [reset, auth, keepUnlock]);
 
   // Back: a tab returns to where it was opened from, another section to
   // Projects, a project to the list. At the list Back leaves the app.
@@ -579,11 +612,12 @@ export function App() {
     }
     setTab(next);
   };
-  // A failed sign-in right after an unlock is retried as a sign-in: sending
-  // the reader back through the fingerprint for a network hiccup made every
-  // failure cost two unlocks. A blocked key store never got that far.
+  // A failed sign-in after an unlock is retried as a sign-in while the unlock
+  // holds: sending the reader back through the fingerprint for a network
+  // hiccup made every failure cost two unlocks. A blocked key store never got
+  // that far.
   const retry = () => {
-    if (unavailable.reason !== "storage_blocked" && Date.now() - unlockedAt.current < LOCK_AFTER_IDLE_MS) resume();
+    if (unavailable.reason !== "storage_blocked" && unlockHolds()) resume();
     else begin();
   };
   if (auth === "loading") return <Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>;
@@ -599,11 +633,13 @@ export function App() {
         <ConnectTrace />
         <button className="primary" onClick={retry}>{t("mobile.app.retry")}</button>
         {isUntested("mobile.link.unlockRetry") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+        {isUntested("mobile.link.keepUnlock") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
         {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </Splash>
     );
   }
-  if (auth === "unpaired") return <Pair setupLock={pairNeedsLock} onDone={pairNeedsLock ? resume : begin} />;
+  // Pairing that sets the lock up on the way is this page's unlock.
+  if (auth === "unpaired") return <Pair setupLock={pairNeedsLock} onDone={pairNeedsLock ? () => { unlockedAt.current = Date.now(); resume(); } : begin} />;
   if (auth === "setup") return <LocalUnlock setup onUnlocked={() => setAuth("locked")} />;
   if (auth === "locked") return <>
     <LockedHomeShell />

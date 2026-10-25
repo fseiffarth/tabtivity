@@ -1,19 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { encode } from "uqr";
-import { translate, useI18nStore, useT } from "../../lib/i18n";
+import { useT, translateNow } from "../../lib/i18n";
 import {
   useMobileHostStatusStore,
   type MobileHostRuntimeStatus,
 } from "../../stores/mobileHostStatus";
-
-/** `translate` at the live language, for the async request below. */
-function tr(
-  key: Parameters<typeof translate>[1],
-  params?: Parameters<typeof translate>[2],
-): string {
-  return translate(useI18nStore.getState().lang, key, params);
-}
 
 /** A one-time pairing code with the private address a phone opens to use it. */
 export interface Pairing {
@@ -36,13 +28,13 @@ export function pairingUrl(origin: string, code: string): string {
 async function requestPairing(): Promise<Pairing> {
   const current = await invoke<MobileHostRuntimeStatus>("mobile_host_status");
   useMobileHostStatusStore.getState().publish(current);
-  if (!current.running) throw new Error(tr("mobile.errStartHostFirst"));
+  if (!current.running) throw new Error(translateNow("mobile.errStartHostFirst"));
   const response = await invoke<{ status: string; code?: string; expires_at?: number; message?: string }>(
     "mobile_admin",
     { request: { type: "pairing_code" } },
   );
   if (response.status !== "pairing_code" || !response.code) {
-    throw new Error(response.message ?? tr("mobile.errPairingUnavailable"));
+    throw new Error(response.message ?? translateNow("mobile.errPairingUnavailable"));
   }
   return {
     code: response.code,

@@ -127,6 +127,8 @@ function SideColumn({
     return out;
   }, [rows, side, syncMode]);
 
+  const lineHtml = useMemo(() => lines.map((l) => highlight(l.text, lang)), [lines, lang]);
+
   // Anchor each block's take-arrow to the first rendered line at/after its start
   // row (clamped to the last line when this side has no line inside the block —
   // e.g. a pure addition on the other side), keyed by line index for O(1) lookup.
@@ -167,7 +169,7 @@ function SideColumn({
           }}
         >
           {lines.map((l, i) => {
-            const html = highlight(l.text, lang);
+            const html = lineHtml[i];
             const blockStart = anchors.has(i);
             return (
               <div
@@ -408,6 +410,7 @@ export function CompareView({
   // selection stay live); scroll is mirrored from the textarea in its onScroll.
   const lang = useMemo(() => languageForPath(path), [path]);
   const resultLines = useMemo(() => resultText.split("\n"), [resultText]);
+  const resultHtml = useMemo(() => resultLines.map((line) => highlight(line, lang)), [resultLines, lang]);
 
   // Which result lines currently belong to a change block — used to tint the
   // changed regions in the middle backdrop (the same blue as the mid ruler bars).
@@ -627,7 +630,7 @@ export function CompareView({
               <DiffRuler blocks={blocks} totalRows={rows.length} side="mid" onJump={scrollToBlock} />
               <div className="file-viewer-compare-result-hl" ref={midHlRef} aria-hidden="true">
                 {resultLines.map((line, i) => {
-                  const html = highlight(line, lang);
+                  const html = resultHtml[i];
                   const cls = `file-viewer-compare-hl-line${changedLines.has(i) ? " changed" : ""}`;
                   return html != null ? (
                     <div

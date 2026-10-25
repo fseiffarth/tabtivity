@@ -50,10 +50,18 @@ describe("seen finished tabs", () => {
   });
 
   it("reads anything it cannot trust as nothing seen", () => {
+    expect(readSeenDone()).toEqual([]);
+    const key = storageKey("mobile.seenDone");
+    for (const [stored, expected] of [
+      ["not json", []],
+      ["{\"t1\":5}", []],
+      ["[[\"t1\",5],[\"t2\",\"x\"],[3,4],[\"t3\"]]", [["t1", 5]]],
+    ] as const) {
+      localStorage.setItem(key, stored);
+      expect(readSeenDone()).toEqual(expected);
+    }
     expect(parseSeenDone(null)).toEqual([]);
-    expect(parseSeenDone("not json")).toEqual([]);
-    expect(parseSeenDone("{\"t1\":5}")).toEqual([]);
-    expect(parseSeenDone("[[\"t1\",5],[\"t2\",\"x\"],[3,4],[\"t3\"]]")).toEqual([["t1", 5]]);
+    expect(parseSeenDone([["t1", 5], ["t2", Number.NaN]])).toEqual([["t1", 5]]);
   });
 });
 

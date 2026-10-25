@@ -17,6 +17,7 @@
 
 import { agentDraftPrefixes, agentFamily } from "../../shared/agentComposer";
 import { storageKey } from "../../src/lib/brand";
+import { readJson, writeJson } from "../../src/lib/persist";
 import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
 
 const KEY = storageKey("mobile.slashCommands");
@@ -225,9 +226,10 @@ export function completedSlashCommand(draft: string, cli: string, used: readonly
  * absent: a stored line is text the composer offers to send to an agent, so a
  * bad value must mean "nothing was kept", never an odd line in the menu.
  */
-function load(storage: SlashStorage): Record<string, StoredLine[]> {
-  try {
-    const parsed: unknown = JSON.parse(storage.getItem(KEY) ?? "null");
+function load(storage?: SlashStorage): Record<string, StoredLine[]> {
+  // A private browser can refuse the store; the menu then offers the
+  // built-in list alone.
+  return readJson(KEY, (parsed) => {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const kept: Record<string, StoredLine[]> = {};
     for (const [cli, value] of Object.entries(parsed as Record<string, unknown>)) {
@@ -238,20 +240,15 @@ function load(storage: SlashStorage): Record<string, StoredLine[]> {
       if (lines.length > 0) kept[cli] = lines;
     }
     return kept;
-  } catch {
-    // A private browser can refuse the store; the menu then offers the
-    // built-in list alone.
-    return {};
-  }
+  }, {}, storage);
 }
 
-function save(storage: SlashStorage, store: Record<string, StoredLine[]>): void {
+function save(storage: SlashStorage | undefined, store: Record<string, StoredLine[]>): void {
   const kept = Object.entries(store)
     .filter(([, lines]) => lines.length > 0)
     .sort(([, a], [, b]) => (b[0]?.at ?? 0) - (a[0]?.at ?? 0))
     .slice(0, MAX_CLIS);
-  if (kept.length === 0) storage.removeItem(KEY);
-  else storage.setItem(KEY, JSON.stringify(Object.fromEntries(kept)));
+  writeJson(KEY, kept.length === 0 ? undefined : Object.fromEntries(kept), storage);
 }
 
 /** A line the store keeps: one line, a slash, a command name right after it. */
@@ -261,7 +258,7 @@ function isSlashLine(line: string): boolean {
 
 /** The lines sent to this CLI from the phone, newest first. */
 export function readSlashCommands(cli: string, storage?: SlashStorage): string[] {
-  return (load(storage ?? localStorage)[cli] ?? []).map((entry) => entry.line);
+  return (load(storage)[cli] ?? []).map((entry) => entry.line);
 }
 
 /** Keep a slash command the reader just sent to this CLI. Anything that is not
@@ -269,28 +266,19 @@ export function readSlashCommands(cli: string, storage?: SlashStorage): string[]
 export function rememberSlashCommand(cli: string, draft: string, storage?: SlashStorage, now: number = Date.now()): void {
   const line = draft.trim().replace(/\s+/gu, " ");
   if (!isSlashLine(line) || /[\r\n]/u.test(draft.trim())) return;
-  const store = storage ?? localStorage;
-  try {
-    const all = load(store);
-    const lines = (all[cli] ?? []).filter((entry) => entry.line !== line);
-    all[cli] = [{ line, at: now }, ...lines].slice(0, MAX_PER_CLI);
-    save(store, all);
-  } catch {
-    // A full or blocked store costs the menu a row, not the message.
-  }
+  // A full or blocked store costs the menu a row, not the message.
+  const all = load(storage);
+  const lines = (all[cli] ?? []).filter((entry) => entry.line !== line);
+  all[cli] = [{ line, at: now }, ...lines].slice(0, MAX_PER_CLI);
+  save(storage, all);
 }
 
 /** Drop one kept line — the menu's ✕ on a row the reader no longer wants. */
 export function forgetSlashCommand(cli: string, line: string, storage?: SlashStorage): void {
-  const store = storage ?? localStorage;
-  try {
-    const all = load(store);
-    if (!all[cli]) return;
-    all[cli] = all[cli].filter((entry) => entry.line !== line);
-    save(store, all);
-  } catch {
-    // See rememberSlashCommand.
-  }
+  const all = load(storage);
+  if (!all[cli]) return;
+  all[cli] = all[cli].filter((entry) => entry.line !== line);
+  save(storage, all);
 }
 
 /**

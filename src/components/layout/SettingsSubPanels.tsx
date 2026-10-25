@@ -8,11 +8,10 @@ import { PasswordInput } from "../common/PasswordInput";
 import type { UntestedId } from "../../lib/untested";
 import { unlockKeyring } from "../../lib/keyring";
 import { diffDefaultApps, patchDefaultApps } from "../../lib/defaultApps";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
-import { useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
+import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import { ollamaVersionStatus } from "../../lib/agents/localDrivers";
 import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollamaUpdateActions";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
@@ -78,6 +77,7 @@ import { AGENT_TAB_ACTIONS, chordLabel, modifierLabel, resolveChord } from "../.
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
+import { runWithProgress } from "../../lib/runWithProgress";
 
 interface OllamaModelInfo {
   name: string;
@@ -2433,30 +2433,28 @@ export function AgentsPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [logs, installing]);
 
+  const appendAgentLog = (id: string, p: { id: string; line: string }) => {
+    if (p.id !== id) return;
+    setLogs((l) => ({ ...l, [id]: l[id] ? `${l[id]}\n${p.line}` : p.line }));
+  };
+
   const installAgent = async (id: string) => {
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
-    // Stream the installer's output, filtering to this agent's events.
-    const unlisten = await listen<{ id: string; line: string }>(
-      "agent-install-progress",
-      (e) => {
-        if (e.payload.id !== id) return;
-        setLogs((l) => ({
-          ...l,
-          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
-        }));
-      },
-    );
     try {
-      await invoke<string>("install_agent", { id });
+      // Stream the installer's output, filtering to this agent's events.
+      await runWithProgress<{ id: string; line: string }, string>(
+        "agent-install-progress",
+        (p) => appendAgentLog(id, p),
+        () => invoke<string>("install_agent", { id }),
+      );
       refresh();
       notifyAgentRegistryChanged();
       loadVersions(true);
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
-      unlisten();
       setInstalling(null);
     }
   };
@@ -2495,18 +2493,12 @@ export function AgentsPanel({
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
-    const unlisten = await listen<{ id: string; line: string }>(
-      "agent-install-progress",
-      (e) => {
-        if (e.payload.id !== id) return;
-        setLogs((l) => ({
-          ...l,
-          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
-        }));
-      },
-    );
     try {
-      await invoke<string>("update_agent", { id });
+      await runWithProgress<{ id: string; line: string }, string>(
+        "agent-install-progress",
+        (p) => appendAgentLog(id, p),
+        () => invoke<string>("update_agent", { id }),
+      );
       setUpdates(({ [id]: _drop, ...rest }) => rest);
       setLogs(({ [id]: _drop, ...rest }) => rest);
       refresh();
@@ -2515,7 +2507,6 @@ export function AgentsPanel({
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
-      unlisten();
       setInstalling(null);
     }
   };
@@ -3328,7 +3319,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // Models currently being loaded into memory, keyed by name. Driven by the
   // global `ollama-load-progress` events so a load started from the brain menu
   // shows here too; Ollama streams no load percentage, so it's indeterminate.
-  const [loadingMem, setLoadingMem] = useState<Record<string, boolean>>({});
+  // Live downloads and the session's paused pulls come from the same shared
+  // store (`initLocalModelEvents` below), so a pull started or paused from the
+  // 🧠 menu offers its Pause / Resume here too.
+  const loads = useOllamaActivityStore((s) => s.loads);
   // Per-tag registry facts (size, parameters, quantization, cloud), fetched
   // lazily and cached. The parameter count and size are what the search card
   // omits for a model with no size badge, so it is fetched from the manifest.
@@ -3338,16 +3332,14 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // Live download progress per model ref, keyed by the exact ref passed to
   // `pull_ollama_model`. `pct` is null during non-download phases (manifest,
   // verify, write) where Ollama reports no byte totals.
-  const [pullProgress, setPullProgress] = useState<
-    Record<string, { pct: number | null; status: string }>
-  >({});
+  const pullProgress = useOllamaActivityStore((s) => s.downloads);
   // Model refs whose download was interrupted by a previous Tabtivity exit/crash,
   // persisted by the backend. Each can be resumed ("Continue") since Ollama
   // picks up a partially-fetched model where it left off.
   const [interrupted, setInterrupted] = useState<string[]>([]);
   // Model refs the user paused mid-download this session. A paused pull keeps its
   // partial blobs (so it can be resumed) and offers Resume / Delete.
-  const [paused, setPaused] = useState<Set<string>>(new Set());
+  const paused = useOllamaActivityStore((s) => s.paused);
   // Orphaned partial layers in Ollama's blob cache with no recoverable model
   // name — surfaced only so the user can delete them to reclaim space.
   const [orphans, setOrphans] = useState<{ digest: string; size: number; path: string }[]>([]);
@@ -3447,60 +3439,22 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       .catch(() => {});
   }, [installed]);
 
-  // Track live download progress emitted by `pull_ollama_model`.
-  useEffect(() => {
-    const un = listen<{ model: string; status: string; completed: number; total: number }>(
-      "ollama-pull-progress",
-      (e) => {
-        const { model, status, completed, total } = e.payload;
-        // A paused pull stops streaming here — move it out of the live-progress
-        // map and into the paused set so its row offers Resume / Delete.
-        if (status === "paused") {
-          setPullProgress((p) => {
-            const { [model]: _drop, ...rest } = p;
-            return rest;
-          });
-          setPaused((p) => new Set(p).add(model));
-          return;
-        }
-        setPullProgress((p) => ({
-          ...p,
-          [model]: {
-            pct: total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : null,
-            status,
-          },
-        }));
-      },
-    );
-    return () => {
-      void un.then((f) => f());
-    };
-  }, []);
+  // Live download progress and loads-into-memory, from any surface, in the shared
+  // activity store. A paused pull stops streaming there and moves into `paused`,
+  // so its row offers Resume / Delete.
+  useEffect(() => initLocalModelEvents(), []);
 
-  // Track in-flight loads-into-memory (from any surface). On success, re-read the
-  // model list so the row flips to its resident state.
+  // A load that just finished: re-read the model list so the row flips to its
+  // resident state. A model leaving `loads` is a success (an error stays in it).
+  const prevLoads = useRef(loads);
   useEffect(() => {
-    const un = listen<{ model: string; status: string }>("ollama-load-progress", (e) => {
-      const { model, status } = e.payload;
-      setLoadingMem((p) => {
-        if (status === "loading") return { ...p, [model]: true };
-        const { [model]: _drop, ...rest } = p;
-        return rest;
-      });
-      if (status === "success") void refresh();
-    });
-    return () => {
-      void un.then((f) => f());
-    };
-  }, []);
+    const finished = Object.keys(prevLoads.current).some((m) => prevLoads.current[m] === "loading" && !(m in loads));
+    prevLoads.current = loads;
+    if (finished) void refresh();
+  }, [loads]);
 
   // Drop a model's progress once its pull settles (success or error).
-  const clearPullProgress = (model: string) =>
-    setPullProgress((p) => {
-      if (!(model in p)) return p;
-      const { [model]: _drop, ...rest } = p;
-      return rest;
-    });
+  const clearPullProgress = (model: string) => useOllamaActivityStore.getState().dropDownload(model);
 
   // Live button label for an in-flight pull: a percentage when Ollama is
   // streaming byte totals, otherwise the caller's fallback (e.g. "Pulling…").
@@ -3569,21 +3523,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
 
   // Resume a paused download — re-pull, which Ollama continues from the partials.
   const resumePull = (model: string) => {
-    setPaused((p) => {
-      const n = new Set(p);
-      n.delete(model);
-      return n;
-    });
+    useOllamaActivityStore.getState().clearPaused(model);
     void withBusy(`${model}:pull`, () => invoke("pull_ollama_model", { model }));
   };
 
   // Delete a paused download: drop its partial blobs and clear its pending record.
   const deletePausedPull = (model: string) => {
-    setPaused((p) => {
-      const n = new Set(p);
-      n.delete(model);
-      return n;
-    });
+    useOllamaActivityStore.getState().clearPaused(model);
     setInterrupted((p) => p.filter((m) => m !== model));
     void invoke("delete_ollama_pull", { model })
       .then(() => refresh())
@@ -3593,16 +3539,16 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const installVibe = async () => {
     setVibeInstalling(true);
     setVibeInstallLog("");
-    const unlisten = await listen<{ line: string }>("vibe-install-progress", (e) => {
-      setVibeInstallLog((prev) => (prev ? `${prev}\n${e.payload.line}` : e.payload.line));
-    });
     try {
-      await invoke<string>("install_vibe");
+      await runWithProgress<{ line: string }, string>(
+        "vibe-install-progress",
+        (p) => setVibeInstallLog((prev) => (prev ? `${prev}\n${p.line}` : p.line)),
+        () => invoke<string>("install_vibe"),
+      );
       setVibeInstalled(true);
     } catch (e) {
       setError(String(e));
     } finally {
-      unlisten();
       setVibeInstalling(false);
     }
   };
@@ -3617,12 +3563,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     setInstalling(true);
     setError(null);
     setInstallLog("");
-    // Stream the installer's output line-by-line so the user sees live progress.
-    const unlisten = await listen<{ line: string }>("ollama-install-progress", (e) => {
-      setInstallLog((prev) => (prev ? `${prev}\n${e.payload.line}` : e.payload.line));
-    });
     try {
-      await invoke<string>("install_ollama");
+      // Stream the installer's output line-by-line so the user sees live progress.
+      await runWithProgress<{ line: string }, string>(
+        "ollama-install-progress",
+        (p) => setInstallLog((prev) => (prev ? `${prev}\n${p.line}` : p.line)),
+        () => invoke<string>("install_ollama"),
+      );
       setInstalled(true);
       // Start the server and load the model catalog so the user can immediately
       // pick what to install next.
@@ -3631,7 +3578,6 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     } catch (e) {
       setError(String(e));
     } finally {
-      unlisten();
       setInstalling(false);
     }
   };
@@ -4295,11 +4241,11 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       {(() => {
         // Interrupted entries not currently being (re)pulled — these get a
         // "Continue" action; live pulls show their streaming progress bar.
-        const resumable = interrupted.filter((m) => !(m in pullProgress) && !paused.has(m));
+        const resumable = interrupted.filter((m) => !(m in pullProgress) && !paused.includes(m));
         if (
           Object.keys(pullProgress).length === 0 &&
           resumable.length === 0 &&
-          paused.size === 0 &&
+          paused.length === 0 &&
           orphans.length === 0
         )
           return null;
@@ -4334,7 +4280,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   </div>
                 </div>
               ))}
-              {[...paused].map((model) => (
+              {paused.map((model) => (
                 <div className="ollama-model-row" key={`paused:${model}`}>
                   <div className="ollama-model-header">
                     <span className="ollama-model-name">{model}</span>
@@ -4425,7 +4371,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       ) : (
         <div className="settings-list">
           {models.map((m) => {
-            const loadingNow = busy[`${m.name}:load`] || loadingMem[m.name];
+            const loadingNow = busy[`${m.name}:load`] || loads[m.name] === "loading";
             const meta = [fmtBytes(m.size), m.parameter_size, m.quantization, m.family]
               .filter(Boolean)
               .join(" · ");

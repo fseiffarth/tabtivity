@@ -66,3 +66,11 @@ describe("hello capabilities", () => {
     expect(helloCapabilities("nonsense", 1)).toEqual({ protocol: 1, role: "user", commands: [] });
   });
 });
+
+describe("frames that are not objects", () => {
+  it("a frame that parses to null or a plain value is dropped, not dereferenced", () => {
+    for (const frame of [null, 7, "text", true]) {
+      expect(() => clientWith(frame).close()).not.toThrow();
+    }
+  });
+});

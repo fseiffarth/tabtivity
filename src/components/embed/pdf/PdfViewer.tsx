@@ -13,6 +13,7 @@ import { useSearchText } from "./useSearchText";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
@@ -1670,8 +1671,9 @@ function PdfPageCanvas({
           Above the remark layer because it is a live control over what the reader is
           doing right now, while a marker stands for something already written. */}
       {/* The markup layer (`usePdfMarkup`), over every other page layer — the
-          remarks included, which it leaves visible but out of reach. */}
-      {markup && cssSize && (
+          remarks included, which it leaves visible but out of reach. Only on a
+          near page: its canvas is a full-resolution backing store. */}
+      {markup && cssSize && near && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
       )}
       {tickBadges && tickBadges.badges.length > 0 && cssSize && (
@@ -2321,18 +2323,11 @@ function PdfCanvas({
   // for a window nobody asked for is a subscription that never pays for itself.
   useEffect(() => {
     if (!presentOpen) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
-      if (e.payload.label === presentLabel) seedPresentRef.current();
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribeTauri(() =>
+      listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
+        if (e.payload.label === presentLabel) seedPresentRef.current();
+      }),
+    );
   }, [presentOpen, presentLabel]);
 
   /** A metadata field's name. Only the eight standard `/Info` keys are translated —
@@ -2846,7 +2841,7 @@ function PdfCanvas({
   }, [marking, markup.key, markupOwner]);
   // While a round of these marks is with an agent tab, that tab's prompt strip
   // offers the way back here (`stores/viewers/markupLinks`).
-  const linkTarget = marking && markup.round && tabKey ? markup.target : null;
+  const linkTarget = marking && markup.round && tabKey ? markup.roundTarget : null;
   usePdfMarkupLink(
     linkTarget?.ptyId ?? null,
     linkTarget && tabKey ? { tabKey, name: basename(path), owner: markupOwner } : null,

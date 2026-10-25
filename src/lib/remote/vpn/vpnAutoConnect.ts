@@ -11,7 +11,7 @@ import { canConnectVpnSilently, connectVpnSilently } from "./vpnConnect";
 import { keyringState } from "../../keyring";
 import { openConnectionInRoot } from "../remoteConnect";
 import { loginDedupeKey, vpnLogin } from "../loginTarget";
-import { translate, useI18nStore } from "../../i18n";
+import { translateNow } from "../../i18n";
 
 /**
  * "Connect this tunnel on launch" — the machine-level twin of a project's
@@ -151,7 +151,7 @@ export async function autoConnectVpnOnLaunch(): Promise<void> {
     // instead and leave the remedy one click away in the header.
     if (isVpnCredentialSaved(config) && (await keyringState()) === "locked") {
       useProjectsStore.setState({
-        connToast: translate(useI18nStore.getState().lang, "vpnAutoConnect.keyringLockedToast", {
+        connToast: translateNow("vpnAutoConnect.keyringLockedToast", {
           config: fileOf(config),
         }),
       });
@@ -164,7 +164,7 @@ export async function autoConnectVpnOnLaunch(): Promise<void> {
     await connectVpnSilently(config, username);
     useVpnStatusStore.getState().setState(config, "connected");
     useProjectsStore.setState({
-      connToast: translate(useI18nStore.getState().lang, "vpnAutoConnect.upToast", {
+      connToast: translateNow("vpnAutoConnect.upToast", {
         config: fileOf(config),
       }),
     });
@@ -244,7 +244,7 @@ export function pollVpnUp(
     if (projectId) markVpnConnected(projectId, config);
     else useVpnStatusStore.getState().setState(config, "connected");
     useProjectsStore.setState({
-      connToast: translate(useI18nStore.getState().lang, "vpnAutoConnect.upToast", {
+      connToast: translateNow("vpnAutoConnect.upToast", {
         config: opts?.name ?? fileOf(config),
       }),
     });

@@ -1,5 +1,7 @@
 import type { TodoBoard, TodoCard, TodoColumn } from "./api";
 import type { TranslationKey } from "../../src/lib/i18n";
+import { todayStr } from "../../src/lib/calendar/calendarTime";
+import { fallbackColumnId } from "../../shared/todoColumns";
 
 /**
  * The deadline's say in where a card can be filed — the phone's copy of the
@@ -17,30 +19,8 @@ import type { TranslationKey } from "../../src/lib/i18n";
  * Day granularity, deliberately, exactly as `dateColumn` uses: an hour deadline
  * does not move a card into Overdue halfway through the afternoon it is due.
  */
-export function localDate(now: Date = new Date()): string {
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
-
 const flagged = (columns: TodoColumn[], flag: (column: TodoColumn) => boolean): string | null =>
   columns.find(flag)?.id ?? null;
-
-/**
- * The column a card with no home belongs in — the desktop's `fallbackColumnId`,
- * over the wire.
- *
- * Not "the first open column" any more: the board leads with Overdue and Today,
- * whose contents are decided by a card's deadline rather than by anyone putting
- * something there, and the intake column sits behind Doing. The positional rule
- * is kept only as the fallback for an older desktop that sends no flag, where it
- * was the right answer.
- */
-export function intakeColumn(columns: TodoColumn[]): string {
-  const column = columns.find((entry) => entry.intake)
-    ?? columns.find((entry) => !entry.done && !entry.archived && !entry.overdue && !entry.due_today)
-    ?? columns.find((entry) => !entry.done && !entry.archived)
-    ?? columns[0];
-  return column?.id ?? "";
-}
 
 /** Late by a whole day: `isOverdue` read against a bare date, as `columnOf` reads it. */
 function late(task: TodoCard, today: string): boolean {
@@ -63,7 +43,7 @@ export function moveAccepted(
   task: TodoCard,
   columnId: string,
   columns: TodoColumn[],
-  today: string = localDate(),
+  today: string = todayStr(),
 ): boolean {
   const target = columns.find((column) => column.id === columnId);
   if (!target) return false;
@@ -75,7 +55,7 @@ export function moveAccepted(
   if (target.id === done) return false;
   const overdue = flagged(columns, (column) => column.overdue);
   const dueToday = flagged(columns, (column) => column.due_today);
-  const intake = intakeColumn(columns);
+  const intake = fallbackColumnId(columns);
   if (target.id !== overdue && target.id !== dueToday && target.id !== intake) return true;
   if (late(task, today)) return target.id === overdue;
   if (task.due && task.due.slice(0, 10) === today) return target.id === dueToday;
@@ -85,7 +65,7 @@ export function moveAccepted(
 }
 
 /** The columns a card can actually be moved into, in board order. */
-export function acceptedColumns(task: TodoCard, board: Pick<TodoBoard, "columns">, today: string = localDate()): TodoColumn[] {
+export function acceptedColumns(task: TodoCard, board: Pick<TodoBoard, "columns">, today: string = todayStr()): TodoColumn[] {
   return board.columns.filter((column) => moveAccepted(task, column.id, board.columns, today));
 }
 

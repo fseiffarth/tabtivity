@@ -27,7 +27,7 @@ import { useProjectsStore } from "../../../stores/projects";
 import { useSettingsStore } from "../../../stores/settings";
 import { isHpcHost, targetOfSpec } from "./hpcHost";
 import { basename } from "../../paths";
-import { translate, useI18nStore } from "../../i18n";
+import { translateNow } from "../../i18n";
 
 // ── Backend types (mirror `commands::slurm`) ─────────────────────────────────
 
@@ -270,7 +270,7 @@ export function openLogTab(opts: {
 }): void {
   openHostShellTab({
     scope: opts.scope,
-    label: translate(useI18nStore.getState().lang, "slurm.logTabLabel", { job: opts.jobLabel }),
+    label: translateNow("slurm.logTabLabel", { job: opts.jobLabel }),
     cwd: opts.projectDir,
     location: locationForHost(opts.hostId, opts.isRemote),
     initialInput: buildTailCommand(opts.outFile),
@@ -385,7 +385,7 @@ export function openInteractiveJob(opts: {
 }): void {
   openHostShellTab({
     scope: opts.scope,
-    label: translate(useI18nStore.getState().lang, "slurm.srunTabLabel"),
+    label: translateNow("slurm.srunTabLabel"),
     cwd: opts.cwd,
     location: locationForHost(opts.hostId, opts.isRemote),
     initialInput: buildInteractiveCommand(opts.res),

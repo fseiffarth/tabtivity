@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { draftPreview, lastPrompt } from "../agentPrompts";
 import { readDrafts } from "../drafts";
-import { getActivity, type ActivityTab } from "../api";
+import { ApiError, getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
 import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass, lastWorkedAt } from "../components/AgentModeMarks";
-import { tabColorCss } from "../tabColors";
+import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { ageLabel } from "../terminal/fileLabels";
+import { useVisiblePoll } from "../visiblePoll";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -38,31 +40,19 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
   native: "mobile.activity.sortStatus",
 };
 
-/** "3m ago" from a desktop timestamp — a rough age, since the two clocks are
- * not the same clock and the reading is a minute old at worst. Home's Needs
- * you says its rows' ages in the same words. */
-export function ago(at: number, now: number, t: Translate): string {
-  const minutes = Math.max(0, Math.round((now - at) / 60_000));
-  if (minutes < 1) return t("mobile.activity.justNow");
-  if (minutes < 90) return t("mobile.activity.minutesAgo", { count: minutes });
-  const hours = Math.round(minutes / 60);
-  if (hours < 36) return t("mobile.activity.hoursAgo", { count: hours });
-  return t("mobile.activity.daysAgo", { count: Math.round(hours / 24) });
-}
-
 /** The reading the current sort is ordering by, said on the row so the order
  * explains itself: what a tab is doing now, or when it last did it. */
 function timing(tab: ActivityTab, sort: AgentSort, now: number, t: Translate): string {
-  if (sort === "lastDone") return tab.done_at === undefined ? "" : t("mobile.activity.finished", { ago: ago(tab.done_at, now, t) });
+  if (sort === "lastDone") return tab.done_at === undefined ? "" : t("mobile.activity.finished", { ago: ageLabel((now - tab.done_at) / 1000, t) });
   if (tab.agent_status === "working") return t("mobile.activity.workingNow");
   // Under `lastWorking` a tab that is neither asking nor working sits in the
   // tier ordered by its last finished turn, so that is the reading its row
   // shows. A question is ordered by nothing timed, and its last output is when
   // it stopped to ask — which is the reading worth having on it.
   if (sort === "lastWorking" && tab.agent_status !== "question" && tab.done_at !== undefined) {
-    return t("mobile.activity.finished", { ago: ago(tab.done_at, now, t) });
+    return t("mobile.activity.finished", { ago: ageLabel((now - tab.done_at) / 1000, t) });
   }
-  return tab.working_at === undefined ? "" : t("mobile.activity.worked", { ago: ago(tab.working_at, now, t) });
+  return tab.working_at === undefined ? "" : t("mobile.activity.worked", { ago: ageLabel((now - tab.working_at) / 1000, t) });
 }
 
 /** Sorted here, by the reader's choice — by last working (the default), by
@@ -103,41 +93,27 @@ export function Activity({ open, onConnection }: {
     workingAt: tab.working_at,
     doneAt: lastWorkedAt(tab),
   })), [drafts, sort, tabs]);
-  useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
-    const load = () => {
-      if (document.visibilityState !== "visible") return;
-      void getActivity(controller.signal)
-        .then((body) => {
-          if (disposed) return;
-          setTabs(body.tabs);
-          setNow(Date.now());
-          setDesktop(body.desktop_available);
-          setAiOff(body.ai_off === true);
-          setOffline(null);
-          onConnection(null);
-          setLoaded(true);
-        })
-        // Keep the last good list rather than blanking it: one dropped packet on
-        // a flaky link should not wipe the screen the reader is looking at.
-        .catch((error: unknown) => {
-          if (disposed || controller.signal.aborted) return;
-          const reason = classifyUnavailable(error);
-          setOffline(reason);
-          onConnection(reason);
-        });
-    };
-    load();
-    const timer = window.setInterval(load, POLL_MS);
-    document.addEventListener("visibilitychange", load);
-    return () => {
-      disposed = true;
-      controller.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", load);
-    };
-  }, [onConnection]);
+  useVisiblePoll((signal) => getActivity(signal)
+    .then((body) => {
+      if (signal.aborted) return;
+      // An answer with no list is a failed one: keep the last good list.
+      if (!Array.isArray(body.tabs)) throw new ApiError(200, "malformed_response");
+      setTabs(body.tabs);
+      setNow(Date.now());
+      setDesktop(body.desktop_available);
+      setAiOff(body.ai_off === true);
+      setOffline(null);
+      onConnection(null);
+      setLoaded(true);
+    })
+    // Keep the last good list rather than blanking it: one dropped packet on
+    // a flaky link should not wipe the screen the reader is looking at.
+    .catch((error: unknown) => {
+      if (signal.aborted) return;
+      const reason = classifyUnavailable(error);
+      setOffline(reason);
+      onConnection(reason);
+    }), POLL_MS);
   return <>
     {offline && <p className="error connection-error">
       <strong>{describeUnavailable(offline).title}</strong>

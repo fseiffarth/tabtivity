@@ -33,6 +33,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { PLATFORM } from "../../../lib/platform";
 import { PresentationOverlay } from "../PresentationOverlay";
@@ -336,18 +337,11 @@ export function DeckPresenter({
   // deck itself changes under an open window.
   useEffect(() => {
     if (!audience) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<PresentReady>(PRESENT_READY, (e) => {
-      if (e.payload.label === audience) seed();
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribeTauri(() =>
+      listen<PresentReady>(PRESENT_READY, (e) => {
+        if (e.payload.label === audience) seed();
+      }),
+    );
   }, [audience, seed]);
 
   useEffect(() => {
@@ -376,46 +370,32 @@ export function DeckPresenter({
 
   useEffect(() => {
     if (!audience) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<PresentNav>(PRESENT_NAV, (e) => {
-      if (e.payload.label !== audience) return;
-      const action = e.payload.action;
-      if (action.kind === "close") {
-        closeAllRef.current();
-        return;
-      }
-      if (action.kind === "blank") {
-        setBlank((v) => (v === action.mode ? null : action.mode));
-        return;
-      }
-      setIndex((i) => applyNav(stopsRef.current, i, action));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribeTauri(() =>
+      listen<PresentNav>(PRESENT_NAV, (e) => {
+        if (e.payload.label !== audience) return;
+        const action = e.payload.action;
+        if (action.kind === "close") {
+          closeAllRef.current();
+          return;
+        }
+        if (action.kind === "blank") {
+          setBlank((v) => (v === action.mode ? null : action.mode));
+          return;
+        }
+        setIndex((i) => applyNav(stopsRef.current, i, action));
+      }),
+    );
   }, [audience]);
 
   // The audience window was closed from the WM: drop back to one screen rather
   // than streaming at a window that is not there.
   useEffect(() => {
     if (!audience) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<{ label: string }>(PRESENT_CLOSED, (e) => {
-      if (e.payload.label === audience) setAudience(null);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribeTauri(() =>
+      listen<{ label: string }>(PRESENT_CLOSED, (e) => {
+        if (e.payload.label === audience) setAudience(null);
+      }),
+    );
   }, [audience]);
 
   // Unmount (the tab closed, the deck reloaded) must not leave an orphaned

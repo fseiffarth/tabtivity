@@ -21,7 +21,7 @@ import { mutedCalendarIds } from "../../lib/calendar/alarms";
 import { addDays, toStamp, todayStr } from "../../lib/calendar/calendarTime";
 import { parseIcs } from "../../lib/calendar/ics";
 import { markForPush, notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
-import { translate, useI18nStore } from "../../lib/i18n";
+import { translateNow } from "../../lib/i18n";
 
 /**
  * The native calendar's store: one global set of calendars, events and tasks,
@@ -55,6 +55,8 @@ interface CalendarStore {
   events: CalendarEvent[];
   tasks: CalendarTask[];
   loaded: boolean;
+  /** Why the last (re)load failed; the data shown is then the last good copy. */
+  loadError: string | null;
 
   /** Load the whole store. Safe to call repeatedly; only the first does work. */
   load: () => Promise<void>;
@@ -129,6 +131,9 @@ interface CalendarStore {
 const withoutId = (event: Omit<CalendarEvent, "id">): CalendarEvent =>
   ({ ...event, id: "" }) as CalendarEvent;
 
+/** Latest `reload` — an answer from an older one is dropped. */
+let reloadSeq = 0;
+
 export const useCalendarStore = create<CalendarStore>((set, get) => ({
   overlayOpen: false,
   openOverlay: () => set({ overlayOpen: true }),
@@ -139,6 +144,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   tasks: [],
   taskColumns: [],
   loaded: false,
+  loadError: null,
 
   load: async () => {
     if (get().loaded) return;
@@ -146,13 +152,24 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   },
 
   reload: async () => {
-    const data = await invoke<CalendarData>("calendar_load").catch(() => null);
+    const seq = ++reloadSeq;
+    let data: CalendarData | null;
+    try {
+      data = await invoke<CalendarData>("calendar_load");
+    } catch (error) {
+      // A failed read is not an empty calendar: keep what is shown, and stay
+      // unloaded if nothing ever loaded so the next `load` tries again.
+      if (seq === reloadSeq) set({ loadError: String(error instanceof Error ? error.message : error) });
+      return;
+    }
+    if (seq !== reloadSeq) return;
     set({
       calendars: data?.calendars ?? [],
       events: data?.events ?? [],
       tasks: data?.tasks ?? [],
       taskColumns: data?.task_columns ?? [],
       loaded: true,
+      loadError: null,
     });
   },
 
@@ -193,7 +210,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       );
       if (split) {
         throw new Error(
-          translate(useI18nStore.getState().lang, "eventDialog.errMoveSyncedSeries", {
+          translateNow("eventDialog.errMoveSyncedSeries", {
             title: moved.title,
           }),
         );

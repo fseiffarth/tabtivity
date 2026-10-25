@@ -286,4 +286,7 @@ every place a log can be has to be probed:
   any project dir there means `--resume`, else the fresh `--session-id`. A
   `/clear` on the host is not followed (the launch id is what comes back), no
   mode is re-applied, and a remote Codex tab has no resume path at all beyond
-  its surviving tmux session.
+  its surviving tmux session. Its Reader/Focus chat reads the same launch id's file
+  off the host (`services::remote_transcript`, a local copy grown over the
+  pooled SFTP session; `agent_tab_transcript`'s `remoteHost`), so it shares
+  those limits; a host tab of any other CLI has no chat.

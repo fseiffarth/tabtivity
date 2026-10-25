@@ -1,4 +1,4 @@
-import { ApiError, api, traceConnect } from "./api";
+import { ApiError, api, hopOf, traceConnect } from "./api";
 import { classifyUnavailable, unavailableDetail, type UnavailableReason } from "./connection";
 import { loadDevice as load, loadPendingKey, saveDevice as save, savePendingKey, type AuthRecord } from "./authStore";
 
@@ -13,10 +13,13 @@ export { openAuthDatabase } from "./authStore";
  * answer clears the session cookie, so one that lands after the next sign-in
  * — the lock fires as the phone wakes, the reader unlocks at once, and the
  * DELETE was stuck behind a tunnel still reconnecting — wiped the fresh
- * session and the first screen after the unlock met a 401. Sign-in waits for
- * it to settle instead. */
-let pendingLogout: Promise<void> | null = null;
-/** Short: it is best effort, and a sign-in waits on it. */
+ * session and the first screen after the unlock met a 401. Sign-in used to
+ * wait for it to settle, which put the whole of a stuck DELETE's deadline in
+ * front of every such unlock. It cancels it instead: the browser applies
+ * nothing from a cancelled request's answer, and a DELETE that never arrived
+ * leaves the old token to its idle expiry, as a timed-out one always did. */
+let pendingLogout: AbortController | null = null;
+/** Short: it is best effort. */
 const LOGOUT_TIMEOUT = 3_000;
 
 /** One request of the sign-in exchange, its outcome and time on the trace. */
@@ -25,7 +28,7 @@ async function traced<T>(name: string, request: () => Promise<T>): Promise<T> {
   const took = () => `${Math.round(performance.now() - started)} ms`;
   try {
     const answer = await request();
-    traceConnect(`${name} ok after ${took()}`);
+    traceConnect(`${name} ok after ${took()}${hopOf(`/api/v1/auth/${name}`)}`);
     return answer;
   } catch (error) {
     traceConnect(`${name} ${error instanceof ApiError ? `${error.status} ${error.code}` : "failed"} after ${took()}`);
@@ -35,8 +38,9 @@ async function traced<T>(name: string, request: () => Promise<T>): Promise<T> {
 
 async function login(record: AuthRecord): Promise<void> {
   if (pendingLogout) {
-    traceConnect("waiting for the lock's logout");
-    await pendingLogout;
+    traceConnect("cancelled the lock's logout");
+    pendingLogout.abort();
+    pendingLogout = null;
   }
   const challenge = await traced("challenge", () => api<{ nonce: string; payload: string }>("/api/v1/auth/challenge", {
     method: "POST", body: JSON.stringify({ device_id: record.deviceId }),
@@ -193,12 +197,13 @@ export async function hasPairedDevice(): Promise<boolean> {
  * non-exportable signing key stays in IndexedDB, so a verified local unlock
  * can obtain a fresh session without making the user pair again. */
 export function logoutAuth(): Promise<void> {
-  const request = api("/api/v1/auth/session", { method: "DELETE" }, LOGOUT_TIMEOUT).then(() => undefined);
-  const settled: Promise<void> = request.catch(() => undefined).finally(() => {
-    if (pendingLogout === settled) pendingLogout = null;
-  });
-  pendingLogout = settled;
-  return request;
+  const controller = new AbortController();
+  pendingLogout = controller;
+  return api("/api/v1/auth/session", { method: "DELETE", signal: controller.signal }, LOGOUT_TIMEOUT)
+    .then(() => undefined)
+    .finally(() => {
+      if (pendingLogout === controller) pendingLogout = null;
+    });
 }
 
 export async function pair(code: string, deviceName: string): Promise<void> {

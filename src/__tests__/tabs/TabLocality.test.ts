@@ -15,6 +15,7 @@ import {
   defaultLocationForKind,
   effectiveTabLocation,
   hostTabCwd,
+  hostTabId,
   isLocatableKind,
   localTabCwd,
   useTabsStore,
@@ -172,5 +173,25 @@ describe("hostTabCwd", () => {
 
   it("pins a VM project's tabs to the VM host", () => {
     expect(hostTabCwd({ kind: "agent", location: "local" }, { ...project, vm: { enabled: true } })).toBe("/srv/primary/p1");
+  });
+});
+
+describe("hostTabId", () => {
+  const project = {
+    remote: { remote_path: "/srv/primary/p1" },
+    compute_hosts: [{ id: "h1", remote_path: "/scratch/p1" }],
+  };
+
+  it("names the host a remote project's tab runs on", () => {
+    expect(hostTabId({ kind: "agent", location: "remote" }, project)).toBe("primary");
+    expect(hostTabId({ kind: "agent", location: "host:h1" }, project)).toBe("h1");
+    expect(hostTabId({ kind: "agent", location: "host:gone" }, project)).toBe("primary");
+  });
+
+  it("is null for a local tab or a local project", () => {
+    expect(hostTabId({ kind: "agent" }, project)).toBeNull();
+    expect(hostTabId({ kind: "agent", location: "local" }, project)).toBeNull();
+    expect(hostTabId({ kind: "agent", location: "remote" }, {})).toBeNull();
+    expect(hostTabId({ kind: "agent", location: "remote" }, undefined)).toBeNull();
   });
 });

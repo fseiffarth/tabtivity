@@ -18,6 +18,8 @@ import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
 import { useBackLayer } from "../backStack";
+import { startVisiblePoll } from "../visiblePoll";
+import { delayMinutes } from "../../../shared/scheduleDelay";
 
 /** Per-tab scheduled prompts, opened from the project tab overview — the phone's
  * counterpart to the desktop Agents view, and deliberately not from inside the
@@ -30,16 +32,6 @@ function mobileLocalDateTime(): string {
   const date = new Date(Date.now() + 60 * 60 * 1000);
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** "In … h … min": whole minutes ahead, or null for what the boxes must not
- * accept (blank both, negative, fractional, zero). */
-function delayMinutes(hours: string, minutes: string): number | null {
-  const h = hours.trim() === "" ? 0 : Number(hours);
-  const m = minutes.trim() === "" ? 0 : Number(minutes);
-  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || m < 0) return null;
-  const total = h * 60 + m;
-  return total > 0 ? total : null;
 }
 
 /** An instant as the desktop's wall clock (`YYYY-MM-DDTHH:MM`), which is what a
@@ -120,17 +112,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
   useEffect(() => {
     // Gated like the project screen's poll: a sheet left open when the screen
     // went off kept a desktop round trip going every 5s all night.
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      void refresh();
-    };
-    void refresh();
-    const timer = window.setInterval(tick, 5_000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
-    };
+    return startVisiblePoll(() => refresh(), 5_000).stop;
   }, [refresh]);
 
   const reset = () => {

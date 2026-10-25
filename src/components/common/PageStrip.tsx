@@ -18,7 +18,6 @@
  * arrangement back the way it was when the drag began.
  */
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import {
   movePages,
   deletePages,
@@ -29,7 +28,7 @@ import {
 } from "../../lib/viewers/pageModel";
 import { nextSelection } from "../../lib/viewers/fileUtils";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
-import { useClampToViewport } from "../../hooks/useClampToViewport";
+import { ContextMenuPortal } from "./ContextMenuPortal";
 import {
   registerPageStrip,
   resolveDropTarget,
@@ -158,8 +157,6 @@ export function PageStrip({
   const anchorRef = useRef<string | null>(null);
   const [draggingIds, setDraggingIds] = useState<Set<string> | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useClampToViewport(menuRef, menu, setMenu);
   /** Where a foreign drag would land (an insertion caret), or null. */
   const [caret, setCaret] = useState<number | null>(null);
 
@@ -231,13 +228,6 @@ export function PageStrip({
       return pruned;
     });
   }, [pages, onSelectionChange]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menu]);
 
   /** The sheets an action applies to: the selection when the sheet is in it, else
    *  just that sheet (right-clicking outside a selection acts on what you clicked). */
@@ -541,30 +531,23 @@ export function PageStrip({
         {caret === pages.length && <div className="page-strip-caret" aria-hidden="true" />}
       </div>
 
-      {menu &&
-        createPortal(
-          <div
-            ref={menuRef}
-            className="context-menu page-strip-context-menu"
-            style={{ left: menu.x, top: menu.y }}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <button onClick={() => act(rotatePages(pages, menu.ids, 90))}>
-              {t("pageStrip.turnRight")}
-            </button>
-            <button onClick={() => act(rotatePages(pages, menu.ids, -90))}>
-              {t("pageStrip.turnLeft")}
-            </button>
-            <button onClick={() => act(duplicatePages(pages, menu.ids))}>
-              {t("pageStrip.duplicate")}
-            </button>
-            <hr />
-            <button onClick={() => act(deletePages(pages, menu.ids))}>
-              {menu.ids.length > 1 ? t("pageStrip.deleteMany", { count: menu.ids.length }) : t("pageStrip.deleteOne")}
-            </button>
-          </div>,
-          document.body,
-        )}
+      {menu && (
+        <ContextMenuPortal x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+          <button onClick={() => act(rotatePages(pages, menu.ids, 90))}>
+            {t("pageStrip.turnRight")}
+          </button>
+          <button onClick={() => act(rotatePages(pages, menu.ids, -90))}>
+            {t("pageStrip.turnLeft")}
+          </button>
+          <button onClick={() => act(duplicatePages(pages, menu.ids))}>
+            {t("pageStrip.duplicate")}
+          </button>
+          <hr />
+          <button onClick={() => act(deletePages(pages, menu.ids))}>
+            {menu.ids.length > 1 ? t("pageStrip.deleteMany", { count: menu.ids.length }) : t("pageStrip.deleteOne")}
+          </button>
+        </ContextMenuPortal>
+      )}
     </>
   );
 }
