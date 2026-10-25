@@ -169,7 +169,8 @@ pub async fn git_peer_pair_confirm(
 pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, String> {
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    Ok(git_peer::list_backups(&project_id, &rt.spec))
+    // A `for-each-ref` on each side, one of them over ssh: off the async runtime.
+    app_core::rt::blocking("backups", move || git_peer::list_backups(&project_id, &rt.spec)).await
 }
 
 /// Move a branch back onto a backup ref, on the peer that holds it (#28p D6). The

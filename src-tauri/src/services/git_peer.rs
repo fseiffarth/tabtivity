@@ -1674,14 +1674,10 @@ async fn transfer_and_apply(
                     result.dest_ahead.push(src_ref.name.clone());
                 }
             }
-            RefAction::CreateOnDest => {
-                let _ = dst_peer.run(&[
-                    "update-ref",
-                    &format!("refs/heads/{}", src_ref.name),
-                    &src_ref.sha,
-                ]);
-                result.applied += 1;
-            }
+            RefAction::CreateOnDest => match create_branch(&dst_peer, &src_ref.name, &src_ref.sha) {
+                Ok(()) => result.applied += 1,
+                Err(e) => result.blocked = result.blocked.or(Some(e)),
+            },
             RefAction::FastForwardDest => {
                 if is_head {
                     // Checked-out branch: move ref + working tree, refusing on a dirty tree.
@@ -1769,13 +1765,10 @@ async fn transfer_and_apply(
                         }
                     }
                 } else {
-                    let _ = dst_peer.run(&[
-                        "update-ref",
-                        &format!("refs/heads/{}", src_ref.name),
-                        &src_ref.sha,
-                        dst_sha.unwrap(),
-                    ]);
-                    result.applied += 1;
+                    match fast_forward_branch_ref(&dst_peer, &src_ref.name, &src_ref.sha, dst_sha.unwrap()) {
+                        Ok(()) => result.applied += 1,
+                        Err(e) => result.blocked = result.blocked.or(Some(e)),
+                    }
                 }
             }
             RefAction::Diverged => {
@@ -2234,6 +2227,33 @@ fn force_move_tag(dst_peer: &Peer, tag: &str, src_sha: &str, dst_sha: &str, ts: 
     Ok(())
 }
 
+/// Create `dest`'s branch `branch` at `sha`, which the probe saw missing there.
+/// Only a create (`""` as the old value), like [`create_tag`]: a branch made on the
+/// dest since the probe is never overwritten — the next pass classifies it. A
+/// refused or failed write is an error, never a counted apply.
+fn create_branch(dst_peer: &Peer, branch: &str, sha: &str) -> Result<(), String> {
+    run_checked(
+        dst_peer,
+        &["update-ref", &format!("refs/heads/{branch}"), sha, ""],
+        &format!("creating '{branch}'"),
+    )?;
+    Ok(())
+}
+
+/// Fast-forward `dest`'s branch `branch`, not checked out there, from `dst_sha` (its
+/// tip at the probe) to `src_sha`, with `update-ref`'s old-value guard: a branch that
+/// moved since the probe stays where it is. A refused or failed write is an error,
+/// never a counted apply (it used to be ignored and counted, so a pass reported green
+/// over a branch it never moved).
+fn fast_forward_branch_ref(dst_peer: &Peer, branch: &str, src_sha: &str, dst_sha: &str) -> Result<(), String> {
+    run_checked(
+        dst_peer,
+        &["update-ref", &format!("refs/heads/{branch}"), src_sha, dst_sha],
+        &format!("fast-forwarding '{branch}'"),
+    )?;
+    Ok(())
+}
+
 /// Create `dest`'s tag `tag` at `sha`, which the probe saw missing there. Only a
 /// create: a tag that appeared since the probe is never overwritten (it has no
 /// backup ref, and tags keep no reflog) — the next pass classifies it.
@@ -2627,6 +2647,40 @@ fn reset_collisions(source_peer: &Peer, dest_peer: &Peer, target_sha: &str) -> V
     out
 }
 
+// ── Off the async workers ───────────────────────────────────────────────────
+
+/// Run one lockstep operation on the runtime's blocking pool and wait for it.
+///
+/// An operation is a chain of blocking calls — local `git` children
+/// ([`Peer::run`]), `ssh` round trips, the batched [`probe`], tree walks — with a
+/// few SFTP and manifest awaits between them. Run on a tokio worker, each of those
+/// parked the worker for as long as git or the host took, stalling every task
+/// queued behind it (code screen B2). The whole operation moves, in one
+/// `spawn_blocking` batch like `remote.rs`'s keychain read: its awaits are driven
+/// by `Handle::block_on` on the blocking thread, so the git steps run in exactly
+/// the order written and nothing between them changes. A panic resumes on the
+/// caller, as it did when the operation ran inline; `Err` only when the runtime
+/// is shutting down and never started it.
+async fn off_worker<T: Send + 'static>(
+    op: impl std::future::Future<Output = T> + Send + 'static,
+) -> Result<T, String> {
+    let handle = tokio::runtime::Handle::current();
+    match tokio::task::spawn_blocking(move || handle.block_on(op)).await {
+        Ok(value) => Ok(value),
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Err(e) => Err(format!("lockstep task did not run: {e}")),
+    }
+}
+
+/// [`refs_signature`] of the mirror, read off the async workers (a local `git`
+/// probe), as [`probe`] would read an unreadable mirror when the task never ran.
+async fn local_signature_off_worker(project_id: &str) -> String {
+    let id = project_id.to_owned();
+    off_worker(async move { local_signature(&id) })
+        .await
+        .unwrap_or_else(|_| refs_signature(&probe_error_snapshot()))
+}
+
 // ── Reconcile + status ──────────────────────────────────────────────────────
 
 /// Probe both peers, transfer + fast-forward in both directions, and compute the new
@@ -2645,7 +2699,10 @@ pub async fn reconcile(
     project_id: &str,
     spec: &RemoteSpec,
 ) -> GitPeerState {
-    reconcile_with(pool, manifest, project_id, spec, ReconcileOpts::default()).await
+    let (pool, manifest, id, spec2) = (pool.clone(), manifest.clone(), project_id.to_owned(), spec.clone());
+    off_worker(async move { reconcile_with(&pool, &manifest, &id, &spec2, ReconcileOpts::default()).await })
+        .await
+        .unwrap_or_else(|_| load_state(project_id))
 }
 
 /// Knobs the two user-driven entry points need; a background pass uses the defaults.
@@ -3004,29 +3061,52 @@ async fn restamp_after_checkout(
     }
     let sftp = crate::services::remote::pooled_sftp(pool, project_id).await;
 
-    let mut g = manifest.lock().await;
-    let m = remote_sync::ensure_loaded(&mut g, project_id);
-    let mut restamped = Vec::new();
+    // Stat both sides first, then take the manifest lock once to record: the lock is
+    // the one every byte-sync pass and transfer waits on, and holding it across one
+    // SFTP round trip per changed path stalled all of them for the whole walk (code
+    // screen B2; `sync_auto::reconcile_pass` stats before it locks too).
+    let mut deleted = Vec::new();
+    let mut stamps = Vec::new();
     for ch in changes {
         if ch.deleted {
-            m.remove(&ch.path);
+            deleted.push(ch.path);
             continue;
         }
-        let local_path = mirror_local_path(project_id, &ch.path);
-        let (ls, lm) = remote_sync::local_size_mtime(std::fs::metadata(&local_path).ok());
-        let (hs, hm) = match &sftp {
-            Some(s) => {
-                let host_abs = remote_sync::join_remote(&spec.remote_path, &ch.path);
-                sftp::metadata_on(s, &host_abs).await.unwrap_or((ls, lm))
-            }
-            None => (ls, lm),
-        };
-        remote_sync::record_pull(m, &ch.path, hs, hm, ls, lm);
-        restamped.push(ch.path);
+        let (local, host) = stat_both_sides(sftp.as_ref(), project_id, spec, &ch.path).await;
+        stamps.push((ch.path, local, host));
+    }
+    let mut g = manifest.lock().await;
+    let m = remote_sync::ensure_loaded(&mut g, project_id);
+    for path in &deleted {
+        m.remove(path);
+    }
+    let mut restamped = Vec::new();
+    for (path, (ls, lm), (hs, hm)) in stamps {
+        remote_sync::record_pull(m, &path, hs, hm, ls, lm);
+        restamped.push(path);
     }
     if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &restamped) {
         eprintln!("lockstep: could not re-stamp the sync bases after a checkout: {e}");
     }
+}
+
+/// The mirror's and the host's `(size, mtime)` for `rel`, the bases a re-stamp
+/// records. The host side falls back to the mirror's when it cannot be stat'd (no
+/// pooled session, or the stat failed), as both re-stampers always did.
+async fn stat_both_sides(
+    sftp: Option<&Arc<openssh_sftp_client::Sftp>>,
+    project_id: &str,
+    spec: &RemoteSpec,
+    rel: &str,
+) -> ((u64, Option<u64>), (u64, Option<u64>)) {
+    let local = remote_sync::local_size_mtime(std::fs::metadata(mirror_local_path(project_id, rel)).ok());
+    let host = match sftp {
+        Some(s) => sftp::metadata_on(s, &remote_sync::join_remote(&spec.remote_path, rel))
+            .await
+            .unwrap_or(local),
+        None => local,
+    };
+    (local, host)
 }
 
 /// Seed the file-sync manifest for every git-tracked file right after an INITIAL
@@ -3051,18 +3131,14 @@ async fn seed_manifest_after_pairing(
     }
     let sftp = crate::services::remote::pooled_sftp(pool, project_id).await;
 
+    // Stat first, lock once to record (see `restamp_after_checkout`).
+    let mut stamps = Vec::with_capacity(paths.len());
+    for rel in &paths {
+        stamps.push(stat_both_sides(sftp.as_ref(), project_id, spec, rel).await);
+    }
     let mut g = manifest.lock().await;
     let m = remote_sync::ensure_loaded(&mut g, project_id);
-    for rel in &paths {
-        let local_path = mirror_local_path(project_id, rel);
-        let (ls, lm) = remote_sync::local_size_mtime(std::fs::metadata(&local_path).ok());
-        let (hs, hm) = match &sftp {
-            Some(s) => {
-                let host_abs = remote_sync::join_remote(&spec.remote_path, rel);
-                sftp::metadata_on(s, &host_abs).await.unwrap_or((ls, lm))
-            }
-            None => (ls, lm),
-        };
+    for (rel, ((ls, lm), (hs, hm))) in paths.iter().zip(stamps) {
         remote_sync::record_pull(m, rel, hs, hm, ls, lm);
     }
     if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &paths) {
@@ -3075,6 +3151,25 @@ async fn seed_manifest_after_pairing(
 /// target out on the peer (a **guarded** checkout — never `-f`), re-stamp file-sync
 /// bases, and resume. `initiating_side` is `"local"` or `"remote"`.
 pub async fn checkout_lockstep(
+    pool: &RemotePoolState,
+    manifest: &remote_sync::SyncManifestState,
+    auto: &crate::services::sync_auto::AutoSyncState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    target: &str,
+    initiating_side: &str,
+    already_checked_out: bool,
+) -> Result<GitPeerState, String> {
+    let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
+    let (id, spec, target, side) = (project_id.to_owned(), spec.clone(), target.to_owned(), initiating_side.to_owned());
+    off_worker(async move {
+        checkout_lockstep_on(&pool, &manifest, &auto, &id, &spec, &target, &side, already_checked_out).await
+    })
+    .await?
+}
+
+/// [`checkout_lockstep`]'s body, on the thread that already left the workers.
+async fn checkout_lockstep_on(
     pool: &RemotePoolState,
     manifest: &remote_sync::SyncManifestState,
     auto: &crate::services::sync_auto::AutoSyncState,
@@ -3245,11 +3340,16 @@ pub async fn resolve(
     spec: &RemoteSpec,
     authority: &str,
 ) -> Result<GitPeerState, String> {
-    if !connected(pool, project_id).await {
-        return Err("Not connected to the remote host".to_string());
-    }
-    let _paused = crate::services::sync_auto::pause(auto, project_id).await;
-    resolve_inner(pool, manifest, project_id, spec, authority).await
+    let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
+    let (id, spec, authority) = (project_id.to_owned(), spec.clone(), authority.to_owned());
+    off_worker(async move {
+        if !connected(&pool, &id).await {
+            return Err("Not connected to the remote host".to_string());
+        }
+        let _paused = crate::services::sync_auto::pause(&auto, &id).await;
+        resolve_inner(&pool, &manifest, &id, &spec, &authority).await
+    })
+    .await?
 }
 
 async fn resolve_inner(
@@ -3263,7 +3363,7 @@ async fn resolve_inner(
     let remote = probe(&Peer::Remote(spec.clone()));
     if !local.is_repo || !remote.is_repo {
         // Nothing paired to resolve; a plain reconcile may still initial-pair.
-        return Ok(reconcile(pool, manifest, project_id, spec).await);
+        return Ok(reconcile_with(pool, manifest, project_id, spec, ReconcileOpts::default()).await);
     }
 
     let old_local_sha = head_sha(&local).unwrap_or_default();
@@ -3291,7 +3391,7 @@ async fn resolve_inner(
     applied?;
 
     // Recompute status; the forced side is now in sync, so this should read Synchronized.
-    Ok(reconcile(pool, manifest, project_id, spec).await)
+    Ok(reconcile_with(pool, manifest, project_id, spec, ReconcileOpts::default()).await)
 }
 
 /// The forced winner → loser apply behind Use local / Use remote and a
@@ -3444,6 +3544,22 @@ pub async fn restore_backup(
     peer_label: &str,
     refname: &str,
 ) -> Result<GitPeerState, String> {
+    let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
+    let (id, spec, label, refname) = (project_id.to_owned(), spec.clone(), peer_label.to_owned(), refname.to_owned());
+    off_worker(async move { restore_backup_on(&pool, &manifest, &auto, &id, &spec, &label, &refname).await })
+        .await?
+}
+
+/// [`restore_backup`]'s body, on the thread that already left the workers.
+async fn restore_backup_on(
+    pool: &RemotePoolState,
+    manifest: &remote_sync::SyncManifestState,
+    auto: &crate::services::sync_auto::AutoSyncState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    peer_label: &str,
+    refname: &str,
+) -> Result<GitPeerState, String> {
     if !connected(pool, project_id).await {
         return Err("Not connected to the remote host".to_string());
     }
@@ -3530,7 +3646,7 @@ pub async fn restore_backup(
     drop(_paused);
 
     prune_backups(project_id, spec);
-    Ok(reconcile(pool, manifest, project_id, spec).await)
+    Ok(reconcile_with(pool, manifest, project_id, spec, ReconcileOpts::default()).await)
 }
 
 /// Drop the backup refs that are neither recent nor among the newest N, per peer, so the
@@ -3858,7 +3974,7 @@ async fn poll_loop(
     // red. The signature covers everything a pass *acts* on (heads, tags, HEAD, the
     // tracked-dirty bit), so a burst that leaves it unchanged is either ours or a
     // no-op write, and the 12 s poll still covers anything that slips through.
-    let mut own_sig = local_signature(&project_id);
+    let mut own_sig = local_signature_off_worker(&project_id).await;
     // Events our pass just caused are already queued by the time it returns; drop
     // them rather than debounce into a pass that would only re-derive the same state.
     drain_events(&mut rx);
@@ -3877,7 +3993,7 @@ async fn poll_loop(
                 if crate::services::hpc_mode::is_hpc_spec(&spec) { break; }
                 ensure_git_watcher(&mut watcher, &gitdir, &tx);
                 if !guarded_pass(&ctx, &pool, &manifest, &auto, &project_id, &spec, &stopping).await { break; }
-                own_sig = local_signature(&project_id);
+                own_sig = local_signature_off_worker(&project_id).await;
                 drain_events(&mut rx);
             }
             res = rx.recv() => {
@@ -3895,12 +4011,12 @@ async fn poll_loop(
                 // Nothing a pass acts on changed since we last left the mirror: this
                 // burst is our own tail (or a stat-cache refresh). Skip the pass; the
                 // interval still re-checks the host on its own schedule.
-                let now_sig = local_signature(&project_id);
+                let now_sig = local_signature_off_worker(&project_id).await;
                 if watcher_burst_is_own(&own_sig, &now_sig) {
                     continue;
                 }
                 if !guarded_pass(&ctx, &pool, &manifest, &auto, &project_id, &spec, &stopping).await { break; }
-                own_sig = local_signature(&project_id);
+                own_sig = local_signature_off_worker(&project_id).await;
                 drain_events(&mut rx);
                 // A `.git` change on the mirror = a new commit/ref move; fan the
                 // committed code out to every connected worker (plan §2 trigger).
@@ -3995,6 +4111,22 @@ pub async fn detect_and_sync(
     spec: &RemoteSpec,
     opts: ReconcileOpts,
 ) -> GitPeerState {
+    let (pool, manifest, auto) = (pool.clone(), manifest.clone(), auto.clone());
+    let (id, spec) = (project_id.to_owned(), spec.clone());
+    off_worker(async move { detect_and_sync_on(&pool, &manifest, &auto, &id, &spec, opts).await })
+        .await
+        .unwrap_or_else(|_| load_state(project_id))
+}
+
+/// [`detect_and_sync`]'s body, on the thread that already left the workers.
+async fn detect_and_sync_on(
+    pool: &RemotePoolState,
+    manifest: &SyncManifestState,
+    auto: &AutoSyncState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    opts: ReconcileOpts,
+) -> GitPeerState {
     // #28p D4: probing a disconnected host is six dead round trips whose failures read
     // as "the host is empty" — bail before any of that.
     if !connected(pool, project_id).await {
@@ -4020,7 +4152,7 @@ pub async fn detect_and_sync(
         let host_target = target_of(&remote.head);
         if let Some(t) = target_of(&local.head).filter(|t| Some(t) != host_target.as_ref()) {
             if let Ok(s) =
-                checkout_lockstep(pool, manifest, auto, project_id, spec, &t, "local", true).await
+                checkout_lockstep_on(pool, manifest, auto, project_id, spec, &t, "local", true).await
             {
                 return s;
             }
@@ -4040,7 +4172,7 @@ pub async fn detect_and_sync(
     if local_moved {
         if let Some(t) = target_of(&local.head) {
             if let Ok(s) =
-                checkout_lockstep(pool, manifest, auto, project_id, spec, &t, "local", true).await
+                checkout_lockstep_on(pool, manifest, auto, project_id, spec, &t, "local", true).await
             {
                 return s;
             }
@@ -4048,7 +4180,7 @@ pub async fn detect_and_sync(
     } else if remote_moved {
         if let Some(t) = target_of(&remote.head) {
             if let Ok(s) =
-                checkout_lockstep(pool, manifest, auto, project_id, spec, &t, "remote", true).await
+                checkout_lockstep_on(pool, manifest, auto, project_id, spec, &t, "remote", true).await
             {
                 return s;
             }
@@ -5072,6 +5204,32 @@ mod tests {
         assert!(!connected(&pool, "no-such-project").await);
     }
 
+    /// A lockstep operation leaves the runtime's thread for the blocking pool, its
+    /// awaits (the pool lock, a timer) still complete there, and a panic inside it
+    /// still reaches the caller.
+    #[tokio::test]
+    async fn a_lockstep_operation_runs_off_the_async_workers_and_still_awaits() {
+        let worker = std::thread::current().id();
+        let pool = crate::services::remote::new_pool();
+        let (ran_on, answer) = off_worker(async move {
+            let here = std::thread::current().id();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            (here, connected(&pool, "no-such-project").await)
+        })
+        .await
+        .expect("ran");
+        assert_ne!(ran_on, worker, "the operation must not run on the async worker");
+        assert!(!answer);
+
+        let joined = tokio::spawn(off_worker(async {
+            if true {
+                panic!("lockstep boom");
+            }
+        }))
+        .await;
+        assert!(joined.is_err_and(|e| e.is_panic()), "a panic must reach the caller");
+    }
+
     #[test]
     fn disconnected_state_keeps_heads_and_drops_the_early_out() {
         let prior = GitPeerState {
@@ -5784,6 +5942,61 @@ mod tests {
         assert_eq!(rev(dir, "refs/tags/v1"), first, "the tag must not have moved");
         create_tag(&peer, "v2", &second).expect("create");
         assert_eq!(rev(dir, "refs/tags/v2"), second);
+    }
+
+    /// A branch create the dest refuses is an error the pass reports as blocked —
+    /// it used to be ignored and counted as applied — and a branch made on the
+    /// dest since the probe is never overwritten.
+    #[test]
+    fn create_branch_never_moves_a_branch_that_appeared_since_the_probe() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping create_branch_never_moves_a_branch_that_appeared_since_the_probe");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let first = init_repo_with_file(dir, "a.txt", b"one\n");
+        git_in(dir, &["branch", "side"]);
+        std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+        git_in(dir, &["commit", "-qam", "two"]);
+        let second = rev(dir, "HEAD");
+        let peer = Peer::Local(dir.to_path_buf());
+
+        let err = create_branch(&peer, "side", &second).expect_err("an existing branch is not a create");
+        assert!(err.contains("creating 'side'"), "{err}");
+        assert_eq!(rev(dir, "refs/heads/side"), first, "the branch must not have moved");
+        create_branch(&peer, "fresh", &second).expect("create");
+        assert_eq!(rev(dir, "refs/heads/fresh"), second);
+    }
+
+    /// A fast-forward of a branch that is not checked out is guarded by the tip the
+    /// probe saw: one that moved since is left where it is and reported, never
+    /// counted as applied.
+    #[test]
+    fn fast_forward_branch_ref_reports_a_branch_that_moved_since_the_probe() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping fast_forward_branch_ref_reports_a_branch_that_moved_since_the_probe");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let first = init_repo_with_file(dir, "a.txt", b"one\n");
+        git_in(dir, &["branch", "side"]);
+        std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+        git_in(dir, &["commit", "-qam", "two"]);
+        let second = rev(dir, "HEAD");
+        std::fs::write(dir.join("a.txt"), b"three\n").unwrap();
+        git_in(dir, &["commit", "-qam", "three"]);
+        let third = rev(dir, "HEAD");
+        // The probe saw `side` at `first`; something moved it on since.
+        git_in(dir, &["branch", "-f", "side", &second]);
+        let peer = Peer::Local(dir.to_path_buf());
+
+        let err = fast_forward_branch_ref(&peer, "side", &third, &first).expect_err("a stale old value");
+        assert!(err.contains("fast-forwarding 'side'"), "{err}");
+        assert_eq!(rev(dir, "refs/heads/side"), second, "the moved branch stays where it is");
+        fast_forward_branch_ref(&peer, "side", &third, &second).expect("fast-forward");
+        assert_eq!(rev(dir, "refs/heads/side"), third);
     }
 
     /// A lockstep state file that does not parse is never replaced by the
