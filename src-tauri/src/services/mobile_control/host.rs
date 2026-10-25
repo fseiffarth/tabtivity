@@ -4956,6 +4956,78 @@ async fn assistant_models(
     }
 }
 
+/// The CLI build a phone's model sheet on `tab_id` lists the remembered rows
+/// of (`services::model_rows`): its registry id and executable. Only for an
+/// agent tab whose CLI runs on this machine — not a remote, container or VM
+/// project's, not a host tab's, not a local-model tab's (its model is fixed).
+fn model_rows_cli(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+) -> Result<(&'static str, crate::services::agent_versions::VersionSource), (StatusCode, Json<serde_json::Value>)> {
+    let catalog = catalog(state, phone)?;
+    let Some((project, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    if project.host != super::discovery::ProjectHost::Local || tab.place.on_host() || tab.local_model {
+        return Err(api_error(StatusCode::CONFLICT, "not_this_machine"));
+    }
+    crate::commands::agents::installed_source(&tab.cmd).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))
+}
+
+/// `GET /api/v1/tabs/{id}/model-rows` — `{ title?, rows }`, the rows the tab's
+/// CLI build's own model picker drew last time, for the phone's model sheet to
+/// list while the session draws its picker (`rows` empty when none).
+async fn model_rows(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (cli, source) = match model_rows_cli(&state, &phone, &tab_id) {
+        Ok(cli) => cli,
+        Err(error) => return error,
+    };
+    let store = crate::services::model_rows::store_path_in(&state.config.state_dir);
+    let rows = crate::services::model_rows::rows_in(&store, cli, Some(&source)).unwrap_or_default();
+    (StatusCode::OK, Json(json!(rows)))
+}
+
+/// `POST /api/v1/tabs/{id}/model-rows` with `{ title?, rows }` — keep the rows
+/// the phone just read off the tab's live model picker for its CLI build.
+async fn remember_model_rows(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(rows) = serde_json::from_slice::<crate::services::model_rows::Rows>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let (cli, source) = match model_rows_cli(&state, &phone, &tab_id) {
+        Ok(cli) => cli,
+        Err(error) => return error,
+    };
+    let store = crate::services::model_rows::store_path_in(&state.config.state_dir);
+    match crate::services::model_rows::remember_rows_in(&store, cli, Some(&source), rows) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "kept": true }))),
+        Err(why) => {
+            eprintln!("mobile: keeping a model list failed: {why}");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SwitchModelBody {
@@ -6979,6 +7051,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/worktrees", get(tab_worktrees))
         .route("/api/v1/tabs/{tab_id}/worktree", post(move_tab_worktree))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
+        .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))
         .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
         .route("/api/v1/tabs/{tab_id}/teleport", post(teleport_tab))

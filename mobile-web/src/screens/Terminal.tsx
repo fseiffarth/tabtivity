@@ -54,6 +54,8 @@ import {
   moveTabWorktree,
   getAssistantModels,
   switchAssistantModel,
+  getModelRows,
+  rememberModelRows,
   uploadToInbox,
   type DesktopImage,
   type OutboxFile,
@@ -115,6 +117,7 @@ import {
   type SelectStep,
 } from "../terminal/selectPrompt";
 import { NO_QUESTION_PARTS, questionParts, type QuestionParts } from "../terminal/questionParts";
+import { liveModelPick, modelRowsOf, modelRowsStep, sameModelRows } from "../terminal/modelRows";
 import {
   isOpenCodeTab,
   openCodeDialogCloseKeys,
@@ -314,6 +317,9 @@ const NEWEST_SLACK = 4;
  * opens. Past it the sheet steps aside: the dialog — or the reason there is
  * none — is in the session output, and the arrow keys still answer it. */
 const MODEL_PICKER_WAIT = 6_000;
+/** How long a model list stays unchanged before it is kept for the next
+ * opening (`rememberModelRows`): a frame split across reads is not the list. */
+const MODEL_KEEP_SETTLE = 500;
 /** How long the dialog an answer brought up takes no tap: a CLI asks its next
  * question at once and in the same place (Codex's "Hooks need review" under
  * its folder question), and a second tap meant for the answered row took the
@@ -1139,6 +1145,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * picker (Claude Code's, at 24 lines, draws three of its five models) is
    * only ever a slice, so the list is what the slices add up to. */
   const [knownStep, setKnownStep] = useState<SelectStep | null>(null);
+  /** The rows this CLI build's picker drew last time (`getModelRows`), listed
+   * until the session draws its own; the one tapped among them, answered in
+   * the live picker by its label once it is all there; whether this opening
+   * answered its first list yet (Codex's next list is reasoning levels, not
+   * models), and the list last kept for the next opening. */
+  const [rememberedStep, setRememberedStep] = useState<SelectStep | null>(null);
+  const [heldPick, setHeldPick] = useState<string | null>(null);
+  const sheetAnswered = useRef(false);
+  const keptStep = useRef<SelectStep | null>(null);
   /** The walk that makes a windowed picker draw the rows it hides: the row the
    * highlight started on, and the row the last arrow keys were sent to. The
    * highlight goes back where it was once every row is listed. */
@@ -1437,6 +1452,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setSwitchFailed("");
     setAnswered(null);
     setKnownStep(null);
+    setRememberedStep(null);
+    setHeldPick(null);
     setReveal(null);
     sawPicker.current = false;
     // Dictation belongs to the tab it was started in. Its recognizer is aborted
@@ -3381,6 +3398,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     [pickerStep, openCode, knownStep],
   );
   useEffect(() => { if (listedStep && !openCode) setKnownStep(listedStep); }, [listedStep, openCode]);
+  /** The remembered rows, listed until the session draws its picker — for
+   * OpenCode until its walk has listed the whole of it. */
+  const modelPreview = modelSheet && !answered && !effortFor && !effortStep && (!listedStep || (openCode && !!picker?.hidden))
+    ? rememberedStep
+    : null;
   /** The printed number of the row the dialog highlights right now. */
   const pickerAt = pickerStep?.options[pickerStep.current]?.number;
   /** The effort stops Antigravity's dialog is offering right now — the ones
@@ -3515,8 +3537,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (modelSheet) return;
     sawPicker.current = false;
     revealStuck.current = false;
+    sheetAnswered.current = false;
+    keptStep.current = null;
     setAnswered(null);
     setKnownStep(null);
+    setRememberedStep(null);
+    setHeldPick(null);
     setReveal(null);
     setEffortFor(null);
     setEffortStep(null);
@@ -3525,6 +3551,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       if (!deliver(OPENCODE_MODEL_KEYS)) return;
     } else if (!sendAgentText("/model")) return;
     setModelSheet(true);
+    // Refused for a tab whose CLI runs elsewhere: the sheet waits as before.
+    getModelRows(tab.id).then((rows) => setRememberedStep((now) => now ?? modelRowsStep(rows)), () => {});
   };
   /** The card's model tap, answered once the socket is up and the session has
    * drawn its first frame: sent any earlier, `/model` lands before the agent's
@@ -3545,7 +3573,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * by walking a highlight this cannot see (`openCodePickKeys`); tapping one of
    * its group headings narrows the list, which the sheet reads as the next
    * step. */
-  const chooseModel = (key: string) => {
+  const answerModel = (key: string) => {
     // Mid-walk the highlight is not where the frame says; the sheet is busy.
     if (!pickerStep || !listedStep || reveal || effortFor) return;
     clearPending();
@@ -3556,6 +3584,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     // the effort the dialog then draws for it.
     if (antigravity) {
       if (pickerAt === undefined || !deliver(selectMoveKeys(pickerAt, picked.number))) return;
+      sheetAnswered.current = true;
       setEffortFor({ number: picked.number, label: picked.label });
       return;
     }
@@ -3566,8 +3595,49 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       ? picked.keys ?? openCodePickKeys(picked.label)
       : pickerAt === undefined ? [] : selectKeys(pickerAt, picked.number);
     if (writes.length === 0 || !deliver(writes)) return;
+    sheetAnswered.current = true;
     setAnswered(listedStep);
   };
+  /** A tap on the sheet: a remembered row is held for the live picker. */
+  const chooseModel = (key: string) => {
+    if (!modelPreview) {
+      answerModel(key);
+      return;
+    }
+    const row = modelPreview.options.find((option) => option.number === Number(key));
+    if (row) setHeldPick(row.label);
+  };
+  const answerModelNow = useRef(answerModel);
+  answerModelNow.current = answerModel;
+  /** Whether the live list is all there: OpenCode's walk has listed it, or a
+   * windowed picker's reveal walk has nothing left to show. */
+  const listSettled = !!pickerStep && !!listedStep && !reveal && (openCode
+    ? !picker?.hidden
+    : revealStuck.current || revealSelectRow(listedStep, pickerStep) === undefined);
+  // The opening's model list, kept for the next one once it is all there and
+  // has stopped changing (a frame split across reads is not the list), and
+  // only before anything was answered in it.
+  useEffect(() => {
+    if (!modelSheet || !listSettled || !listedStep || sheetAnswered.current || answered || effortFor || effortStep) return;
+    const keep = window.setTimeout(() => {
+      const kept = keptStep.current ?? rememberedStep;
+      if (kept && sameModelRows(kept, listedStep)) return;
+      keptStep.current = listedStep;
+      rememberModelRows(tab.id, modelRowsOf(listedStep)).catch(() => {});
+    }, MODEL_KEEP_SETTLE);
+    return () => window.clearTimeout(keep);
+  }, [modelSheet, listSettled, listedStep, answered, effortFor, effortStep, rememberedStep, tab.id]);
+  // The held remembered row, answered in the live list by its label once the
+  // walks are done (their keys must not follow the answer's), or dropped when
+  // the whole list is in without it. OpenCode's search answer needs no walk.
+  useEffect(() => {
+    if (!heldPick || !pickerStep || !listedStep || reveal || effortFor) return;
+    const index = liveModelPick(listedStep, { label: heldPick });
+    if (!listSettled && !(openCode && index !== null)) return;
+    setHeldPick(null);
+    const row = listedStep.options.find((option) => option.index === index);
+    if (row) answerModelNow.current(String(row.number));
+  }, [heldPick, pickerStep, listedStep, reveal, effortFor, listSettled, openCode]);
   /** Answers Antigravity's effort step: the slider is moved with the same
    * ←/→ its own keyboard row names, and the Enter that follows is the one
    * that applies the model and the effort at once. */
@@ -3577,6 +3647,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     const target = Number(key);
     if (!effortSlider.stops[target]) return;
     if (!deliver([...antigravityEffortKeys(effortSlider.current, target), "\r"])) return;
+    sheetAnswered.current = true;
     setAnswered(listedStep);
     setEffortStep(null);
   };
@@ -3678,6 +3749,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setReveal(null);
     setEffortFor(null);
     setEffortStep(null);
+    setHeldPick(null);
   };
   /** Shift+Tab — the mode cycle Claude Code, Codex and Qwen Code all bind,
    * encoded the way this family's TUI reads it (`shiftTabKey`). The chip label
@@ -4355,9 +4427,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     ?? (storedModelId ? transcriptModelTag(storedModelId, /^claude$/iu.test(agentLabel)) : undefined)
     ?? tab.agent_model
     ?? t("terminal.reader.model");
-  const shownStep = listedStep ?? (answered && picker ? answered : null);
+  const shownStep = modelPreview ?? listedStep ?? (answered && picker ? answered : null);
   /** The highlighted row — where it was before a reveal walk moved it. */
-  const shownAt = reveal?.origin ?? picker?.options[picker.current]?.number;
+  const shownAt = modelPreview ? undefined : reveal?.origin ?? picker?.options[picker.current]?.number;
   const pickerOptionsRaw: SheetOption[] = (shownStep?.options ?? []).map((option) => ({
     key: String(option.number),
     label: option.label,
@@ -4905,7 +4977,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       />
       : <OptionSheet
         title={shownStep?.title ?? t("terminal.reader.modelTitle")}
-        note={cursorAgent && isUntested("mobile.model.cursor")
+        note={modelPreview
+          ? { text: isUntested("agents.modelRows.remembered")
+            ? `${t("terminal.reader.modelRemembered")} · ${t("mobile.focus.untested")}`
+            : t("terminal.reader.modelRemembered") }
+          : cursorAgent && isUntested("mobile.model.cursor")
           ? { text: t("mobile.focus.untested") }
           : openCode && (picker?.hidden || isUntested("agents.opencode.modelList"))
             ? { text: [
@@ -4917,7 +4993,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         waiting={t(!connected
           ? "mobile.model.waitingConnection"
           : answered ? "mobile.model.waitingSession" : "terminal.reader.modelWaiting")}
-        busy={shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
+        busy={modelPreview ? heldPick !== null : shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
         onPick={chooseModel}
         onClose={closeModelSheet}
       />}</div>}

@@ -470,7 +470,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
-                  className={picker && option.index === picker.current ? "terminal-reader-option current" : "terminal-reader-option"}
+                  className={!session.remembered && picker && option.index === picker.current ? "terminal-reader-option current" : "terminal-reader-option"}
                   disabled={busy}
                   onClick={() => choose(option.index)}
                 >
@@ -489,6 +489,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           {listing
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
+          {session.remembered && <small className="terminal-reader-question-more">{t("terminal.reader.modelRemembered")} <UntestedTag id="agents.modelRows.remembered" /></small>}
         </div>
       )}
       {assistantOpen && assistantLaunch && (

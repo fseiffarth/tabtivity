@@ -267,6 +267,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_agents", Core),
     ("node_runtime_status", Core),
     ("probe_binaries", Core),
+    ("remember_model_rows", Core),
+    ("remembered_model_rows", Core),
     ("uninstall_agent", Admin),
     ("update_agent", Admin),
     // commands/agent_tasks.rs

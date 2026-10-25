@@ -96,6 +96,8 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["list_agents", "core"],
   ["node_runtime_status", "core"],
   ["probe_binaries", "core"],
+  ["remember_model_rows", "core"],
+  ["remembered_model_rows", "core"],
   ["uninstall_agent", "admin"],
   ["update_agent", "admin"],
   ["agent_schedule_claim", "core"],

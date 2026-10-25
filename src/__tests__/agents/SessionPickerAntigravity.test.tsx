@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   submit: vi.fn(async () => {}),
   rows: [] as string[],
 }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("../../lib/agents/scheduledAgentInput", () => ({ submitScheduledAgentCommand: mocks.submit, holdSessionPicker: () => () => {} }));
 vi.mock("../../lib/terminal/terminalRegistry", () => ({
   terminalFor: () => ({

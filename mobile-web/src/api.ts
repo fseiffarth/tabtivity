@@ -1,5 +1,6 @@
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
+import type { ModelRows } from "./terminal/modelRows";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -660,6 +661,20 @@ export async function getAssistantModels(tabId: string): Promise<AssistantModels
     models: Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [],
     ...(typeof body.current === "string" && body.current ? { current: body.current } : {}),
   };
+}
+
+/** `GET /api/v1/tabs/{id}/model-rows` — the rows the tab's CLI build's own
+ * model picker drew last time (`services::model_rows`), for the model sheet to
+ * list while the session draws its picker. `409 not_this_machine` for a tab
+ * whose CLI runs elsewhere. */
+export function getModelRows(tabId: string): Promise<ModelRows> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`);
+}
+
+/** `POST /api/v1/tabs/{id}/model-rows` — keep the rows just read off the
+ * tab's live model picker for its CLI build. */
+export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kept: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
 }
 
 /** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:

@@ -2375,6 +2375,45 @@ pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(),
     Ok(())
 }
 
+/// The identity of the executable `agent` (registry id or binary name) runs as
+/// on this host — what `services::model_rows` keys a CLI build by. `None` for
+/// an unknown or missing CLI.
+pub fn installed_source(agent: &str) -> Option<(&'static str, crate::services::agent_versions::VersionSource)> {
+    let spec = find_spec_by_id_or_bin(agent)?;
+    let path = resolve_spec_path(spec)?;
+    Some((spec.id, crate::services::agent_versions::version_source(&path)?))
+}
+
+/// `remembered_model_rows({ agent })` → `{ title?, rows }`, what `agent`'s own
+/// model picker drew last time in this build of it (`services::model_rows`),
+/// for a model sheet to list while the session draws its picker; `null` when
+/// none.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remembered_model_rows(agent: String) -> Option<crate::services::model_rows::Rows> {
+    use crate::services::model_rows;
+    app_core::rt::spawn_blocking(move || {
+        let (id, source) = installed_source(&agent)?;
+        model_rows::rows_in(&model_rows::store_path(), id, Some(&source))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// `remember_model_rows({ agent, rows: { title?, rows } })`: keep what
+/// `agent`'s picker just drew for its installed build. A patch of that one
+/// entry.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remember_model_rows(agent: String, rows: crate::services::model_rows::Rows) -> Result<(), String> {
+    use crate::services::model_rows;
+    app_core::rt::spawn_blocking(move || {
+        let (id, source) = installed_source(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
+        model_rows::remember_rows_in(&model_rows::store_path(), id, Some(&source), rows)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Whether Claude already trusts `cwd`, i.e. it will NOT open its "Is this a
 /// project you created or one you trust?" dialog there.
 ///

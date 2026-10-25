@@ -5185,6 +5185,7 @@ export const dict: Dict = {
   "terminal.reader.modelTitle": "Scegli il modello",
   "terminal.reader.modelClose": "Chiudi l'elenco dei modelli (Esc)",
   "terminal.reader.modelWaiting": "In attesa del selettore di modelli della sessione…",
+  "terminal.reader.modelRemembered": "Ultimo elenco di questa versione della CLI. La scelta si applica appena la sessione mostra il suo.",
   "terminal.reader.modelGroup.free": "Gratuiti",
   "terminal.reader.modelGroup.claude": "Claude",
   "terminal.reader.modelGroup.openai": "OpenAI",

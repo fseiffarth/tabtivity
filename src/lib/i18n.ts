@@ -5391,6 +5391,7 @@ export const enSource = {
   "terminal.reader.modelTitle": "Select model",
   "terminal.reader.modelClose": "Close the model list (Esc)",
   "terminal.reader.modelWaiting": "Waiting for the session's model picker…",
+  "terminal.reader.modelRemembered": "Last list from this CLI version. A pick goes in once the session shows its own.",
   "terminal.reader.assistantModelHint": "Choose the model — the chat restarts on it and keeps its conversation",
   "terminal.reader.assistantModelNote": "{assistant} restarts the chat on the model you pick; the conversation carries on",
   "terminal.reader.assistantModelLoading": "Reading the models…",
