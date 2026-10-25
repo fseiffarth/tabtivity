@@ -1,6 +1,14 @@
 # PDF markup mode — review and improvement plan
 
-> **Status (2026-10-24): review only, nothing implemented.** Line numbers are
+> **Status (2026-10-25): items 1, 2 and most of 3 are implemented** (not
+> live-verified): 1 — the round is bound to the tab its last prompt went to
+> (`roundTarget` in `usePdfMarkup.ts`); 2 — a custom instruction in an `apply`
+> round that fell back to `list` gets `LIST_FALLBACK_GUARD` appended
+> (`mobile_control/markup.rs`); 3 — `PdfMarkupLayer` mounts only on `near`
+> pages, and box/arrow/stamp/area drags repaint from a cached copy of the
+> committed marks. Not done: memoizing `edit`/`PdfPageCanvas` (item 3's last
+> point; the repaint cost is already gone, only React reconciliation of the
+> near pages is left), items 4–7 and the smaller items. Line numbers are
 > from `develop` at `9be78e95` (v0.2.29) and will drift; grep for the named
 > symbol before acting on one.
 
