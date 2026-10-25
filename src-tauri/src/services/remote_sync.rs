@@ -1220,6 +1220,7 @@ pub fn rsync_pull_args(
     local_dest: &str,
     files_from: &Path,
 ) -> Vec<String> {
+    let host_src = rsync_literal_host_path(host_src);
     let target = match user {
         Some(u) => format!("{u}@{host}:{host_src}"),
         None => format!("{host}:{host_src}"),
@@ -1232,6 +1233,24 @@ pub fn rsync_pull_args(
         local_dest.to_string(),
     ]);
     args
+}
+
+/// `path` as the remote rsync reads it literally. The sending rsync expands
+/// wildcards in its source argument itself (with `--protect-args` too), so
+/// a project dir `/srv/a[1]` would pull `/srv/a1` instead; it only does so
+/// when one of `*?[` is present, and then honours `\` escapes.
+fn rsync_literal_host_path(path: &str) -> String {
+    if !path.contains(['*', '?', '[']) {
+        return path.to_string();
+    }
+    let mut out = String::with_capacity(path.len() + 8);
+    for c in path.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Whether a host file of `host_size` bytes may ride the rsync fast path at
@@ -2286,6 +2305,42 @@ mod tests {
         let args = rsync_pull_args(&None, "host.example", None, "/srv/my $proj/", "/m/", Path::new("/tmp/list"));
         assert!(args.iter().any(|arg| arg == "--protect-args"), "{args:?}");
         assert!(args.iter().any(|arg| arg == "host.example:/srv/my $proj/"));
+    }
+
+    /// The remote rsync globs its source argument: a host dir whose name holds
+    /// a wildcard must pull that dir, not a sibling the pattern also matches.
+    /// Run against the real rsync, through a stand-in `ssh` that runs the
+    /// remote command locally the way a login shell would.
+    #[cfg(unix)]
+    #[test]
+    fn rsync_pull_reads_a_wildcard_host_dir_literally() {
+        if !rsync_available_local() {
+            eprintln!("rsync not on PATH; skipping the local transfer check");
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        for (dir, body) in [("a[1]", "right"), ("a1", "wrong"), ("q?", "right"), ("qz", "wrong"), ("b\\x[2]", "right"), ("bx2", "wrong")] {
+            std::fs::create_dir_all(r.join(dir)).unwrap();
+            std::fs::write(r.join(dir).join("f.txt"), body).unwrap();
+        }
+        let ssh = r.join("fake-ssh");
+        std::fs::write(&ssh, "#!/bin/sh\nshift\neval \"$*\"\n").unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let list = rsync_files_from(&["f.txt".into()]).unwrap();
+        for dir in ["a[1]", "q?", "b\\x[2]"] {
+            let dest = tempfile::tempdir().unwrap();
+            let src = format!("{}/", r.join(dir).display());
+            let mut args = rsync_pull_args(&None, "h", None, &src, &format!("{}/", dest.path().display()), list.path());
+            let e = args.iter().position(|a| a == "-e").unwrap();
+            args[e + 1] = ssh.display().to_string();
+            let out = std::process::Command::new("rsync").args(&args).output().unwrap();
+            assert!(out.status.success(), "{dir}: {}", String::from_utf8_lossy(&out.stderr));
+            assert_eq!(std::fs::read_to_string(dest.path().join("f.txt")).unwrap(), "right", "{dir}");
+        }
+        // No wildcard: the path goes as it is.
+        assert_eq!(rsync_literal_host_path("/srv/my $proj\\x/"), "/srv/my $proj\\x/");
     }
 
     #[test]

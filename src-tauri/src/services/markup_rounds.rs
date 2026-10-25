@@ -406,7 +406,7 @@ fn run(mut cmd: Command, stdin: Option<Vec<u8>>, limit: usize) -> Result<Output,
     let timeout = call_deadline().saturating_duration_since(Instant::now());
     // No pre-check: the round vets the files it reads itself (a FIFO
     // `info/attributes` is "no undo", not a failure), and the deadline bounds git.
-    let opts = bounded::Opts { stdin, stdout_cap: Some(limit as u64 + 1), timeout: Some(timeout), no_precheck: true };
+    let opts = bounded::Opts { stdin, stdout_cap: Some(limit as u64 + 1), timeout: Some(timeout), no_precheck: true, ..Default::default() };
     match bounded::run(&mut cmd, opts) {
         Ok(ran) if !ran.cut => Ok(ran.output),
         Ok(_) | Err(bounded::RunError::TimedOut(_)) => Err(RunError::Timeout),

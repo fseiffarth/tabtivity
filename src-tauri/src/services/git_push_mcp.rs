@@ -47,7 +47,7 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const REMOTE_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const TRANSPORT_TIMEOUT: Duration = Duration::from_secs(600);
 /// stdout kept from a lane process (`ls-remote`, the pre-push hook, the push);
-/// past it the process is stopped.
+/// past it `ls-remote` and the push are stopped, the hook's is drained.
 pub(crate) const LANE_OUTPUT_CAP: u64 = 4 * 1024 * 1024;
 /// Unapproved proposals expire after a day; records are kept as long.
 const RETENTION: Duration = Duration::from_secs(24 * 3600);
@@ -664,7 +664,10 @@ fn preflight(dir: &Path, boundary: HookBoundary<'_>, mut plan: Plan) -> Result<(
     for round in 0..2 {
         let mut cmd = preflight_command(boundary, &hook, dir, &plan.remote, &plan.url)?;
         let line = format!("refs/heads/{b} {h} refs/heads/{b} {r}\n", b = plan.branch, h = plan.head, r = plan.remote_sha);
-        let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(Some(line.into_bytes()), PREFLIGHT_TIMEOUT)) {
+        // Drained, not stopped, past the cap: a hook's log is only shown (its
+        // tail), so a chatty but passing hook (a test run) never blocks the push.
+        let opts = crate::services::git_bounded::Opts { keep_stdout_ends: true, ..lane_opts(Some(line.into_bytes()), PREFLIGHT_TIMEOUT) };
+        let ran = match crate::services::git_bounded::run(&mut cmd, opts) {
             Ok(ran) => ran,
             Err(RunError::TimedOut(_)) => return Err(Failure::new(Category::PreflightTimeout, "The pre-push hook did not finish within five minutes and was stopped; nothing was pushed.")),
             Err(e) => return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook could not be started: {e}"))),
@@ -672,9 +675,6 @@ fn preflight(dir: &Path, boundary: HookBoundary<'_>, mut plan: Plan) -> Result<(
         let (stdout, stderr) = lane_text(&ran.output);
         outputs.push(join_streams(&stdout, &stderr));
         let output = clean_output(&outputs.join("\n"), None);
-        if ran.cut {
-            return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook wrote more than {} MiB of output and was stopped; nothing was pushed.", LANE_OUTPUT_CAP / (1024 * 1024))).with_output(output));
-        }
         if !ran.output.status.success() {
             return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook exited with status {}; nothing was pushed. Fix what its output reports and ask again.", ran.output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()))).with_output(output));
         }
@@ -1996,11 +1996,12 @@ mod tests {
         assert!(failure.output.contains("hook says hi"));
     }
 
-    /// The hook is agent-writable: one that floods stdout is stopped at the
-    /// lane's cap and refused, never read whole into the main process.
+    /// The hook is agent-writable: one that floods stdout is never read whole
+    /// into the main process, only its ends are kept; and a chatty hook that
+    /// passes still lets the push go on (its tail is what the card shows).
     #[cfg(unix)]
     #[test]
-    fn a_preflight_hook_flooding_stdout_is_stopped_at_the_cap() {
+    fn a_preflight_hook_flooding_stdout_is_kept_to_its_ends() {
         if !have_git() { eprintln!("git not on PATH — skipping"); return; }
         use std::os::unix::fs::PermissionsExt;
         let (_root, remote, work) = pair();
@@ -2008,15 +2009,20 @@ mod tests {
         let hooks = work.join(".githooks");
         std::fs::create_dir_all(&hooks).unwrap();
         let hook = hooks.join("pre-push");
-        std::fs::write(&hook, format!("#!/bin/sh\nhead -c {} /dev/zero\n", LANE_OUTPUT_CAP * 4)).unwrap();
+        std::fs::write(&hook, format!("#!/bin/sh\nhead -c {} /dev/zero | tr '\\0' x\necho hook-passed\n", LANE_OUTPUT_CAP * 4)).unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
         sh(&work, &["config", "core.hooksPath", ".githooks"]);
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
         let before = plan(&work, &policy, None, None, &[]).unwrap();
-        let failure = preflight(&work, HookBoundary::Host, before).unwrap_err();
-        assert_eq!(failure.category, Category::PreflightFailed);
-        assert!(failure.message.contains("output"), "{}", failure.message);
-        assert!(failure.output.len() as u64 <= LANE_OUTPUT_CAP + 1024, "kept {} bytes", failure.output.len());
+        let (_, output) = preflight(&work, HookBoundary::Host, before).map_err(|f| f.message).expect("a passing hook lets the push go on");
+        assert!(output.trim_end().ends_with("hook-passed"), "{}", tail(&output, 200));
+        assert!(output.len() <= OUTPUT_CAP + 8, "kept {} bytes", output.len());
+        // The ends, not the whole: what the lane reads is bounded.
+        let mut cmd = std::process::Command::new(&hook);
+        let opts = crate::services::git_bounded::Opts { keep_stdout_ends: true, ..lane_opts(None, Duration::from_secs(60)) };
+        let ran = crate::services::git_bounded::run(&mut cmd, opts).expect("ran");
+        assert!(ran.output.status.success() && !ran.cut);
+        assert!(ran.output.stdout.len() as u64 <= LANE_OUTPUT_CAP + 64, "kept {} bytes", ran.output.stdout.len());
     }
 
     /// Gap 18: the hook is agent-writable, so a Pusher whose binding holds no

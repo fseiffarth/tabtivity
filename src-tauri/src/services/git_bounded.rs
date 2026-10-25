@@ -330,6 +330,10 @@ pub(crate) struct Opts {
     pub timeout: Option<Duration>,
     /// Skip [`hazard`] (`init`, `clone`: no repo of their own yet).
     pub no_precheck: bool,
+    /// Past [`Opts::stdout_cap`], keep stdout's first and last halves and
+    /// drain the rest, as stderr always is, instead of stopping the child:
+    /// for output only shown (a hook's log), never parsed. Never [`Ran::cut`].
+    pub keep_stdout_ends: bool,
 }
 
 pub(crate) struct Ran {
@@ -469,7 +473,13 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, RunError> {
     let stdout = child.stdout.take().map(|s| {
         let tx = done_tx.clone();
         let cap = opts.stdout_cap.unwrap_or(DEFAULT_STDOUT_CAP);
+        let keep_ends = opts.keep_stdout_ends;
         std::thread::spawn(move || {
+            if keep_ends {
+                let buf = read_head_and_tail(s, cap);
+                let _ = tx.send(false);
+                return buf;
+            }
             let mut buf = Vec::new();
             let _ = s.take(cap).read_to_end(&mut buf);
             let _ = tx.send(buf.len() as u64 >= cap);
@@ -812,6 +822,21 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "exec yes"]);
         assert!(output_within(cmd, NOT_A_HANG).unwrap_err().contains("MiB"));
+    }
+
+    /// `keep_stdout_ends` drains stdout past its cap, keeping both ends, so a
+    /// chatty child runs to its own exit instead of being stopped.
+    #[cfg(unix)]
+    #[test]
+    fn keep_stdout_ends_drains_instead_of_stopping() {
+        let cap = 64 * 1024;
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("printf first; head -c {} /dev/zero; printf last", cap * 8)]);
+        let opts = Opts { stdout_cap: Some(cap), keep_stdout_ends: true, timeout: Some(NOT_A_HANG), ..Opts::default() };
+        let ran = run(&mut cmd, opts).expect("ran");
+        assert!(!ran.cut && ran.output.status.success(), "stopped instead of drained");
+        assert!(ran.output.stdout.len() as u64 <= cap + 64, "kept {} bytes", ran.output.stdout.len());
+        assert!(ran.output.stdout.starts_with(b"first") && ran.output.stdout.ends_with(b"last"));
     }
 
     /// stderr keeps its head and tail within [`STDERR_CAP`]; the child is
