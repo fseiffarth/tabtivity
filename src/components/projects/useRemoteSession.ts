@@ -512,7 +512,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   };
 
   // Non-headless: bring the OpenVPN tunnel up in a terminal embedded in the
-  // dialog. The connect (`pkexec openvpn … --auth-nocache`) is the PTY's own
+  // dialog. The connect (`pkexec openvpn …`) is the PTY's own
   // program, so the user types the passphrase in that visible terminal —
   // Tabtivity never handles it. The PTY persists past the dialog so the tunnel
   // stays up for the new project; we pre-mark the dedupe key so activation's
