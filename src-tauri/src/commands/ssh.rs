@@ -146,7 +146,7 @@ pub fn ssh_remember_address(address: String) -> Result<(), String> {
 }
 
 fn remember_address_in(file: &std::path::Path, address: &str) -> Result<(), String> {
-    crate::storage::patch_json(file, Vec::new(), |list: &mut Vec<String>| {
+    crate::storage::patch_private_json(file, Vec::new(), |list: &mut Vec<String>| {
         *list = merge_recent_address(std::mem::take(list), address);
         Ok(())
     })
@@ -203,7 +203,7 @@ pub fn remote_remember_path(host: String, path: String) -> Result<(), String> {
 }
 
 fn remember_path_in(file: &std::path::Path, key: String, path: &str) -> Result<(), String> {
-    crate::storage::patch_json(
+    crate::storage::patch_private_json(
         file,
         std::collections::HashMap::new(),
         |store: &mut std::collections::HashMap<String, Vec<String>>| {
@@ -260,7 +260,7 @@ pub fn remote_set_default_path(host: String, path: String) -> Result<(), String>
 
 /// Set `key`'s standard path to `path`, or clear it when `path` is empty.
 fn set_default_path_in(file: &std::path::Path, key: String, path: &str) -> Result<(), String> {
-    crate::storage::patch_json(
+    crate::storage::patch_private_json(
         file,
         std::collections::HashMap::new(),
         |store: &mut std::collections::HashMap<String, String>| {

@@ -1124,9 +1124,19 @@ pub fn load_state(project_id: &str) -> GitPeerState {
     crate::storage::read_json(&state_path(project_id)).unwrap_or_default()
 }
 
-/// Persist a project's lockstep state.
+/// Persist a project's lockstep state. A file that does not parse (corrupt, or a
+/// newer build's) is left as it is: [`load_state`] read it as the default, so
+/// the state saved over it would drop the user's `enabled` and
+/// `local_authoritative` choices.
 pub fn save_state(project_id: &str, state: &GitPeerState) -> Result<(), String> {
-    crate::storage::write_json(&state_path(project_id), state).map_err(|e| e.to_string())
+    save_state_at(&state_path(project_id), state)
+}
+
+fn save_state_at(path: &Path, state: &GitPeerState) -> Result<(), String> {
+    crate::storage::patch_private_json(path, GitPeerState::default(), |stored| {
+        *stored = state.clone();
+        Ok(())
+    })
 }
 
 // ── Probing ─────────────────────────────────────────────────────────────────
@@ -1817,14 +1827,10 @@ async fn transfer_and_apply(
     // surface (and, under a resolution, force-move after a backup — never otherwise).
     for src_tag in &source.tags {
         match sha_of(dest, RefKind::Tag, &src_tag.name) {
-            None => {
-                let _ = dst_peer.run(&[
-                    "update-ref",
-                    &format!("refs/tags/{}", src_tag.name),
-                    &src_tag.sha,
-                ]);
-                result.applied += 1;
-            }
+            None => match create_tag(&dst_peer, &src_tag.name, &src_tag.sha) {
+                Ok(()) => result.applied += 1,
+                Err(e) => result.blocked = result.blocked.or(Some(e)),
+            },
             Some(d) if d != src_tag.sha => {
                 if force {
                     match force_move_tag(&dst_peer, &src_tag.name, &src_tag.sha, d, ts) {
@@ -2224,6 +2230,18 @@ fn force_move_tag(dst_peer: &Peer, tag: &str, src_sha: &str, dst_sha: &str, ts: 
         dst_peer,
         &["update-ref", &format!("refs/tags/{tag}"), src_sha, dst_sha],
         &format!("moving tag '{tag}'"),
+    )?;
+    Ok(())
+}
+
+/// Create `dest`'s tag `tag` at `sha`, which the probe saw missing there. Only a
+/// create: a tag that appeared since the probe is never overwritten (it has no
+/// backup ref, and tags keep no reflog) — the next pass classifies it.
+fn create_tag(dst_peer: &Peer, tag: &str, sha: &str) -> Result<(), String> {
+    run_checked(
+        dst_peer,
+        &["update-ref", &format!("refs/tags/{tag}"), sha, ""],
+        &format!("creating tag '{tag}'"),
     )?;
     Ok(())
 }
@@ -5744,6 +5762,49 @@ mod tests {
         let err = back_up_branches(&peer, &branches, 1_700_000_007)
             .expect_err("a backup that did not land must stop the pairing");
         assert!(err.contains("backing up"), "{err}");
+    }
+
+    #[test]
+    fn create_tag_never_moves_a_tag_that_appeared_since_the_probe() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping create_tag_never_moves_a_tag_that_appeared_since_the_probe");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let first = init_repo_with_file(dir, "a.txt", b"one\n");
+        git_in(dir, &["tag", "v1"]);
+        std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+        git_in(dir, &["commit", "-qam", "two"]);
+        let second = rev(dir, "HEAD");
+        let peer = Peer::Local(dir.to_path_buf());
+
+        let err = create_tag(&peer, "v1", &second).expect_err("an existing tag is not a create");
+        assert!(err.contains("creating tag"), "{err}");
+        assert_eq!(rev(dir, "refs/tags/v1"), first, "the tag must not have moved");
+        create_tag(&peer, "v2", &second).expect("create");
+        assert_eq!(rev(dir, "refs/tags/v2"), second);
+    }
+
+    /// A lockstep state file that does not parse is never replaced by the
+    /// default-derived state a later save carries; a readable one is.
+    #[test]
+    fn save_state_never_replaces_an_unreadable_state_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("git_peer.json");
+        let newer = r#"{"enabled":true,"localAuthoritative":true,"status":"fromANewerBuild","detail":null}"#;
+        std::fs::write(&path, newer).unwrap();
+        assert!(save_state_at(&path, &GitPeerState::default()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+
+        std::fs::remove_file(&path).unwrap();
+        let on = GitPeerState { enabled: true, local_authoritative: true, ..GitPeerState::default() };
+        save_state_at(&path, &on).unwrap();
+        let back: GitPeerState = crate::storage::read_json(&path).unwrap();
+        assert!(back.enabled && back.local_authoritative);
+        save_state_at(&path, &GitPeerState::default()).unwrap();
+        let back: GitPeerState = crate::storage::read_json(&path).unwrap();
+        assert!(!back.enabled);
     }
 
     #[test]

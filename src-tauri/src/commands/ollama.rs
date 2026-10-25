@@ -1294,20 +1294,22 @@ fn read_pending_pulls() -> Vec<String> {
 }
 
 fn mark_pending_pull(model: &str, active: bool) {
-    let mut list = read_pending_pulls();
-    let existed = list.iter().any(|m| m == model);
-    if active {
-        if existed {
-            return;
+    let _ = mark_pending_pull_in(&pending_pulls_path(), model, active);
+}
+
+/// Add or drop `model` in one read-modify-write. A list that does not parse is
+/// an error and stays as it is — never replaced by a one-entry list.
+fn mark_pending_pull_in(path: &std::path::Path, model: &str, active: bool) -> Result<(), String> {
+    crate::storage::patch_private_json(path, Vec::<String>::new(), |list| {
+        if active {
+            if !list.iter().any(|m| m == model) {
+                list.push(model.to_string());
+            }
+        } else {
+            list.retain(|m| m != model);
         }
-        list.push(model.to_string());
-    } else {
-        if !existed {
-            return;
-        }
-        list.retain(|m| m != model);
-    }
-    let _ = crate::storage::write_json(&pending_pulls_path(), &list);
+        Ok(())
+    })
 }
 
 /// Model refs whose download was interrupted (Tabtivity closed/crashed mid-pull).
@@ -4879,6 +4881,25 @@ mod owned_server_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An interrupted-pull list that does not parse keeps its entries: a new
+    /// pull fails to record itself rather than replacing them with its own.
+    #[test]
+    fn a_pending_pull_never_replaces_an_unreadable_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ollama_pending_pulls.json");
+        std::fs::write(&path, "[\"llama3\", ").unwrap();
+        assert!(mark_pending_pull_in(&path, "qwen3", true).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\"llama3\", ");
+
+        std::fs::remove_file(&path).unwrap();
+        mark_pending_pull_in(&path, "llama3", true).unwrap();
+        mark_pending_pull_in(&path, "qwen3", true).unwrap();
+        mark_pending_pull_in(&path, "qwen3", true).unwrap();
+        mark_pending_pull_in(&path, "llama3", false).unwrap();
+        let list: Vec<String> = crate::storage::read_json(&path).unwrap();
+        assert_eq!(list, vec!["qwen3"]);
+    }
 
     #[test]
     fn prose_sentence_stops_preserve_language_punctuation_and_decimals() {

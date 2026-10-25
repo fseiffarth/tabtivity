@@ -2301,7 +2301,7 @@ fn record_root_mappings_in(path: &Path, root: &Path) {
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     // A map that does not parse is left as it is, not replaced by this root's.
-    let _ = crate::storage::patch_json(
+    let _ = crate::storage::patch_private_json(
         path,
         std::collections::HashMap::new(),
         |map: &mut std::collections::HashMap<String, String>| {

@@ -64,7 +64,7 @@ fn patch_all<R>(
     path: &std::path::Path,
     patch: impl FnOnce(&mut Vec<GlobalMachine>) -> Result<R, String>,
 ) -> Result<R, String> {
-    storage::patch_json(path, Vec::new(), patch)
+    storage::patch_private_json(path, Vec::new(), patch)
 }
 
 /// Every globally connected machine, for the header's Machines indicator.

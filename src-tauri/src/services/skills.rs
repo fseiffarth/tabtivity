@@ -92,20 +92,20 @@ fn default_sources() -> Vec<SkillSource> {
 }
 
 /// Every configured source, seeding + persisting the default set on first call
-/// (an empty/missing file, not an error — a fresh install has no sources yet).
-pub fn list_sources() -> Vec<SkillSource> {
-    match storage::read_json::<Vec<SkillSource>>(&sources_path()) {
-        Ok(sources) => sources,
-        Err(_) => {
-            let seeded = default_sources();
-            let _ = storage::write_json(&sources_path(), &seeded);
-            seeded
-        }
-    }
+/// (a missing file, not an error — a fresh install has no sources yet). A file
+/// that does not parse (corrupt, or a newer build's) is an error and stays as it
+/// is: the user's added sources are never replaced by the seed.
+pub fn list_sources() -> Result<Vec<SkillSource>, String> {
+    patch_sources(&sources_path(), |sources| Ok(sources.clone()))
 }
 
-fn save_sources(sources: &[SkillSource]) -> Result<(), String> {
-    storage::write_json(&sources_path(), &sources.to_vec()).map_err(|e| e.to_string())
+/// One read-modify-write of the source list, starting from the seed when the
+/// file is missing.
+fn patch_sources<R>(
+    path: &Path,
+    patch: impl FnOnce(&mut Vec<SkillSource>) -> Result<R, String>,
+) -> Result<R, String> {
+    storage::patch_private_json(path, default_sources(), patch)
 }
 
 /// A short, filesystem- and JSON-safe id derived from the URL, so a repeated add
@@ -141,30 +141,35 @@ fn slug_from(url: &str, label: &str) -> String {
 /// same URL is a no-op that returns the existing entry rather than a duplicate.
 pub fn add_source(label: String, url: String) -> Result<SkillSource, String> {
     crate::commands::git::validate_clone_url(&url)?;
-    let mut sources = list_sources();
-    if let Some(existing) = sources.iter().find(|s| s.url == url) {
-        return Ok(existing.clone());
-    }
-    let base = slug_from(&url, &label);
-    let mut id = base.clone();
-    let mut n = 2;
-    while sources.iter().any(|s| s.id == id) {
-        id = format!("{base}-{n}");
-        n += 1;
-    }
-    let entry = SkillSource { id, label, url };
-    sources.push(entry.clone());
-    save_sources(&sources)?;
-    Ok(entry)
+    add_source_in(&sources_path(), label, url)
+}
+
+fn add_source_in(path: &Path, label: String, url: String) -> Result<SkillSource, String> {
+    patch_sources(path, |sources| {
+        if let Some(existing) = sources.iter().find(|s| s.url == url) {
+            return Ok(existing.clone());
+        }
+        let base = slug_from(&url, &label);
+        let mut id = base.clone();
+        let mut n = 2;
+        while sources.iter().any(|s| s.id == id) {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        let entry = SkillSource { id, label, url };
+        sources.push(entry.clone());
+        Ok(entry)
+    })
 }
 
 /// Drop a source and its cached clone. Does not touch anything already
 /// installed into a project — install is a copy, not a link.
 pub fn remove_source(id: String) -> Result<(), String> {
-    let mut sources = list_sources();
-    sources.retain(|s| s.id != id);
     let dir = cache_dir(&id)?;
-    save_sources(&sources)?;
+    patch_sources(&sources_path(), |sources| {
+        sources.retain(|s| s.id != id);
+        Ok(())
+    })?;
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
@@ -177,7 +182,7 @@ pub fn remove_source(id: String) -> Result<(), String> {
 /// private repo that lost access fails instead of hanging on a credential
 /// prompt Tabtivity has no console to answer.
 pub fn refresh_source(id: &str) -> Result<(), String> {
-    let sources = list_sources();
+    let sources = list_sources()?;
     let source = sources
         .into_iter()
         .find(|s| s.id == id)
@@ -489,6 +494,24 @@ fn list_installed_at(dir: &Path) -> Vec<InstalledSkill> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A source list that does not parse is left as it is: neither a read nor
+    /// an add replaces the user's sources with the seed. A missing one is seeded.
+    #[test]
+    fn an_unreadable_source_list_is_never_replaced_by_the_seed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills_sources.json");
+        let unreadable = r#"[{"id":"mine","label":"Mine","url":"https://example.com/s.git"}"#;
+        std::fs::write(&path, unreadable).unwrap();
+        assert!(patch_sources(&path, |s| Ok(s.clone())).is_err());
+        assert!(add_source_in(&path, "Other".into(), "https://example.com/o.git".into()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), unreadable);
+
+        std::fs::remove_file(&path).unwrap();
+        let added = add_source_in(&path, "Other".into(), "https://example.com/o.git".into()).unwrap();
+        let ids: Vec<String> = patch_sources(&path, |s| Ok(s.iter().map(|s| s.id.clone()).collect())).unwrap();
+        assert_eq!(ids, vec!["anthropic".to_string(), added.id]);
+    }
 
     #[test]
     fn parse_skill_md_reads_frontmatter_and_strips_it() {

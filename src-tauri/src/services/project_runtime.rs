@@ -328,8 +328,13 @@ pub fn save_side_panel_folder(local_file: &str, folder: Option<String>) -> Resul
         return Err("cannot resolve project sessions directory".into());
     };
     let path = sessions_dir.join("filetabs.json");
+    // A session file that does not parse (corrupt, or a newer build's) is an
+    // error and stays as it is — never a default whose empty tab list would
+    // replace the stored file tabs. Read and written like `save_previous_sessions`
+    // (in place, umask), not through `patch_json`: a project folder's file keeps
+    // the mode a group-shared project gives it.
     let mut session: FileTabSession = if path.exists() {
-        storage::read_json(&path).unwrap_or_default()
+        storage::read_json(&path).map_err(|e| format!("{}: {e}", path.display()))?
     } else {
         FileTabSession::default()
     };
@@ -438,6 +443,20 @@ mod tests {
         let (tabs, folder) = load_file_tab_session(&local);
         assert_eq!(tabs.len(), 1);
         assert_eq!(folder.as_deref(), Some("src"));
+    }
+
+    /// A session file that does not parse keeps its bytes (and the file tabs in
+    /// them): saving the folder fails instead of replacing it with a default.
+    #[test]
+    fn saving_the_side_panel_folder_never_replaces_an_unreadable_session_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = project_file(&dir);
+        std::fs::create_dir_all(filetabs_path(&dir).parent().unwrap()).unwrap();
+        let unreadable = r#"{"fileTabs":[{"path":"README.md"}],"sidePanelFolder":7}"#;
+        std::fs::write(filetabs_path(&dir), unreadable).unwrap();
+
+        assert!(save_side_panel_folder(&local, Some("src".into())).is_err());
+        assert_eq!(std::fs::read_to_string(filetabs_path(&dir)).unwrap(), unreadable);
     }
 
     /// A file from before the panel was renamed still yields its folder, and

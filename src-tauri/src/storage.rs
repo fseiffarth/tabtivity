@@ -90,6 +90,34 @@ pub fn patch_json<T, R>(
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
+    patch_json_as(path, default, None, patch)
+}
+
+/// [`patch_json`] for a store [`write_json`] used to write owner-only: one that
+/// names hosts, logins or their paths. Each write is staged like
+/// [`write_private_atomic`]'s — `0600` on Unix (as [`patch_json`]'s already
+/// is), the owner-only ACL on Windows instead of the folder's inherited one.
+pub fn patch_private_json<T, R>(
+    path: &Path,
+    default: T,
+    patch: impl FnOnce(&mut T) -> Result<R, String>,
+) -> Result<R, String>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    patch_json_as(path, default, Some(0o600), patch)
+}
+
+/// The one read-modify-write; `private` as in [`write_atomic`].
+fn patch_json_as<T, R>(
+    path: &Path,
+    default: T,
+    private: Option<u32>,
+    patch: impl FnOnce(&mut T) -> Result<R, String>,
+) -> Result<R, String>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
     let _guard = JSON_MUTATION_LOCK
         .lock_ok();
     // The process-wide lock serialises this process; the file lock serialises
@@ -117,7 +145,7 @@ where
     if on_disk.as_deref().map(str::as_bytes) == Some(bytes.as_slice()) {
         return Ok(result);
     }
-    write_bytes_atomic_unlocked(path, &bytes).map_err(|e| e.to_string())?;
+    write_atomic(path, &bytes, private, Landing::Replace).map_err(|e| e.to_string())?;
     Ok(result)
 }
 
@@ -1255,6 +1283,31 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+    }
+
+    /// A private patch lands a whole, owner-only file — a protected DACL on
+    /// Windows, not the folder's inherited ACL — and refuses a corrupt one.
+    #[test]
+    fn patch_private_json_writes_owner_only_and_keeps_a_corrupt_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hosts.json");
+        patch_private_json(&path, Vec::<String>::new(), |hosts| {
+            hosts.push("a.example".into());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(read_json::<Vec<String>>(&path).unwrap(), vec!["a.example"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        #[cfg(windows)]
+        assert!(crate::services::private_file::dacl_is_protected(&path), "{}", path.display());
+
+        std::fs::write(&path, b"[\"a.ex").unwrap();
+        assert!(patch_private_json(&path, Vec::<String>::new(), |_| Ok(())).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"[\"a.ex");
     }
 
     /// What identifies one written file: a rewrite goes through a fresh temp
