@@ -1670,8 +1670,9 @@ function PdfPageCanvas({
           Above the remark layer because it is a live control over what the reader is
           doing right now, while a marker stands for something already written. */}
       {/* The markup layer (`usePdfMarkup`), over every other page layer — the
-          remarks included, which it leaves visible but out of reach. */}
-      {markup && cssSize && (
+          remarks included, which it leaves visible but out of reach. Only on a
+          near page: its canvas is a full-resolution backing store. */}
+      {markup && cssSize && near && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
       )}
       {tickBadges && tickBadges.badges.length > 0 && cssSize && (

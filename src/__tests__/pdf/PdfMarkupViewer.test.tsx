@@ -201,6 +201,44 @@ describe("Mark up in the PDF viewer", () => {
     expect(container.querySelector(".file-viewer-pdf-markup-layer")).toBeNull();
   });
 
+  it("mounts the markup canvas only on pages near the viewport", async () => {
+    const watchers: { cb: IntersectionObserverCallback; targets: Element[] }[] = [];
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class {
+      private rec: (typeof watchers)[number];
+      constructor(cb: IntersectionObserverCallback) {
+        this.rec = { cb, targets: [] };
+        watchers.push(this.rec);
+      }
+      observe(el: Element) { this.rec.targets.push(el); }
+      unobserve() {}
+      disconnect() { this.rec.targets = []; }
+      takeRecords() { return []; }
+    };
+    try {
+      const { container } = render(viewer());
+      await loaded();
+      await waitFor(() => expect(watchers.flatMap((w) => w.targets).length).toBe(2));
+      await waitFor(() => expect(markUp()!.disabled).toBe(false));
+      fireEvent.click(markUp()!);
+      expect(container.querySelectorAll(".file-viewer-pdf-page-wrap.is-marking").length).toBe(2);
+      // Nothing is near: no page holds a markup canvas.
+      expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(0);
+      const report = (hit: (el: Element) => boolean) => {
+        for (const w of watchers) {
+          const entries = w.targets.map((target) => ({ target, isIntersecting: hit(target) }) as IntersectionObserverEntry);
+          if (entries.length) w.cb(entries, w as unknown as IntersectionObserver);
+        }
+      };
+      const first = container.querySelector(".file-viewer-pdf-page-wrap")!;
+      act(() => report((el) => el === first));
+      expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(1);
+      act(() => report(() => false));
+      expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(0);
+    } finally {
+      delete (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver;
+    }
+  });
+
   it("steers the pen bar from the keyboard and keeps the choices", async () => {
     localStorage.clear();
     const { container } = render(viewer());

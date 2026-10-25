@@ -186,13 +186,52 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   const selBox = selection ? boxAround(page, selection.indices) : null;
   const selKey = selBox?.join(",") ?? "";
 
+  /** The committed marks drawn once, for the length of a gesture that repaints
+   *  the layer on every pointer move (a box, an arrow, a stamp, an area): each
+   *  move then copies this instead of redrawing every mark. Dropped as the
+   *  gesture ends, so it holds no second backing store at rest. */
+  const committed = useRef<{ page: PageLayer | undefined; sent: PageLayer | undefined; w: number; h: number; canvas: HTMLCanvasElement } | null>(null);
+  const dropCommitted = () => {
+    const held = committed.current;
+    if (held) {
+      held.canvas.width = 0;
+      held.canvas.height = 0;
+    }
+    committed.current = null;
+  };
+  /** Paints the committed marks onto `ctx`, from the copy while a gesture is
+   *  in flight. */
+  const paintCommitted = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, k: number, gesturing: boolean) => {
+    if (!gesturing) {
+      dropCommitted();
+      paintLayer(ctx, page, sent, k);
+      return;
+    }
+    let held = committed.current;
+    if (!held || held.page !== page || held.sent !== sent || held.w !== canvas.width || held.h !== canvas.height) {
+      dropCommitted();
+      const copy = document.createElement("canvas");
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const copyCtx = copy.getContext("2d");
+      if (!copyCtx) {
+        paintLayer(ctx, page, sent, k);
+        return;
+      }
+      paintLayer(copyCtx, page, sent, k);
+      held = { page, sent, w: canvas.width, h: canvas.height, canvas: copy };
+      committed.current = held;
+    }
+    ctx.drawImage(held.canvas, 0, 0);
+  };
+
   const redraw = () => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const k = canvas.width / size[0];
-    paintLayer(ctx, page, sent, k);
+    paintCommitted(ctx, canvas, k, preview.length > 0 || area !== null);
     if (preview.length) {
       ctx.save();
       ctx.scale(k, k);
@@ -219,6 +258,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     () => () => {
       const g = gesture.current;
       if (g?.kind === "ink" && g.timer !== null) window.clearTimeout(g.timer);
+      dropCommitted();
       const canvas = canvasRef.current;
       if (canvas) {
         canvas.width = 0;
