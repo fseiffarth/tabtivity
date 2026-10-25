@@ -885,13 +885,13 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       <input ref={searchBox} className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
         placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
         onChange={(event) => setQuery(event.target.value)} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} />
-      {!searching && listing?.uploads && <button className="new-tab-file" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
-        <span><strong>{t("mobile.files.upload.button")}</strong><small>{t("mobile.files.upload.hint", { folder: here.name })}</small></span>
+      {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
+        <span><strong>{t("mobile.files.upload.button")}</strong><small>{t("mobile.files.upload.hint")}</small></span>
       </button>}
       {uploads.input}
       {uploads.rows.map(uploadRow)}
-      <p className="sheet-note">{t(!searching && listing?.uploads ? "mobile.files.addOnly" : "mobile.files.readOnly")}</p>
+      <p className="sheet-note files-note">{t(!searching && listing?.uploads ? "mobile.files.addOnly" : "mobile.files.readOnly")}</p>
       {savedFailure && <p className="sheet-note error" role="alert">{t(savedFailure)}</p>}
       {atRoot && !searching && !showRecents && favorites.length > 0 && <section className="files-saved" aria-label={t("mobile.files.favorites")}>
         <h3>{t("mobile.files.favorites")}</h3>

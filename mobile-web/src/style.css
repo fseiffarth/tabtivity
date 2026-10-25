@@ -1393,8 +1393,8 @@ span.files-close { background:transparent; }
 .files-tile { position:relative; display:grid; align-content:start; gap:4px; min-width:0; }
 .files-tile-open { display:grid; gap:3px; min-width:0; padding:0; border:0; background:transparent; color:#d8e2f5; text-align:left; }
 .files-tile-cover { position:relative; display:grid; place-items:center; aspect-ratio:4 / 5; overflow:hidden; border:1px solid #2b3040; border-radius:10px; background:#1e2230; }
-.files-tile-cover .files-icon { display:grid; place-items:center; width:56px; height:56px; border-radius:14px; background:#252a3a; color:#aab2c5; }
-.files-tile-cover .files-icon svg { width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.files-tile-cover .files-icon { display:grid; place-items:center; width:64px; height:64px; border-radius:14px; background:#252a3a; color:#aab2c5; }
+.files-tile-cover .files-icon svg { width:34px; height:34px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-cover .files-icon-dir { background:#1d2a44; color:#8fb8ff; }
 .files-tile-cover .files-icon-image { background:#1d3329; color:#8ad1a6; }
 .files-tile-cover .files-icon-pdf { background:#3a2226; color:#f28b82; }
@@ -1427,6 +1427,14 @@ span.files-close { background:transparent; }
 .files-side-switch button { flex:1 1 0; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
+/* Upload here: one line under the search box, as wide as it, the arrow in a
+   tinted tile before the label; the add-only note below it is fine print. */
+.files-library .new-tab-file.files-upload { justify-content:flex-start; gap:12px; min-height:56px; margin:0 4px; padding:8px 14px 8px 10px; border-radius:11px; }
+.files-library .files-upload svg { flex:0 0 38px; box-sizing:border-box; width:38px; height:38px; padding:9px; border-radius:10px; background:#1d2a44; color:#8fb8ff; }
+.files-library .files-upload > span { flex:1; gap:1px; }
+.files-library .files-upload strong { font-size:.95rem; }
+.files-library .files-upload small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.files-note { margin:-4px 4px 0; padding:0 2px; font-size:.76rem; }
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
 /* A file's ↗ Share sits beside its row, drawn as the outbox tile's Share link. */
 .files-list li { display:flex; flex-wrap:wrap; align-items:stretch; gap:3px; }
