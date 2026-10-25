@@ -171,8 +171,11 @@ import {
 } from "../voiceInput";
 import { startDictation, type DictationSession } from "../voiceSession";
 import { usePenWriting } from "../penWriting";
-import { speak, speechOutputSupported, stopSpeaking, unlockSpeech } from "../speechOutput";
+import { currentSpeechId, speak, speechOutputSupported, stopSpeaking, subscribeSpeech, unlockSpeech } from "../speechOutput";
 import { spokenSend, spokenText } from "../../../shared/voice";
+import { createSendGuard, type GuardPhase, type SendGuard } from "../../../shared/handsFree";
+import { playChime } from "../../../src/lib/voice/chime";
+import { HANDS_FREE_PAUSE_MS, TURN_SETTLE_MS, handsFreeTurnOver, questionSpeech, voicePick } from "../handsFree";
 
 /** A line the dictation strip shows: a key, not a sentence, so switching the
  * language retranslates what is already on screen. */
@@ -895,6 +898,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const connectedRef = useRef(false);
   const voiceRequest = useRef(0);
   const voiceProgress = useRef<DictationProgress>(DICTATION_START);
+  /** Hands-free (`focusHandsFree`): the send guard the dictation feeds, and
+   * whether the recognizer holds words it has not settled yet. */
+  const sendGuard = useRef<SendGuard>();
+  const voiceOpen = useRef(false);
+  /** The user stopped the mic: what it still settles is plain dictation. */
+  const voiceStopping = useRef(false);
   const copiedTimer = useRef<number>();
   const sendTimers = useRef<number[]>([]);
   /** When this screen last sent a slash command, and last drew output from
@@ -1297,6 +1306,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   useEffect(() => { if (clearRefused && !liveBusy) setClearRefused(false); }, [clearRefused, liveBusy]);
   const [focusSource, setFocusSource] = useState<"session" | "screen">("session");
   const [readAloud, setReadAloud] = useState(() => readFlag("focusReadAloud"));
+  const [handsFree, setHandsFree] = useState(() => readFlag("focusHandsFree"));
+  const handsFreeRef = useRef(handsFree);
+  handsFreeRef.current = handsFree;
+  const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
+  /** Hands-free sent at this time and waits for the turn to end, to open the
+   * mic again; `sawWork` once the agent was seen at work on it, `answer` the
+   * newest answer's key at the send. */
+  const [handsFreeWait, setHandsFreeWait] = useState<number | null>(null);
+  const handsFreeTurn = useRef<{ sawWork: boolean; answer: string | null }>({ sawWork: false, answer: null });
+  /** Whether read-aloud is saying something now (`speechOutput`). */
+  const [speaking, setSpeaking] = useState(() => currentSpeechId() !== null);
+  useEffect(() => subscribeSpeech(() => setSpeaking(currentSpeechId() !== null)), []);
   const [voiceRemote, setVoiceRemote] = useState(() => readFlag("voiceRemote"));
   /** Only a phone with an on-device recognizer for the dictation language has
    * anything to choose. Android's Chrome has the API but no model, so `available`
@@ -2475,6 +2496,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   useEffect(() => {
     if (listening || !sessionShown) stopSpeaking();
   }, [listening, sessionShown]);
+  /** The newest answer in the stored session, by key: hands-free tells a
+   * turn that ended too fast for its busy row by a new one. */
+  const lastAnswerKey = useMemo(() => {
+    const turns = transcript ? transcriptTurns(transcript.entries) : [];
+    for (let index = turns.length - 1; index >= 0; index -= 1) if (turns[index].kind === "answer") return turns[index].key;
+    return null;
+  }, [transcript]);
   // A new turn in the stored session, or a file the agent sent into the
   // Focus chat, scrolls the view to it, as new screen output does, unless
   // the reader has scrolled up to read.
@@ -2764,6 +2792,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       paintMicLevel(dictateButton.current, null);
     }
     voiceProgress.current = DICTATION_START;
+    sendGuard.current?.reset();
+    voiceOpen.current = false;
     setListening(false);
     setVoicePreview("");
     setVoiceStatus(null);
@@ -2892,6 +2922,27 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * that started them. */
   const submitDraftRef = useRef(submitDraft);
   submitDraftRef.current = submitDraft;
+  /** Hands-free sent: the mic opens again once the turn is over. */
+  const awaitTurn = () => {
+    handsFreeTurn.current = { sawWork: false, answer: lastAnswerKey };
+    setHandsFreeWait(Date.now());
+  };
+  const awaitTurnRef = useRef(awaitTurn);
+  awaitTurnRef.current = awaitTurn;
+  /** The send guard (`shared/handsFree.ts`), made on first use: its pause
+   * ends in the chime and the cancel window, the window in a send. */
+  const handsFreeGuard = () => {
+    sendGuard.current ??= createSendGuard(HANDS_FREE_PAUSE_MS, {
+      hasDraft: () => draftRef.current.trim() !== "",
+      onWindow: () => playChime(),
+      onSend: () => {
+        if (submitDraftRef.current()) awaitTurnRef.current();
+      },
+      onCancel: () => {},
+      onPhase: setGuardPhase,
+    });
+    return sendGuard.current;
+  };
   /** Esc stops the agent's turn; once the CLI has wound down the message is
    * typed like any other — not held for an idle point the interrupt has just
    * made. A failure after the gap marks the bubble, as a dropped piece does. */
@@ -4137,6 +4188,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (!deliver(answerRowKeys(liveQuestion, option))) return;
     setQuestionSent({ signature: questionSignature, number: option.number });
   };
+  /** Hands-free: a settled utterance that picks a row of the question on
+   * screen answers it as a tap would; the mic then waits for the turn the
+   * answer resumes. False when it picks none — the words are dictation. */
+  const voicePickRef = useRef<(utterance: string) => boolean>(() => false);
+  voicePickRef.current = (utterance) => {
+    if (!liveQuestion || questionHeld) return false;
+    const option = voicePick(utterance, liveQuestion);
+    if (!option) return false;
+    answerQuestion(option);
+    endDictation();
+    awaitTurn();
+    return true;
+  };
   /** Walks a several-question dialog — Claude Code's ←/→, Codex's
    * PageUp/PageDown — so an answer already given can be changed before it is
    * sent. No row is pending, but none can be tapped until the session redraws. */
@@ -4245,7 +4309,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
     followReadable(true);
   };
-  const stopVoice = () => recognition.current?.stop();
+  /** The user's stop also ends the hands-free loop until the mic is tapped
+   * again. */
+  const stopVoice = () => {
+    sendGuard.current?.reset();
+    setHandsFreeWait(null);
+    voiceStopping.current = true;
+    recognition.current?.stop();
+  };
   /** A tap while the on-device check runs takes the check back, so a browser
    * whose check hangs (or a long language download) never locks the button. */
   const cancelVoicePrep = () => {
@@ -4281,6 +4352,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       return;
     }
     voiceProgress.current = DICTATION_START;
+    voiceStopping.current = false;
     setVoicePreview("");
     setVoiceFailure(null);
     // The session restarts the browser's recognizer through pauses, so
@@ -4288,12 +4360,33 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     const session: DictationSession = startDictation(Recognition, { lang: language, local: mode === "local" }, {
       onStart: () => {
         setListening(true);
-        setVoiceStatus({ key: mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" });
+        setVoiceStatus({ key: handsFreeRef.current ? "mobile.voice.listeningHandsFree" : mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" });
       },
       onResult: (event) => {
         const reading = readDictation(event);
         const step = advanceDictation(voiceProgress.current, reading.heard);
         voiceProgress.current = step.progress;
+        // Hands-free: settled words go through the send guard first. A stop
+        // word cancels its window and never reaches the draft; on a question
+        // the agent waits on, "two" / "option two" picks that row.
+        const guard = handsFreeRef.current && !voiceStopping.current ? handsFreeGuard() : undefined;
+        if (step.insert && guard) {
+          if (voicePickRef.current(step.insert)) {
+            guard.reset();
+            voiceOpen.current = false;
+            forgetDictation();
+            return;
+          }
+          voiceOpen.current = false;
+          if (!guard.settled(step.insert)) {
+            forgetDictation();
+            if (reading.interim) {
+              voiceOpen.current = true;
+              guard.speechStarted();
+            }
+            return;
+          }
+        }
         // Speech is inserted into the current prompt, not submitted: the user
         // reviews it and presses Send — or says "go on" / "los" last, which
         // leaves the draft and sends the rest (`spokenSend`). The ref, not
@@ -4305,20 +4398,40 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           draftRef.current = spoken ?? next;
           setDraft(spoken ?? next);
           if (spoken !== null) {
+            // Deliberate: it skips the hands-free window.
+            guard?.reset();
             forgetDictation();
-            submitDraftRef.current(spoken);
+            if (submitDraftRef.current(spoken) && guard) awaitTurnRef.current();
             return;
           }
+        }
+        if (guard && reading.interim) {
+          voiceOpen.current = true;
+          guard.speechStarted();
+        } else if (guard && voiceOpen.current && !step.insert) {
+          // What was being heard settled into nothing new (a re-read): the
+          // window, or the pause, goes on.
+          voiceOpen.current = false;
+          guard.settled("");
         }
         setVoicePreview(dictationPreview(step.progress, reading.interim));
       },
       // A new recognizer's result list starts empty: everything the last one
-      // heard is in the draft already, and none of it is read back.
-      onRestart: () => { voiceProgress.current = DICTATION_START; },
+      // heard is in the draft already, and none of it is read back. Words it
+      // had not settled are gone, so hands-free counts its pause from here.
+      onRestart: () => {
+        voiceProgress.current = DICTATION_START;
+        if (voiceOpen.current && handsFreeRef.current) {
+          voiceOpen.current = false;
+          handsFreeGuard().settled("");
+        }
+      },
       onError: (message) => setVoiceFailure({ key: message }),
       onLevel: (level) => paintMicLevel(dictateButton.current, level),
       onEnd: () => {
         if (recognition.current === session) recognition.current = undefined;
+        sendGuard.current?.reset();
+        voiceOpen.current = false;
         setListening(false);
         setVoiceStatus(null);
       },
@@ -4333,7 +4446,66 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       active.abort();
       paintMicLevel(dictateButton.current, null);
     }
+    sendGuard.current?.reset();
+    setHandsFreeWait(null);
   }, [tab.id]);
+  // Hands-free's turn: the agent seen at work on what was sent.
+  useEffect(() => {
+    if (handsFreeWait !== null && liveBusy) handsFreeTurn.current.sawWork = true;
+  }, [handsFreeWait, liveBusy]);
+  /** Bumped when the page comes back, so a turn that ended while it was
+   * hidden opens the mic then: a hidden page cannot hold it. */
+  const [pageShown, setPageShown] = useState(0);
+  useEffect(() => {
+    if (handsFreeWait === null) return;
+    const shown = () => { if (!document.hidden) setPageShown((n) => n + 1); };
+    document.addEventListener("visibilitychange", shown);
+    return () => document.removeEventListener("visibilitychange", shown);
+  }, [handsFreeWait]);
+  const startVoiceRef = useRef(startVoice);
+  startVoiceRef.current = startVoice;
+  // Once the turn is over and the answer has been read — at once with
+  // read-aloud off — the mic opens again, after the busy row stayed off a
+  // moment (`TURN_SETTLE_MS`).
+  useEffect(() => {
+    if (handsFreeWait === null) return;
+    if (!handsFree || !connected) {
+      setHandsFreeWait(null);
+      return;
+    }
+    const over = handsFreeTurnOver({
+      busy: liveBusy,
+      sawWork: handsFreeTurn.current.sawWork,
+      question: liveQuestion !== null && !questionHeld,
+      answerAtSend: handsFreeTurn.current.answer,
+      answerNow: lastAnswerKey,
+    });
+    if (!over || speaking || listening || preparingVoice || document.hidden) return;
+    const timer = window.setTimeout(() => {
+      setHandsFreeWait(null);
+      void startVoiceRef.current();
+    }, TURN_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [handsFreeWait, handsFree, connected, liveBusy, liveQuestion, questionHeld, lastAnswerKey, speaking, listening, preparingVoice, pageShown]);
+  /** Hands-free with read-aloud: a question the agent waits on is read out,
+   * its rows by number, once per question, so it can be answered by voice. */
+  const spokenQuestion = useRef("");
+  useEffect(() => {
+    if (!questionSignature) {
+      spokenQuestion.current = "";
+      return;
+    }
+    if (!handsFree || !readAloud || !liveQuestion || questionHeld || spokenQuestion.current === questionSignature) return;
+    spokenQuestion.current = questionSignature;
+    const text = questionSpeech(questionAsk.map((line) => line.text), liveQuestion);
+    if (!text) return;
+    // The mic would hear it: it closes, and opens again once it was read.
+    if (recognition.current) {
+      endDictation();
+      awaitTurn();
+    }
+    speak(`question:${questionSignature}`, text, speechTag());
+  }, [questionSignature, handsFree, readAloud, liveQuestion, questionHeld, questionAsk]);
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -4342,6 +4514,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
     : voiceStatus ? sayVoice(voiceStatus) : "";
+  /** Hands-free's line where a tap does something: the cancel window (a tap
+   * keeps the draft unsent), the answer being read (a tap stops the voice;
+   * the agent goes on), or the wait for the turn to end. */
+  const handsFreeLine: { text: string; run?: () => void } | null = !handsFree || voiceProblem ? null
+    : guardPhase === "window" || guardPhase === "holding" ? { text: t("mobile.voice.handsFreeWindow"), run: () => sendGuard.current?.cancel() }
+    : handsFreeWait !== null && speaking ? { text: t("mobile.voice.handsFreeSpeaking"), run: stopSpeaking }
+    : handsFreeWait !== null && !listening && !preparingVoice ? { text: t("mobile.voice.handsFreeWaiting") }
+    : null;
   /** What the sheet paints: the live step, or — between the tap and the
    * session's redraw — the answered one, listed but not tappable, so the sheet
    * does not blink empty on the way to the next step. */
@@ -4559,6 +4739,23 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           <span><strong>{t("mobile.speech.auto")} {isUntested("mobile.focus.readAloud") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{t(speechAvailable ? "mobile.speech.autoHint" : "mobile.speech.unavailable")}</small></span>
           {readAloud && speechAvailable && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
         </button>
+        {/* Hands-free: a pause sends the dictation after a chime and a cancel
+            window, and the mic opens again once the answer is over. The
+            screen must stay on and this page open — a web page cannot keep
+            the microphone from a pocket. */}
+        <button role="menuitemcheckbox" aria-checked={handsFree && voiceAvailable} aria-disabled={voiceAvailable ? undefined : "true"} className={voiceAvailable ? undefined : "unavailable"} onClick={() => {
+          if (!voiceAvailable) return;
+          if (handsFree) {
+            sendGuard.current?.reset();
+            setHandsFreeWait(null);
+          } else unlockSpeech();
+          writeFlag("focusHandsFree", !handsFree);
+          setHandsFree(!handsFree);
+          setFocusMenu(false);
+        }}>
+          <span><strong>{t("mobile.voice.handsFree")} {isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{t(voiceAvailable ? "mobile.voice.handsFreeHint" : "mobile.voice.unavailable")}</small></span>
+          {handsFree && voiceAvailable && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+        </button>
         <button role="menuitemcheckbox" aria-checked={voiceRemote && voiceLocalOffered} aria-disabled={voiceLocalOffered ? undefined : "true"} className={voiceLocalOffered ? undefined : "unavailable"} onClick={() => {
           if (!voiceLocalOffered) return;
           writeFlag("voiceRemote", !voiceRemote);
@@ -4636,7 +4833,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
                   <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
-                    <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.onScreen") && <> · {t("mobile.focus.untested")}</>}</small>
+                    <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
                         it — in Claude Code's permission dialog the file and the
                         diff it is asking about. Bounded by `readSelectPrompt`
@@ -4714,7 +4911,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && handsFreeLine && (handsFreeLine.run
+        ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
+        : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
+      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
@@ -4842,7 +5042,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
-          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
+          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : handsFree && speaking ? stopSpeaking : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>

@@ -648,11 +648,19 @@ export interface Settings {
    *  dictate with (unset: `small`), the speech language (`auto` / unset: the
    *  UI language; `detect`: whisper guesses), headset mode (talking over the
    *  voice interrupts it) and the hands-free pause in ms. Renderer-side only;
-   *  the backend round-trips them through its catch-all. */
+   *  the backend round-trips them through its catch-all. `voice_rate` is the
+   *  read-aloud speed (a multiplier, unset: 1); `voice_read_aloud` and
+   *  `voice_hands_free_on` are the Chat chips' state — read answers aloud,
+   *  and the hands-free loop, which needs the experimental flag below too. */
   voice_model?: string;
   voice_lang?: string;
   voice_headset?: boolean;
   voice_pause_ms?: number;
+  voice_rate?: number;
+  voice_read_aloud?: boolean;
+  voice_hands_free_on?: boolean;
+  /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
+  voice_hands_free?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */

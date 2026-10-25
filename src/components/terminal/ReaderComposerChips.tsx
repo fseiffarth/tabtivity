@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { COMMIT_CHOICES, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
@@ -14,7 +14,7 @@ const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit
  * commit prompts, each sent as a prompt of its own, the draft kept too.
  * `prefixes` are the commands this CLI takes as a lead (`draftPrefixes`).
  */
-export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit }: {
+export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, extra }: {
   prefixes: readonly string[];
   /** The command the draft leads with, if it is one of `prefixes`. */
   active: string | null;
@@ -22,6 +22,8 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   onPrefix: (command: string) => void;
   onClear: () => void;
   onCommit: (choice: CommitChoice) => void;
+  /** Chips of the composer's own after these (read-aloud, hands-free). */
+  extra?: ReactNode;
 }) {
   const t = useT();
   const [commitOpen, setCommitOpen] = useState(false);
@@ -105,6 +107,7 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
           ))}
         </div>
       )}
+      {extra}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { runInstallInTab } from "../../lib/installCommand";
 import {
   DEFAULT_VOICE_MODEL,
   VOICE_MODELS,
+  VOICE_PAUSE_MS,
   voiceErrorKey,
   voiceModelInstallCommand,
   voiceStatus,
@@ -13,7 +14,7 @@ import {
 import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
-import { SettingRow } from "./settingsUi";
+import { SettingRow, ToggleCard } from "./settingsUi";
 
 /** A model's label in the picker: its id, size and whether it is here. */
 const MODEL_LABEL: Record<(typeof VOICE_MODELS)[number], TranslationKey> = {
@@ -22,11 +23,17 @@ const MODEL_LABEL: Record<(typeof VOICE_MODELS)[number], TranslationKey> = {
   "large-v3-turbo": "settings.voice.modelLarge",
 };
 
+/** Read-aloud's speeds, as the multiplier `voice_speak` takes. */
+const RATES = [0.75, 1, 1.25, 1.5] as const;
+/** The hands-free pauses offered, in ms, inside the backend's range. */
+const PAUSES = [1000, 1500, 2000, 3000] as const;
+
 /**
- * Settings → Voice (docs/desktop_voice_plan.md, step 3): the speech model
- * the Chat dictates with — installed in a tab, one click — and the language
- * it listens in. Read-aloud's voice and rate, headset mode and the
- * hands-free pause come with read-aloud and hands-free (steps 2c and 4).
+ * Settings → Voice (docs/desktop_voice_plan.md, steps 3 and 4): the speech
+ * model the Chat dictates with — installed in a tab, one click — and the
+ * language it listens in; read-aloud's speed on the system voice (the one
+ * voice engine of phase 1); headset mode, in which talking over the voice
+ * stops it; and the pause after which hands-free sends.
  */
 export function VoiceSettings() {
   const t = useT();
@@ -88,6 +95,36 @@ export function VoiceSettings() {
               ...LANGUAGES.map((language) => ({ value: language.value, label: language.label })),
               { value: "detect", label: t("settings.voice.langDetect") },
             ]}
+          />
+        }
+      />
+      <SettingRow
+        label={<>{t("settings.voice.rate")} <UntestedTag id="terminal.reader.voice.readAloud" /></>}
+        help={t(status?.speak ? voiceErrorKey(status.speak) : "settings.voice.rateHelp")}
+        control={
+          <Dropdown
+            value={String(settings?.voice_rate ?? 1)}
+            ariaLabel={t("settings.voice.rate")}
+            onChange={(value) => void updateSettings({ voice_rate: Number(value) })}
+            options={RATES.map((rate) => ({ value: String(rate), label: `${rate}×` }))}
+          />
+        }
+      />
+      <ToggleCard
+        label={<>{t("settings.voice.headset")} <UntestedTag id="terminal.reader.voice.headsetBargeIn" /></>}
+        checked={settings?.voice_headset ?? false}
+        onChange={(e) => void updateSettings({ voice_headset: e.target.checked })}
+        help={t("settings.voice.headsetHelp")}
+      />
+      <SettingRow
+        label={t("settings.voice.pause")}
+        help={t("settings.voice.pauseHelp")}
+        control={
+          <Dropdown
+            value={String(settings?.voice_pause_ms ?? VOICE_PAUSE_MS.default)}
+            ariaLabel={t("settings.voice.pause")}
+            onChange={(value) => void updateSettings({ voice_pause_ms: Number(value) })}
+            options={PAUSES.map((ms) => ({ value: String(ms), label: t("settings.voice.seconds", { n: ms / 1000 }) }))}
           />
         }
       />
