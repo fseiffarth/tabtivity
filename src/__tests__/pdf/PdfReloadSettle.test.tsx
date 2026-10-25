@@ -110,7 +110,6 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { PdfView, RELOAD_SETTLE_MS } from "../../components/embed/pdf/PdfViewer";
 import { FileScopeContext } from "../../components/embed/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
-import { SCREENSHOT_CAPTURE_EVENT } from "../../lib/window/screenshot";
 
 const PATH = "/home/u/paper/paper.pdf";
 
@@ -236,16 +235,11 @@ describe("reading a PDF the compiler is rewriting", () => {
   it("corrects a middle page the build resized under a kept measurement", async () => {
     // Pages are near, so they render — and a render has the page in hand.
     (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = EveryPageNearStub;
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      drawImage() {},
-    } as unknown as CanvasRenderingContext2D);
     await mounted();
-    // The copy-region layer is sized from the RESERVED page size alone — what a
+    // With no 2D context (beforeEach) the render stops after its size check, so
+    // the page canvas keeps the box the RESERVED page size gives it — what a
     // remark, a markup stroke or a link box is laid out by too.
-    act(() => {
-      window.dispatchEvent(new CustomEvent(SCREENSHOT_CAPTURE_EVENT, { detail: { claimed: false } }));
-    });
-    const layers = () => [...document.querySelectorAll<HTMLElement>(".file-viewer-pdf-copy-layer")];
+    const layers = () => [...document.querySelectorAll<HTMLElement>("canvas.file-viewer-pdf-page")];
     await waitFor(() => expect(layers().length).toBe(5));
     const scale = parseFloat(layers()[0].style.width) / 600;
     expect(scale).toBeGreaterThan(0);

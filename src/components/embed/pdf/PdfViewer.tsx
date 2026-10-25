@@ -142,11 +142,7 @@ import {
   readPresentScreen,
 } from "./present";
 import { openRoutedUri } from "../../../lib/linkTarget";
-import {
-  SCREENSHOT_CAPTURE_EVENT,
-  screenshotFilename,
-  type ScreenshotCaptureDetail,
-} from "../../../lib/window/screenshot";
+import { screenshotFilename } from "../../../lib/window/screenshot";
 import { printPdfNative } from "../../../lib/window/printing";
 import { layoutPrintPdf } from "../../../lib/viewers/pdfPrintLayout";
 import { useSettingsStore } from "../../../stores/settings";
@@ -2207,25 +2203,6 @@ function PdfCanvas({
     },
     [t, pdfProjectDir],
   );
-  // The global Screenshot app offers the shot to visible viewers before it
-  // spawns the OS region tool (see `lib/window/screenshot`). Claim it while this pane
-  // is the one on screen: `paneVisible` is false for every hidden tab, so of
-  // the many mounted viewers only the visible one(s) even listen, and the
-  // `claimed` flag keeps two side-by-side PDFs from both arming.
-  useEffect(() => {
-    if (!paneVisible || !doc) return;
-    const onCapture = (e: Event) => {
-      const detail = (e as CustomEvent<ScreenshotCaptureDetail>).detail;
-      if (!detail || detail.claimed || copyBusy) return;
-      detail.claimed = true;
-      setRedacting(false);
-      setMarking(false);
-      setCopyNotice(null);
-      setCopySelecting(true);
-    };
-    window.addEventListener(SCREENSHOT_CAPTURE_EVENT, onCapture);
-    return () => window.removeEventListener(SCREENSHOT_CAPTURE_EVENT, onCapture);
-  }, [paneVisible, doc, copyBusy]);
   /** Grow each drawn box out to the words it touches. On by default: a box drawn by
    *  eye clips ascenders and word ends, and the burn-in is pixel-exact, so an
    *  unsnapped mark is how a legible sliver of the redacted word survives. */

@@ -1,25 +1,9 @@
 /**
- * The global Screenshot app's in-app capture seam.
- *
- * Pressing the header's Screenshot button used to always spawn an OS
- * region-capture tool. But when the thing being captured is a PDF on screen,
- * the viewer can do strictly better than a screen grab: it rasterises the
- * selected region from the rendered page canvas (document-sharp, DPR-exact,
- * with pending blackouts burned in), which is what its old ✂ toolbar tool did.
- * That tool is now armed by the Screenshot button instead of a per-viewer
- * button, so there is ONE capture entry point rather than two.
- *
- * The handshake is a synchronous, claimable window event: the launcher
- * dispatches, a visible PDF viewer claims (`detail.claimed = true`), and the
- * launcher reads the flag back to decide whether the external tool still needs
- * to run. First visible viewer wins — the flag is checked before it is set, so
- * two viewers on screen never both arm.
+ * Screenshot helpers: where a saved shot lands, its file name, and the delayed
+ * capture countdown. (The in-app capture handshake with the PDF viewer went
+ * with the header's Screenshot launcher.)
  */
 import { NAMES } from "../brand";
-
-export const SCREENSHOT_CAPTURE_EVENT = "app:screenshot-capture";
-
-export type ScreenshotCaptureDetail = { claimed: boolean };
 
 /** The project folder a saved screen grab lands in, mirroring the backend's
  *  `commands::projects::SCREENSHOTS_DIR`. `tabtivity-`prefixed on purpose: a repo
