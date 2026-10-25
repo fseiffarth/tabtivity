@@ -382,6 +382,12 @@ go-ahead from the user (S5–S9 are large).
 
 Bound: ≤ 5 subagents at once, ≤ 3 running cargo.
 
+Models (user's choice 2026-10-25, mixed by risk): **Opus** for the A
+implementers and their finder + verifier reviewers, the B implementers and
+their reviewers, S5/S7/S9 and the final review; **Sonnet** for the
+mechanical C, D, E, G steps and the S1–S4, S6, S8 moves. Column "Model"
+below.
+
 Dependencies: A1 → B1 (both `commands/projects.rs`); A2 → D1
 (`git_bounded::run` shape); A3 → B2 (`git_peer.rs`); C1 ∥ C2 ∥ A*;
 D1/D2 after A+B; D3 after C2; D4 after C1 and after the i18n edits land;
@@ -389,21 +395,21 @@ E after D; S after everything else.
 
 ### Agent steps
 
-| Step | Plan sections | Main files | Reviewers |
-|---|---|---|---|
-| 1 | A1 | commands/projects.rs, commands/fs.rs, storage.rs, server/share.rs, brand_migration/project.rs, skills.rs, mobile_control/web_client.rs | finder + verifier |
-| 2 | A2 | git_bounded.rs, git_push_mcp.rs, git_release.rs, markup_rounds.rs, openvpn.rs, remote_sync.rs, sandbox.rs | finder + verifier |
-| 3 | A3 | git_peer.rs, global_machines.rs, ssh.rs, tex.rs, agent_auth.rs, markup_rounds.rs, dev_todo.rs, tmux_local.rs, admin.rs | finder + verifier |
-| 4 | C1 | stores/calendar/*, boxes.ts, globalMachines.ts, agentPrompts.ts, agentSchedules.ts, typedClear.ts, tabs.ts, mobile-web main.tsx/api.ts | final only |
-| 5 | C2 | ProjectBlobPane, FileBrowser, ProjectPill, ProjectDialog, VmSettingsDialog, FileTree, SettingsSubPanels, FileViewerPane, GitHistory, CompareView | final only |
-| 6 | B1 | commands/projects.rs, commands/fs.rs, commands/git.rs, commands/git_fork.rs | per-step |
-| 7 | B2 | commands/ollama.rs, services/git_peer.rs | per-step |
-| 8 | D1 | apps.rs, vm.rs, openvpn.rs, ssh_common.rs, printing.rs, workspace.rs, tex.rs, agents.rs, terminal/mod.rs, screenshot.rs | final only |
-| 9 | D2 | digest users, clip loops, storage.rs/lib.rs time, projects.rs/remote.rs list, test_util.rs | final only |
-| 10 | D3 | DetachedApp, SettingsSubPanels, useRemoteSession/Reconnect, VpnIndicator, CenterPanel/DetachedCenterPanel, menu sites | final only |
-| 11 | D4 | src/lib formatters/persist/paths, mobile-web helpers, shared/, ptyId.ts, i18n translateNow | final only |
-| 12 | E + G | dead exports; eslint config; Rust scan tests | final only |
-| S1–S9 | S | per S item | per-step, user go-ahead each |
+| Step | Plan sections | Main files | Reviewers | Model |
+|---|---|---|---|---|
+| 1 | A1 | commands/projects.rs, commands/fs.rs, storage.rs, server/share.rs, brand_migration/project.rs, skills.rs, mobile_control/web_client.rs | finder + verifier | Opus |
+| 2 | A2 | git_bounded.rs, git_push_mcp.rs, git_release.rs, markup_rounds.rs, openvpn.rs, remote_sync.rs, sandbox.rs | finder + verifier | Opus |
+| 3 | A3 | git_peer.rs, global_machines.rs, ssh.rs, tex.rs, agent_auth.rs, markup_rounds.rs, dev_todo.rs, tmux_local.rs, admin.rs | finder + verifier | Opus |
+| 4 | C1 | stores/calendar/*, boxes.ts, globalMachines.ts, agentPrompts.ts, agentSchedules.ts, typedClear.ts, tabs.ts, mobile-web main.tsx/api.ts | final only | Sonnet |
+| 5 | C2 | ProjectBlobPane, FileBrowser, ProjectPill, ProjectDialog, VmSettingsDialog, FileTree, SettingsSubPanels, FileViewerPane, GitHistory, CompareView | final only | Sonnet |
+| 6 | B1 | commands/projects.rs, commands/fs.rs, commands/git.rs, commands/git_fork.rs | per-step | Opus |
+| 7 | B2 | commands/ollama.rs, services/git_peer.rs | per-step | Opus |
+| 8 | D1 | apps.rs, vm.rs, openvpn.rs, ssh_common.rs, printing.rs, workspace.rs, tex.rs, agents.rs, terminal/mod.rs, screenshot.rs | final only | Sonnet |
+| 9 | D2 | digest users, clip loops, storage.rs/lib.rs time, projects.rs/remote.rs list, test_util.rs | final only | Sonnet |
+| 10 | D3 | DetachedApp, SettingsSubPanels, useRemoteSession/Reconnect, VpnIndicator, CenterPanel/DetachedCenterPanel, menu sites | final only | Sonnet |
+| 11 | D4 | src/lib formatters/persist/paths, mobile-web helpers, shared/, ptyId.ts, i18n translateNow | final only | Sonnet |
+| 12 | E + G | dead exports; eslint config; Rust scan tests | final only | Sonnet |
+| S1–S9 | S | per S item | per-step, user go-ahead each | Opus for S5, S7, S9; Sonnet for S1–S4, S6, S8 |
 
 12 agent steps before S; S adds up to 9 more.
 
