@@ -2673,11 +2673,8 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
             crate::services::git_init::init_repo(&directory)
                 .map_err(|e| format!("git init failed: {e}"))?;
         }
-        let gitignore = directory.join(".gitignore");
-        if !gitignore.exists() {
-            fs::write(&gitignore, GITIGNORE_DEFAULT)
-                .map_err(|e| format!("failed to write .gitignore: {e}"))?;
-        }
+        write_default_gitignore_if_missing(&directory)
+            .map_err(|e| format!("failed to write .gitignore: {e}"))?;
         "local".to_string()
     };
 
@@ -3228,6 +3225,17 @@ pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
 /// `CLAUDE.md -> ~/somewhere` passed the check and the write then created the
 /// link's target outside the project, and a file appearing between the check and
 /// the write was truncated. `create_new` + `O_NOFOLLOW` decide in the one open.
+/// The most of a scaffold doc read to tell a legacy stub from the user's own.
+const MAX_SCAFFOLD_DOC_BYTES: u64 = 4 << 20;
+
+/// A scaffold doc (`CLAUDE.md`, …) in the project tree as text, `None` for
+/// anything else: missing, a link, a FIFO (never waited on — the project
+/// list asks this of every project), too large or not UTF-8. `None` is never
+/// a stub, so nothing that is not a plain file of ours is rewritten.
+fn read_scaffold_doc(path: &Path) -> Option<String> {
+    crate::services::home_io::read_record_capped(path, MAX_SCAFFOLD_DOC_BYTES)
+}
+
 fn write_scaffold_file(path: &Path, content: &str) -> std::io::Result<bool> {
     match write_no_follow(path, content.as_bytes(), true) {
         Ok(()) => Ok(true),
@@ -3316,17 +3324,37 @@ fn missing_gitignore_lines_at(dir: &Path) -> std::io::Result<Vec<String>> {
         .lines()
         .filter(|l| !l.is_empty())
         .collect();
-    let path = dir.join(".gitignore");
-    if !path.exists() {
+    let Some(existing) = read_project_gitignore(&dir.join(".gitignore"))? else {
         return Ok(defaults.into_iter().map(str::to_string).collect());
-    }
-    let existing = fs::read_to_string(&path)?;
+    };
     let existing_lines: HashSet<&str> = existing.lines().collect();
     Ok(defaults
         .into_iter()
         .filter(|l| !existing_lines.contains(l))
         .map(str::to_string)
         .collect())
+}
+
+/// The most of a project's `.gitignore` Tabtivity reads (and so rewrites).
+const MAX_GITIGNORE_BYTES: u64 = 4 << 20;
+
+/// A project's `.gitignore` as text, `None` when there is none. The project
+/// tree is attacker-controlled (AGENTS.md): a link, FIFO or anything else
+/// that is not a regular file is refused, and the read never follows a link
+/// or blocks. Too large or not UTF-8 is refused too, never read as empty —
+/// every caller writes the result back.
+pub(crate) fn read_project_gitignore(path: &Path) -> std::io::Result<Option<String>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if !meta.file_type().is_file() => {
+            return Err(std::io::Error::other(".gitignore is not a regular file"));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    crate::services::home_io::read_record_capped(path, MAX_GITIGNORE_BYTES)
+        .map(Some)
+        .ok_or_else(|| std::io::Error::other(".gitignore is not a readable UTF-8 file of at most 4 MB"))
 }
 
 /// Append any `GITIGNORE_DEFAULT` pattern missing from `dir/.gitignore` to the
@@ -3340,11 +3368,10 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
         return Ok(vec![]);
     }
     let path = dir.join(".gitignore");
-    if !path.exists() {
-        fs::write(&path, GITIGNORE_DEFAULT)?;
+    let Some(mut updated) = read_project_gitignore(&path)? else {
+        write_no_follow(&path, GITIGNORE_DEFAULT.as_bytes(), true)?;
         return Ok(missing);
-    }
-    let mut updated = fs::read_to_string(&path)?;
+    };
     if !updated.is_empty() && !updated.ends_with('\n') {
         updated.push('\n');
     }
@@ -3352,8 +3379,17 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
         updated.push_str(line);
         updated.push('\n');
     }
-    fs::write(&path, updated)?;
+    write_no_follow(&path, updated.as_bytes(), false)?;
     Ok(missing)
+}
+
+/// Write the default `dir/.gitignore` unless there is something at that name
+/// — a dangling link included, whose target would land outside the project.
+fn write_default_gitignore_if_missing(dir: &Path) -> std::io::Result<()> {
+    match write_no_follow(&dir.join(".gitignore"), GITIGNORE_DEFAULT.as_bytes(), true) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
 }
 
 /// Make sure `dir/.gitignore` ignores one of Tabtivity's own generated folders
@@ -3387,18 +3423,10 @@ pub fn ensure_generated_dir_ignored(dir: &Path, folder: &str) -> std::io::Result
     // `.gitignore -> ~/.bashrc` would otherwise have this append a line to
     // whatever file the link names. Only a real file, or no file, is ours to
     // touch.
-    match fs::symlink_metadata(&path) {
-        Ok(meta) if !meta.file_type().is_file() => {
-            return Err(std::io::Error::other(".gitignore is not a regular file"));
-        }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            write_no_follow(&path, format!("{pattern}\n").as_bytes(), true)?;
-            return Ok(true);
-        }
-        Err(e) => return Err(e),
-    }
-    let existing = fs::read_to_string(&path)?;
+    let Some(existing) = read_project_gitignore(&path)? else {
+        write_no_follow(&path, format!("{pattern}\n").as_bytes(), true)?;
+        return Ok(true);
+    };
     if existing.lines().any(|line| line.trim() == pattern) {
         return Ok(false);
     }
@@ -3415,21 +3443,29 @@ pub fn ensure_generated_dir_ignored(dir: &Path, folder: &str) -> std::io::Result
 /// Write `bytes` to `path` without following a symlink at the final component:
 /// `create_new` refuses anything already there (a dangling link included), and
 /// otherwise `O_NOFOLLOW` refuses a link swapped in after the caller's check.
+/// A FIFO swapped in is refused without waiting for a reader (`O_NONBLOCK`:
+/// `ENXIO`), and an existing file is truncated only once the *opened* inode
+/// is known to be a regular file.
 pub fn write_no_follow(path: &Path, bytes: &[u8], create_new: bool) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = fs::OpenOptions::new();
     options.write(true);
     if create_new {
         options.create_new(true);
-    } else {
-        options.truncate(true);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    options.open(path)?.write_all(bytes)
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+    }
+    if !create_new {
+        file.set_len(0)?;
+    }
+    file.write_all(bytes)
 }
 
 /// Result of repairing one project's scaffold — which pieces were actually
@@ -3514,7 +3550,7 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
             continue;
         }
         // Only an agent doc still holding its untouched legacy stub is rewritten.
-        let Ok(existing) = fs::read_to_string(&p) else {
+        let Some(existing) = read_scaffold_doc(&p) else {
             continue;
         };
         if existing != *content && is_legacy_agent_stub(name, &existing) {
@@ -3573,9 +3609,9 @@ fn scaffold_is_missing_at(target: &Path, with_git: bool) -> bool {
         // An agent doc still holding its untouched legacy stub counts as
         // missing: a repair would change it, so the tag must not claim the
         // scaffold is complete (see `is_legacy_agent_stub`).
-        match fs::read_to_string(&p) {
-            Ok(existing) => is_legacy_agent_stub(name, &existing),
-            Err(_) => !p.exists(),
+        match read_scaffold_doc(&p) {
+            Some(existing) => is_legacy_agent_stub(name, &existing),
+            None => !p.exists(),
         }
     }) || (with_git && !target.join(".gitignore").exists())
         || !target.join(".claude/settings.json").exists()
@@ -3886,8 +3922,8 @@ fn migration_steps_at(dir: &Path, with_git: bool) -> std::io::Result<Vec<Migrati
     let mut steps = Vec::new();
     for (name, content) in SCAFFOLD_FILES {
         let p = dir.join(name);
-        match fs::read_to_string(&p) {
-            Ok(existing) => {
+        match read_scaffold_doc(&p) {
+            Some(existing) => {
                 if existing != *content && is_legacy_agent_stub(name, &existing) {
                     steps.push(MigrationStep {
                         id: format!("stub:{name}"),
@@ -3897,7 +3933,7 @@ fn migration_steps_at(dir: &Path, with_git: bool) -> std::io::Result<Vec<Migrati
                     });
                 }
             }
-            Err(_) => {
+            None => {
                 if !p.exists() {
                     steps.push(MigrationStep {
                         id: format!("file:{name}"),
@@ -3959,7 +3995,7 @@ fn apply_migration_steps_at(
                 report.created_files.push((*name).to_string());
             }
         } else if accepted.contains(&format!("stub:{name}")) {
-            if let Ok(existing) = fs::read_to_string(&p) {
+            if let Some(existing) = read_scaffold_doc(&p) {
                 if existing != *content && is_legacy_agent_stub(name, &existing) {
                     write_no_follow(&p, content.as_bytes(), false)?;
                     report.updated_files.push((*name).to_string());
@@ -4625,8 +4661,12 @@ fn finish_import(
         let _ = std::fs::create_dir_all(mirror);
     }
 
-    let project = if project_file.exists() {
-        let mut existing: Project = storage::read_json(&project_file).unwrap_or_default();
+    // Read without following a link or waiting on a FIFO. One that does not
+    // parse is replaced by a blank project, as before; one that is refused
+    // (a link, a FIFO) is refused again by the write below.
+    let adopted = read_project_json_no_follow(&project_file);
+    let project = if !matches!(adopted, Ok(None)) {
+        let mut existing: Project = adopted.ok().flatten().unwrap_or_default();
         // The adopted `project.json` came with the folder — a foreign repository, a
         // clone, a fork, or a tree someone else wrote — so anything in it that
         // Tabtivity would later read back as *executable intent* must not be adopted
@@ -4780,11 +4820,7 @@ pub async fn extend_project_to_remote(
     // Move project.json from the old (now mirror) tree into the state dir, tagging
     // it remote. Read the existing one so tabs/time/created_at/etc. survive.
     let old_project_file = old_path.join("project.json");
-    let mut project: Project = if old_project_file.exists() {
-        storage::read_json(&old_project_file).unwrap_or_default()
-    } else {
-        Project::default()
-    };
+    let mut project = read_project_to_move(&old_project_file)?;
     project.id = req.project_id.clone();
     project.name = list[idx].name.clone();
     project.directory = new_directory.clone();
@@ -4904,11 +4940,7 @@ pub async fn detach_project_from_remote(
     // dropping the remote/mirror fields. Read the existing one so tabs/time/
     // created_at/etc. survive.
     let state_local_file = list[idx].local_file.clone();
-    let mut project: Project = if PathBuf::from(&state_local_file).exists() {
-        storage::read_json(&PathBuf::from(&state_local_file)).unwrap_or_default()
-    } else {
-        Project::default()
-    };
+    let mut project = read_project_to_move(Path::new(&state_local_file))?;
     project.id = project_id.clone();
     project.name = list[idx].name.clone();
     project.directory = mirror.clone();
@@ -4933,7 +4965,6 @@ pub async fn detach_project_from_remote(
     // layout used to be keyed by `local_file`, so a detach swapped which file was
     // authoritative and the mirror's leftover copy silently won.)
     let state_dir = remote_project_state_dir(&project_id);
-    let state_dir_s = state_dir.to_string_lossy().to_string();
     let new_local_file = new_project_file.to_string_lossy().to_string();
     // project-tree-read: ok — the state-dir `TerminalSession`, edited in place
     // by project id through the workspace service (which moves the scope's
@@ -4942,10 +4973,8 @@ pub async fn detach_project_from_remote(
     if !crate::services::terminal_service::load_terminal_session(&project_id).tab_layout.is_empty() {
         let _ = crate::services::workspace::edit(&project_id, &new_local_file, |session| {
             for tab in session.tab_layout.iter_mut() {
-                if tab.cwd == state_dir_s {
-                    tab.cwd = mirror.clone();
-                } else if let Some(rest) = tab.cwd.strip_prefix(&format!("{state_dir_s}/")) {
-                    tab.cwd = format!("{mirror}/{rest}");
+                if let Some(cwd) = rehome_tab_cwd(&tab.cwd, &state_dir, &mirror) {
+                    tab.cwd = cwd;
                 }
             }
             Ok(())
@@ -4959,7 +4988,9 @@ pub async fn detach_project_from_remote(
     // `clear_host_bound_state` for what that silently does to the new one.
     clear_host_bound_state(&project_id, manifest).await;
 
-    // Remove the old state-dir project.json, its session mirror, and then the state dir.
+    // Update the projects.json entry in place, preserving every other extra key
+    // (categories, git_provider, git_type, description, sandbox, …); only then
+    // remove the old state-dir project.json, its session mirror, and the state dir.
     // `.tabtivity/` is why the dir used to survive every detach: `remove_dir` is
     // non-recursive, so it failed on a dir that still held the session mirror, and the
     // project's id was left lying around under `remote-projects/` forever.
@@ -4969,24 +5000,81 @@ pub async fn detach_project_from_remote(
     // mirror, and the user may not have seen it yet). A dir that still holds it must
     // survive; `remove_dir` succeeds only once the dir is genuinely empty, which is
     // exactly that distinction.
-    let _ = std::fs::remove_file(&state_local_file);
-    let _ = std::fs::remove_dir_all(state_dir.join(crate::brand::PROJECT_DIR));
-    let _ = std::fs::remove_dir(&state_dir);
+    repoint_then_drop_state(
+        || {
+            patch_project_entry(&project_id, |entry| {
+                if !entry.extra.contains_key("remote") {
+                    return Err("Project is not remote".to_string());
+                }
+                entry.local_file = new_project_file.to_string_lossy().to_string();
+                entry
+                    .extra
+                    .insert("directory".to_string(), Value::String(mirror));
+                entry.extra.remove("remote");
+                entry.extra.remove("mirror");
+                Ok(entry.clone())
+            })
+        },
+        Path::new(&state_local_file),
+        &state_dir,
+    )
+}
 
-    // Update the projects.json entry in place, preserving every other extra key
-    // (categories, git_provider, git_type, description, sandbox, …).
-    let updated = patch_project_entry(&project_id, |entry| {
-        if !entry.extra.contains_key("remote") {
-            return Err("Project is not remote".to_string());
-        }
-        entry.local_file = new_project_file.to_string_lossy().to_string();
-        entry
-            .extra
-            .insert("directory".to_string(), Value::String(mirror));
-        entry.extra.remove("remote");
-        entry.extra.remove("mirror");
-        Ok(entry.clone())
-    })?;
+/// The most of a `project.json` Tabtivity reads; its time log is the only part
+/// that grows.
+const MAX_PROJECT_JSON_BYTES: u64 = 64 << 20;
+
+/// A `project.json` that may sit in a project folder (attacker-controlled,
+/// AGENTS.md): `Ok(None)` when nothing is at `path`. A link (dangling or
+/// not), a FIFO or anything else that is not a regular UTF-8 file of at most
+/// [`MAX_PROJECT_JSON_BYTES`] is refused without following or waiting on it,
+/// and so is one that does not parse.
+fn read_project_json_no_follow(path: &Path) -> Result<Option<Project>, String> {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Ok(_) => {}
+    }
+    let text = crate::services::home_io::read_record_capped(path, MAX_PROJECT_JSON_BYTES)
+        .ok_or_else(|| format!("{} is not a readable regular file of at most 64 MB", path.display()))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("{} could not be read: {e}", path.display()))
+}
+
+/// The `project.json` extend or detach moves, or a fresh one when there is
+/// none. The original is deleted once the copy is written, so a file that
+/// is refused or does not parse is an error, never a blank project (which
+/// would lose its time, created_at and description).
+fn read_project_to_move(path: &Path) -> Result<Project, String> {
+    read_project_json_no_follow(path).map(Option::unwrap_or_default)
+}
+
+/// A saved tab's cwd under the remote state dir, re-pointed at the same place
+/// under `mirror`; `None` for a cwd elsewhere. Compared by path components, so
+/// either separator matches on Windows.
+fn rehome_tab_cwd(cwd: &str, state_dir: &Path, mirror: &str) -> Option<String> {
+    let rest = Path::new(cwd).strip_prefix(state_dir).ok()?;
+    if rest.as_os_str().is_empty() {
+        Some(mirror.to_string())
+    } else {
+        Some(Path::new(mirror).join(rest).to_string_lossy().into_owned())
+    }
+}
+
+/// Detach's last step: `repoint` the registry entry at the mirror, then drop
+/// the state-dir `project.json`, its session mirror and (once empty) the
+/// state dir. In that order, like extend: a refused patch or a crash leaves
+/// a harmless leftover, never a registry entry pointing at a deleted file.
+fn repoint_then_drop_state<R>(
+    repoint: impl FnOnce() -> Result<R, String>,
+    state_local_file: &Path,
+    state_dir: &Path,
+) -> Result<R, String> {
+    let updated = repoint()?;
+    let _ = std::fs::remove_file(state_local_file);
+    let _ = std::fs::remove_dir_all(state_dir.join(crate::brand::PROJECT_DIR));
+    let _ = std::fs::remove_dir(state_dir);
     Ok(updated)
 }
 
@@ -6254,6 +6342,177 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
         assert!(ensure_generated_dir_ignored(dir.path(), EMAILS_DIR).is_err());
         assert!(!elsewhere.exists());
+    }
+
+    /// Scaffold repair appends the default patterns to the project's own
+    /// `.gitignore`: a committed `.gitignore -> ~/.bashrc` must not get them.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_gitignore_defaults_never_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, "precious\n").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).unwrap();
+        assert!(ensure_gitignore_defaults(dir.path()).is_err());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious\n");
+
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
+        assert!(ensure_gitignore_defaults(dir.path()).is_err());
+        assert!(!elsewhere.exists());
+    }
+
+    /// A planted FIFO `.gitignore` is refused, never waited on.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_gitignore_is_refused_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::services::home_io::mkfifo(&dir.path().join(".gitignore"));
+        let root = dir.path().to_path_buf();
+        assert!(crate::services::home_io::within_deadline(move || missing_gitignore_lines_at(&root)).is_err());
+        let root = dir.path().to_path_buf();
+        assert!(crate::services::home_io::within_deadline(move || ensure_gitignore_defaults(&root)).is_err());
+    }
+
+    /// Re-enabling git writes the default `.gitignore` only where there is
+    /// nothing: a dangling link would otherwise create its target outside the
+    /// project.
+    #[cfg(unix)]
+    #[test]
+    fn the_default_gitignore_is_never_written_through_a_dangling_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
+        let _ = write_default_gitignore_if_missing(dir.path());
+        assert!(!elsewhere.exists());
+
+        let dir = tempfile::tempdir().unwrap();
+        write_default_gitignore_if_missing(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join(".gitignore")).unwrap(), GITIGNORE_DEFAULT);
+        fs::write(dir.path().join(".gitignore"), "mine\n").unwrap();
+        write_default_gitignore_if_missing(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join(".gitignore")).unwrap(), "mine\n");
+    }
+
+    /// Extend and detach delete the `project.json` they move: one that does not
+    /// parse must stop them, not be replaced by a blank project (losing its
+    /// time, created_at and description).
+    #[test]
+    fn an_unparsable_project_json_stops_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("project.json");
+        assert_eq!(read_project_to_move(&file).unwrap().id, Project::default().id);
+        fs::write(&file, "{ not json").unwrap();
+        assert!(read_project_to_move(&file).is_err());
+        fs::write(&file, r#"{"id":"p1","name":"P","directory":"d","description":"kept"}"#).unwrap();
+        let project = read_project_to_move(&file).unwrap();
+        assert_eq!(project.description.as_deref(), Some("kept"));
+    }
+
+    /// Extend reads the `project.json` it moves out of the project folder: a
+    /// link there is not read through (its target would be adopted into the
+    /// state dir), a dangling one is not taken for "none", and a FIFO is
+    /// refused without waiting on it.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_project_json_stops_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        fs::write(&elsewhere, r#"{"id":"x","name":"X","directory":"d","description":"not yours"}"#).unwrap();
+        let linked = dir.path().join("project.json");
+        std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+        assert!(read_project_to_move(&linked).is_err());
+        fs::remove_file(&elsewhere).unwrap();
+        assert!(read_project_to_move(&linked).is_err(), "a dangling link is not a missing file");
+
+        let fifo = dir.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || read_project_to_move(&fifo)).is_err());
+    }
+
+    /// `write_no_follow` rewrites only a regular file: a FIFO swapped in after
+    /// the caller's check is refused at once, never waited on for a reader.
+    #[cfg(unix)]
+    #[test]
+    fn write_no_follow_refuses_a_fifo_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join(".gitignore");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || write_no_follow(&fifo, b"x\n", false)).is_err());
+
+        let plain = dir.path().join("plain");
+        fs::write(&plain, "a much longer old text\n").unwrap();
+        write_no_follow(&plain, b"new\n", false).unwrap();
+        assert_eq!(fs::read_to_string(&plain).unwrap(), "new\n", "an existing file is truncated first");
+    }
+
+    /// The project list asks every project whether its scaffold is complete,
+    /// reading its agent docs: a FIFO planted as `CLAUDE.md` must not hang it,
+    /// nor the migration plan or the repair.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_agent_doc_does_not_block_the_scaffold_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::services::home_io::mkfifo(&dir.path().join("CLAUDE.md"));
+        let root = dir.path().to_path_buf();
+        crate::services::home_io::within_deadline(move || scaffold_is_missing_at(&root, false));
+        let root = dir.path().to_path_buf();
+        let steps = crate::services::home_io::within_deadline(move || migration_steps_at(&root, false)).unwrap();
+        assert!(!steps.iter().any(|step| step.path.as_deref() == Some("CLAUDE.md")), "the FIFO is left alone");
+        let root = dir.path().to_path_buf();
+        let accepted: HashSet<String> = ["stub:CLAUDE.md".to_string()].into();
+        crate::services::home_io::within_deadline(move || apply_migration_steps_at(&root, false, &accepted)).unwrap();
+        let root = dir.path().to_path_buf();
+        let report = crate::services::home_io::within_deadline(move || repair_project_scaffold_at(&root, false)).unwrap();
+        assert!(!report.updated_files.iter().any(|f| f == "CLAUDE.md"));
+    }
+
+    /// Detach removes the state-dir `project.json` only once the registry
+    /// points at the mirror: a refused patch leaves the project as it was.
+    #[test]
+    fn detach_drops_the_state_only_after_the_registry_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path().join("remote-projects").join("p1");
+        fs::create_dir_all(&state_dir).unwrap();
+        let file = state_dir.join("project.json");
+        fs::write(&file, "{}").unwrap();
+        let refused: Result<(), String> =
+            repoint_then_drop_state(|| Err("Project is not remote".to_string()), &file, &state_dir);
+        assert!(refused.is_err());
+        assert!(file.is_file(), "the state-dir project.json survives a failed patch");
+
+        let mut moved = false;
+        repoint_then_drop_state(
+            || {
+                moved = file.is_file();
+                Ok(())
+            },
+            &file,
+            &state_dir,
+        )
+        .unwrap();
+        assert!(moved, "the registry moves while the state is still there");
+        assert!(!state_dir.exists());
+    }
+
+    /// Tab cwds are compared by path components, so a cwd written with the
+    /// platform's own separator (`\` on Windows) is re-pointed too.
+    #[test]
+    fn a_tab_cwd_under_the_state_dir_moves_to_the_mirror() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path().join("remote-projects").join("p1");
+        let mirror = tmp.path().join("mirror");
+        let mirror_s = mirror.to_string_lossy().into_owned();
+        let at = |p: &Path| p.to_string_lossy().into_owned();
+        assert_eq!(rehome_tab_cwd(&at(&state_dir), &state_dir, &mirror_s), Some(mirror_s.clone()));
+        assert_eq!(
+            rehome_tab_cwd(&at(&state_dir.join("sub").join("deep")), &state_dir, &mirror_s),
+            Some(at(&mirror.join("sub").join("deep")))
+        );
+        assert_eq!(rehome_tab_cwd(&at(&tmp.path().join("other")), &state_dir, &mirror_s), None);
+        // A sibling whose name only starts with the state dir's is not under it.
+        assert_eq!(rehome_tab_cwd(&format!("{}-x", at(&state_dir)), &state_dir, &mirror_s), None);
     }
 
     #[test]

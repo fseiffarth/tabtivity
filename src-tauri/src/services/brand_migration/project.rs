@@ -83,6 +83,13 @@ pub fn migrate_project(pair: &Pair, root: &Path) -> ProjectReport {
     report
 }
 
+/// The most of `packed-refs` the launch sweep reads: a repo with many refs
+/// packs megabytes; one past this (or not a regular file) reads as naming
+/// no old ref.
+const MAX_PACKED_REFS: u64 = 64 << 20;
+/// The most of a project's `.gitignore` the sweep reads.
+const MAX_GITIGNORE: u64 = 4 << 20;
+
 /// Whether anything of the app's under its old name is left in the project,
 /// judged from the file system alone. The launch sweep asks this of every
 /// known project, so a project that is done costs a few `stat`s and no `git`.
@@ -101,8 +108,8 @@ fn needs_work(pair: &Pair, root: &Path) -> bool {
             let old_rule = pair.legacy(Name::PROJECT_DIR_EXCLUDE_RULE);
             old_ns.as_ref().is_some_and(|ns| {
                 has_file_under(&ns.split('/').fold(git_dir.clone(), |dir, part| dir.join(part)))
-                    || std::fs::read_to_string(git_dir.join("packed-refs"))
-                        .is_ok_and(|refs| refs.contains(&format!(" {ns}/")))
+                    || crate::services::home_io::read_record_capped(&git_dir.join("packed-refs"), MAX_PACKED_REFS)
+                        .is_some_and(|refs| refs.contains(&format!(" {ns}/")))
             }) || old_rule.is_some_and(|rule| {
                 crate::services::git_guard::read_info_exclude(&git_dir)
                     .is_ok_and(|rules| rules.is_some_and(|rules| rules.lines().any(|line| line.trim() == rule)))
@@ -237,7 +244,8 @@ fn gitignore_names_old_folder_only(pair: &Pair, root: &Path, git_dir: &Path) -> 
     if !root.join(&new_dir).is_dir() {
         return false;
     }
-    let gitignore = std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
+    let gitignore =
+        crate::services::home_io::read_record_capped(&root.join(".gitignore"), MAX_GITIGNORE).unwrap_or_default();
     let exclude = crate::services::git_guard::read_info_exclude(git_dir)
         .ok()
         .flatten()
@@ -888,5 +896,27 @@ mod tests {
         assert_migrated(&root, &head);
         // Idempotent: a second run says nothing.
         assert_eq!(run_script(), "");
+    }
+
+    /// The launch sweep reads `packed-refs` and `.gitignore` of every known
+    /// project: a FIFO planted at either is skipped, never waited on (which
+    /// would stall the sweep for every later project).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_packed_refs_or_gitignore_does_not_stall_the_sweep() {
+        let machine = Machine::new();
+        let root = machine.home.join("fifo-refs");
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir");
+        crate::services::home_io::mkfifo(&root.join(".git").join("packed-refs"));
+        let at = root.clone();
+        assert!(!crate::services::home_io::within_deadline(move || needs_work(&RENAMED, &at)));
+
+        let root = machine.home.join("fifo-ignore");
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir");
+        std::fs::create_dir_all(root.join(RENAMED.cur(Name::PROJECT_DIR))).expect("mkdir");
+        crate::services::home_io::mkfifo(&root.join(".gitignore"));
+        assert!(!crate::services::home_io::within_deadline(move || {
+            gitignore_names_old_folder_only(&RENAMED, &root, &root.join(".git"))
+        }));
     }
 }

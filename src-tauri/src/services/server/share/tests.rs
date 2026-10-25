@@ -560,3 +560,28 @@ fn a_long_review_is_accepted_only_after_every_page_was_shown() {
     accept_in(&bob_state, &bob_link(), &review.digest).unwrap();
     assert!(spawn_gate_in(&bob_state, std::slice::from_ref(&clone), true).is_ok());
 }
+
+/// `info/exclude` is the user's repo's own file: a link there is refused,
+/// never written through, and a FIFO is refused without waiting on it.
+#[cfg(unix)]
+#[test]
+fn the_app_dir_exclude_is_never_written_through_a_link_or_a_fifo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    let exclude = dir.join(".git").join("info").join("exclude");
+    exclude_app_dir(&dir).unwrap();
+    assert!(std::fs::read_to_string(&exclude).unwrap().lines().any(|l| l == brand::PROJECT_DIR_EXCLUDE_RULE));
+
+    let victim = tmp.path().join("victim");
+    std::fs::write(&victim, "precious\n").unwrap();
+    std::fs::remove_file(&exclude).unwrap();
+    std::os::unix::fs::symlink(&victim, &exclude).unwrap();
+    assert!(exclude_app_dir(&dir).is_err());
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious\n");
+
+    std::fs::remove_file(&exclude).unwrap();
+    crate::services::home_io::mkfifo(&exclude);
+    assert!(crate::services::home_io::within_deadline(move || exclude_app_dir(&dir)).is_err());
+}

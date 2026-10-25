@@ -34,8 +34,8 @@ where
 /// written at human or timer pace, not per message, so that is affordable.
 ///
 /// A shared file (a project folder's) is truncated and rewritten in place,
-/// keeping its mode, owner and links: a group-shared project dir stays
-/// readable to its group.
+/// keeping its mode and owner: a group-shared project dir stays readable to
+/// its group. A link or a FIFO at its name is refused (see below).
 fn write_json_file<T>(path: &Path, value: &T, private: bool) -> Result<(), Box<dyn std::error::Error>>
 where
     T: serde::Serialize,
@@ -48,11 +48,26 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    // The file is the project's (attacker-controlled): a link at its name is
+    // refused, never written through, and a FIFO is refused without waiting
+    // for a reader (`ENXIO`). Truncated only once the opened inode is known
+    // to be a regular file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_file()) {
+        return Err(format!("{} is not a regular file", path.display()).into());
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(format!("{} is not a regular file", path.display()).into());
+    }
+    file.set_len(0)?;
     file.write_all(json.as_bytes())?;
     Ok(())
 }
@@ -1111,6 +1126,34 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["plain", "project.json", "settings.json"]);
+    }
+
+    /// A project folder's `project.json` is the project's: a link there
+    /// (`project.json -> ~/.bashrc`) is refused, never written through, and a
+    /// FIFO is refused without waiting for a reader.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_json_file_is_never_written_through_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        fs::write(&victim, "precious\n").unwrap();
+        let linked = tmp.path().join("project.json");
+        std::os::unix::fs::symlink(&victim, &linked).unwrap();
+        assert!(write_json_file(&linked, &serde_json::json!({}), false).is_err());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious\n");
+
+        let dangling = tmp.path().join("other.json");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, &dangling).unwrap();
+        assert!(write_json_file(&dangling, &serde_json::json!({}), false).is_err());
+        assert!(!elsewhere.exists());
+
+        let fifo = tmp.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || {
+            write_json_file(&fifo, &serde_json::json!({}), false).map_err(|e| e.to_string())
+        })
+        .is_err());
     }
 
     // ── reserved scopes ───────────────────────────────────────────────────

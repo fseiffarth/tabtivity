@@ -377,26 +377,18 @@ fn target_skills_dir(target: &SkillTarget) -> Result<PathBuf, String> {
     }
 }
 
-/// Copy `src` into `dest` recursively. `dest`'s parent is created if needed;
-/// `dest` itself is expected to not exist yet — callers that mean to overwrite
-/// (a re-install) remove it first, so this never merges an old and a new
-/// install's files together. A link in the skill is skipped, not followed: a
-/// repository's `notes -> ~/.ssh` would otherwise copy that folder into the
-/// project.
-fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dest)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dest.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else if kind.is_file() {
-            fs::copy(&from, &to)?;
-        }
+/// Copy the skill folder `src` to `dest`, which must not exist yet (a
+/// re-install removes the old one first, so an old and a new install's files
+/// never merge). The copy is [`tree_copy`]'s, bounded in entries, bytes and
+/// depth; a link in the skill is skipped, not followed: a repository's
+/// `notes -> ~/.ssh` would otherwise copy that folder into the project.
+///
+/// [`tree_copy`]: crate::services::tree_copy
+fn copy_skill(src: &Path, dest: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
     }
-    Ok(())
+    crate::services::tree_copy::copy_tree_without_links(src, dest).map(|_| ())
 }
 
 /// `<target>/.claude/skills/<name>`, for a `name` that is one plain folder
@@ -438,7 +430,7 @@ pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> R
     if fs::symlink_metadata(&dest).is_ok() {
         fs::remove_dir_all(&dest).map_err(|e| e.to_string())?;
     }
-    copy_dir_recursive(&src, &dest).map_err(|e| e.to_string())
+    copy_skill(&src, &dest).map_err(|e| e.to_string())
 }
 
 /// Delete `<target>/.claude/skills/<name>/`.
@@ -568,7 +560,7 @@ mod tests {
         // without touching global state — so this test drives the copy helper
         // and the project-side read paths directly instead.
         let dest = project_skills_dir(&project_dir).join("pdf-fill");
-        copy_dir_recursive(&skill_dir, &dest).unwrap();
+        copy_skill(&skill_dir, &dest).unwrap();
         assert!(dest.join("SKILL.md").is_file());
         assert!(dest.join("scripts").join("run.py").is_file());
 
@@ -680,7 +672,7 @@ mod tests {
         std::os::unix::fs::symlink(&secret, skill.join("notes")).unwrap();
         std::os::unix::fs::symlink(secret.join("id_key"), skill.join("key")).unwrap();
         let dest = tmp.path().join("dest");
-        copy_dir_recursive(&skill, &dest).unwrap();
+        copy_skill(&skill, &dest).unwrap();
         assert!(dest.join("SKILL.md").is_file());
         assert!(fs::symlink_metadata(dest.join("notes")).is_err(), "a linked folder is not copied");
         assert!(fs::symlink_metadata(dest.join("key")).is_err(), "a linked file is not copied");

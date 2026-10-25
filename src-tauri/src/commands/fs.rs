@@ -1033,7 +1033,10 @@ pub fn update_gitignore_rule(
     enforce_confinement(&root, &target_c)?;
 
     let gitignore_path = root.join(".gitignore");
-    let existing = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    // A committed `.gitignore` link or FIFO is refused, never followed.
+    let existing = crate::commands::projects::read_project_gitignore(&gitignore_path).map_err(|e| e.to_string())?;
+    let create = existing.is_none();
+    let existing = existing.unwrap_or_default();
     let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
     let new_rules = match action.as_str() {
         "ignore" => gitignore_ignore_rules(&clean_rel, is_dir),
@@ -1059,7 +1062,7 @@ pub fn update_gitignore_rule(
     if !next.is_empty() {
         next.push('\n');
     }
-    fs::write(&gitignore_path, next).map_err(|e| e.to_string())
+    crate::commands::projects::write_no_follow(&gitignore_path, next.as_bytes(), create).map_err(|e| e.to_string())
 }
 
 /// Create a new directory inside the project.
@@ -2917,6 +2920,49 @@ mod tests {
         assert_eq!(listing.files.iter().map(|f| (f.name.as_str(), f.size)).collect::<Vec<_>>(), [("A.md", 1), ("b.txt", 2)]);
         assert!(listing.parent.is_some());
         assert!(list_dir_all("/definitely/not/here".into()).is_err());
+    }
+
+    fn ignore_rule(dir: &Path, rel: &str) -> Result<(), String> {
+        update_gitignore_rule(dir.to_string_lossy().into_owned(), rel.into(), false, "ignore".into())
+    }
+
+    #[test]
+    fn update_gitignore_rule_edits_the_projects_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        ignore_rule(dir.path(), "a.log").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(), "/a.log\n");
+        ignore_rule(dir.path(), "b.log").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(), "/a.log\n\n/b.log\n");
+    }
+
+    /// A committed `.gitignore -> ~/.bashrc` must not get a rule appended, and
+    /// a dangling one must not create its target.
+    #[cfg(unix)]
+    #[test]
+    fn update_gitignore_rule_never_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("p");
+        std::fs::create_dir(&project).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "precious\n").unwrap();
+        std::os::unix::fs::symlink(&victim, project.join(".gitignore")).unwrap();
+        assert!(ignore_rule(&project, "a.log").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious\n");
+
+        std::fs::remove_file(project.join(".gitignore")).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, project.join(".gitignore")).unwrap();
+        assert!(ignore_rule(&project, "a.log").is_err());
+        assert!(!elsewhere.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_gitignore_rule_refuses_a_fifo_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::services::home_io::mkfifo(&dir.path().join(".gitignore"));
+        let project = dir.path().to_path_buf();
+        assert!(crate::services::home_io::within_deadline(move || ignore_rule(&project, "a.log")).is_err());
     }
 
     // ── The raw-body write's two decoders ──────────────────────────────────
