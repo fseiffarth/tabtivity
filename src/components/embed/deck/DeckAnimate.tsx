@@ -31,6 +31,7 @@ import {
   updateObjects,
 } from "../../../lib/viewers/deck/model";
 import { useT, type TranslationKey } from "../../../lib/i18n";
+import { basename } from "../../../lib/paths";
 
 export interface DeckAnimateProps {
   slide: Slide;
@@ -200,7 +201,7 @@ export function DeckAnimate({
       ) : (
         <>
           <div className="deck-animate-file" title={after.src}>
-            {after.src.split("/").pop()}
+            {basename(after.src)}
           </div>
           <div className="deck-field-row">
             <label className="deck-field">

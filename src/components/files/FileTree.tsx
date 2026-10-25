@@ -3290,7 +3290,7 @@ export function FileTree({
    *  browsed folder, not the clicked entry's. */
   function newEntryBody() {
     const folder = relPath
-      ? relPath.slice(relPath.lastIndexOf("/") + 1)
+      ? basename(relPath)
       : t("fileTree.projectRootFolder");
     return (
       <>

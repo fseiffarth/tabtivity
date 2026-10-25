@@ -121,11 +121,6 @@ export function toPdfDate(at: Date): string {
   );
 }
 
-/** The remarks the arrangement owns for a sheet, or nothing when it owns none. */
-export function notesOf(ref: { notes?: PdfNote[] }): readonly PdfNote[] | undefined {
-  return ref.notes;
-}
-
 /** How many remarks the whole arrangement is holding. Counts only sheets it owns —
  *  an untouched page's own annotations are the file's, not ours to tally. */
 export function noteCount(list: PageList): number {

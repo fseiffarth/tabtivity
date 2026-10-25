@@ -1,4 +1,4 @@
-import type { TodoBoard, TodoCard, TodoColumn } from "./api";
+import type { TodoCard, TodoColumn } from "./api";
 import type { TranslationKey } from "../../src/lib/i18n";
 import { todayStr } from "../../src/lib/calendar/calendarTime";
 import { fallbackColumnId } from "../../shared/todoColumns";
@@ -62,11 +62,6 @@ export function moveAccepted(
   // Neither late nor due today: Overdue would be a column that lies, but a
   // deliberate "I am doing this today" is a decision the date does not overrule.
   return target.id !== overdue;
-}
-
-/** The columns a card can actually be moved into, in board order. */
-export function acceptedColumns(task: TodoCard, board: Pick<TodoBoard, "columns">, today: string = todayStr()): TodoColumn[] {
-  return board.columns.filter((column) => moveAccepted(task, column.id, board.columns, today));
 }
 
 /**

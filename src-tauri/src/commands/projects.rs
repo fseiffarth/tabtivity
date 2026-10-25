@@ -7371,9 +7371,10 @@ mod tests {
         ("git.rs", "git_worktree_selection_supported"),
     ];
 
-    /// The sync Tauri commands of `src/commands/<file>`: the `fn` after each
-    /// `tauri::command` attribute that is not `async`.
-    fn sync_commands_in(file: &str) -> Vec<String> {
+    /// The sync Tauri commands of `src/commands/<file>`: `(name, body)` of the
+    /// `fn` after each `tauri::command` attribute that is not `async`. The body
+    /// runs to the closing `}` in column 0 (a command is a top-level item).
+    fn sync_commands_in(file: &str) -> Vec<(String, String)> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("commands").join(file);
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let lines: Vec<&str> = text.lines().collect();
@@ -7385,34 +7386,85 @@ mod tests {
             if !line.trim_start().starts_with("#[cfg_attr(feature = \"desktop\", tauri::command") {
                 continue;
             }
-            let Some(sig) = lines[i + 1..].iter().map(|l| l.trim()).find(|l| l.contains("fn ")) else { continue };
+            let Some(at) = (i + 1..lines.len()).find(|&j| lines[j].contains("fn ")) else { continue };
+            let sig = lines[at].trim();
             if sig.contains("async fn ") {
                 continue;
             }
             let name = sig.split("fn ").nth(1).unwrap_or("");
-            out.push(name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect());
+            let name: String = name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let end = (at..lines.len()).find(|&j| lines[j] == "}").unwrap_or(lines.len() - 1);
+            out.push((name, lines[at..=end].join("\n")));
         }
         out
     }
 
-    /// B1's guard: no new sync command in these files does tree, process or
-    /// network work on the window's thread. A new one is either `async` over a
-    /// `*_blocking` body (`app_core::rt::try_blocking`) or, when it touches only
-    /// the state dir, a row in [`SYNC_COMMANDS_ALLOWED`].
+    /// Every `src/commands/*.rs` file name.
+    fn command_files() -> Vec<String> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("commands");
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.ends_with(".rs"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// Sync commands outside the B1 files whose body may name `remove_dir_all`,
+    /// `.output(` or `ollama_http`: `(file, fn, why)`. Empty today — every one
+    /// of those is on a worker (`async` over a `*_blocking` body).
+    const SYNC_BODY_ALLOWED: &[(&str, &str, &str)] = &[];
+
+    /// B1's guard, over every `commands/*.rs` (code screen 2026-10-25, G):
+    /// a sync command runs on the window's thread (or pins an async worker), so
+    /// none may walk a tree, spawn a process or ask Ollama.
+    ///  - In the files B1 moved off the window's thread (`projects.rs`, `fs.rs`,
+    ///    `git.rs`, `git_fork.rs`) a new sync command is either `async` over a
+    ///    `*_blocking` body (`app_core::rt::try_blocking`) or, when it touches
+    ///    only the state dir, a row in [`SYNC_COMMANDS_ALLOWED`].
+    ///  - Anywhere else a sync command's body must not name `remove_dir_all`,
+    ///    `.output(` or `ollama_http` ([`SYNC_BODY_ALLOWED`] for a reasoned
+    ///    exception). Work a body hands to a helper is not seen: review it.
     #[test]
-    fn the_b1_files_keep_disk_and_process_work_off_the_windows_thread() {
+    fn sync_commands_keep_disk_and_process_work_off_the_windows_thread() {
+        const B1_FILES: [&str; 4] = ["projects.rs", "fs.rs", "git.rs", "git_fork.rs"];
         let mut unexpected = Vec::new();
         let mut seen = Vec::new();
-        for file in ["projects.rs", "fs.rs", "git.rs", "git_fork.rs"] {
-            for name in sync_commands_in(file) {
-                match SYNC_COMMANDS_ALLOWED.iter().find(|(f, n)| *f == file && *n == name) {
-                    Some(row) => seen.push(*row),
-                    None => unexpected.push(format!("{file}: {name}")),
+        let mut blocking = Vec::new();
+        let mut body_used = Vec::new();
+        for file in command_files() {
+            for (name, body) in sync_commands_in(&file) {
+                if B1_FILES.contains(&file.as_str()) {
+                    match SYNC_COMMANDS_ALLOWED.iter().find(|(f, n)| *f == file && *n == name) {
+                        Some(row) => seen.push(*row),
+                        None => unexpected.push(format!("{file}: {name}")),
+                    }
+                    continue;
+                }
+                let Some(token) = ["remove_dir_all", ".output(", "ollama_http"].into_iter().find(|t| body.contains(t)) else {
+                    continue;
+                };
+                match SYNC_BODY_ALLOWED.iter().find(|(f, n, _)| *f == file && *n == name) {
+                    Some(row) => body_used.push(*row),
+                    None => blocking.push(format!("{file}: {name} ({token})")),
                 }
             }
         }
         assert!(unexpected.is_empty(), "sync commands that should be async over a *_blocking body: {unexpected:?}");
+        assert!(blocking.is_empty(), "sync commands doing tree, process or Ollama work on the window's thread — make them async over a *_blocking body, or allow one in SYNC_BODY_ALLOWED with its reason: {blocking:?}");
         let stale: Vec<_> = SYNC_COMMANDS_ALLOWED.iter().filter(|row| !seen.contains(row)).collect();
         assert!(stale.is_empty(), "SYNC_COMMANDS_ALLOWED rows that match no sync command any more: {stale:?}");
+        let stale: Vec<_> = SYNC_BODY_ALLOWED.iter().filter(|row| !body_used.contains(row)).collect();
+        assert!(stale.is_empty(), "SYNC_BODY_ALLOWED rows that match no sync command any more: {stale:?}");
+    }
+
+    #[test]
+    fn the_sync_command_scan_sees_attribute_bodies_and_skips_async() {
+        // The scan reads real files; pin that it finds the known sync and async shapes.
+        let projects = sync_commands_in("projects.rs");
+        assert!(projects.iter().any(|(n, body)| n == "get_projects" && body.ends_with('}')));
+        assert!(!projects.iter().any(|(n, _)| n == "project_folder_exists"), "an async command is not a sync one");
+        assert!(command_files().iter().any(|f| f == "ollama.rs"));
     }
 }

@@ -180,10 +180,8 @@ const VIEWER_FALLBACK: Partial<Record<InternalViewer, InternalViewer>> = {
   eldeck: "yaml",
 };
 
-/** A presentation deck sidecar: `<name>.eldeck.json`, case-insensitive. Exported
- *  so the deck viewer and its "new presentation" flow name the file exactly one
- *  way. `.eldeck.json` alone (an empty stem) is deliberately NOT a deck. */
-export const DECK_SUFFIX = ".eldeck.json";
+/** A presentation deck sidecar: `<name>.eldeck.json`, case-insensitive.
+ *  `.eldeck.json` alone (an empty stem) is deliberately NOT a deck. */
 const DECK_SUFFIX_RE = /.+\.eldeck\.json$/i;
 
 /** Whether `name` (or a path ending in one) is a deck sidecar. */

@@ -139,12 +139,3 @@ const COLD_RESUME_DIALOG = /Resume\s*this\s*conversation\?[\s\S]{0,800}?5-hour\s
 export function looksLikeColdResumeDialogStripped(plain: string): boolean {
   return plain.includes("conversation?") && COLD_RESUME_DIALOG.test(plain);
 }
-
-/**
- * True when the given RAW terminal text (typically the tail of an agent's
- * output) looks like an agent decision/permission prompt awaiting the user's
- * input.
- */
-export function looksLikeDecisionPrompt(text: string): boolean {
-  return looksLikeDecisionPromptStripped(stripAnsi(text));
-}

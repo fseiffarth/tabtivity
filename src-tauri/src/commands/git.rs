@@ -5931,27 +5931,28 @@ filename note.txt
         }
     }
 
-    /// #6 (whole-project screen 2026-10-15): every LOCAL git spawn goes through
-    /// [`hardened_git_command_in`] (config sanitized, hooks off, common dir
-    /// pinned). A source scan over every production file under `src/`: a bare
-    /// `command_no_window("git")` / `Command::new("git")` outside
-    /// [`BARE_GIT_ALLOWED`] fails. Test code is skipped: inline
-    /// `#[cfg(test)] mod … { … }` bodies ([`inline_test_lines`]) and files that
-    /// are themselves `#[cfg(test)] mod …;` modules. Remote git (`ssh … git`)
-    /// does not match.
-    #[test]
-    fn every_local_git_spawn_goes_through_the_hardened_builder() {
+    /// One production `.rs` file under `src/`: its path relative to `src/`
+    /// (`/`-separated), its text, and which lines sit in an inline
+    /// `#[cfg(test)] mod … { … }` ([`inline_test_lines`]).
+    struct ProdSource {
+        rel: String,
+        text: String,
+        in_test: Vec<bool>,
+    }
+
+    impl ProdSource {
+        fn lines(&self) -> Vec<&str> {
+            self.text.lines().collect()
+        }
+    }
+
+    /// Every production source file under `src/`: files that are themselves
+    /// `#[cfg(test)] mod …;` modules are left out, inline test modules are
+    /// flagged per line. The base of the source-scan guards.
+    fn production_sources() -> Vec<ProdSource> {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         rust_files(&src, &mut files);
-        let rel = |p: &Path| -> String {
-            p.strip_prefix(&src)
-                .unwrap()
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/")
-        };
         let texts: Vec<(PathBuf, String)> = files
             .into_iter()
             .map(|p| {
@@ -5982,15 +5983,39 @@ filename note.txt
             }
         }
 
+        texts
+            .into_iter()
+            .filter(|(path, _)| !test_only.iter().any(|t| path.starts_with(t)))
+            .map(|(path, text)| {
+                let rel = path
+                    .strip_prefix(&src)
+                    .unwrap()
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let in_test = inline_test_lines(&text.lines().collect::<Vec<_>>());
+                ProdSource { rel, text, in_test }
+            })
+            .collect()
+    }
+
+    /// #6 (whole-project screen 2026-10-15): every LOCAL git spawn goes through
+    /// [`hardened_git_command_in`] (config sanitized, hooks off, common dir
+    /// pinned). A source scan over every production file under `src/`: a bare
+    /// `command_no_window("git")` / `Command::new("git")` outside
+    /// [`BARE_GIT_ALLOWED`] fails. Test code is skipped: inline
+    /// `#[cfg(test)] mod … { … }` bodies ([`inline_test_lines`]) and files that
+    /// are themselves `#[cfg(test)] mod …;` modules. Remote git (`ssh … git`)
+    /// does not match.
+    #[test]
+    fn every_local_git_spawn_goes_through_the_hardened_builder() {
         let mut used = std::collections::HashSet::new();
         let mut offenders = Vec::new();
-        for (path, text) in &texts {
-            if test_only.iter().any(|t| path.starts_with(t)) {
-                continue;
-            }
-            let file = rel(path);
-            let lines: Vec<&str> = text.lines().collect();
-            let in_test = inline_test_lines(&lines);
+        for source in production_sources() {
+            let file = source.rel.as_str();
+            let lines = source.lines();
+            let in_test = &source.in_test;
             for (i, line) in lines.iter().enumerate() {
                 let t = line.trim();
                 if in_test[i] || t.starts_with("//") {
@@ -6016,6 +6041,240 @@ filename note.txt
         );
         let stale: Vec<_> = BARE_GIT_ALLOWED.iter().filter(|a| !used.contains(*a)).collect();
         assert!(stale.is_empty(), "BARE_GIT_ALLOWED entries that match no spawn any more: {stale:?}");
+    }
+
+    // ── Source scans for the file-handling classes the 2026-10-25 code screen
+    // found by hand (section G). Like the git-spawn scan: over every production
+    // file, test code skipped, a reasoned allowlist that must not go stale.
+
+    /// Raw file IO a line does, as the scans see it.
+    const RAW_FILE_IO: &[&str] =
+        &["fs::write(", "fs::read_to_string(", "fs::read(", "File::open(", "File::create(", "OpenOptions::new("];
+
+    /// Whether `line` names a file an attacker may have replaced with a link or
+    /// a FIFO: a project's `.gitignore` or `project.json`, or the git dir's
+    /// `info/exclude`.
+    fn names_guarded_project_file(line: &str) -> bool {
+        line.contains("\".gitignore\"")
+            || line.contains("\"project.json\"")
+            || line.contains("info/exclude")
+            || (line.contains("\"info\"") && line.contains("\"exclude\""))
+    }
+
+    /// Functions of one file that name a guarded project file *and* do raw
+    /// file IO: `(fn name, line of the first raw IO)`. A project folder is
+    /// attacker-controlled (AGENTS.md), so these files are read and written
+    /// through `read_project_gitignore` / `write_no_follow` /
+    /// `git_guard::{read,edit}_info_exclude` (no-follow, bounded), whose own
+    /// bodies take the path as a parameter and so never name the file.
+    fn raw_io_on_guarded_project_files(lines: &[&str], in_test: &[bool]) -> Vec<(String, usize)> {
+        let mut named: Vec<String> = Vec::new();
+        let mut io: Vec<(String, usize)> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if in_test[i] || line.trim_start().starts_with("//") {
+                continue;
+            }
+            let func = enclosing_fn(lines, i);
+            if names_guarded_project_file(line) {
+                named.push(func.clone());
+            }
+            if RAW_FILE_IO.iter().any(|call| line.contains(call)) {
+                io.push((func, i));
+            }
+        }
+        let mut out: Vec<(String, usize)> = Vec::new();
+        for (func, at) in io {
+            if named.contains(&func) && !out.iter().any(|(f, _)| *f == func) {
+                out.push((func, at));
+            }
+        }
+        out
+    }
+
+    /// Functions allowed to do raw IO next to a guarded project file name:
+    /// `(file under src/, fn, why)`. Empty today.
+    const GUARDED_FILE_IO_ALLOWED: &[(&str, &str, &str)] = &[];
+
+    #[test]
+    fn guarded_project_files_are_only_opened_through_the_guarded_helpers() {
+        let mut offenders = Vec::new();
+        let mut used = std::collections::HashSet::new();
+        for source in production_sources() {
+            let lines = source.lines();
+            for (func, at) in raw_io_on_guarded_project_files(&lines, &source.in_test) {
+                match GUARDED_FILE_IO_ALLOWED.iter().find(|(f, n, _)| *f == source.rel && *n == func) {
+                    Some(allowed) => {
+                        used.insert(*allowed);
+                    }
+                    None => offenders.push(format!("{}:{} (fn {func}): {}", source.rel, at + 1, lines[at].trim())),
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            ".gitignore / project.json / info/exclude opened with raw fs IO — a link or FIFO there hangs or \
+             redirects it; use read_project_gitignore, write_no_follow or git_guard::{{read,edit}}_info_exclude, \
+             or allow the fn in GUARDED_FILE_IO_ALLOWED with its reason:\n{}",
+            offenders.join("\n")
+        );
+        let stale: Vec<_> = GUARDED_FILE_IO_ALLOWED.iter().filter(|a| !used.contains(*a)).collect();
+        assert!(stale.is_empty(), "GUARDED_FILE_IO_ALLOWED entries that match nothing any more: {stale:?}");
+    }
+
+    /// The argument text of the call whose `(` is at `open`: up to its matching
+    /// `)`, or `None` when it never closes.
+    fn call_args(text: &str, open: usize) -> Option<&str> {
+        let mut depth = 0usize;
+        for (i, c) in text[open..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&text[open + 1..open + i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// The first top-level argument of `args`, without whitespace or a leading `&`.
+    fn first_arg(args: &str) -> String {
+        let mut depth = 0i32;
+        let mut end = args.len();
+        for (i, c) in args.char_indices() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        args[..end].split_whitespace().collect::<String>().trim_start_matches('&').to_string()
+    }
+
+    /// Calls `name(` in `text`, as `(open paren index)`.
+    fn call_sites(text: &str, name: &str) -> Vec<usize> {
+        let needle = format!("{name}(");
+        text.match_indices(&needle)
+            .filter(|(i, _)| !text[..*i].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+            .map(|(i, _)| i + name.len())
+            .collect()
+    }
+
+    /// Functions that read a JSON file with `read_json(path).unwrap_or_default()`
+    /// (or `unwrap_or(…)` / `unwrap_or_else(…)`) and write the same path again
+    /// in the same body: `(fn name, line of the read)`. A read that failed — a
+    /// partial write, a bad edit, an unreadable file — then reads as "empty" and
+    /// the write replaces the file with that. The read must tell a missing file
+    /// from a broken one (`read_tree_json`, an `Err` the caller returns) or the
+    /// write must be a `storage::patch_json` closure. `lines` is production code:
+    /// test lines blanked.
+    fn read_default_then_write_same_file(lines: &[&str]) -> Vec<(String, usize)> {
+        const WRITES: &[&str] =
+            &["write_json", "write_json_atomic", "write_private_atomic", "write_private_atomic_mode", "fs::write"];
+        let text = lines.join("\n");
+        let mut found: Vec<(String, usize)> = Vec::new();
+        for open in call_sites(&text, "read_json") {
+            let Some(args) = call_args(&text, open) else { continue };
+            let after = text[open + args.len() + 2..].trim_start();
+            if !(after.starts_with(".unwrap_or_default()")
+                || after.starts_with(".unwrap_or(")
+                || after.starts_with(".unwrap_or_else("))
+            {
+                continue;
+            }
+            let read_line = text[..open].matches('\n').count();
+            // The fn body: from its header to the closing brace at the same indent.
+            let Some(start) = (0..=read_line).rev().find(|&j| {
+                let t = lines[j].trim_start();
+                let head = t.split("fn ").next().unwrap_or("");
+                t.contains("fn ") && head.split_whitespace().all(|w| ["pub", "pub(crate)", "pub(super)", "async", "const", "unsafe"].contains(&w))
+            }) else {
+                continue;
+            };
+            let indent = lines[start].len() - lines[start].trim_start().len();
+            let end = (start + 1..lines.len())
+                .find(|&k| lines[k].len() - lines[k].trim_start().len() == indent && lines[k].trim_start().starts_with('}'))
+                .unwrap_or(lines.len() - 1);
+            let body = lines[start..=end].join("\n");
+            let path = first_arg(args);
+            let writes_it = WRITES.iter().any(|w| {
+                call_sites(&body, w).into_iter().any(|o| call_args(&body, o).is_some_and(|a| first_arg(a) == path))
+            });
+            if writes_it {
+                found.push((enclosing_fn(lines, read_line), read_line));
+            }
+        }
+        found
+    }
+
+    /// Functions allowed to read-default-then-write one file: `(file under
+    /// src/, fn, why)`. A3 of the screen fixed the stores; what stays is a file
+    /// that holds nothing of the user's.
+    const READ_DEFAULT_THEN_WRITE_ALLOWED: &[(&str, &str, &str)] = &[(
+        "commands/boxes.rs",
+        "write_box_member_links",
+        "a corrupt links manifest reads as \"no owned links\" on purpose: the folder holds only generated \
+         symlinks, the rewrite self-heals it, and refusing would stop the links ever refreshing",
+    )];
+
+    #[test]
+    fn no_store_reads_a_default_over_a_broken_file_and_writes_it_back() {
+        let mut offenders = Vec::new();
+        let mut used = std::collections::HashSet::new();
+        for source in production_sources() {
+            let lines = source.lines();
+            let production: Vec<&str> =
+                lines.iter().enumerate().map(|(i, l)| if source.in_test[i] { "" } else { *l }).collect();
+            for (func, at) in read_default_then_write_same_file(&production) {
+                match READ_DEFAULT_THEN_WRITE_ALLOWED.iter().find(|(f, n, _)| *f == source.rel && *n == func) {
+                    Some(allowed) => {
+                        used.insert(*allowed);
+                    }
+                    None => offenders.push(format!("{}:{} (fn {func}): {}", source.rel, at + 1, lines[at].trim())),
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "read_json(..).unwrap_or_default() then a write of the same file — a broken file reads as empty and \
+             is overwritten. Return the read error, or write through storage::patch_json; or allow the fn in \
+             READ_DEFAULT_THEN_WRITE_ALLOWED with its reason:\n{}",
+            offenders.join("\n")
+        );
+        let stale: Vec<_> = READ_DEFAULT_THEN_WRITE_ALLOWED.iter().filter(|a| !used.contains(*a)).collect();
+        assert!(stale.is_empty(), "READ_DEFAULT_THEN_WRITE_ALLOWED entries that match nothing any more: {stale:?}");
+    }
+
+    #[test]
+    fn the_file_scans_catch_the_shapes_they_guard_and_only_those() {
+        let guarded = "fn bad(dir: &Path) {\n    let t = fs::read_to_string(dir.join(\".gitignore\"));\n}\nfn ok(p: &Path) {\n    let t = fs::read_to_string(p);\n}\nfn other(dir: &Path) {\n    let n = dir.join(\".gitignore\");\n}\n";
+        let lines: Vec<&str> = guarded.lines().collect();
+        let none = vec![false; lines.len()];
+        assert_eq!(raw_io_on_guarded_project_files(&lines, &none), vec![("bad".to_string(), 1)]);
+        let in_test = vec![true; lines.len()];
+        assert!(raw_io_on_guarded_project_files(&lines, &in_test).is_empty());
+        let exclude = "fn x(git: &Path) {\n    let p = git.join(\"info\").join(\"exclude\");\n    fs::write(&p, \"\").ok();\n}\n";
+        let lines: Vec<&str> = exclude.lines().collect();
+        assert_eq!(raw_io_on_guarded_project_files(&lines, &vec![false; lines.len()]), vec![("x".to_string(), 2)]);
+
+        let bad = "fn save(path: &Path) {\n    let mut v: Vec<u8> = storage::read_json(path).unwrap_or_default();\n    v.push(1);\n    storage::write_json(path, &v).ok();\n}\n";
+        let lines: Vec<&str> = bad.lines().collect();
+        assert_eq!(read_default_then_write_same_file(&lines), vec![("save".to_string(), 1)]);
+        // Another file, no default, or a patch closure: not the class.
+        let other = "fn a(p: &Path, q: &Path) {\n    let v: Vec<u8> = storage::read_json(p).unwrap_or_default();\n    storage::write_json(q, &v).ok();\n}\nfn b(p: &Path) -> Result<(), String> {\n    let v: Vec<u8> = storage::read_json(p).map_err(|e| e.to_string())?;\n    storage::write_json(p, &v).ok();\n    Ok(())\n}\nfn c(p: &Path) {\n    let v: Vec<u8> = storage::read_json(p).unwrap_or_default();\n    storage::patch_json(p, |x: &mut Vec<u8>| x.extend(v)).ok();\n}\n";
+        let lines: Vec<&str> = other.lines().collect();
+        assert!(read_default_then_write_same_file(&lines).is_empty());
+        // Multi-line read.
+        let split = "fn save(dir: &Path) {\n    let path = dir.join(\"a.json\");\n    let v: Vec<u8> = storage::read_json(&path)\n        .unwrap_or_default();\n    std::fs::write(&path, b\"\").ok();\n}\n";
+        let lines: Vec<&str> = split.lines().collect();
+        assert_eq!(read_default_then_write_same_file(&lines).len(), 1);
     }
 }
 

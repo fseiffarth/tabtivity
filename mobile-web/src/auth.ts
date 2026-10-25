@@ -184,11 +184,6 @@ export async function resumeAuth(): Promise<ResumeResult> {
   }
 }
 
-/** This device's pairing record (id and non-extractable signing key). */
-export function deviceRecord(): Promise<AuthRecord | null> {
-  return load();
-}
-
 export async function hasPairedDevice(): Promise<boolean> {
   return !!await load();
 }

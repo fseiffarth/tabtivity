@@ -1,11 +1,34 @@
 import { describe, it, expect } from "vitest";
 import {
-  decodeGif,
   openGif,
   effectiveDelayMs,
   GifDecodeError,
-  type GifData,
+  type GifFrame,
 } from "../../lib/viewers/gif";
+
+/** The whole picture upfront: drains {@link openGif}. Throws `GifDecodeError`
+ *  when the bytes are not a GIF or no frame decodes. */
+interface GifData {
+  width: number;
+  height: number;
+  frames: GifFrame[];
+  loopCount: number;
+  truncated: boolean;
+}
+
+function decodeGif(bytes: Uint8Array, opts?: { maxPixelBytes?: number }): GifData {
+  const stream = openGif(bytes, opts);
+  const frames: GifFrame[] = [];
+  for (let f = stream.nextFrame(); f !== null; f = stream.nextFrame()) frames.push(f);
+  if (frames.length === 0) throw new GifDecodeError("GIF contains no image frames");
+  return {
+    width: stream.width,
+    height: stream.height,
+    frames,
+    loopCount: stream.loopCount,
+    truncated: stream.truncated,
+  };
+}
 
 // ── Test-side GIF builder ─────────────────────────────────────────────────────
 // A minimal GIF encoder so each case reads as "this picture, these frames"
