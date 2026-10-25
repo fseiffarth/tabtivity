@@ -8,6 +8,7 @@ import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
+  hostTabId,
   isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
@@ -2917,6 +2918,8 @@ async function agentTranscriptFor(
     limit: limit ?? null,
     // A local-model tab's agent runs in the scope's local-model home.
     localModel: tab.kind === "local_agent",
+    // A tab on a remote project's host keeps its conversation there.
+    remoteHost: hostTabId(tab, scope.project),
   }).catch((): MobileAgentTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
   return { status: "agent_transcript", transcript };
 }
