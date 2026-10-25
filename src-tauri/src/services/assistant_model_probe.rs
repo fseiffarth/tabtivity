@@ -19,35 +19,49 @@
 //! while the screen shows a numbered dialog of its own (a trust or onboarding
 //! question), and gives up instead.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::services::assistant::{self, AssistantCli, AssistantLaunch};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::services::tmux_local;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::storage;
 
 /// The probe's chat folder and tmux session derive from this uid: uuid-shaped,
 /// because the assistant fence binds only a uuid-named folder below its work
 /// folder, and fixed, so Claude's per-folder state in the home stays one entry.
 /// Chats get random ids (`uuid_v4`), so none is ever this one.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PROBE_UID: &str = "00000000-0000-4000-8000-000000000000";
 /// The probe's PTY id, which the fence's per-tab bookkeeping is keyed by.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PROBE_TAB_ID: &str = "assistant-model-probe";
 /// Wide enough that each row's note stays on the row's own line, tall enough
 /// for the picker's ten rows and its heading.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const COLS: u16 = 160;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const ROWS: u16 = 50;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const POLL: Duration = Duration::from_millis(250);
 /// How long Claude may take to draw its prompt, and then its picker: with the
 /// polls, inside the phone's wait (`DesktopRequest::AssistantModels`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const START_WAIT: Duration = Duration::from_secs(12);
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PICKER_WAIT: Duration = Duration::from_secs(6);
 /// The most `Down`s the walk presses (Claude 2.1.310 lists thirteen models),
 /// each waited on for this many polls before the walk ends at the last row.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MAX_WALK: usize = 16;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const WALK_POLLS: u32 = 2;
 /// A screen unchanged over this many polls has finished drawing.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const STEADY_POLLS: u32 = 4;
 /// How long a read stays good when Claude's executable cannot be identified,
 /// so it is kept in memory only. Otherwise it is kept on disk for that build
@@ -94,6 +108,7 @@ pub fn claude_model_screens() -> Result<Vec<Screen>, String> {
 
 /// A numbered row (`❯ 1. Label`, `↓ 10. Label` at a windowed picker's edge):
 /// the shape of every Claude select dialog.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_numbered_row(line: &str) -> bool {
     let rest = line.trim_start_matches(|c: char| c.is_whitespace() || "❯>│┃↑↓".contains(c));
     let digits = rest.chars().take_while(char::is_ascii_digit).count();
@@ -101,6 +116,7 @@ fn is_numbered_row(line: &str) -> bool {
 }
 
 /// Whether `screen` shows a select dialog: two numbered rows or more.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn shows_dialog(screen: &[String]) -> bool {
     screen.iter().filter(|line| is_numbered_row(line)).count() >= 2
 }
@@ -199,6 +215,7 @@ fn drive(session: &str) -> Result<Vec<Screen>, String> {
 }
 
 /// The number of the row the picker highlights (`❯ 4. Sonnet 5.5`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn highlighted(screen: &[String]) -> Option<u32> {
     screen.iter().find_map(|line| {
         let rest = line.trim_start().strip_prefix('❯')?.trim_start();
@@ -283,7 +300,7 @@ fn kill(session: &str) {
     let _ = tmux_local::tmux_command().args(tmux_local::local_tmux_kill_args(session)).output();
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
 
