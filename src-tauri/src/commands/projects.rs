@@ -611,8 +611,15 @@ pub fn check_project_site(req: CheckProjectSiteRequest) -> Result<Option<Project
 /// sits at `directory`. The New-project dialog asks before Create so it can say
 /// the project can't be made there; advisory, like `check_project_site` —
 /// `create_project`'s own `claim_new_project_dir` is the gate.
+///
+/// A stat of a path the user typed (a network mount can hang it), so on a
+/// worker; a worker that fails reads as "nothing there", as before.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_folder_exists(directory: String) -> bool {
+pub async fn project_folder_exists(directory: String) -> bool {
+    app_core::rt::blocking("project", move || project_folder_exists_blocking(directory)).await.unwrap_or(false)
+}
+
+pub fn project_folder_exists_blocking(directory: String) -> bool {
     !directory.trim().is_empty() && fs::symlink_metadata(&directory).is_ok()
 }
 
@@ -1257,13 +1264,18 @@ fn git_in(dir: &Path, args: &[&str]) -> String {
 /// Inspect an archived remote project's mirror for commits that were never synced
 /// to its host, so the UI can warn before an irreversible permanent delete.
 /// Non-remote projects (and those without a mirror repo) report nothing to lose.
-// `(async)` on a sync fn: tauri runs the body on its blocking pool rather than
-// the main thread. It forks 3 + one `rev-list --count` per branch against the
-// mirror, which as a plain command stalled the window while the archive list's
-// delete warning loaded. Read-only and self-contained (no State/AppHandle), so
-// nothing depends on it running on the main thread; the body is unchanged.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn archived_mirror_unsynced(project_id: String) -> Result<UnsyncedReport, String> {
+///
+/// It forks 3 + one `rev-list --count` per branch against the mirror, which as
+/// a plain command stalled the window while the archive list's delete warning
+/// loaded, so the body runs on the blocking pool. (`tauri::command(async)` on
+/// the sync fn, as it was, only moved it onto an async-runtime worker: Tauri
+/// polls the body inside a spawned future, so the forks pinned that worker.)
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn archived_mirror_unsynced(project_id: String) -> Result<UnsyncedReport, String> {
+    app_core::rt::try_blocking("project", move || archived_mirror_unsynced_blocking(project_id)).await
+}
+
+fn archived_mirror_unsynced_blocking(project_id: String) -> Result<UnsyncedReport, String> {
     validate_project_id(&project_id)?;
     let none = UnsyncedReport {
         total: 0,
@@ -1586,8 +1598,16 @@ fn plan_dir_rename(
 
 /// Check what renaming a local project's folder to `leaf` would do (see
 /// [`ProjectDirRenamePlan`]). Read-only; backs the rename dialog's live line.
+/// It stats the project's folder and its siblings, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn plan_project_dir_rename(
+pub async fn plan_project_dir_rename(
+    project_id: String,
+    leaf: String,
+) -> Result<ProjectDirRenamePlan, String> {
+    app_core::rt::try_blocking("project", move || plan_project_dir_rename_blocking(project_id, leaf)).await
+}
+
+fn plan_project_dir_rename_blocking(
     project_id: String,
     leaf: String,
 ) -> Result<ProjectDirRenamePlan, String> {
@@ -1799,8 +1819,20 @@ fn source_needs_decision(spec: &SandboxSpec, detected: &DetectedSpecSource) -> b
 /// that no longer matches the live detection (the file changed between the
 /// two calls, or the caller is answering a stale dialog) is refused the same
 /// way — `NeedsConfirmation` again, with the current source.
+///
+/// The detection reads and hashes the project's Dockerfile / devcontainer
+/// config, so the body runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_project_sandbox(
+pub async fn set_project_sandbox(
+    project_id: String,
+    enabled: bool,
+    source_decision: Option<SandboxSourceDecision>,
+) -> Result<SandboxToggleOutcome, String> {
+    app_core::rt::try_blocking("project", move || set_project_sandbox_blocking(project_id, enabled, source_decision))
+        .await
+}
+
+pub fn set_project_sandbox_blocking(
     project_id: String,
     enabled: bool,
     source_decision: Option<SandboxSourceDecision>,
@@ -2003,14 +2035,17 @@ fn write_project_sandbox_spec(project_id: &str, spec: &SandboxSpec) -> Result<()
 /// the image exist? For a missing image the report carries the shell command
 /// that provides it, so the frontend can run it in a fresh terminal tab
 /// (one-click, per house convention) instead of telling the user to do it.
-// `(async)` on a sync fn: the three docker probes (`docker --version`,
-// `docker info`, `docker image inspect`) run on tauri's blocking pool instead of
-// the main thread — `docker info` against a wedged daemon hangs rather than
-// failing, and froze the whole window with it. The probes themselves stay
-// unbounded, exactly as before; only the thread they block moved.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn sandbox_preflight(project_id: String) -> crate::services::sandbox::PreflightReport {
-    crate::services::sandbox::preflight_report(&project_id)
+///
+/// The three docker probes (`docker --version`, `docker info`, `docker image
+/// inspect`) run on the blocking pool — `docker info` against a wedged daemon
+/// hangs rather than failing, and on the main thread froze the whole window.
+/// (`tauri::command(async)` on the sync fn, as it was, ran them inside a future
+/// on an async-runtime worker, which such a hang pinned for good.) The probes
+/// themselves stay unbounded, exactly as before; only the thread they block
+/// moved. A pool that fails rejects, which both callers treat as "no advice".
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sandbox_preflight(project_id: String) -> Result<crate::services::sandbox::PreflightReport, String> {
+    app_core::rt::blocking("project", move || crate::services::sandbox::preflight_report(&project_id)).await
 }
 
 /// Set (or clear) the OpenVPN client config on a **remote** project's SSH spec,
@@ -2654,6 +2689,11 @@ pub async fn set_project_git_disabled(project_id: String, disabled: bool) -> Res
 }
 
 pub fn set_project_git_disabled_blocking(project_id: String, disabled: bool) -> Result<String, String> {
+    // One toggle at a time. On the window's thread toggles queued; on workers a
+    // second click would run beside the first — a `git init` racing the
+    // `remove_dir_all` of the same `.git`, or two removals, one failing halfway.
+    static GIT_TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _toggle = GIT_TOGGLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // projects.json — locate the entry and resolve its on-disk directory.
     let list = read_projects_list()?;
     let entry = list
@@ -2710,8 +2750,14 @@ pub fn set_project_git_disabled_blocking(project_id: String, disabled: bool) -> 
 
 // ── Per-project project.json ───────────────────────────────────────────────
 
+///
+/// The file sits in the project tree, so it is read on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn load_project(local_file: String) -> Result<Project, String> {
+pub async fn load_project(local_file: String) -> Result<Project, String> {
+    app_core::rt::try_blocking("project", move || load_project_blocking(local_file)).await
+}
+
+pub fn load_project_blocking(local_file: String) -> Result<Project, String> {
     let path = PathBuf::from(&local_file);
     // Never followed at the name or waited on (a FIFO an agent planted).
     let mut project: Project = storage::read_tree_json(&path)?
@@ -2795,13 +2841,17 @@ pub fn workspace_sync(
 
 /// Adopt the layout saved in the project **folder** (`.tabtivity/sessions/`) as this
 /// project's session state. Explicit user action only — see
-/// `terminal_service::adopt_project_tree_session`.
+/// `terminal_service::adopt_project_tree_session`. The layout is read from the
+/// project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn adopt_folder_tab_layout(
+pub async fn adopt_folder_tab_layout(
     project_id: String,
     local_file: String,
 ) -> Result<crate::schema::session::TerminalSession, String> {
-    crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
+    app_core::rt::try_blocking("project", move || {
+        crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
+    })
+    .await
 }
 
 /// Save only the tab layout — into `<state_dir>/sessions/<project_id>/`, plus the
@@ -2863,9 +2913,14 @@ pub fn remote_mirror_root_dir() -> String {
     paths::projects_ssh_root().to_string_lossy().to_string()
 }
 
-/// Open a directory in the OS file manager (Files/Finder/Explorer).
+/// Open a directory in the OS file manager (Files/Finder/Explorer). A stat and
+/// a launcher process, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn open_in_file_manager(path: String) -> Result<(), String> {
+pub async fn open_in_file_manager(path: String) -> Result<(), String> {
+    app_core::rt::try_blocking("project", move || open_in_file_manager_blocking(path)).await
+}
+
+fn open_in_file_manager_blocking(path: String) -> Result<(), String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("Not a directory: {path}"));
@@ -2888,8 +2943,14 @@ pub struct MirrorStatus {
     pub suggested: String,
 }
 
+///
+/// The mirror may sit on any mount, so its stat runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorStatus, String> {
+pub async fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorStatus, String> {
+    app_core::rt::try_blocking("project", move || remote_mirror_status_blocking(project_id, name)).await
+}
+
+fn remote_mirror_status_blocking(project_id: String, name: String) -> Result<MirrorStatus, String> {
     if crate::services::remote::remote_target_for(&project_id).is_none() {
         return Err("not a remote project".to_string());
     }
@@ -2906,9 +2967,14 @@ pub fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorSt
 /// and persist the choice in both `projects.json` (`extra["mirror"]`, the source
 /// of truth `remote_sync::mirror_dir` reads) and the project's `project.json`.
 /// Used when the user relocates a mirror whose folder was deleted. Returns the
-/// resolved absolute path.
+/// resolved absolute path. Creates a folder and writes `project.json`, so on a
+/// worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
+pub async fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
+    app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(project_id, path)).await
+}
+
+fn set_remote_mirror_dir_blocking(project_id: String, path: String) -> Result<String, String> {
     if crate::services::remote::remote_target_for(&project_id).is_none() {
         return Err("not a remote project".to_string());
     }
@@ -3165,8 +3231,13 @@ pub fn generated_dir_name(root: &Path, name: crate::brand::Name) -> String {
 /// The folder a save into the project at `project_dir` defaults to, for the
 /// dialogs that show it: `kind` is `"screenshots"` or `"emails"`. A directory
 /// that is not on this machine (a remote project's) answers the current name.
+/// Two stats in the project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_generated_dir(project_dir: String, kind: String) -> Result<String, String> {
+pub async fn project_generated_dir(project_dir: String, kind: String) -> Result<String, String> {
+    app_core::rt::try_blocking("project", move || project_generated_dir_blocking(project_dir, kind)).await
+}
+
+fn project_generated_dir_blocking(project_dir: String, kind: String) -> Result<String, String> {
     let name = match kind.as_str() {
         "screenshots" => crate::brand::Name::SCREENSHOTS_DIR,
         "emails" => crate::brand::Name::EMAILS_DIR,
@@ -3831,8 +3902,14 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
     items
 }
 
+/// What an import of `source_dir` would add (see [`scaffold_preview`]). A stat
+/// per scaffold file in a folder the user picked, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
+pub async fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
+    app_core::rt::try_blocking("project", move || preview_project_scaffold_blocking(source_dir)).await
+}
+
+fn preview_project_scaffold_blocking(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
     let source = PathBuf::from(source_dir);
     if !source.is_dir() {
         return Err("Source folder does not exist".to_string());
@@ -3855,9 +3932,14 @@ fn agents_empty_at(target: &Path) -> bool {
 /// `agents_empty_at`) — drives the one-time agent-tab card that asks the user
 /// to describe the project. A project with no materialized local scaffold
 /// target yet (e.g. a remote project whose mirror hasn't been created)
-/// reports `false` rather than a spurious "empty".
+/// reports `false` rather than a spurious "empty". Reads the project tree, so
+/// on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_agents_empty(project_id: String) -> Result<bool, String> {
+pub async fn project_agents_empty(project_id: String) -> Result<bool, String> {
+    app_core::rt::try_blocking("project", move || project_agents_empty_blocking(project_id)).await
+}
+
+fn project_agents_empty_blocking(project_id: String) -> Result<bool, String> {
     let list_path = storage::projects_path();
     if !list_path.exists() {
         return Ok(false);
@@ -3883,9 +3965,13 @@ pub fn project_agents_empty(project_id: String) -> Result<bool, String> {
 /// `.git` is likewise excluded: git presence is the separate `git_type` axis. A
 /// project with no materialized local scaffold target yet (e.g. a remote project
 /// whose mirror hasn't been created) reports `false` rather than a spurious
-/// "missing".
+/// "missing". Reads the project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_scaffold_missing(project_id: String) -> Result<bool, String> {
+pub async fn project_scaffold_missing(project_id: String) -> Result<bool, String> {
+    app_core::rt::try_blocking("project", move || project_scaffold_missing_blocking(project_id)).await
+}
+
+fn project_scaffold_missing_blocking(project_id: String) -> Result<bool, String> {
     let list_path = storage::projects_path();
     if !list_path.exists() {
         return Ok(false);
@@ -4075,9 +4161,13 @@ fn apply_migration_steps_at(
 
 /// Dry-run for the "Migrate project" dialog: everything an old project is
 /// missing relative to the current Tabtivity state, one step per piece. Changes
-/// nothing.
+/// nothing. Every scaffold file of the project tree is read, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
+pub async fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
+    app_core::rt::try_blocking("project", move || project_migration_plan_blocking(project_id)).await
+}
+
+pub fn project_migration_plan_blocking(project_id: String) -> Result<MigrationPlan, String> {
     let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
     let entry = list
@@ -6410,8 +6500,8 @@ mod tests {
         // An unchanged name is answered without a second lookup.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(generated_dir_name_for(&PAIR, dir.path(), name), PAIR.cur(name));
-        assert_eq!(project_generated_dir(dir.path().to_string_lossy().into_owned(), "emails".into()).unwrap(), EMAILS_DIR);
-        assert!(project_generated_dir(String::new(), "other".into()).is_err());
+        assert_eq!(project_generated_dir_blocking(dir.path().to_string_lossy().into_owned(), "emails".into()).unwrap(), EMAILS_DIR);
+        assert!(project_generated_dir_blocking(String::new(), "other".into()).is_err());
     }
 
     #[test]
@@ -6619,13 +6709,13 @@ mod tests {
         let linked = dir.path().join("project.json");
         std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
         assert!(project_json_to_adopt(&linked).is_err());
-        assert!(load_project(linked.to_string_lossy().into_owned()).is_err());
+        assert!(load_project_blocking(linked.to_string_lossy().into_owned()).is_err());
 
         let fifo = dir.path().join("fifo.json");
         crate::services::home_io::mkfifo(&fifo);
         let at = fifo.clone();
         assert!(crate::services::home_io::within_deadline(move || project_json_to_adopt(&at)).is_err());
-        assert!(crate::services::home_io::within_deadline(move || load_project(fifo.to_string_lossy().into_owned())).is_err());
+        assert!(crate::services::home_io::within_deadline(move || load_project_blocking(fifo.to_string_lossy().into_owned())).is_err());
     }
 
     /// `write_no_follow` rewrites only a regular file: a FIFO swapped in after
@@ -6819,7 +6909,7 @@ mod tests {
         let fresh = tmp.path().join("parent/fresh");
         claim_new_project_dir(&fresh).unwrap();
         assert!(fresh.is_dir());
-        assert!(project_folder_exists(fresh.to_string_lossy().to_string()));
+        assert!(project_folder_exists_blocking(fresh.to_string_lossy().to_string()));
 
         let err = claim_new_project_dir(&fresh).unwrap_err();
         assert!(err.contains("already exists"), "{err}");
@@ -6830,8 +6920,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
 
         assert!(claim_new_project_dir(Path::new("")).is_err());
-        assert!(!project_folder_exists(String::new()));
-        assert!(!project_folder_exists(
+        assert!(!project_folder_exists_blocking(String::new()));
+        assert!(!project_folder_exists_blocking(
             tmp.path().join("nope").to_string_lossy().to_string()
         ));
     }
@@ -6842,7 +6932,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(tmp.path().join("missing"), &link).unwrap();
-        assert!(project_folder_exists(link.to_string_lossy().to_string()));
+        assert!(project_folder_exists_blocking(link.to_string_lossy().to_string()));
         assert!(claim_new_project_dir(&link).is_err());
         assert!(!tmp.path().join("missing").exists());
     }
@@ -7243,5 +7333,92 @@ mod tests {
         assert_eq!(project.description.as_deref(), Some("keep me"));
         assert_eq!(project.git_type.as_deref(), Some("local"));
         assert_eq!(project.created_at.as_deref(), Some("2020-01-01"));
+    }
+
+    /// Sync commands that may stay sync in the files B1 (code screen 2026-10-25)
+    /// moved off the window's thread: each touches only the app's own state
+    /// dir (the registry, a session, the time log, the archive list) — plus,
+    /// for the registry setters, the one `project.json` mirror write — or
+    /// nothing at all. A sync command runs on the main thread, so one that
+    /// walks the project tree, stats a user-picked path or spawns a process
+    /// freezes the window while it works.
+    const SYNC_COMMANDS_ALLOWED: &[(&str, &str)] = &[
+        ("projects.rs", "get_project_panel_prefs"),
+        ("projects.rs", "set_project_panel_prefs"),
+        ("projects.rs", "check_project_site"),
+        ("projects.rs", "get_projects"),
+        ("projects.rs", "save_projects"),
+        ("projects.rs", "list_archived_projects"),
+        ("projects.rs", "set_project_description"),
+        ("projects.rs", "set_project_name"),
+        ("projects.rs", "set_project_sandbox_spec"),
+        ("projects.rs", "set_project_remote_control"),
+        ("projects.rs", "set_project_schedule_mcp"),
+        ("projects.rs", "set_project_git_push_mcp"),
+        ("projects.rs", "set_project_openvpn"),
+        ("projects.rs", "set_project_auto_connect"),
+        ("projects.rs", "set_project_persist_sessions"),
+        ("projects.rs", "set_project_mobile_access"),
+        ("projects.rs", "set_project_remote_label"),
+        ("projects.rs", "set_project_remote_user"),
+        ("projects.rs", "set_project_run_host"),
+        ("projects.rs", "add_compute_host"),
+        ("projects.rs", "remove_compute_host"),
+        ("projects.rs", "patch_compute_host"),
+        ("projects.rs", "set_project_categories"),
+        ("projects.rs", "load_tab_session"),
+        ("projects.rs", "workspace_snapshot"),
+        ("projects.rs", "workspace_sync"),
+        ("projects.rs", "save_tab_layout"),
+        ("projects.rs", "root_work_dir"),
+        ("projects.rs", "projects_root_dir"),
+        ("projects.rs", "remote_mirror_root_dir"),
+        ("projects.rs", "get_time_today"),
+        ("git.rs", "git_worktree_selection_supported"),
+    ];
+
+    /// The sync Tauri commands of `src/commands/<file>`: the `fn` after each
+    /// `tauri::command` attribute that is not `async`.
+    fn sync_commands_in(file: &str) -> Vec<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("commands").join(file);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            // `tauri::command(async)` on a sync fn counts as sync: Tauri polls
+            // the body inside a future on an async-runtime worker, so blocking
+            // work there pins that worker instead of the window.
+            if !line.trim_start().starts_with("#[cfg_attr(feature = \"desktop\", tauri::command") {
+                continue;
+            }
+            let Some(sig) = lines[i + 1..].iter().map(|l| l.trim()).find(|l| l.contains("fn ")) else { continue };
+            if sig.contains("async fn ") {
+                continue;
+            }
+            let name = sig.split("fn ").nth(1).unwrap_or("");
+            out.push(name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect());
+        }
+        out
+    }
+
+    /// B1's guard: no new sync command in these files does tree, process or
+    /// network work on the window's thread. A new one is either `async` over a
+    /// `*_blocking` body (`app_core::rt::try_blocking`) or, when it touches only
+    /// the state dir, a row in [`SYNC_COMMANDS_ALLOWED`].
+    #[test]
+    fn the_b1_files_keep_disk_and_process_work_off_the_windows_thread() {
+        let mut unexpected = Vec::new();
+        let mut seen = Vec::new();
+        for file in ["projects.rs", "fs.rs", "git.rs", "git_fork.rs"] {
+            for name in sync_commands_in(file) {
+                match SYNC_COMMANDS_ALLOWED.iter().find(|(f, n)| *f == file && *n == name) {
+                    Some(row) => seen.push(*row),
+                    None => unexpected.push(format!("{file}: {name}")),
+                }
+            }
+        }
+        assert!(unexpected.is_empty(), "sync commands that should be async over a *_blocking body: {unexpected:?}");
+        let stale: Vec<_> = SYNC_COMMANDS_ALLOWED.iter().filter(|row| !seen.contains(row)).collect();
+        assert!(stale.is_empty(), "SYNC_COMMANDS_ALLOWED rows that match no sync command any more: {stale:?}");
     }
 }

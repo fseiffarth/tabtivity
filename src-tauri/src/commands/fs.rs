@@ -246,9 +246,17 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 ///
 /// `since_secs` (Unix seconds) keeps only entries modified at or after it; `None`
 /// returns everything. Results are sorted by `modified_secs` descending, then by
-/// name, so the most recent download is first.
+/// name, so the most recent download is first. A listing and a stat per
+/// entry, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_recent_downloads(
+pub async fn list_recent_downloads(
+    paths: Vec<String>,
+    since_secs: Option<u64>,
+) -> Result<Vec<FileEntry>, String> {
+    app_core::rt::try_blocking("fs", move || list_recent_downloads_blocking(paths, since_secs)).await
+}
+
+fn list_recent_downloads_blocking(
     paths: Vec<String>,
     since_secs: Option<u64>,
 ) -> Result<Vec<FileEntry>, String> {
@@ -1033,13 +1041,29 @@ pub fn write_project_file_bytes_local(
     write_confined(&target_c, content)
 }
 
+/// Add (`"ignore"`) or drop (`"unignore"`) the `.gitignore` rule for one path
+/// of the project. Reads and writes the project's `.gitignore`, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn update_gitignore_rule(
+pub async fn update_gitignore_rule(
     project_dir: String,
     rel_path: String,
     is_dir: bool,
     action: String,
 ) -> Result<(), String> {
+    app_core::rt::try_blocking("fs", move || update_gitignore_rule_blocking(project_dir, rel_path, is_dir, action)).await
+}
+
+pub fn update_gitignore_rule_blocking(
+    project_dir: String,
+    rel_path: String,
+    is_dir: bool,
+    action: String,
+) -> Result<(), String> {
+    // A read-modify-write of one file: two rule edits at once (they no longer
+    // queue on the window's thread) would each write their own copy and drop
+    // the other's rule.
+    static GITIGNORE_EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _edit = GITIGNORE_EDIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = canonical(&project_dir)?;
     let clean_rel = normalize_project_rel_path(&rel_path)?;
     let target_c = canonical_or_new(&root.join(&clean_rel))?;
@@ -1293,8 +1317,13 @@ pub fn import_external_file_blocking(
 
 /// Whether a project-relative path currently exists. The drag-drop importer
 /// calls this before copying so it can prompt rename-vs-replace on a collision.
+/// It canonicalizes inside the project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
+pub async fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
+    app_core::rt::try_blocking("fs", move || project_path_exists_blocking(project_dir, rel_path)).await
+}
+
+pub fn project_path_exists_blocking(project_dir: String, rel_path: String) -> Result<bool, String> {
     let root = canonical(&project_dir)?;
     let rel = normalize_project_rel_path(&rel_path)?;
     let target = if rel.is_empty() {
@@ -1516,8 +1545,16 @@ pub fn detect_mime_local(path: &str, scope_id: Option<&str>) -> Result<String, S
 /// This mirrors the *exact* routing `read_file_text`/`read_file_bytes` apply
 /// (`remote_target_for` gates remoteness, `is_under_mirror` picks the side), so
 /// the badge can never disagree with where the bytes were actually read from.
+/// The side is found by canonicalizing both paths, so on a worker; a worker
+/// that fails answers "none" (no badge).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn file_source(path: String, project_id: Option<String>) -> String {
+pub async fn file_source(path: String, project_id: Option<String>) -> String {
+    app_core::rt::blocking("fs", move || file_source_blocking(path, project_id))
+        .await
+        .unwrap_or_else(|_| "none".to_string())
+}
+
+fn file_source_blocking(path: String, project_id: Option<String>) -> String {
     match project_id.as_deref() {
         Some(pid) if crate::services::remote::remote_target_for(pid).is_some() => {
             if crate::services::remote_sync::is_under_mirror(pid, &path) {
@@ -2937,7 +2974,7 @@ mod tests {
     }
 
     fn ignore_rule(dir: &Path, rel: &str) -> Result<(), String> {
-        update_gitignore_rule(dir.to_string_lossy().into_owned(), rel.into(), false, "ignore".into())
+        update_gitignore_rule_blocking(dir.to_string_lossy().into_owned(), rel.into(), false, "ignore".into())
     }
 
     #[test]
@@ -2968,6 +3005,34 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, project.join(".gitignore")).unwrap();
         assert!(ignore_rule(&project, "a.log").is_err());
         assert!(!elsewhere.exists());
+    }
+
+    /// The command runs on workers now, so two rule edits can overlap; each
+    /// reads, edits and writes the whole file, and without the edit lock the
+    /// later write dropped the earlier one's rule.
+    #[test]
+    fn concurrent_gitignore_rule_edits_keep_every_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..16).map(|i| format!("f{i}.log")).collect();
+        let start = std::sync::Arc::new(std::sync::Barrier::new(names.len()));
+        let workers: Vec<_> = names
+            .iter()
+            .cloned()
+            .map(|name| {
+                let (root, start) = (dir.path().to_path_buf(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    ignore_rule(&root, &name)
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        let text = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        for name in &names {
+            assert!(text.lines().any(|l| l == format!("/{name}")), "lost /{name}:\n{text}");
+        }
     }
 
     #[cfg(unix)]
@@ -3692,8 +3757,8 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         std::fs::write(proj.path().join("here.txt"), "x").unwrap();
         let dir = proj.path().to_string_lossy().to_string();
-        assert!(project_path_exists(dir.clone(), "here.txt".into()).unwrap());
-        assert!(!project_path_exists(dir, "missing.txt".into()).unwrap());
+        assert!(project_path_exists_blocking(dir.clone(), "here.txt".into()).unwrap());
+        assert!(!project_path_exists_blocking(dir, "missing.txt".into()).unwrap());
     }
 
     #[test]
