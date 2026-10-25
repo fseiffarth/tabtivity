@@ -69,3 +69,5 @@ f49778aa6513650ebe03570fe61375f8f6f527b0:src/__tests__/mobile/MobileSecretsRelea
 08306d8b58d632cc16b7b53fa0249cc98ba762c1:docs/ai_switch_plan.md:generic-api-key:90
 # teleport route test: idempotency_key fixture "0123456789abcdef"
 f37b64c04c0916c8d9be4960026a4e1cf41e6adb:src-tauri/src/services/mobile_control/host.rs:generic-api-key:10040
+# remote-machine create test: idempotency_key fixture "0123456789abcdef"
+945a878d8e40b7dcb9291abc785ed2a38331cd46:src/__tests__/mobile/MobileHostMachines.test.tsx:generic-api-key:60
