@@ -80,6 +80,7 @@ struct Atoms {
     net_client_list: Atom,
     net_wm_name: Atom,
     utf8_string: Atom,
+    wm_state: Atom,
 }
 
 struct CinnamonWorkspaceState {
@@ -156,6 +157,12 @@ impl WorkspaceBackend for X11Backend {
         ensure_desktop_count(&self.conn, self.screen_num, &self.atoms, 2)?;
         self.move_window(wid, ACTIVE_DESKTOP)?;
         switch_current_desktop(&self.conn, self.screen_num, &self.atoms, ACTIVE_DESKTOP)?;
+        // A window the user minimized stays minimized: mapping an iconic
+        // window asks the WM to restore it (ICCCM 4.1.4), and raising it would
+        // too. Back on the active desktop is all a switch owes it.
+        if is_iconic(&self.conn, wid, &self.atoms) {
+            return self.conn.flush().map_err(|e| e.to_string());
+        }
         self.conn
             .send_and_check_request(&x::MapWindow { window: wid })
             .map_err(|e| e.to_string())?;
@@ -439,6 +446,7 @@ fn intern_atoms(conn: &Connection) -> Result<Atoms, String> {
         net_client_list: intern_atom(conn, b"_NET_CLIENT_LIST")?,
         net_wm_name: intern_atom(conn, b"_NET_WM_NAME")?,
         utf8_string: intern_atom(conn, b"UTF8_STRING")?,
+        wm_state: intern_atom(conn, b"WM_STATE")?,
     })
 }
 
@@ -487,6 +495,26 @@ fn get_window_desktop(conn: &Connection, wid: Window, atoms: &Atoms) -> Option<u
     conn.wait_for_reply(cookie)
         .ok()
         .and_then(|r| r.value::<u32>().first().copied())
+}
+
+/// ICCCM `WM_STATE` IconicState: the WM holds the window minimized.
+const ICONIC_STATE: u32 = 3;
+
+fn is_iconic(conn: &Connection, wid: Window, atoms: &Atoms) -> bool {
+    let cookie = conn.send_request(&x::GetProperty {
+        delete: false,
+        window: wid,
+        property: atoms.wm_state,
+        r#type: atoms.wm_state,
+        long_offset: 0,
+        long_length: 1,
+    });
+    // Any client can write WM_STATE; xcb's `value` panics on a format mismatch.
+    conn.wait_for_reply(cookie)
+        .ok()
+        .filter(|r| r.format() == 32)
+        .and_then(|r| r.value::<u32>().first().copied())
+        == Some(ICONIC_STATE)
 }
 
 fn set_window_desktop_property(
