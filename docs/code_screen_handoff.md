@@ -160,3 +160,11 @@ Phone
 - [8] brand, whitespace, clippy green. Lib 4713 (+2), dlib 4558 + 1; one `sysstat` flake, rerun green. Windows check not run.
 - [10] build green; lint 0 errors / 28 warnings; vitest 950 files / 9479 tests (+6); one `PdfZoomRaster` timing flake under load. No cargo tests.
 - [11] build green; lint 0 errors / 28 warnings; vitest 951 files / 9493 tests, 0 failed. No Rust touched.
+
+## Follow-ups after the user's calls (2026-10-25/26)
+
+- `voice_speak`/`voice_speak_stop`: kept for read-aloud.
+- [13] PDF region capture deleted — 6ec758aa→develop (copy layer, `pdfViewer.copySelection*` keys, `startDelayedCapture`/`cancelDelayedCapture`), c1d67b10 (untested row).
+- [14] rsync fast path probes both ends — fba3ee46, ed2d4737 (review: host probe bounded 20 s / 64 KiB, no `2>/dev/null` so csh hosts work), be0c329a (filemap). Fast path only where both ends run rsync ≥ 3.0; else SFTP as before.
+- Flagged: the whole screenshot save chain (`capture_screenshot`, `ScreenshotSaveOverlay`, `screenshotPending`, `copy_png_bytes_to_clipboard`) has no caller left; macOS `/usr/bin/rsync` (openrsync) beats Homebrew, so Macs never take the fast path; rsync installed/downgraded mid-session is noticed only after a restart (pulls fall back); remote tooling status still lists rsync as present on macOS.
+- S1–S9: not started — user said not yet.
