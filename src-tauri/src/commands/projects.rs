@@ -1372,9 +1372,13 @@ fn remote_head_sha(state: &crate::services::git_peer::GitPeerState) -> Option<St
 }
 
 /// Permanently delete an archived project: remove its archive folder and purge
-/// its time-tracking history. Irreversible.
+/// its time-tracking history. Irreversible. A whole tree goes, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn delete_archived_project(project_id: String) -> Result<(), String> {
+pub async fn delete_archived_project(project_id: String) -> Result<(), String> {
+    app_core::rt::try_blocking("project", move || delete_archived_project_blocking(project_id)).await
+}
+
+pub fn delete_archived_project_blocking(project_id: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
     let dest = paths::archive_root().join(&project_id);
     if dest.exists() {
@@ -1387,11 +1391,14 @@ pub fn delete_archived_project(project_id: String) -> Result<(), String> {
 
 /// Permanently delete every archived project (Settings "Clear archive").
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn clear_archive() -> Result<(), String> {
-    for archived in list_archived_projects()? {
-        delete_archived_project(archived.id)?;
-    }
-    Ok(())
+pub async fn clear_archive() -> Result<(), String> {
+    app_core::rt::try_blocking("project", || {
+        for archived in list_archived_projects()? {
+            delete_archived_project_blocking(archived.id)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Update a project's description in both `projects.json` (the pill list) and
@@ -2638,8 +2645,15 @@ pub fn set_project_categories(
 ///
 /// Returns the resulting `git_type`. Mirrors the change into both
 /// `projects.json` and `project.json`, like `set_project_sandbox`.
+///
+/// Removing `.git` or running `git init` takes seconds on a big repo, so the
+/// body runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<String, String> {
+pub async fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<String, String> {
+    app_core::rt::try_blocking("project", move || set_project_git_disabled_blocking(project_id, disabled)).await
+}
+
+pub fn set_project_git_disabled_blocking(project_id: String, disabled: bool) -> Result<String, String> {
     // projects.json — locate the entry and resolve its on-disk directory.
     let list = read_projects_list()?;
     let entry = list
@@ -3660,7 +3674,11 @@ pub struct ProjectScaffoldRepair {
 /// pattern, or `.claude/settings.json` that is missing relative to current
 /// defaults. Safe to run repeatedly — every step is additive/idempotent.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
+pub async fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
+    app_core::rt::try_blocking("project", move || repair_project_scaffold_blocking(project_id)).await
+}
+
+pub fn repair_project_scaffold_blocking(project_id: String) -> Result<ProjectScaffoldRepair, String> {
     let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
     let entry = list
@@ -3682,9 +3700,14 @@ pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepa
 /// counterpart to `repair_project_scaffold`. Projects whose local target
 /// directory doesn't exist yet (e.g. a remote project whose mirror hasn't
 /// materialized) are silently skipped rather than erroring the whole batch.
-/// Returns only the projects that actually needed a repair.
+/// Returns only the projects that actually needed a repair. Every project's
+/// tree is read and written, so the pass runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, String> {
+pub async fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, String> {
+    app_core::rt::try_blocking("project", repair_all_project_scaffolds_blocking).await
+}
+
+pub fn repair_all_project_scaffolds_blocking() -> Result<Vec<ProjectScaffoldRepair>, String> {
     let list_path = storage::projects_path();
     if !list_path.exists() {
         return Ok(vec![]);
@@ -4088,8 +4111,16 @@ pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, Strin
 
 /// Apply the steps the user accepted (by id, from `project_migration_plan`).
 /// Declined steps are simply absent from `accepted` and nothing runs for them.
+/// The scaffold step writes into the project tree, so the body runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_migration_apply(
+pub async fn project_migration_apply(
+    project_id: String,
+    accepted: Vec<String>,
+) -> Result<MigrationApplyReport, String> {
+    app_core::rt::try_blocking("project", move || project_migration_apply_blocking(project_id, accepted)).await
+}
+
+pub fn project_migration_apply_blocking(
     project_id: String,
     accepted: Vec<String>,
 ) -> Result<MigrationApplyReport, String> {
@@ -4771,12 +4802,45 @@ pub struct ExtendProjectRemoteRequest {
 /// local `mirror` (working copy) in place — files never move — and its `directory`
 /// becomes a local state dir holding `project.json`. The user pushes files to the
 /// (empty) host later via the existing manual sync UI.
+///
+/// The ssh `mkdir`, the file moves and a scaffold commit run on a worker (the
+/// `*_blocking` halves), not on the async runtime's threads, which inline they
+/// held for seconds. Only the host-bound state clear between them is async: it
+/// waits on the project's sync lock, polled rather than held on a pool thread.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extend_project_to_remote(
     ctx: Ctx,
     req: ExtendProjectRemoteRequest,
 ) -> Result<ProjectEntry, String> {
     let manifest = ctx.get::<SyncManifestState>();
+    let prep = app_core::rt::try_blocking("project", move || extend_prepare_blocking(req)).await?;
+    // This project may have been remote before (detached, and now pointed at a different
+    // host — the ordinary way to correct a wrong path). The state dir is keyed by id, so
+    // any host-bound state from that earlier life is sitting right here. Clear it before
+    // we write the new pairing: a manifest describing the OLD host makes byte-sync refuse
+    // to push to the new one while the file tree reports green. Detach clears it too; this
+    // is the belt-and-braces that also rescues a project detached by an older build, which
+    // could not clear it (`remove_dir` cannot empty a non-empty directory).
+    clear_host_bound_state(&prep.req.project_id, manifest).await;
+    app_core::rt::try_blocking("project", move || extend_finish_blocking(prep)).await
+}
+
+/// What [`extend_prepare_blocking`] read and made, for [`extend_finish_blocking`].
+struct ExtendPrep {
+    req: ExtendProjectRemoteRequest,
+    name: String,
+    old_dir: String,
+    old_path: PathBuf,
+    git_backed: bool,
+    project: Project,
+    state_dir: PathBuf,
+    new_directory: String,
+}
+
+/// The guards and reads of [`extend_project_to_remote`], then its first side
+/// effects (the remote root, the state dir) — in that order, so a refused or
+/// unreadable `project.json` stops extend before anything is touched.
+fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
     let list = read_projects_list()?;
 
     let idx = list
@@ -4823,7 +4887,7 @@ pub async fn extend_project_to_remote(
     // touched: one that is refused or does not parse stops extend cleanly.
     // Read the existing one so tabs/time/created_at/etc. survive.
     let old_project_file = old_path.join("project.json");
-    let mut project = read_project_to_move(&old_project_file)?;
+    let project = read_project_to_move(&old_project_file)?;
 
     // Best-effort create the empty remote root — same as create_project. Failure
     // is non-fatal (key/agent-auth hosts may need it to pre-exist; a password-auth
@@ -4839,20 +4903,28 @@ pub async fn extend_project_to_remote(
     let state_dir = remote_project_state_dir(&req.project_id);
     std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
     let new_directory = state_dir.to_string_lossy().to_string();
+    Ok(ExtendPrep {
+        name: list[idx].name.clone(),
+        req,
+        old_dir,
+        old_path,
+        git_backed,
+        project,
+        state_dir,
+        new_directory,
+    })
+}
 
-    // This project may have been remote before (detached, and now pointed at a different
-    // host — the ordinary way to correct a wrong path). The state dir is keyed by id, so
-    // any host-bound state from that earlier life is sitting right here. Clear it before
-    // we write the new pairing: a manifest describing the OLD host makes byte-sync refuse
-    // to push to the new one while the file tree reports green. Detach clears it too; this
-    // is the belt-and-braces that also rescues a project detached by an older build, which
-    // could not clear it (`remove_dir` cannot empty a non-empty directory).
-    clear_host_bound_state(&req.project_id, manifest).await;
+/// The rest of [`extend_project_to_remote`], after the host-bound state is
+/// cleared: the moved `project.json`, the registry entry, lockstep.
+fn extend_finish_blocking(prep: ExtendPrep) -> Result<ProjectEntry, String> {
+    let ExtendPrep { req, name, old_dir, old_path, git_backed, mut project, state_dir, new_directory } = prep;
+    let old_project_file = old_path.join("project.json");
 
     // Move project.json from the old (now mirror) tree into the state dir, tagging
     // it remote.
     project.id = req.project_id.clone();
-    project.name = list[idx].name.clone();
+    project.name = name;
     project.directory = new_directory.clone();
     project.remote = Some(req.remote.clone());
     project.mirror = Some(old_dir.clone());
@@ -4936,12 +5008,39 @@ pub async fn extend_project_to_remote(
 /// its id, tabs, time, categories, git metadata, etc.
 ///
 /// Errors if the project isn't remote, or has no local mirror to fall back to.
+///
+/// The file moves run on a worker (the `*_blocking` halves); only the
+/// host-bound state clear between them is async (the project's sync lock).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_project_from_remote(
     ctx: Ctx,
     project_id: String,
 ) -> Result<ProjectEntry, String> {
     let manifest = ctx.get::<SyncManifestState>();
+    let prep = app_core::rt::try_blocking("project", move || detach_prepare_blocking(project_id)).await?;
+
+    // Drop everything that was bound to the host we are detaching from. Not merely
+    // hygiene: the project keeps its id, so a later "extend to remote" — the whole point
+    // of detaching, when the old path was wrong — lands on this same state dir and would
+    // otherwise inherit a byte-sync manifest whose bases describe the OLD host. See
+    // `clear_host_bound_state` for what that silently does to the new one.
+    clear_host_bound_state(&prep.project_id, manifest).await;
+
+    app_core::rt::try_blocking("project", move || detach_finish_blocking(prep)).await
+}
+
+/// What [`detach_prepare_blocking`] wrote, for [`detach_finish_blocking`].
+struct DetachPrep {
+    project_id: String,
+    mirror: String,
+    new_project_file: PathBuf,
+    state_local_file: String,
+    state_dir: PathBuf,
+}
+
+/// The guards of [`detach_project_from_remote`], then `project.json` moved
+/// back into the mirror and the saved tabs re-pointed at it.
+fn detach_prepare_blocking(project_id: String) -> Result<DetachPrep, String> {
     let list = read_projects_list()?;
 
     let idx = list
@@ -5010,14 +5109,13 @@ pub async fn detach_project_from_remote(
             Ok(())
         });
     }
+    Ok(DetachPrep { project_id, mirror, new_project_file, state_local_file, state_dir })
+}
 
-    // Drop everything that was bound to the host we are detaching from. Not merely
-    // hygiene: the project keeps its id, so a later "extend to remote" — the whole point
-    // of detaching, when the old path was wrong — lands on this same state dir and would
-    // otherwise inherit a byte-sync manifest whose bases describe the OLD host. See
-    // `clear_host_bound_state` for what that silently does to the new one.
-    clear_host_bound_state(&project_id, manifest).await;
-
+/// The rest of [`detach_project_from_remote`], after the host-bound state is
+/// cleared: the registry entry re-pointed, then the state dir dropped.
+fn detach_finish_blocking(prep: DetachPrep) -> Result<ProjectEntry, String> {
+    let DetachPrep { project_id, mirror, new_project_file, state_local_file, state_dir } = prep;
     // Update the projects.json entry in place, preserving every other extra key
     // (categories, git_provider, git_type, description, sandbox, …); only then
     // remove the old state-dir project.json, its session mirror, and the state dir.

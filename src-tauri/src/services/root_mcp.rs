@@ -3319,7 +3319,7 @@ fn local_checkout(entry: &crate::schema::projects::ProjectEntry) -> Result<(Stri
 }
 
 fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
-    if !crate::commands::git::git_available() {
+    if !crate::commands::git::git_available_blocking() {
         return Err("git is not installed (or not on PATH), so no working copy can be read".into());
     }
     let only = project_filter(stores, args)?;
@@ -3388,7 +3388,7 @@ fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
 /// One project up close: its git state and its latest commits. The sweep says
 /// *which* projects moved; this says what happened in the one being asked about.
 fn project_activity(stores: &Stores, args: &Value) -> Result<Value, String> {
-    if !crate::commands::git::git_available() {
+    if !crate::commands::git::git_available_blocking() {
         return Err("git is not installed (or not on PATH), so no working copy can be read".into());
     }
     let wanted = str_arg(args, "project").ok_or("`project` is required")?;
@@ -5910,7 +5910,7 @@ mod tests {
     /// A real repo, because the point of the tool is the answer about a folder.
     #[test]
     fn the_git_sweep_reads_local_copies_and_says_why_it_skipped_the_rest() {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return; // Reported honestly by the tool itself; nothing to test here.
         }
         let f = Fixture::new();

@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn only_the_chats_files_still_changed_are_counted_per_checkout() {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return;
         }
         // Reached through a symlink, as macOS's temp dir is: git reports the

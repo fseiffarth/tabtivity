@@ -595,7 +595,7 @@ mod tests {
 
     /// An upstream repo and a clone of it, the clone one commit behind.
     fn behind_pair() -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return None;
         }
         let tmp = tempfile::tempdir().unwrap();

@@ -8,7 +8,7 @@ use app_lib::commands::project_transfer::{
     preview_project_export, ExportProjectRequest, ImportBundleRequest, MirrorSource,
 };
 use app_lib::commands::projects::{
-    archive_project_blocking, create_project_blocking, delete_archived_project, get_projects,
+    archive_project_blocking, clear_archive, create_project_blocking, delete_archived_project_blocking, get_projects,
     import_project_blocking, list_archived_projects, load_project,
     restore_archived_project_blocking, save_projects,
     set_project_auto_connect, set_project_description, set_project_remote_control,
@@ -1258,13 +1258,30 @@ fn permanent_delete_removes_archived_project() {
         archive_project_blocking(id.clone(), "2026-07-01T00:00:00+00:00".to_string()).expect("archive");
         assert_eq!(list_archived_projects().unwrap().len(), 1);
 
-        delete_archived_project(id.clone()).expect("delete forever");
+        delete_archived_project_blocking(id.clone()).expect("delete forever");
         assert!(
             list_archived_projects().unwrap().is_empty(),
             "archive must be empty after permanent delete"
         );
         // Restoring a permanently-deleted project is an error (nothing to read).
         assert!(restore_archived_project_blocking(id).is_err());
+    });
+}
+
+/// "Clear archive" deletes whole trees, so it runs on a worker: the async
+/// command still empties every archived project before it answers.
+#[test]
+fn clear_archive_deletes_every_archived_project_off_the_calling_thread() {
+    with_isolated_home("archive-clear-home", |_| {
+        for name in ["clear-a", "clear-b"] {
+            let target = tempdir_in_test_projects(name);
+            let id = new_local_project(name, target.path()).id;
+            archive_project_blocking(id, "2026-07-01T00:00:00+00:00".to_string()).expect("archive");
+        }
+        assert_eq!(list_archived_projects().unwrap().len(), 2);
+
+        app_core::rt::block_on(clear_archive()).expect("clear archive");
+        assert!(list_archived_projects().unwrap().is_empty());
     });
 }
 

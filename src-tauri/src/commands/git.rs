@@ -795,8 +795,16 @@ pub(crate) fn local_non_repo(target: Option<&RemoteTarget>, project_dir: &str) -
 /// this before offering a git-backed project, so a missing `git` surfaces as an
 /// install prompt instead of `scaffold_project` silently no-oping `git init`
 /// (see its `let _ =` discard) and registering a git-typed project with no repo.
+///
+/// The probe spawns a process, so the command runs it on a worker; a worker
+/// that fails reads as "not available".
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn git_available() -> bool {
+pub async fn git_available() -> bool {
+    app_core::rt::blocking("git", git_available_blocking).await.unwrap_or(false)
+}
+
+/// [`git_available`] on the calling thread, for code already off the window's.
+pub fn git_available_blocking() -> bool {
     // Bare on purpose: `--version` touches no repo.
     crate::paths::command_no_window("git")
         .arg("--version")
@@ -3747,7 +3755,7 @@ mod tests {
 
     /// Tests skip gracefully when `git` isn't on PATH.
     fn git_available() -> bool {
-        super::git_available()
+        super::git_available_blocking()
     }
 
     /// The import dialog's origin read answers for the folder's own repository
@@ -5815,7 +5823,7 @@ filename note.txt
         ("commands/git.rs", "surviving_denylisted_key", "`config --file` on one file, no repo"),
         ("commands/git.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
         ("services/git_bounded.rs", "list_path_values", "`config --file` on one file, no repo"),
-        ("commands/git.rs", "git_available", "`--version`, no repo"),
+        ("commands/git.rs", "git_available_blocking", "`--version`, no repo"),
         ("commands/git.rs", "git_clone_blocking", "network clone into a new empty dir"),
         ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),
         ("services/dev_build.rs", "commits_behind", "the app's own checkout"),

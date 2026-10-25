@@ -100,7 +100,7 @@ pub async fn list_dir(
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         return list_dir_remote(&target, &rel_path, pool).await;
     }
-    list_dir_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || list_dir_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs directory listing — the pre-Phase-2 behavior, byte-identical.
@@ -154,8 +154,20 @@ const TEXT_PATH_BASES_MAX: usize = 4;
 /// answered either. The returned path is the lexical one (the base as given,
 /// joined), not the canonical one, so it prefix-matches the project directory
 /// the frontend holds. One answer per candidate, in order; `None` = no link.
+///
+/// Every candidate is a canonicalize and a stat, so the lookup runs on a
+/// worker. A worker that fails is an error, not "no links": the frontend
+/// would remember those.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn resolve_text_paths(bases: Vec<String>, candidates: Vec<String>) -> Vec<Option<FileEntry>> {
+pub async fn resolve_text_paths(
+    bases: Vec<String>,
+    candidates: Vec<String>,
+) -> Result<Vec<Option<FileEntry>>, String> {
+    app_core::rt::blocking("fs", move || resolve_text_paths_blocking(bases, candidates)).await
+}
+
+/// The body of [`resolve_text_paths`], on the calling thread.
+pub fn resolve_text_paths_blocking(bases: Vec<String>, candidates: Vec<String>) -> Vec<Option<FileEntry>> {
     let bases: Vec<(PathBuf, PathBuf)> = bases
         .iter()
         .filter(|b| !b.is_empty())
@@ -857,7 +869,7 @@ pub async fn rename_path(
         };
         return remote_rename(pool, &target, &from, &to).await;
     }
-    rename_path_local(&project_dir, &old_rel, &new_name)
+    app_core::rt::try_blocking("fs", move || rename_path_local(&project_dir, &old_rel, &new_name)).await
 }
 
 /// Local-fs rename — the pre-Phase-3 body, byte-identical. Re-validates so it is
@@ -889,7 +901,7 @@ pub async fn delete_file(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_remove_file(pool, &target, &full).await;
     }
-    delete_file_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || delete_file_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs file delete — byte-identical pre-Phase-3 body.
@@ -920,7 +932,8 @@ pub async fn delete_dir(
         let full = join_remote_dir(&target.spec.remote_path, &clean);
         return remote_remove_dir(pool, &target, &full).await;
     }
-    delete_dir_local(&project_dir, &rel_path)
+    // A whole tree goes: on a worker, never the thread driving the command.
+    app_core::rt::try_blocking("fs", move || delete_dir_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs directory-tree delete — byte-identical pre-Phase-3 body.
@@ -950,7 +963,7 @@ pub async fn create_file(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_create_file(pool, &target, &full).await;
     }
-    create_file_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || create_file_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs empty-file create, confined like every project write.
@@ -975,7 +988,7 @@ pub async fn write_project_file(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_write(pool, &target, &full, content.as_bytes()).await;
     }
-    write_project_file_local(&project_dir, &rel_path, &content)
+    app_core::rt::try_blocking("fs", move || write_project_file_local(&project_dir, &rel_path, &content)).await
 }
 
 /// Local-fs text write, confined like every project write.
@@ -1004,7 +1017,7 @@ pub async fn write_project_file_bytes(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_write(pool, &target, &full, &content).await;
     }
-    write_project_file_bytes_local(&project_dir, &rel_path, &content)
+    app_core::rt::try_blocking("fs", move || write_project_file_bytes_local(&project_dir, &rel_path, &content)).await
 }
 
 /// Local-fs byte write, confined like every project write.
@@ -1077,7 +1090,7 @@ pub async fn create_dir(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_mkdir(pool, &target, &full).await;
     }
-    create_dir_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || create_dir_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs directory create, confined like every project write.
@@ -2814,33 +2827,13 @@ pub struct DirListing {
 /// picker browses the whole local filesystem to choose a destination folder.
 /// Empty `path` starts at the user's home directory. Files are omitted (only
 /// folders); unreadable entries are skipped rather than failing the whole call.
+/// The folder half of [`list_dir_all`], read by the same body.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_dirs(path: String) -> Result<DirListing, String> {
-    let trimmed = path.trim();
-    let base = if trimmed.is_empty() {
-        crate::paths::home_dir()
-    } else {
-        PathBuf::from(trimmed)
-    };
-    // Best-effort canonicalize so `..`/symlinks resolve to a stable absolute
-    // path; fall back to the raw path if it can't be canonicalized.
-    let base = fs::canonicalize(&base).unwrap_or(base);
-
-    let read = fs::read_dir(&base).map_err(|e| format!("cannot read '{}': {e}", base.display()))?;
-    let mut entries: Vec<DirEntry> = read
-        .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .map(|e| DirEntry {
-            name: e.file_name().to_string_lossy().into_owned(),
-            path: display_path(&e.path()),
-        })
-        .collect();
-    entries.sort_by_key(|a| a.name.to_lowercase());
-
-    Ok(DirListing {
-        path: display_path(&base),
-        parent: base.parent().map(display_path),
-        entries,
+pub async fn list_dirs(path: String) -> Result<DirListing, String> {
+    app_core::rt::try_blocking("fs", move || list_local_dir(&path, true)).await.map(|listing| DirListing {
+        path: listing.path,
+        parent: listing.parent,
+        entries: listing.dirs,
     })
 }
 
@@ -2871,7 +2864,15 @@ pub struct FileListing {
 /// Folders and files of a local directory (see [`FileListing`]). Empty `path`
 /// starts at the user's home; unreadable entries are skipped.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_dir_all(path: String) -> Result<FileListing, String> {
+pub async fn list_dir_all(path: String) -> Result<FileListing, String> {
+    app_core::rt::try_blocking("fs", move || list_local_dir(&path, false)).await
+}
+
+/// The one local directory read behind [`list_dirs`] and [`list_dir_all`]:
+/// `..`/links resolved to a stable absolute path where possible (the raw path
+/// otherwise), folders and — unless `dirs_only` — regular files, each sorted
+/// by name. A link is neither: entry types are read without following it.
+pub fn list_local_dir(path: &str, dirs_only: bool) -> Result<FileListing, String> {
     let trimmed = path.trim();
     let base = if trimmed.is_empty() {
         crate::paths::home_dir()
@@ -2883,13 +2884,13 @@ pub fn list_dir_all(path: String) -> Result<FileListing, String> {
     let mut dirs = Vec::new();
     let mut files = Vec::new();
     for entry in read.flatten() {
-        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(kind) = entry.file_type() else { continue };
         let name = entry.file_name().to_string_lossy().into_owned();
-        let path = display_path(&entry.path());
-        if meta.is_dir() {
-            dirs.push(DirEntry { name, path });
-        } else if meta.is_file() {
-            files.push(FileRow { name, path, size: meta.len() });
+        if kind.is_dir() {
+            dirs.push(DirEntry { name, path: display_path(&entry.path()) });
+        } else if kind.is_file() && !dirs_only {
+            let Ok(meta) = entry.metadata() else { continue };
+            files.push(FileRow { name, path: display_path(&entry.path()), size: meta.len() });
         }
     }
     dirs.sort_by_key(|d| d.name.to_lowercase());
@@ -2915,11 +2916,24 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("b.txt"), b"xy").unwrap();
         std::fs::write(dir.path().join("A.md"), b"x").unwrap();
-        let listing = list_dir_all(dir.path().to_string_lossy().into_owned()).unwrap();
+        let listing = list_local_dir(&dir.path().to_string_lossy(), false).unwrap();
         assert_eq!(listing.dirs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["sub"]);
         assert_eq!(listing.files.iter().map(|f| (f.name.as_str(), f.size)).collect::<Vec<_>>(), [("A.md", 1), ("b.txt", 2)]);
         assert!(listing.parent.is_some());
-        assert!(list_dir_all("/definitely/not/here".into()).is_err());
+        assert!(list_local_dir("/definitely/not/here", false).is_err());
+    }
+
+    /// The folder picker's half (`list_dirs`) reads the same body with
+    /// `dirs_only`: the same folders, no files.
+    #[test]
+    fn list_local_dir_dirs_only_drops_the_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Zed")).unwrap();
+        std::fs::create_dir(dir.path().join("alpha")).unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"xy").unwrap();
+        let listing = list_local_dir(&dir.path().to_string_lossy(), true).unwrap();
+        assert_eq!(listing.dirs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["alpha", "Zed"]);
+        assert!(listing.files.is_empty());
     }
 
     fn ignore_rule(dir: &Path, rel: &str) -> Result<(), String> {
@@ -3083,7 +3097,7 @@ mod tests {
         // Per component: Windows keeps a joined `/`, the resolved path has `\`.
         let abs_inside = project.join("docs").join("plan.md").to_string_lossy().to_string();
         let abs_outside = tmp.path().join("secret.txt").to_string_lossy().to_string();
-        let got = resolve_text_paths(
+        let got = resolve_text_paths_blocking(
             vec![base],
             vec![
                 "docs/plan.md".into(),
@@ -3113,7 +3127,7 @@ mod tests {
         fs::create_dir_all(sub.join("src")).unwrap();
         fs::write(sub.join("src/lib.rs"), "x").unwrap();
         fs::write(project.join("README.md"), "x").unwrap();
-        let got = resolve_text_paths(
+        let got = resolve_text_paths_blocking(
             vec![sub.to_string_lossy().into(), project.to_string_lossy().into()],
             vec!["src/lib.rs".into(), "README.md".into()],
         );
@@ -3129,7 +3143,7 @@ mod tests {
         fs::create_dir_all(&project).unwrap();
         fs::write(tmp.path().join("secret.txt"), "x").unwrap();
         std::os::unix::fs::symlink(tmp.path().join("secret.txt"), project.join("link.txt")).unwrap();
-        let got = resolve_text_paths(vec![project.to_string_lossy().into()], vec!["link.txt".into()]);
+        let got = resolve_text_paths_blocking(vec![project.to_string_lossy().into()], vec!["link.txt".into()]);
         assert!(got[0].is_none());
     }
 
@@ -3140,7 +3154,7 @@ mod tests {
         fs::create_dir_all(&state).unwrap();
         fs::write(state.join("project.json"), "{}").unwrap();
         let rel = format!("{}/project.json", crate::brand::PROJECT_DIR);
-        let got = resolve_text_paths(vec![tmp.path().to_string_lossy().into()], vec![rel]);
+        let got = resolve_text_paths_blocking(vec![tmp.path().to_string_lossy().into()], vec![rel]);
         assert!(got[0].is_none());
     }
 

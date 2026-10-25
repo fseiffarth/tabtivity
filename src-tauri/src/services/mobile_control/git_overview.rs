@@ -770,7 +770,7 @@ mod tests {
 
     #[test]
     fn probe_reads_worktrees_branches_and_one_dirty_row() {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return;
         }
         let tmp = tempfile::tempdir().expect("tmp");
