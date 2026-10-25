@@ -439,13 +439,22 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
     // Both pipes are drained on threads (a child that fills a pipe buffer would
     // deadlock the timeout on a healthy build with a lot of log output), the
     // wait is bounded, and a stuck build's whole subtree is stopped.
-    use crate::services::git_bounded::{self, Opts, RunError};
-    let opts = Opts { timeout: Some(timeout), no_precheck: true, ..Opts::default() };
+    // A stuck build keeps the log it wrote so far: it says where it stuck.
+    use crate::services::git_bounded::{self, Opts};
+    let opts = Opts { timeout: Some(timeout), no_precheck: true, keep_on_timeout: true, ..Opts::default() };
     match git_bounded::run(&mut cmd, opts) {
         Ok(ran) => {
             let out = ran.output;
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
+            if ran.timed_out {
+                text.push_str(&format!(
+                    "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
+                    timeout.as_secs(),
+                    app = crate::brand::DISPLAY
+                ));
+                return Ok(RunOut { ok: false, text });
+            }
             if ran.cut {
                 text.push_str(&format!(
                     "\n! {app} stopped {bin}: it wrote more than {} MiB of output.\n",
@@ -455,14 +464,6 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
             }
             Ok(RunOut { ok: out.status.success() && !ran.cut, text })
         }
-        Err(RunError::TimedOut(_)) => Ok(RunOut {
-            ok: false,
-            text: format!(
-                "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
-                timeout.as_secs(),
-                app = crate::brand::DISPLAY
-            ),
-        }),
         Err(e) => Err(format!("run {bin}: {e}")),
     }
 }
@@ -2349,6 +2350,21 @@ pub fn resolve_tex_root(path: String) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A build stopped at its ceiling keeps the log it wrote until then (the
+    /// log says where it stuck), with the stop note after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_stuck_build_keeps_its_partial_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = ["-c", "echo '! partial log line'; sleep 30"];
+        let started = std::time::Instant::now();
+        let run = run_in_within(dir.path(), "sh", &args, std::time::Duration::from_secs(1)).expect("ran");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "not stopped at the ceiling");
+        assert!(!run.ok);
+        assert!(run.text.contains("! partial log line"), "partial log lost: {:?}", run.text);
+        assert!(run.text.contains("appears to be stuck"), "no stop note: {:?}", run.text);
+    }
 
     #[test]
     fn a_preview_wrapper_keeps_the_authors_preamble_and_crops_to_the_snippet() {

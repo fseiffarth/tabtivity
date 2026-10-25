@@ -334,12 +334,19 @@ pub(crate) struct Opts {
     /// drain the rest, as stderr always is, instead of stopping the child:
     /// for output only shown (a hook's log), never parsed. Never [`Ran::cut`].
     pub keep_stdout_ends: bool,
+    /// At the deadline, answer what was captured so far ([`Ran::timed_out`])
+    /// instead of [`RunError::TimedOut`]: for a log shown to the user (a stuck
+    /// TeX build's output says where it stuck).
+    pub keep_on_timeout: bool,
 }
 
 pub(crate) struct Ran {
     pub output: Output,
     /// stdout reached [`Opts::stdout_cap`] and git was stopped there.
     pub cut: bool,
+    /// Stopped at its ceiling ([`Opts::keep_on_timeout`] only); `output`
+    /// holds what it wrote until then.
+    pub timed_out: bool,
 }
 
 /// Why [`run`] has no output to give.
@@ -566,6 +573,9 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, RunError> {
         }
     };
     let (stdout, stderr) = (collect(stdout), collect(stderr));
+    if timed_out && opts.keep_on_timeout {
+        return Ok(Ran { output: Output { status, stdout, stderr }, cut, timed_out });
+    }
     if timed_out {
         let what = verb(&cmd.get_args().collect::<Vec<_>>()).unwrap_or_default();
         return Err(RunError::TimedOut(format!(
@@ -574,7 +584,7 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, RunError> {
             timeout.as_secs()
         )));
     }
-    Ok(Ran { output: Output { status, stdout, stderr }, cut })
+    Ok(Ran { output: Output { status, stdout, stderr }, cut, timed_out: false })
 }
 
 /// Kill the child's whole subtree and its process group, then reap it.
