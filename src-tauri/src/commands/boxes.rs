@@ -151,26 +151,40 @@ pub(crate) fn reconcile_member_ids(boxes: BoxesList, project_ids: &HashSet<Strin
         .collect()
 }
 
-/// Read the set of known project ids from `projects.json` (empty if absent).
-/// Used only to reconcile boxes in-memory; never mutates `projects.json`.
-fn known_project_ids() -> HashSet<String> {
-    crate::services::remote::projects().map(|list| list.iter().map(|p| p.id.clone()).collect()).unwrap_or_default()
+/// Read the set of known project ids from `projects.json` (empty if absent,
+/// an error if unreadable). Used only to reconcile boxes in-memory; never
+/// mutates `projects.json`.
+fn known_project_ids() -> Result<HashSet<String>, String> {
+    crate::services::remote::projects().map(|list| list.iter().map(|p| p.id.clone()).collect())
+}
+
+/// The boxes as [`get_boxes`] shows them: reconciled against the registry's
+/// ids, or as stored when the registry cannot be read. An unreadable registry
+/// is not "no projects": that reconcile would empty every box, and the next
+/// mutating box action would persist it.
+fn boxes_as_seen(boxes: BoxesList, project_ids: Result<HashSet<String>, String>) -> BoxesList {
+    match project_ids {
+        Ok(ids) => reconcile_member_ids(boxes, &ids),
+        Err(_) => boxes,
+    }
 }
 
 /// Resolve a box's ordered member ids to `(name, root_directory)` pairs by
 /// reading `projects.json`. The root directory mirrors the frontend's
 /// `resolveProjectDirectory`: the `directory` field if present, else the parent
 /// of a `…/project.json` `local_file`. Members that don't resolve are skipped.
-fn member_projects(member_ids: &[String]) -> Vec<(String, PathBuf)> {
-    let list = crate::services::remote::projects().unwrap_or_default();
-    member_ids
+/// An unreadable registry is an error, never "no members" (that would strip
+/// every member's link and doc block).
+fn member_projects(member_ids: &[String]) -> Result<Vec<(String, PathBuf)>, String> {
+    let list = crate::services::remote::projects()?;
+    Ok(member_ids
         .iter()
         .filter_map(|id| {
             let p = list.iter().find(|p| &p.id == id)?;
             let dir = project_directory(p)?;
             Some((p.name.clone(), dir))
         })
-        .collect()
+        .collect())
 }
 
 /// Mirror of the frontend `resolveProjectDirectory` for a single project entry.
@@ -529,7 +543,7 @@ pub fn get_boxes() -> Result<BoxesList, String> {
     // never leaves a dangling member id in what the frontend sees. No surprise
     // write: the corrected list is persisted on the next mutating box action.
     let boxes = read_boxes()?;
-    Ok(reconcile_member_ids(boxes, &known_project_ids()))
+    Ok(boxes_as_seen(boxes, known_project_ids()))
 }
 
 /// The whole-list save. Answers the list as written: a box this save changed
@@ -854,10 +868,14 @@ pub fn ensure_box_folder(box_id: String) -> Result<ProjectBox, String> {
 
     // Refresh the box agent docs + member symlinks (best effort — a write
     // failure here must not block opening the box).
-    let members = member_projects(&member_ids);
-    let _ = write_box_agent_docs(Path::new(&folder), &name, &members);
-    if let Err(e) = write_box_member_links(Path::new(&folder), &members) {
-        eprintln!("[boxes] member links not refreshed: {e}");
+    match member_projects(&member_ids) {
+        Ok(members) => {
+            let _ = write_box_agent_docs(Path::new(&folder), &name, &members);
+            if let Err(e) = write_box_member_links(Path::new(&folder), &members) {
+                eprintln!("[boxes] member links not refreshed: {e}");
+            }
+        }
+        Err(e) => eprintln!("[boxes] box docs and links not refreshed: {e}"),
     }
     Ok(answered)
 }
@@ -878,7 +896,7 @@ pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     if !folder.is_dir() {
         return Ok(());
     }
-    let members = member_projects(&b.member_ids);
+    let members = member_projects(&b.member_ids)?;
     // Symlinks first, best-effort (the docs-write pattern): a failed link farm
     // must not block the doc refresh, and vice versa.
     if let Err(e) = write_box_member_links(folder, &members) {
@@ -1058,6 +1076,16 @@ mod tests {
         let mut adopted = answered.clone();
         adopted[0].name = "A2".into();
         save_boxes_at(&path, &adopted).expect("the adopted revisions are current");
+    }
+
+    /// An unreadable registry leaves the boxes as stored: reconciling against
+    /// "no projects" would empty every box for the next save to persist.
+    #[test]
+    fn an_unreadable_registry_keeps_box_members() {
+        let boxes = vec![mk_box("box1", &["p1", "p2"])];
+        let seen = boxes_as_seen(boxes.clone(), Err("projects.json could not be read".into()));
+        assert_eq!(seen[0].member_ids, ["p1", "p2"]);
+        assert_eq!(boxes_as_seen(boxes, Ok(ids(&["p1"])))[0].member_ids, ["p1"]);
     }
 
     #[test]
