@@ -3,6 +3,7 @@ import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunch
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
+import { HintMessage } from "../components/HintMessage";
 import { apiTarget, localTarget } from "../newTabDefault";
 
 /** How the tap wants the agent started, beyond which agent and mode. */
@@ -155,6 +156,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
           {!headless && agent.modes.map((mode) => <button className="mode" disabled={busy} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
           {onDefault && <DefaultStar starred={agent.id === defaultTarget} label={agent.label} onClick={() => onDefault(agent.id, agent.label)} />}
         </div>)}</div>
+        {onDefault && agents.length > 0 && <HintMessage hint="agentDefault" />}
         {starred && <p className="sheet-note">{t("mobile.newTab.defaultNote", { agent: starred })}{isUntested("mobile.project.fabQuick") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
         {/* A desktop that reports no agents still opens shells — say so, rather
             than leaving the sheet looking half-loaded. */}

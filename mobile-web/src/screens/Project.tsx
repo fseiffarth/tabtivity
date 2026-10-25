@@ -18,6 +18,7 @@ import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
+import { HintMessage } from "../components/HintMessage";
 import { lastWorkedAt } from "../components/AgentModeMarks";
 import { draftPreview } from "../agentPrompts";
 import { readDrafts } from "../drafts";
@@ -130,7 +131,7 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
     ?? { name: file.name, kind: file.kind, size: file.size, modified: file.modified, ...(file.label ? { original: file.label } : {}) };
 }
 
-export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
+export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack; launchHint?: boolean }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [creating, setCreating] = useState(false);
@@ -440,7 +441,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     } : undefined,
     [detail?.agents.length, creates, id, terminal],
   );
-  const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
+  const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch, launchHint = false) => {
     setCreating(true); setError("");
     const action = `${kind}:${agent?.id ?? ""}:${mode ?? ""}:${launch?.worktree ?? ""}:${launch?.cloud ?? ""}:${launch?.task ?? ""}:${launch?.sign_in ?? ""}:${launch?.local ?? ""}:${launch?.api_key ? "api" : ""}:${launch?.host ?? ""}`;
     const idempotencyKey = pendingKeys.current.get(action) ?? crypto.randomUUID();
@@ -448,7 +449,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     try {
       const body = await api<{ tab: TabRow }>(`/api/v1/projects/${encodeURIComponent(id)}/tabs`, { method: "POST", body: JSON.stringify({ project_id: id, kind, agent_id: agent?.id, mode, ...launch, idempotency_key: idempotencyKey }) }, TAB_CREATE_TIMEOUT);
       pendingKeys.current.delete(action);
-      terminal(body.tab, launch?.sign_in ? { signIn: true } : undefined);
+      terminal(body.tab, launch?.sign_in ? { signIn: true } : launchHint ? { launchHint: true } : undefined);
     } catch (reason) { setError(describeFailure(reason)); void load(); } finally { setCreating(false); }
   };
   /** A tap on ＋ starts the default agent here at once (`newTabDefault.ts`);
@@ -458,7 +459,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const quickTarget = creates ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
   const quickLabel = quickTarget?.kind === "api" ? t("newTabMenu.apiKeyEntry", { label: quickTarget.label }) : quickTarget?.label;
   const fabPress = useTapHold(
-    () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch); },
+    () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch, true); },
     () => { dropHint("hold"); setNewTabOpen(true); },
   );
   /** The tab being started, by tab id: an agent tab the desktop is
@@ -752,6 +753,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       </span>
       <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); if (showHoldHint) dropHint("hold"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
     </p>}
+    {drawerOffered && <HintMessage hint="projectFiles" />}
     <div className="project-foot">
       {/* Agent tabs closed on either surface, newest first, folded under one
           row: a tap reopens one on the desktop, resuming its conversation,

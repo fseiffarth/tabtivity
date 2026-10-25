@@ -30,9 +30,11 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * `projectHintReorder`, `projectHintSwipe`, `projectHintHold` and `homeHintReorder` are the
  * gesture hints under the project screen's and Home's lists, set once one is
  * dismissed or its gesture has been used: a hint read every visit is noise.
+ * `hintAgentHold`, `hintAgentDefault` and `hintProjectFiles` suppress individual
+ * messages only when their Never show this message again checkbox is ticked.
  * `limitBars` shows the facts row's usage limits as bars rather than
  * percentages, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars";
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
