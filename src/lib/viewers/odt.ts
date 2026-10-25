@@ -22,16 +22,6 @@
  * follow (see NotebookView).
  */
 
-/** Escape text for HTML body context (mirrors `escapeHtmlText` in the viewer). */
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/** Escape a value destined for a double-quoted HTML attribute. */
-function escAttr(s: string): string {
-  return esc(s).replace(/"/g, "&quot;");
-}
-
 /** Map a `Pictures/…` entry name to an image MIME type by extension. */
 function imageMime(name: string): string {
   const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
@@ -66,6 +56,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  * hand-built map without fflate.
  */
 import { translate, useI18nStore } from "../i18n";
+import { escapeHtml } from "../textSafety";
 
 export function extractOdt(
   entries: Record<string, Uint8Array>,
@@ -191,7 +182,7 @@ export function renderOdtDocument(
     const href = attr(imgEl, "href");
     if (!href) return "";
     const url = images?.get(href) ?? images?.get(href.replace(/^\.\//, ""));
-    return url ? `<img class="odt-image" src="${escAttr(url)}" alt="" />` : "";
+    return url ? `<img class="odt-image" src="${escapeHtml(url)}" alt="" />` : "";
   };
 
   const inlineChildren = (el: Element): string => {
@@ -201,7 +192,7 @@ export function renderOdtDocument(
   };
 
   function renderInline(node: Node): string {
-    if (node.nodeType === 3 /* text */) return esc(node.nodeValue ?? "");
+    if (node.nodeType === 3 /* text */) return escapeHtml(node.nodeValue ?? "");
     if (node.nodeType !== 1 /* element */) return "";
     const el = node as Element;
     switch (el.localName) {
@@ -217,7 +208,7 @@ export function renderOdtDocument(
         const href = safeHref(attr(el, "href"));
         const inner = inlineChildren(el);
         return href
-          ? `<a href="${escAttr(href)}" target="_blank" rel="noreferrer noopener">${inner}</a>`
+          ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${inner}</a>`
           : inner;
       }
       case "line-break":

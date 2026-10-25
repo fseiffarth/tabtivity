@@ -32,7 +32,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TranslationKey } from "./i18n";
 import { formatBytes } from "./formatBytes";
-import { MAIL_FRAME_CSP, bodyLooksUnsafe, escapeHtml, stripFormatControls } from "./mail";
+import { MAIL_FRAME_CSP, bodyLooksUnsafe, stripFormatControls } from "./mail";
+import { escapeHtml } from "./textSafety";
 import type {
   BlockedNavigation,
   BrowserCapabilities,

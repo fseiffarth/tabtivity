@@ -17,6 +17,7 @@ import { createElement } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { translate, useI18nStore } from "../i18n";
 import { isUntested, type UntestedId } from "../untested";
+import { escapeHtml } from "../textSafety";
 import { initialPages, isPristine, type PageList } from "./pageModel";
 import {
   mountPageStrip,
@@ -467,7 +468,7 @@ export function buildPrintDoc(bodyHtml: string, css: string, title = "Print"): s
     `font-size:12px;line-height:1.5}`;
   return (
     `<!doctype html><html><head><meta charset="utf-8">` +
-    `<title>${escapeAttr(title)}</title>` +
+    `<title>${escapeHtml(title)}</title>` +
     `<style>${base}\n${css}</style>` +
     `</head><body>${bodyHtml}</body></html>`
   );
@@ -526,7 +527,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     // viewer toolbar's PrintButton busy state.
     printBtn.disabled = true;
     printBtn.innerHTML =
-      `<span class="file-viewer-save-spinner" aria-hidden="true"></span>${escapeAttr(tr("print.preparing"))}`;
+      `<span class="file-viewer-save-spinner" aria-hidden="true"></span>${escapeHtml(tr("print.preparing"))}`;
 
     // Where the last job is once it has left for the printer (see `followJob`).
     const progressEl = document.createElement("span");
@@ -777,7 +778,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
               : tr("print.printPages", { count: sequence.length })
             : tr("print.print")) +
           (opts.copies > 1 ? tr("print.copiesSuffix", { count: opts.copies }) : "");
-        printBtn.innerHTML = `${PRINTER_SVG} ${escapeAttr(label)}`;
+        printBtn.innerHTML = `${PRINTER_SVG} ${escapeHtml(label)}`;
       }
     };
 
@@ -1379,11 +1380,6 @@ export async function renderPdfPagesToImages(
     page.cleanup();
   }
   return urls;
-}
-
-/** Escape a string for use inside a double-quoted HTML attribute. */
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 // ── Print stylesheets ────────────────────────────────────────────────────────

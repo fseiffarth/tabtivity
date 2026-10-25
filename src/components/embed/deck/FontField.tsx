@@ -22,6 +22,7 @@ import {
   fontKey,
 } from "../../../lib/viewers/deck/model";
 import { useT } from "../../../lib/i18n";
+import { basename } from "../../../lib/paths";
 
 export interface FontFile {
   path: string;
@@ -110,7 +111,7 @@ export function FontField({ value, onChange, label, missing }: FontFieldProps) {
         </optgroup>
         {orphan && (
           <optgroup label={t("deckFontField.namedNotFoundGroup")}>
-            <option value={`custom:${path}`}>{path!.split("/").pop()}</option>
+            <option value={`custom:${path}`}>{basename(path!)}</option>
           </optgroup>
         )}
         {fonts.length > 0 && (

@@ -8,6 +8,7 @@ import { openLinkedFile } from "../embed/FileViewerPane";
 import { WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
+import { basename, dirname, resolvePath } from "../../lib/paths";
 
 /** Mirrors `commands::git_pull::PullPreview`. */
 interface PullPreview {
@@ -25,24 +26,11 @@ export interface MergeState {
   conflicts: string[];
 }
 
-function joinPath(dir: string, rel: string): string {
-  return `${dir.replace(/[/\\]+$/, "")}/${rel}`;
-}
-
-function dirOf(p: string): string {
-  const i = p.lastIndexOf("/");
-  return i > 0 ? p.slice(0, i) : p;
-}
-
-function baseOf(p: string): string {
-  return p.slice(p.lastIndexOf("/") + 1);
-}
-
 /** Open one file of `repoDir` in the `gitmerge` viewer (the shared three-way
  *  compare): the incoming diff, or the conflict resolver mid-merge. */
 function openInMergeView(repoDir: string, rel: string) {
-  const abs = joinPath(repoDir, rel);
-  openLinkedFile(undefined, dirOf(abs), { path: abs, viewer: "gitmerge", label: baseOf(abs) });
+  const abs = resolvePath(repoDir, rel);
+  openLinkedFile(undefined, dirname(abs), { path: abs, viewer: "gitmerge", label: basename(abs) });
 }
 
 /**

@@ -58,7 +58,7 @@ describe("buildPrintDoc", () => {
 
   it("sets and escapes the document title", () => {
     const doc = buildPrintDoc("", "", 'a"b & <c>');
-    expect(doc).toContain("<title>a&quot;b &amp; &lt;c></title>");
+    expect(doc).toContain("<title>a&quot;b &amp; &lt;c&gt;</title>");
   });
 
   it("defaults the title when none is given", () => {

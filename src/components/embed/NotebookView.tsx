@@ -3,9 +3,9 @@ import {
   ViewerHeader,
   useViewerState,
   useReadonlyFile,
-  escapeHtmlText,
   openMarkdownTarget,
 } from "./FileViewerPane";
+import { escapeHtml } from "../../lib/textSafety";
 import { renderMarkdown } from "../../lib/viewers/markdown";
 import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import { highlight } from "../../lib/viewers/highlight";
@@ -22,7 +22,7 @@ import { useT } from "../../lib/i18n";
  *     outputs (stream/result text, error tracebacks, and PNG images).
  *
  * SECURITY: every HTML string we set with dangerouslySetInnerHTML comes from
- * `renderMarkdown`, `highlight`, or `escapeHtmlText`, all of which escape-first.
+ * `renderMarkdown`, `highlight`, or `escapeHtml`, all of which escape-first.
  * A notebook's `text/html` outputs are never rendered (the parser drops them),
  * and image outputs are limited to base64 PNG data URLs.
  */
@@ -106,7 +106,7 @@ function CodeCell({ source, outputs }: { source: string; outputs: NbOutput[] }) 
         {codeHtml != null ? (
           <code dangerouslySetInnerHTML={{ __html: codeHtml }} />
         ) : (
-          <code dangerouslySetInnerHTML={{ __html: escapeHtmlText(source) }} />
+          <code dangerouslySetInnerHTML={{ __html: escapeHtml(source) }} />
         )}
       </pre>
       {outputs.map((out, i) =>
@@ -121,7 +121,7 @@ function CodeCell({ source, outputs }: { source: string; outputs: NbOutput[] }) 
           <pre
             key={i}
             className="notebook-output notebook-output-text"
-            dangerouslySetInnerHTML={{ __html: escapeHtmlText(out.text ?? "") }}
+            dangerouslySetInnerHTML={{ __html: escapeHtml(out.text ?? "") }}
           />
         ),
       )}

@@ -34,6 +34,11 @@ describe("hasContent", () => {
     expect(hasContent("\x1b[1;5C")).toBe(false); // ctrl+right
   });
 
+  it("does not see an Alt+key chord or an OSC report (the shared stripAnsi plus the two-byte meta prefix)", () => {
+    expect(hasContent("\x1bb")).toBe(false); // alt+b
+    expect(hasContent("\x1b]0;title\x07")).toBe(false);
+  });
+
   it("does not see control characters", () => {
     expect(hasContent("\x03")).toBe(false); // ctrl+c
     expect(hasContent("\t")).toBe(false);

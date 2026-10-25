@@ -16,6 +16,7 @@ import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
 import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
+import { basename } from "../../lib/paths";
 import { NAMES, storageKey } from "../../lib/brand";
 
 interface GitCommit {
@@ -143,11 +144,6 @@ interface Props {
   onWorktreeChanged?: (selection: GitWorktreeSelection | null) => void;
   actionsBusy?: boolean;
   connected?: boolean;
-}
-
-function basename(p: string): string {
-  const parts = p.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] ?? p;
 }
 
 /**
