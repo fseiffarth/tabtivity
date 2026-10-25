@@ -118,7 +118,7 @@ impl HostFiles {
     /// The literal socket of the desktop's master for `spec`: `known` (the
     /// host refresher's, `CatalogCache::host_control_path`), else `ssh -G`'s
     /// answer, kept a while. `None` when there is no socket file there.
-    async fn control_path(&self, spec: &RemoteSpec, known: Option<PathBuf>) -> Option<PathBuf> {
+    pub(super) async fn control_path(&self, spec: &RemoteSpec, known: Option<PathBuf>) -> Option<PathBuf> {
         let path = match known {
             Some(path) => Some(path),
             None => {

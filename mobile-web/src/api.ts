@@ -72,7 +72,12 @@ export interface AssistantLaunchOptions { ollama_reachable: boolean; launches: A
  * "+"'s "<agent> (API)" row. `budget_reached`: the key's monthly budget is
  * spent or unset, so a new tab would be refused. Flags only. */
 export interface ApiKeyLaunchRow { agent_id: string; budget_reached?: boolean }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[] }
+/** One machine of a remote project an agent can start on instead of this
+ * computer's copy: the primary host or a worker, under an opaque id.
+ * `connected`: the desktop holds a connection to it now — the only way the
+ * agent can start there, since the phone never dials a host itself. */
+export interface HostMachineRow { id: string; label: string; primary: boolean; connected: boolean }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[]; hosts?: HostMachineRow[] }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -80,7 +85,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}), ...(Array.isArray(body.hosts) && body.hosts.length ? { hosts: body.hosts } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;

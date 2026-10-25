@@ -340,6 +340,12 @@ small { color:#9498aa; }
 .new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
 .new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
+/* "Runs on": the label beside a compact select (the base select's chevron),
+   the note under both. */
+.new-tab-machine { display:grid; gap:4px; }
+.new-tab-machine > label { display:flex; align-items:center; gap:8px; min-width:0; }
+.new-tab-machine small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
+.new-tab-machine select { flex:1 1 auto; padding:7px 30px 7px 12px; background-position:right 10px center; font-size:.85rem; text-overflow:ellipsis; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }

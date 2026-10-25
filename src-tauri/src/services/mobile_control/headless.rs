@@ -988,6 +988,7 @@ pub async fn create_tab(
         || request.like_tab.is_some()
         || request.mode.is_some()
         || request.api_key
+        || request.host.is_some()
         || project.public.kind == ScopeKind::Root
     {
         return Err(CreateRefusal::DesktopUnavailable);
@@ -2250,6 +2251,7 @@ mod tests {
             folder: false,
             create: super::super::discovery::CreateVerdict::All,
             primary_host: None,
+            machines: Vec::new(),
         };
         let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
         let sink = seen.clone();
@@ -2413,6 +2415,7 @@ mod tests {
             folder: true,
             create,
             primary_host: None,
+            machines: Vec::new(),
         }
     }
 
