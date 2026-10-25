@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useT, useI18nStore, type TranslationKey } from "../../lib/i18n";
+import { formatWorkedTime } from "../../lib/formatWorkedTime";
 import { useSettingsStore } from "../../stores/settings";
 
 interface Props {
@@ -10,10 +11,7 @@ interface Props {
 function formatTime(secs: number, t: (key: TranslationKey) => string): string {
   if (secs <= 0) return t("activityCal.noActivity");
   if (secs < 60) return `${Math.round(secs)}s`;
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  return formatWorkedTime(t, secs);
 }
 
 function getLevel(secs: number): 0 | 1 | 2 | 3 | 4 {

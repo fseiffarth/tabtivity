@@ -8,7 +8,7 @@ import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openF
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS, tabColorCss } from "../tabColors";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { useThumb } from "../thumbs";
 import { OptionSheet } from "./OptionSheet";
@@ -112,7 +112,7 @@ type T = ReturnType<typeof useT>;
  * (where the desktop's filesystem says) and last edited. */
 function rowMeta(entry: ProjectFileEntry, t: T, lang: Language): string {
   return [
-    entry.kind !== "dir" ? sizeLabel(entry.size) : null,
+    entry.kind !== "dir" ? formatBytes(entry.size) : null,
     entry.created ? t("mobile.files.created", { when: stampLabel(entry.created, lang) }) : null,
     entry.modified > 0 ? t("mobile.files.edited", { when: stampLabel(entry.modified, lang) }) : null,
   ].filter(Boolean).join(" · ");
@@ -129,7 +129,7 @@ function itemsLabel(items: number | undefined, t: T): string {
 /** The line under a grid tile's name: a folder's item count, a file's date and size. */
 function tileMeta(entry: ProjectFileEntry, t: T, lang: Language): string {
   if (entry.kind === "dir") return itemsLabel(entry.items, t);
-  return [entry.modified > 0 ? stampLabel(entry.modified, lang) : null, sizeLabel(entry.size)].filter(Boolean).join(" · ");
+  return [entry.modified > 0 ? stampLabel(entry.modified, lang) : null, formatBytes(entry.size)].filter(Boolean).join(" · ");
 }
 
 /** The message for a listing (or a search) the sidecar refused. */

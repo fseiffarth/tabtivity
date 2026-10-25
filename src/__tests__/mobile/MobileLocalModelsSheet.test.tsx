@@ -8,7 +8,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeLocalModels, type LocalModelList, type LocalModelRow } from "../../../mobile-web/src/api";
-import { FAST_POLL, SLOW_POLL, keepAliveKey, modelSizeLabel, placementKey, pollDelay, sortModels, summary } from "../../../mobile-web/src/localModels";
+import { formatBytes } from "../../lib/formatBytes";
+import { FAST_POLL, SLOW_POLL, keepAliveKey, placementKey, pollDelay, sortModels, summary } from "../../../mobile-web/src/localModels";
 import { LocalModelsSection, LocalModelsSheet } from "../../../mobile-web/src/screens/LocalModelsSheet";
 import { BRAND } from "../../lib/brand";
 
@@ -109,8 +110,8 @@ describe("local models — pure helpers", () => {
   });
 
   it("spells a model's size in gigabytes", () => {
-    expect(modelSizeLabel(6594474711)).toBe("6.1 GB");
-    expect(modelSizeLabel(384)).toBe("384 B");
+    expect(formatBytes(6594474711)).toBe("6.1 GB");
+    expect(formatBytes(384)).toBe("384 B");
   });
 
   it("reads a list strictly: residency only when loaded, a non-list as none", () => {

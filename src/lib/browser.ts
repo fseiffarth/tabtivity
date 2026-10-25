@@ -31,6 +31,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TranslationKey } from "./i18n";
+import { formatBytes } from "./formatBytes";
 import { MAIL_FRAME_CSP, bodyLooksUnsafe, escapeHtml, stripFormatControls } from "./mail";
 import type {
   BlockedNavigation,
@@ -441,13 +442,5 @@ export function liveControlAvailable(caps: BrowserCapabilities | null): boolean 
  *  none — shown as such, never as `0 B`. */
 export function formatDownloadSize(bytes: number | undefined): string | null {
   if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return null;
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+  return formatBytes(bytes);
 }

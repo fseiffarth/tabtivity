@@ -25,6 +25,7 @@ import { Toggle } from "../common/Toggle";
 import { Typewriter } from "../common/Typewriter";
 import { UntestedTag } from "../common/UntestedTag";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { formatWorkedTime } from "../../lib/formatWorkedTime";
 import { dayAnchorMs, type WelcomeBack } from "../../lib/welcomeBack";
 import {
   fetchTokenReport,
@@ -40,12 +41,9 @@ import {
   type TokenSplit,
 } from "../../lib/tokenStats";
 
-/** Human duration, matching the header timer's phrasing. */
+/** Human duration, matching the header timer's phrasing; none at all reads `0m`. */
 function formatTime(t: (key: TranslationKey) => string, secs: number): string {
-  if (secs < 60) return secs > 0 ? t("projectHoverCard.timeUnderMinute") : "0m";
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return secs > 0 ? formatWorkedTime(t, secs) : "0m";
 }
 
 const PERIOD_LABEL_KEYS: Record<Period, TranslationKey> = {

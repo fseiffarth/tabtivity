@@ -121,6 +121,13 @@ describe("formatBytes", () => {
     expect(formatBytes(536_870_912)).toBe("512 MB");
     expect(formatBytes(18_052_190_208)).toBe("16.8 GB");
   });
+
+  it("also reads a renderer's resident set (KiB × 1024) the way the side panel prints it", () => {
+    const MB = 1024 * 1024;
+    expect(formatBytes(912 * MB)).toBe("912 MB");
+    expect(formatBytes(4736 * MB)).toBe("4.6 GB");
+    expect(formatBytes(1024 * MB)).toBe("1.0 GB");
+  });
 });
 
 describe("sensor formatters", () => {

@@ -134,12 +134,12 @@ describe("Mobile home — agents mode", () => {
     // The oldest tab of the four leads the list: it is the only one that cannot
     // go on without the reader.
     expect(rowLabels()).toEqual(["Asking", "Busy", "Finished", "Recent"]);
-    expect(screen.getByText(/opus-4-1/).textContent).toContain("Aurora · opus-4-1 · finished 9m ago");
+    expect(screen.getByText(/opus-4-1/).textContent).toContain("Aurora · opus-4-1 · finished 9 min ago");
     expect(screen.getByText(/gpt-5-codex/).textContent).toContain("working now");
 
     fireEvent.change(screen.getByLabelText("Sort agent tabs"), { target: { value: "lastDone" } });
     expect(rowLabels()).toEqual(["Busy", "Finished", "Recent", "Asking"]);
-    expect(screen.getByText(/gpt-5-codex/).textContent).toContain("finished 3m ago");
+    expect(screen.getByText(/gpt-5-codex/).textContent).toContain("finished 3 min ago");
     expect(localStorage.getItem(storageKey("mobile.agentsSort"))).toBe("lastDone");
 
     // The sidecar's own order (waiting first, finished last) is still on offer.

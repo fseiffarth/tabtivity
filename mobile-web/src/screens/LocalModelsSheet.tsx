@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, getLocalModels, localModelAction, wasApplied, type LocalModelAction, type LocalModelList, type LocalModelRow } from "../api";
-import { keepAliveKey, modelSizeLabel, placementKey, pollDelay, sortModels, summary } from "../localModels";
+import { keepAliveKey, placementKey, pollDelay, sortModels, summary } from "../localModels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
@@ -45,7 +46,7 @@ export function localModelsCaption(list: LocalModelList | null, failure: string 
 }
 
 function rowMeta(row: LocalModelRow): string {
-  return [row.parameter_size, row.quantization, row.size ? modelSizeLabel(row.size) : null].filter(Boolean).join(" · ");
+  return [row.parameter_size, row.quantization, row.size ? formatBytes(row.size) : null].filter(Boolean).join(" · ");
 }
 
 /** What the row says about memory: loading, a failed load, or — loaded —

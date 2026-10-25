@@ -125,20 +125,20 @@ describe("Mobile activity list — rows", () => {
     // lastWorking (default): the tiers, then the reading each tier carries.
     expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Asking", "Working", "Done", "Fresh"]);
     expect(small("Working")).toBe("Aurora · working now");
-    expect(small("Done")).toBe("Aurora · finished 3m ago");
-    expect(small("Asking")).toBe("Aurora · worked 10m ago");
+    expect(small("Done")).toBe("Aurora · finished 3 min ago");
+    expect(small("Asking")).toBe("Aurora · worked 10 min ago");
     expect(small("Fresh")).toBe("Aurora");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Sort agent tabs" }), { target: { value: "lastDone" } });
     expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Asking", "Done", "Working", "Fresh"]);
-    expect(small("Working")).toBe("Aurora · finished 60m ago");
-    expect(small("Asking")).toBe("Aurora · finished 1m ago");
+    expect(small("Working")).toBe("Aurora · finished 60 min ago");
+    expect(small("Asking")).toBe("Aurora · finished 1 min ago");
     expect(small("Fresh")).toBe("Aurora");
 
     fireEvent.change(screen.getByRole("combobox", { name: "Sort agent tabs" }), { target: { value: "native" } });
     expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Working", "Done", "Asking", "Fresh"]);
     expect(small("Working")).toBe("Aurora · working now");
-    expect(small("Asking")).toBe("Aurora · worked 10m ago");
+    expect(small("Asking")).toBe("Aurora · worked 10 min ago");
   });
 
   it("rounds ages the way a glance reads them", async () => {
@@ -151,7 +151,7 @@ describe("Mobile activity list — rows", () => {
     render(<Activity open={() => {}} onConnection={() => {}} />);
     await screen.findByText("Now");
     expect(small("Now")).toBe("Aurora · finished just now");
-    expect(small("Hour")).toBe("Aurora · finished 2h ago");
+    expect(small("Hour")).toBe("Aurora · finished 2 h ago");
     expect(small("Days")).toBe("Aurora · finished 2d ago");
   });
 

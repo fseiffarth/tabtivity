@@ -307,14 +307,6 @@ export function rendererName(r: Pick<RendererRss, "label" | "title" | "pid">): s
   return "renderer";
 }
 
-/** `912 MB` below a gibibyte, `4.6 GB` from there — one decimal, since the
- *  reading is glanced at beside a 4 GB ceiling. */
-export function formatRssKib(kib: number): string {
-  const mb = kib / 1024;
-  if (mb < 1024) return `${Math.round(mb)} MB`;
-  return `${(mb / 1024).toFixed(1)} GB`;
-}
-
 function readSessionNumber(key: string): number | null {
   try {
     const raw = sessionStorage.getItem(key);

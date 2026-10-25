@@ -3,7 +3,7 @@ import { useT } from "../../../src/lib/i18n";
 import { type OutboxFile, type OutboxScope } from "../api";
 import { OutboxGrid } from "./OutboxGrid";
 import { isUntested } from "../../../src/lib/untested";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { useBackLayer } from "../backStack";
 
 /** The sidecar's listing cap (`outbox::MAX_LISTED`): a full list means the
@@ -44,7 +44,7 @@ export function OutboxGallery({ scope, files, onOpen, onDetails, onDelete, onDel
   /** What the listed files hold — the outbox may keep more past the 40 the
    * sidecar lists, which Delete all clears too. */
   const listedBytes = files.reduce((sum, file) => sum + file.size, 0);
-  const sizeShown = `${sizeLabel(listedBytes)}${files.length >= LISTED_CAP ? "+" : ""}`;
+  const sizeShown = `${formatBytes(listedBytes)}${files.length >= LISTED_CAP ? "+" : ""}`;
   const clearAll = async () => {
     setClearing(true);
     setClearFailed(false);

@@ -5,7 +5,6 @@ import {
   RENDERER_CEILING_MB,
   decideWatchdog,
   formatRendererMemory,
-  formatRssKib,
   ownRenderer,
   pickProbedPid,
   rendererName,
@@ -146,12 +145,6 @@ describe("rendererWatchdog / readout formatting", () => {
     expect(rendererName({ label: "main", title: BRAND.display, pid: 7 })).toBe("main");
     expect(rendererName({ label: "", title: "", pid: 4242 })).toBe("pid 4242");
     expect(rendererName({ label: "", title: "", pid: 0 })).toBe("renderer");
-  });
-
-  it("prints MB below a gibibyte and one-decimal GB from there", () => {
-    expect(formatRssKib(912 * MB)).toBe("912 MB");
-    expect(formatRssKib(4736 * MB)).toBe("4.6 GB");
-    expect(formatRssKib(1024 * MB)).toBe("1.0 GB");
   });
 });
 

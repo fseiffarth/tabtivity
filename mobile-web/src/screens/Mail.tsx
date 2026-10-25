@@ -18,6 +18,7 @@ import { readChoice, writeChoice } from "../prefs";
 import { goBack as stepBack, useBackLayer } from "../backStack";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { isUntested } from "../../../src/lib/untested";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -48,12 +49,6 @@ function replyBytes(text: string) {
 
 /** A refusal in the reader's words — never the code (`connection.ts`). */
 const writeError = describeFailure;
-
-function sizeLabel(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 /** Where a folder sits in the pickers: the inbox first, the bins last, and
  * folders of one kind in the order the desktop sent them (the sort is stable). */
@@ -284,7 +279,7 @@ export function Mail() {
       {message.attachments.length > 0 && <section className="mail-mobile-attachments">
         <h2>{t("mail.attachments")}</h2>
         {message.attachments.map((attachment, index) => <div key={`${attachment.filename}-${index}`}>
-          <span>{safeText(attachment.filename)}</span><small>{safeText(attachment.mime)} · {sizeLabel(attachment.size)}</small>
+          <span>{safeText(attachment.filename)}</span><small>{safeText(attachment.mime)} · {formatBytes(attachment.size)}</small>
         </div>)}
       </section>}
       {writes.reply && <section className="mail-mobile-reply">

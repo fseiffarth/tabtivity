@@ -4,7 +4,7 @@ import { lastPrompt } from "../agentPrompts";
 import { getActivity, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
 import { describeFailure } from "../connection";
 import { SECTION_ICON } from "../glyphs";
-import { ago } from "../screens/Activity";
+import { ageLabel } from "../terminal/fileLabels";
 import { isUnseenDone, type SeenDone } from "../seenDone";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -159,7 +159,7 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
             <span className="home-needs-title">{`${tab.project_label} · ${tab.label}`}{tab.agent_status === "done" && index === asking.length && isUntested("mobile.home.seenDone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
             {asked && <small>{asked.text}</small>}
           </span>
-          {at !== undefined && <time>{ago(at, now, t)}</time>}
+          {at !== undefined && <time>{ageLabel((now - at) / 1000, t)}</time>}
         </button>,
       };
     }),

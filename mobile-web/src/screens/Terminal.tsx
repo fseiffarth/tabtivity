@@ -154,7 +154,8 @@ import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPost
 import { inboxInPlace, inboxLeaves, inboxSegments, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
 import { afterClear, clearMark, type ClearMark } from "../terminal/clearedSession";
 import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../terminal/heldPrompts";
-import { ageLabel, sizeLabel } from "../terminal/fileLabels";
+import { ageLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
 import { copiedSignIn, hasSignInTab, osc52Text, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, signInPageKeys, type SignIn, type SignInPage } from "../terminal/signIn";
@@ -437,7 +438,7 @@ function desktopImageDescription(image: DesktopImage) {
   return [
     image.source,
     image.age_secs != null ? ageLabel(image.age_secs) : "",
-    image.size != null ? sizeLabel(image.size) : "",
+    image.size != null ? formatBytes(image.size) : "",
     image.width != null && image.height != null ? `${image.width}×${image.height}` : "",
   ].filter(Boolean).join(" · ");
 }
