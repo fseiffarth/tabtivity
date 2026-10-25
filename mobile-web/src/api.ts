@@ -649,17 +649,36 @@ export function moveTabWorktree(tabId: string, worktree: string): Promise<{ move
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
 }
 
-/** The models a Tabby chat's model chip can switch it to (names the desktop's
- * own chip lists) and the one it runs now. */
-export interface AssistantModels { models: string[]; current?: string }
+/** One model of a Tabby chat's sheet: `id` is what a switch sends, the words
+ * are Claude's own picker's where the desktop read them. */
+export interface AssistantModelRow { id: string; label: string; description?: string }
+
+/** The models a Tabby chat's model chip can switch it to (the rows the
+ * desktop's own chip lists) and the one it runs now. */
+export interface AssistantModels { models: AssistantModelRow[]; current?: string }
+
+/** Past the sidecar's 32 s wait on the desktop, whose first list for a Claude
+ * chat comes from a probe that starts a CLI (`DesktopRequest::response_timeout`). */
+const ASSISTANT_MODELS_TIMEOUT = 36_000;
 
 /** `GET /api/v1/tabs/{id}/assistant-models` — asked when the chip's sheet opens
- * on a chat of the assistant scope, whose `/model` is off. */
+ * on a chat of the assistant scope, whose `/model` is off. A desktop that sends
+ * no rows yet is read from its names. */
 export async function getAssistantModels(tabId: string): Promise<AssistantModels> {
-  const body = await api<{ models?: unknown; current?: unknown }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-models`);
+  const body = await api<{ models?: unknown; rows?: unknown; current?: unknown }>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-models`, undefined, ASSISTANT_MODELS_TIMEOUT);
+  const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+  const rows: AssistantModelRow[] = Array.isArray(body.rows)
+    ? body.rows.flatMap((row: unknown) => {
+      const { id, label, description } = (row ?? {}) as Record<string, unknown>;
+      const [shownId, shownLabel, note] = [text(id), text(label), text(description)];
+      return shownId && shownLabel ? [note ? { id: shownId, label: shownLabel, description: note } : { id: shownId, label: shownLabel }] : [];
+    })
+    : [];
+  const names = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
   return {
-    models: Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [],
-    ...(typeof body.current === "string" && body.current ? { current: body.current } : {}),
+    models: rows.length > 0 ? rows : names.map((id) => ({ id, label: id })),
+    ...(text(body.current) ? { current: text(body.current) } : {}),
   };
 }
 

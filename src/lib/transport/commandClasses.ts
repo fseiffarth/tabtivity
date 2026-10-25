@@ -123,6 +123,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["set_project_default_apps", "core"],
   ["start_file_drag", "client"],
   ["untrack_window", "client"],
+  ["assistant_claude_models", "core"],
   ["assistant_new_chat", "core"],
   ["assistant_options", "core"],
   ["assistant_set_search", "core"],

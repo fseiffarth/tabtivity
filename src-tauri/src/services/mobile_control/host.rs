@@ -4949,8 +4949,8 @@ async fn assistant_models(
     )
     .await;
     match response {
-        Ok(DesktopResponse::AssistantModels { models, current }) => {
-            (StatusCode::OK, Json(json!({ "models": models, "current": current })))
+        Ok(DesktopResponse::AssistantModels { models, rows, current }) => {
+            (StatusCode::OK, Json(json!({ "models": models, "rows": rows, "current": current })))
         }
         other => worktree_desktop_error(other),
     }

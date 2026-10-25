@@ -1809,6 +1809,7 @@ pub fn run() {
             commands::markup_mcp::markup_mcp_answer,
             commands::markup_mcp::markup_mcp_dismiss,
             commands::markup_mcp::markup_mcp_reopen,
+            commands::assistant::assistant_claude_models,
             commands::assistant::assistant_options,
             commands::assistant::assistant_new_chat,
             commands::assistant::assistant_set_search,

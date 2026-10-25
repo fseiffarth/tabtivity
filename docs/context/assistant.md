@@ -230,7 +230,7 @@ blocked shows its card and leaves the chat alone.
 **The model switches in place.** A chat's slash commands are off, so the
 Reader's usual chips that type `/model`, `/effort` or `/status` cannot reach
 it. In a Tabby chat the Reader's model chip and the head's model dropdown list
-`assistantModelChoices` instead: Claude's aliases, Codex's catalog
+`assistantModelRows` instead: Claude's own `/model` rows, Codex's catalog
 (`CliOption.models`, `assistant::codex_offered_models`, read without writing)
 or the installed Ollama models. A pick is `switchAssistantModel`: it rewrites
 the tab's `assistant` launch (and a local chat's label), ends its tmux session,
@@ -238,11 +238,32 @@ waits for the old CLI's exit, and respawns the same tab. The backend resumes
 the conversation on the new `--model`. The effort chip and Claude's Status
 button only show what they read.
 
+Claude's rows come from `services::assistant_model_probe`
+(`assistant_claude_models`): a short-lived Claude in the assistant home and
+fence, in the fixed probe folder `work/00000000-0000-4000-8000-000000000000`,
+with no tools and no MCP servers, started in a detached tmux session (160×50).
+Once its prompt is drawn it is sent `/model`, the picker's highlight is
+walked down with the arrow key (Claude draws ten rows at most, and wraps at
+the end), each screen is kept, then `Esc`, and the session is killed. Nothing
+else is typed: a digit, `s` or `Enter` on a row would commit it as the home's
+default; a numbered dialog before the prompt aborts the probe. The screens
+are kept per Claude build in `<state_dir>/model_rows.json`
+(`services::model_rows`, keyed by the executable's path, size and mtime), so
+the probe runs once after each Claude update; a Claude whose executable
+cannot be identified is kept in memory for six hours. The renderer reads them with the normal
+sheet's reader (`readableScreen` plain, `readSelectPrompt`,
+`mergeSelectRows`); `claudeModelId` names each row's `--model`
+(`Opus 5.5` → `claude-opus-5-5`, a bare `Fable` → `fable`, a `(1M context)`
+row is dropped). The `Default` row is `ASSISTANT_DEFAULT_MODEL`: the launch
+loses its model rather than passing `--model default`. A failed probe falls
+back to the aliases.
+
 On the phone the Focus facts row's model chip does the same: `GET
 /tabs/{id}/assistant-models` and `POST /tabs/{id}/assistant-model` ride the
 `AssistantModels` / `SwitchAssistantModel` desktop requests, answered by the
 window (`MobileBridgeHost`: `assistantChat`) from the same
-`assistantModelChoices` and `switchAssistantModel`. Only model names cross; a
+`assistantModelRows` and `switchAssistantModel`. Only model names and each
+row's label and note (bounded) cross; a
 name the window did not list is `model_not_found`, a chat at work `tab_busy`.
 With no window open there is nobody to restart the chat: `desktop_unavailable`.
 

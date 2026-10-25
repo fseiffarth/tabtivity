@@ -36,7 +36,7 @@ import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./Termina
 import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
-import { assistantModelChoices, assistantOptions } from "../../lib/assistant";
+import { assistantCurrentModel, assistantModelRows, assistantOptions, type AssistantModelRow } from "../../lib/assistant";
 import { switchAssistantModel } from "../../stores/assistantScope";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
@@ -311,7 +311,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const assistantLaunch = tab.assistant;
   const [assistantOpen, setAssistantOpen] = useState(false);
   /** `null` while the choices are read. */
-  const [assistantModels, setAssistantModels] = useState<string[] | null>(null);
+  const [assistantModels, setAssistantModels] = useState<AssistantModelRow[] | null>(null);
+  const assistantCurrent = assistantLaunch ? assistantCurrentModel(assistantLaunch) : undefined;
   const [assistantSwitching, setAssistantSwitching] = useState("");
   const [assistantFailed, setAssistantFailed] = useState(false);
   const closeAssistantModels = () => {
@@ -331,17 +332,16 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setAssistantFailed(false);
     setAssistantModels(null);
     setAssistantOpen(true);
-    void assistantOptions().then(
-      (options) => {
+    void assistantOptions()
+      .then((options) => {
         const cli = options.clis.find((c) => c.id === assistantLaunch.cli);
-        setAssistantModels(cli ? assistantModelChoices(cli, options) : []);
-      },
-      () => setAssistantModels([]),
-    );
+        return cli ? assistantModelRows(cli, options) : [];
+      })
+      .then(setAssistantModels, () => setAssistantModels([]));
   };
   const chooseAssistantModel = (model: string) => {
     if (assistantSwitching) return;
-    if (model === assistantLaunch?.model) {
+    if (model === assistantCurrent) {
       closeAssistantModels();
       return;
     }
@@ -511,15 +511,18 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <div className="terminal-reader-options">
               {assistantModels.map((model, index) => (
                 <button
-                  key={model}
+                  key={model.id}
                   type="button"
-                  className={model === assistantLaunch.model ? "terminal-reader-option current" : "terminal-reader-option"}
+                  className={model.id === assistantCurrent ? "terminal-reader-option current" : "terminal-reader-option"}
                   disabled={!!assistantSwitching}
-                  aria-busy={model === assistantSwitching}
-                  onClick={() => chooseAssistantModel(model)}
+                  aria-busy={model.id === assistantSwitching}
+                  onClick={() => chooseAssistantModel(model.id)}
                 >
-                  <span className="terminal-reader-option-number">{model === assistantSwitching ? "…" : index + 1}</span>
-                  <span className="terminal-reader-option-label"><span>{model}</span></span>
+                  <span className="terminal-reader-option-number">{model.id === assistantSwitching ? "…" : index + 1}</span>
+                  <span className="terminal-reader-option-label">
+                    <span>{model.label}</span>
+                    {model.description && <small>{model.description}</small>}
+                  </span>
                 </button>
               ))}
             </div>

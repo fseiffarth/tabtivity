@@ -300,6 +300,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // feature (the server case is handled by not offering it), and
     // `assistant_set_search` is their own setting, which `admin` would lock a
     // hosted server's users out of.
+    ("assistant_claude_models", Core),
     ("assistant_new_chat", Core),
     ("assistant_options", Core),
     ("assistant_set_search", Core),

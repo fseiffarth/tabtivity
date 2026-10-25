@@ -4458,10 +4458,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }));
   const failedMode = modes.find((choice) => choice.value === switchFailed);
   const assistantOptionRows: SheetOption[] = (assistantModels?.models ?? []).map((model) => ({
-    key: model,
-    label: model,
-    current: model === assistantModels?.current,
-    pending: model === assistantSwitching,
+    key: model.id,
+    label: model.label,
+    description: model.description,
+    current: model.id === assistantModels?.current,
+    pending: model.id === assistantSwitching,
   }));
   const worktreeOptions: SheetOption[] = (worktreeChoices?.worktrees ?? []).map((row) => ({
     key: row.id,
@@ -4869,7 +4870,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
             : bare
-            ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openAssistantSheet} aria-haspopup="dialog" aria-expanded={assistantSheet} title={t("terminal.reader.assistantModelHint")}><span className="fact-action-label">{assistantModels?.current ?? modelChip}</span></button>
+            ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openAssistantSheet} aria-haspopup="dialog" aria-expanded={assistantSheet} title={t("terminal.reader.assistantModelHint")}><span className="fact-action-label">{assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip}</span></button>
             : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}

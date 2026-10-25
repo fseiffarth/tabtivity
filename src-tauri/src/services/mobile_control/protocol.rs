@@ -1493,6 +1493,9 @@ impl DesktopRequest {
             // Waits for the old CLI to exit (`switchAssistantModel`, up to
             // 3 s) before the respawn on the new model.
             Self::SwitchAssistantModel { .. } => 20,
+            // A Claude chat's first list is read by a probe that starts a CLI
+            // (`assistant_model_probe`: up to 15 s for it, 8 s for its picker).
+            Self::AssistantModels { .. } => 32,
             // Rides on the project list, which answers without the desktop:
             // a wedged window must not hold that list up for long.
             Self::GitStates { .. } => 3,
@@ -1512,6 +1515,7 @@ impl DesktopRequest {
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } => 20,
             Self::MoveWorktree { .. } | Self::SwitchAssistantModel { .. } => 15,
+            Self::AssistantModels { .. } => 28,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
         })
@@ -1810,6 +1814,16 @@ pub fn git_dot(state: &str) -> Option<&'static str> {
     }
 }
 
+/// One row of a Tabby chat's model sheet ([`DesktopResponse::AssistantModels`]):
+/// `id` is what a switch names, the words are only shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantModelRow {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// What the desktop answers a [`DesktopRequest`] with.
 ///
 /// **This enum and everything it carries are deliberately NOT
@@ -1983,6 +1997,10 @@ pub enum DesktopResponse {
     AssistantModels {
         #[serde(default)]
         models: Vec<String>,
+        /// The same models as the sheet lists them: Claude's own picker
+        /// wording where it was read (`assistant_model_probe`), else the name.
+        #[serde(default)]
+        rows: Vec<AssistantModelRow>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current: Option<String>,
     },
@@ -2454,7 +2472,15 @@ mod tests {
             "current": "opus",
         }))
         .expect("deserialize models");
-        assert!(matches!(listed, DesktopResponse::AssistantModels { ref models, current: Some(_) } if models.len() == 2));
+        assert!(matches!(listed, DesktopResponse::AssistantModels { ref models, ref rows, current: Some(_) } if models.len() == 2 && rows.is_empty()));
+        let worded: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "assistant_models",
+            "models": ["default"],
+            "rows": [{ "id": "default", "label": "Default (recommended)", "description": "Sonnet 5.5" }],
+        }))
+        .expect("deserialize rows");
+        assert!(matches!(worded, DesktopResponse::AssistantModels { ref rows, current: None, .. }
+            if rows[0].label == "Default (recommended)" && rows[0].description.as_deref() == Some("Sonnet 5.5")));
     }
 
     #[test]
