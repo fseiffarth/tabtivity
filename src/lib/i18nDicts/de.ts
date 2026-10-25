@@ -141,6 +141,7 @@ export const dict: Dict = {
   "mobile.composer.undoRemote": "Dieser Tab läuft auf einem entfernten Host; dort lässt sich das Leeren von hier nicht rückgängig machen.",
   "mobile.composer.heldNote": "Der Agent arbeitet: Dein Prompt kommt in seine Warteschlange und wird aufgenommen, sobald der Agent dazu kommt.",
   "mobile.composer.holdToInterrupt": "Senden gedrückt halten, um den Agenten zu unterbrechen und sofort zu senden.",
+  "mobile.chat.sendNowWaiting": "Wird gesendet, sobald das geht, ohne den Agenten anzuhalten",
   "mobile.composer.heldEdited": "Prompt geändert — der Agent bekommt den neuen Wortlaut.",
   "mobile.composer.heldGone": "Der Agent hat diesen Prompt schon übernommen, er lässt sich nicht mehr ändern. Dein Text bleibt im Eingabefeld.",
   "mobile.composer.heldEditFailed": "Die Änderung hat den Desktop nicht erreicht. Versuch es erneut oder brich ab.",

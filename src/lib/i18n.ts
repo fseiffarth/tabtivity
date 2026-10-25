@@ -160,6 +160,7 @@ export const enSource = {
   "mobile.composer.undoRemote": "This tab runs on a remote host, where the clear cannot be undone from here.",
   "mobile.composer.heldNote": "The agent is working: your prompt joins its queue and is taken in when the agent gets to it.",
   "mobile.composer.holdToInterrupt": "Hold Send to interrupt the agent and send at once.",
+  "mobile.chat.sendNowWaiting": "Sends as soon as it can without stopping the agent",
   "mobile.gitSheet.menu": "Git",
   "mobile.gitSheet.title": "Git · {label}",
   "mobile.gitSheet.loading": "Reading git…",

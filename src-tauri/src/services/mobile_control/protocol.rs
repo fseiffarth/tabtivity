@@ -2134,6 +2134,14 @@ pub enum TerminalControl {
     /// it (`TerminalEvent::Features`): an older one closes the socket on a
     /// control it does not know.
     Visibility { visible: bool },
+    /// The queued bubbles' Send now for an agent of CLI `family` (the
+    /// phone's `agentFamily`): Esc into the pane, but only while the CLI's
+    /// screen says the message still waits in its queue
+    /// (`pty_bridge::queue_hint`) — once the turn has taken it in, an Esc
+    /// would stop the turn that is to answer it. Checked beside the pane, not
+    /// on the phone's late copy of it. Answered with `TerminalEvent::SendNow`.
+    /// Sent only to a bridge that announced it (`Features::send_now`).
+    SendNow { family: String },
 }
 
 /// Server → client control frames. The phone needs four things it cannot infer
@@ -2173,8 +2181,18 @@ pub enum TerminalEvent {
     /// `invalid_terminal_size`, `resize_failed`).
     Closing { reason: String, retry: bool },
     Ack { seq: u64 },
-    /// `visibility`: this bridge accepts `TerminalControl::Visibility`.
-    Features { visibility: bool },
+    /// `visibility`: this bridge accepts `TerminalControl::Visibility`;
+    /// `send_now`: `TerminalControl::SendNow`.
+    Features {
+        visibility: bool,
+        #[serde(default)]
+        send_now: bool,
+    },
+    /// The answer to `TerminalControl::SendNow`: whether the Esc went in.
+    /// `false` when the queue hint was not on the screen (not typed in yet,
+    /// or already taken up by the turn), for a CLI with no hint to read, or
+    /// while the AI switch is off.
+    SendNow { sent: bool },
     /// The AI switch is off (`services::ai_switch`): the input frame the
     /// next `Ack` covers was dropped, not written to the agent.
     AiOff,
@@ -3076,6 +3094,15 @@ mod tests {
             control(r#"{"type":"visibility","visible":false}"#),
             Ok(TerminalControl::Visibility { visible: false })
         ));
+        assert!(matches!(
+            control(r#"{"type":"send_now","family":"claude"}"#),
+            Ok(TerminalControl::SendNow { family }) if family == "claude"
+        ));
+        // A bridge's features from before `send_now` still read.
+        assert_eq!(
+            serde_json::from_str::<TerminalEvent>(r#"{"type":"features","visibility":true}"#).expect("older features"),
+            TerminalEvent::Features { visibility: true, send_now: false }
+        );
         // Anything the protocol does not name is refused, never guessed at.
         // The one gap is serde's, and documented here so nobody relies on the
         // `deny_unknown_fields` on the enum for it: an internally tagged enum
@@ -3093,6 +3120,8 @@ mod tests {
             r#"{"type":"exec","cmd":"id"}"#,
             r#"{"type":"visibility"}"#,
             r#"{"type":"visibility","visible":"no"}"#,
+            r#"{"type":"send_now"}"#,
+            r#"{"type":"send_now","family":"claude","keys":"\u001b"}"#,
             r#"{}"#,
             "[]",
             "",
@@ -3114,7 +3143,8 @@ mod tests {
                 reason: "host_offline".into(),
                 retry: false,
             },
-            TerminalEvent::Features { visibility: true },
+            TerminalEvent::Features { visibility: true, send_now: true },
+            TerminalEvent::SendNow { sent: false },
         ] {
             let restored: TerminalEvent =
                 serde_json::from_str(&event.to_frame()).expect("server frame round trip");

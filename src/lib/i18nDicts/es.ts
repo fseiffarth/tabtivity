@@ -141,6 +141,7 @@ export const dict: Dict = {
   "mobile.composer.undoRemote": "Esta pestaña se ejecuta en un host remoto; desde aquí no se puede deshacer el borrado.",
   "mobile.composer.heldNote": "El agente está trabajando: tu prompt entra en su cola y lo recogerá cuando llegue a él.",
   "mobile.composer.holdToInterrupt": "Mantén pulsado Enviar para interrumpir al agente y enviar al instante.",
+  "mobile.chat.sendNowWaiting": "Se envía en cuanto se pueda sin detener al agente",
   "mobile.composer.heldEdited": "Prompt cambiado: el agente recibe el texto nuevo.",
   "mobile.composer.heldGone": "El agente ya tomó este prompt, así que ya no se puede cambiar. Tu texto se queda en el campo de mensaje.",
   "mobile.composer.heldEditFailed": "El cambio no llegó al escritorio. Inténtalo de nuevo o cancela.",

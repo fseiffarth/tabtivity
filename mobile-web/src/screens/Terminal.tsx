@@ -84,7 +84,7 @@ import {
   shiftHistory,
   type HistoryChunk,
 } from "../terminal/readableHistory";
-import { type TerminalEvent } from "../terminal/protocol";
+import { type TerminalControl, type TerminalEvent } from "../terminal/protocol";
 import { createVisibilityReporter } from "../terminal/visibility";
 import { installTerminalTouchScroll } from "../terminal/touchScroll";
 import { installWideOutputHint, type WideOutputHint } from "../terminal/wideOutput";
@@ -146,7 +146,7 @@ import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
-import { pullQueuedPrompts } from "../terminal/queuePull";
+import { pullQueuedPrompts, queuedHintShown } from "../terminal/queuePull";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -259,6 +259,9 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
  * waits: a lone Esc followed at once by text is read as Alt+key, and the turn
  * needs a moment to wind down before the CLI takes a new prompt. */
 const AGENT_INTERRUPT = "\u001b";
+/** CLIs whose queue the desktop reads for Send now. Mirrors `queue_hint` in
+ * `src-tauri/src/services/mobile_control/pty_bridge.rs`. */
+const SEND_NOW_FAMILIES: ReadonlySet<string> = new Set(["claude"]);
 const AGENT_INTERRUPT_GAP = 400;
 /** How long Send is held before it interrupts the agent instead of queueing. */
 const SEND_HOLD_MS = 450;
@@ -897,6 +900,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * bubble it belongs to, so a lost frame marks that bubble and not the
    * composer's generic notice. */
   const write = useRef<(value: string, prompt?: number) => boolean>(() => false);
+  /** Hands a control frame to the socket; false when none is open. */
+  const sendControl = useRef<(frame: TerminalControl) => boolean>(() => false);
+  /** This socket's bridge takes `send_now` (its `features`). */
+  const [sendNowReady, setSendNowReady] = useState(false);
+  /** A `send_now` is out and not answered yet. */
+  const sendNowAsking = useRef(false);
+  /** What a `send_now` answer does, as the latest render has it. */
+  const sendNowAnswer = useRef<(sent: boolean) => void>(() => {});
   const recognition = useRef<DictationSession>();
   const dictateButton = useRef<HTMLButtonElement>(null);
   const connectedRef = useRef(false);
@@ -1102,6 +1113,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The CLI this tab runs, as the composer's `/` menu keys its store, and the
    * slash commands this phone has sent that CLI before (`slashCommands.ts`). */
   const slashCliKey = slashCli(tab.agent_label ?? tab.label);
+  /** The tab's CLI (`agentFamily`). */
+  const agentKey = agentFamily(tab.agent_label ?? tab.label);
+  /** Send now is offered where the desktop can tell the CLI's queue apart —
+   * Claude's queue hint (`queue_hint` in `pty_bridge.rs`); Codex and Copilot
+   * take a mid-turn prompt in at once, and OpenCode marks its queue nowhere
+   * on screen. */
+  const sendNowOffered = sendNowReady && SEND_NOW_FAMILIES.has(agentKey);
   const hiddenLink = useMemo(
     () => (tab.kind === "agent" && !screenSignIn ? readHiddenSignIn(liveScreen, slashCliKey) : null),
     [tab.kind, screenSignIn, liveScreen, slashCliKey],
@@ -1308,6 +1326,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * `/clear` then, and says so only on the desktop's screen. */
   const [clearRefused, setClearRefused] = useState(false);
   const liveBusy = useMemo(() => agentWork(liveScreen) !== null, [liveScreen]);
+  /** Send now was tapped; its Esc waits for a moment that loses nothing. */
+  const [sendNowWaiting, setSendNowWaiting] = useState(false);
   /** The agent is in a turn — by its screen, or by the desktop's word — so a
    * prompt sent now is held for its next idle point (`holdDraft`). */
   const agentAtWork = tab.kind === "agent" && (liveBusy || tab.agent_status === "working");
@@ -1775,6 +1795,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     // Returns whether the bytes were handed to an open socket that is still
     // taking them. Callers that confirm something to the user must not claim
     // success on a `false`; the ack is what confirms delivery.
+    sendControl.current = (frame) => {
+      if (ws?.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(frame));
+      return true;
+    };
     write.current = (value, prompt) => {
       if (ws?.readyState !== WebSocket.OPEN) return false;
       // Buffered bytes the socket is not draining are the earliest sign of a
@@ -1928,6 +1953,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         inputFrames = 0;
         pingMarks.length = 0;
         interrupted = false;
+        // A new bridge says again what it takes; an ask the old socket held
+        // is never answered.
+        setSendNowReady(false);
+        sendNowAsking.current = false;
         setConnected(true);
         setSendFailed(false);
         // A retryable close (`idle_timeout`) explained itself and then
@@ -2004,6 +2033,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           // This desktop takes visibility reports: say so if the page is
           // already hidden, and from here on at every change.
           if (control.visibility) visibility.supported(next);
+          setSendNowReady(control.send_now === true);
+          return;
+        }
+        if (control.type === "send_now") {
+          sendNowAnswer.current(control.sent);
           return;
         }
         if (control.type === "window") {
@@ -2135,6 +2169,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       voiceRequest.current += 1;
       refreshReadable.current = () => {};
       write.current = () => false;
+      sendControl.current = () => false;
       bracketedPaste.current = () => false;
       screenRows.current = () => [];
       viewportRows.current = () => [];
@@ -3013,12 +3048,35 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       },
     );
   };
-  /** The queued bubbles' Send now: Esc stops Claude's turn, and Claude then
-   * sends what waits in its queue at once (the desktop chat's Send now). */
+  /** The queued bubbles' Send now: Esc stops the agent's turn, and the CLI
+   * then sends what waits in its queue at once (the desktop chat's Send now).
+   * But Claude takes a queued message into the running turn at its next tool
+   * call, and an Esc after that stops the turn that was to answer it. The
+   * phone's copy of the screen is too late to judge that by, so the desktop
+   * does, beside the pane (`send_now`): it presses only while the queue hint
+   * shows. Until then — the desktop has not typed the prompt in yet, or the
+   * hint the phone saw was gone by the time it asked — Send now waits, and it
+   * gives up once the turn ends or takes the prompt up. */
   const sendQueuedNow = () => {
     setQueueNote("");
-    type(AGENT_INTERRUPT);
+    setSendNowWaiting(true);
   };
+  useEffect(() => {
+    if (!sendNowWaiting) return;
+    // The turn ended, or took the prompts up: they go without an Esc.
+    if (!liveBusy || !queuedShown) {
+      setSendNowWaiting(false);
+      return;
+    }
+    // The phone's own read only says when to ask; the desktop reads again.
+    if (sendNowAsking.current || !queuedHintShown(screenRows.current())) return;
+    sendNowAsking.current = sendControl.current({ type: "send_now", family: agentKey });
+  }, [sendNowWaiting, liveBusy, queuedShown, liveScreen, agentKey]);
+  sendNowAnswer.current = (sent) => {
+    sendNowAsking.current = false;
+    if (sent) setSendNowWaiting(false);
+  };
+  useEffect(() => setSendNowWaiting(false), [tab.id]);
   /** The queued bubbles' Cancel and edit — the desktop chat's ↑ in its empty
    * box: every prompt in Claude's queue comes back out of it into the
    * composer, after the draft, read off the phone's copy of the screen
@@ -4785,8 +4843,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       until the desktop types it in: not taken yet. */}
                   {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox} />}
                   {/* Both act on Claude's whole queue: once, under its last bubble. */}
-                  {queuedShown && agentAtWork && !editing && agentFamily(tab.agent_label ?? tab.label) === "claude" && <div className="transcript-queued-actions">
-                    <button type="button" disabled={!connected} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>
+                  {queuedShown && agentAtWork && !editing && agentKey === "claude" && <div className="transcript-queued-actions">
+                    {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
+                    {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                     <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                     {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
                   </div>}

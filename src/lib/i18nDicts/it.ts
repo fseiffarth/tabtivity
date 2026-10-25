@@ -141,6 +141,7 @@ export const dict: Dict = {
   "mobile.composer.undoRemote": "Questa scheda gira su un host remoto; da qui la cancellazione non si può annullare.",
   "mobile.composer.heldNote": "L’agente sta lavorando: il tuo prompt entra nella sua coda e verrà preso quando l’agente ci arriva.",
   "mobile.composer.holdToInterrupt": "Tieni premuto Invia per interrompere l’agente e inviare subito.",
+  "mobile.chat.sendNowWaiting": "Inviato appena possibile, senza fermare l’agente",
   "mobile.composer.heldEdited": "Prompt modificato — l’agente riceve il nuovo testo.",
   "mobile.composer.heldGone": "L’agente ha già preso questo prompt, quindi non si può più cambiare. Il tuo testo resta nel campo di scrittura.",
   "mobile.composer.heldEditFailed": "La modifica non ha raggiunto il desktop. Riprova o annulla.",
