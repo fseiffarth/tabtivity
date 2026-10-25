@@ -7388,6 +7388,32 @@ mod tests {
         assert!(stale.is_empty(), "SYNC_BODY_ALLOWED rows that match no sync command any more: {stale:?}");
     }
 
+    /// `tauri::command(async)` on a sync fn runs the body inside a future on an
+    /// async-runtime worker, not on the blocking pool: blocking work there pins
+    /// that worker. A command that blocks is `async` over a `*_blocking` body.
+    #[test]
+    fn no_command_marks_a_sync_fn_async() {
+        let mut found = Vec::new();
+        for file in command_files() {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("commands").join(&file);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if !line.trim_start().starts_with("#[cfg_attr(feature = \"desktop\", tauri::command(async")
+                    && !line.trim_start().starts_with("#[tauri::command(async")
+                {
+                    continue;
+                }
+                if let Some(sig) = lines[i + 1..].iter().find(|l| l.contains("fn ")) {
+                    if !sig.contains("async fn ") {
+                        found.push(format!("{file}: {}", sig.trim()));
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "tauri::command(async) on a sync fn — make it async over a *_blocking body: {found:?}");
+    }
+
     #[test]
     fn the_sync_command_scan_sees_attribute_bodies_and_skips_async() {
         // The scan reads real files; pin that it finds the known sync and async shapes.

@@ -225,13 +225,17 @@ pub fn formatter_available(lang: String, path: Option<String>) -> bool {
 ///  - `formatter-unavailable:<lang>` when no tool is installed (frontend disables
 ///    the button and shows a hint),
 ///  - the tool's stderr (trimmed) when it exits non-zero (e.g. a syntax error).
-// `(async)` on a *sync* fn, as for `check_syntax`: the body spawns an external
-// formatter and waits for it (a cold prettier is node startup plus config
-// resolution), which as a plain `#[tauri::command]` froze the whole window for
-// the run. Tauri's blocking pool runs it instead; the body, its error strings
-// and the unit tests calling it directly are unchanged.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn format_source(text: String, lang: String, path: Option<String>) -> Result<String, String> {
+// The body spawns an external formatter and waits for it (a cold prettier is
+// node startup plus config resolution): it runs on the blocking pool. (A
+// `tauri::command(async)` on the sync fn, as it was, only moved it onto an
+// async-runtime worker, which a slow formatter then pinned.)
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn format_source(text: String, lang: String, path: Option<String>) -> Result<String, String> {
+    app_core::rt::try_blocking("format", move || format_source_blocking(text, lang, path)).await
+}
+
+/// [`format_source`]'s body.
+pub(crate) fn format_source_blocking(text: String, lang: String, path: Option<String>) -> Result<String, String> {
     let tool = resolve_tool(&lang, path.as_deref())
         .ok_or_else(|| format!("formatter-unavailable:{lang}"))?;
     // A project's own prettier, a JS config, a config loading plugins or naming
@@ -302,13 +306,18 @@ pub struct SyntaxIssue {
 /// error or `None` when it is well-formed. Whitespace-only input is treated as
 /// valid (an empty buffer isn't an error to surface while typing). Any other
 /// `lang` is unchecked and returns `None`.
-// `(async)` on a *sync* fn: tauri runs the body on its blocking threadpool
-// instead of the GTK main thread. The body parses an entire editor draft (up
-// to the 8 MiB viewer limit) on every check, and a plain `#[tauri::command]`
-// would freeze the whole window for the length of that parse. Kept a plain fn
-// so the return type (and the unit tests) stay `Option<SyntaxIssue>`.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn check_syntax(text: String, lang: String) -> Option<SyntaxIssue> {
+// The body parses an entire editor draft (up to the 8 MiB viewer limit) on
+// every check: it runs on the blocking pool, off the window's thread and the
+// async-runtime workers (`tauri::command(async)` on the sync fn, as it was,
+// ran it on one of those). A pool that fails answers "no issue", the payload
+// staying `Option<SyntaxIssue>`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn check_syntax(text: String, lang: String) -> Option<SyntaxIssue> {
+    app_core::rt::blocking("format", move || check_syntax_blocking(text, lang)).await.unwrap_or(None)
+}
+
+/// [`check_syntax`]'s body.
+pub(crate) fn check_syntax_blocking(text: String, lang: String) -> Option<SyntaxIssue> {
     if text.trim().is_empty() {
         return None;
     }
@@ -345,32 +354,32 @@ mod tests {
 
     #[test]
     fn json_ok_is_none() {
-        assert!(check_syntax("{\"a\": 1}".into(), "json".into()).is_none());
+        assert!(check_syntax_blocking("{\"a\": 1}".into(), "json".into()).is_none());
     }
 
     #[test]
     fn json_error_reports_position() {
-        let issue = check_syntax("{\"a\": }".into(), "json".into()).expect("should error");
+        let issue = check_syntax_blocking("{\"a\": }".into(), "json".into()).expect("should error");
         assert_eq!(issue.line, 1);
         assert!(issue.column > 0);
     }
 
     #[test]
     fn blank_input_is_valid() {
-        assert!(check_syntax("   \n  ".into(), "json".into()).is_none());
-        assert!(check_syntax("".into(), "yaml".into()).is_none());
+        assert!(check_syntax_blocking("   \n  ".into(), "json".into()).is_none());
+        assert!(check_syntax_blocking("".into(), "yaml".into()).is_none());
     }
 
     #[test]
     fn yaml_ok_and_error() {
-        assert!(check_syntax("a: 1\nb: 2\n".into(), "yaml".into()).is_none());
+        assert!(check_syntax_blocking("a: 1\nb: 2\n".into(), "yaml".into()).is_none());
         // A tab in indentation is invalid YAML.
-        assert!(check_syntax("a:\n\t- 1\n".into(), "yaml".into()).is_some());
+        assert!(check_syntax_blocking("a:\n\t- 1\n".into(), "yaml".into()).is_some());
     }
 
     #[test]
     fn unknown_lang_is_unchecked() {
-        assert!(check_syntax("@@@ not checked".into(), "python".into()).is_none());
+        assert!(check_syntax_blocking("@@@ not checked".into(), "python".into()).is_none());
     }
 
     #[test]
@@ -379,7 +388,7 @@ mod tests {
         // assume any formatter is installed in CI, so only assert the prefix when
         // it is in fact unavailable.
         if !formatter_available("rust".into(), None) {
-            let err = format_source("fn  main(){}".into(), "rust".into(), None).unwrap_err();
+            let err = format_source_blocking("fn  main(){}".into(), "rust".into(), None).unwrap_err();
             assert!(err.starts_with("formatter-unavailable:"));
         }
     }
