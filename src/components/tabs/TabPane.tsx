@@ -61,6 +61,7 @@ function LazyPane({ children }: { children: ReactNode }) {
 }
 import { PaneTabContext } from "./paneTabContext";
 import type { TabEntry } from "../../stores/tabs";
+import { projectIdOfScope } from "../../lib/terminal/ptyId";
 
 /**
  * The single per-tab `kind → pane` render switch, shared by the main window
@@ -147,7 +148,7 @@ function TabPaneImpl({
   readerAlways = false,
 }: TabPaneProps) {
   // Identical in both windows: null for the root scope, else the scope id.
-  const projectId = scope === "root" ? null : scope;
+  const projectId = projectIdOfScope(scope);
 
   switch (tab.kind) {
     case "projects3d":

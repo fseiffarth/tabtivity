@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { storageKey } from "../../lib/brand";
 import { cappedMap, readJson, writeJson } from "../../lib/persist";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 
 /**
  * The TeX editor's two chrome switches — the beamer overlay bar (#tex-beamer)
@@ -38,7 +39,7 @@ const MAX_PERSISTED = 200;
 
 /** The store key for a file scope: a project id, or the root scope. */
 export function texViewScopeKey(projectId: string | null | undefined): string {
-  return projectId ?? "root";
+  return projectId ?? ROOT_SCOPE;
 }
 
 function readPersisted(): Record<string, TexViewPref> {

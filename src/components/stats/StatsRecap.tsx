@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 
 import { APP_TIMER_ID } from "../../stores/timer";
-import { ROOT_SCOPE, useUsageStore, type GitStats } from "../../stores/usage";
+import { useUsageStore, type GitStats } from "../../stores/usage";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { NAMES } from "../../lib/brand";
 import { useProjectsStore } from "../../stores/projects";

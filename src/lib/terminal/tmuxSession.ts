@@ -12,6 +12,7 @@
 import type { RemoteSpec } from "../../types";
 import { NAMES } from "../brand";
 import { tmuxSessionRest } from "../brandMigration";
+import { ROOT_SCOPE } from "./ptyId";
 
 /**
  * A project id can appear verbatim in a tmux session name (it's practice a uuid),
@@ -159,7 +160,7 @@ export function shouldPersistLocalTab(
   return (
     (kind === "shell" ||
       ((kind === "agent" || kind === "local_agent") && mobileAccess && resumableAgent)) &&
-    (scopeKey !== "root" || kind === "shell") &&
+    (scopeKey !== ROOT_SCOPE || kind === "shell") &&
     localRunning &&
     localEnabled
   );

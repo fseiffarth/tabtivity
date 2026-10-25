@@ -16,7 +16,8 @@ import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
 import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
-import { ROOT_SCOPE, bumpUsage, markAgentActive } from "../../stores/usage";
+import { bumpUsage, markAgentActive } from "../../stores/usage";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import {
   onTerminalExit,
   onTerminalOutput,

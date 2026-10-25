@@ -11,7 +11,7 @@ import type { LoginTarget } from "../lib/remote/loginTarget";
 import { forgetPty } from "../lib/agents/promptCount";
 import { forgetTypedLine } from "../lib/agents/typedClear";
 import { forgetPromptTrail } from "./agents/promptTrail";
-import { BOX_SCOPE_PREFIX, splitPtyId } from "../lib/terminal/ptyId";
+import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
 import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
 import { useLinkRoutingStore } from "./linkRouting";
@@ -219,13 +219,9 @@ export function workerRunnable(h: LocalityHost): boolean {
   return !!h.shared_fs || h.sync_code !== false;
 }
 
-/**
- * The scope that belongs to no project: the root control terminal's, and the
- * scope every tab opened outside a project lands in. Its working directory is
- * `~/tabtivity/root` (`root_work_dir`), which the side panel browses as the app's
- * unfiled/scratch area.
- */
-export const ROOT_SCOPE = "root";
+// The scope that belongs to no project (the root control terminal's, and where
+// every tab opened outside a project lands) is defined in `lib/terminal/ptyId`.
+export { ROOT_SCOPE };
 
 export const FILES_TAB_CMD = tabCommand("files");
 

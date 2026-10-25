@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
-import { splitPtyId } from "../../lib/terminal/ptyId";
+import { splitPtyId, projectIdOfScope } from "../../lib/terminal/ptyId";
 import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useActivityStore } from "../activity";
@@ -132,7 +132,7 @@ const PLAN_RETRY_MS = 1_000;
 function askPlan(scope: string, tab: TabEntry): Promise<UndoClearPlan | null> {
   return invoke<UndoClearPlan | null>("agent_tab_undo_clear", {
     agent: tab.cmd,
-    projectId: scope === "root" ? null : scope,
+    projectId: projectIdOfScope(scope),
     sessionId: tab.sessionId,
   }).catch(() => null);
 }

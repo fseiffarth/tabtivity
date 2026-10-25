@@ -72,6 +72,7 @@ import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedS
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
 import type { UntestedId } from "../../lib/untested";
+import { projectIdOfScope } from "../../lib/terminal/ptyId";
 
 /** How long a sent prompt shows as sending while the transcript has not
  * recorded it yet — counted from the send, or from the last moment the agent
@@ -1223,7 +1224,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
 
   // Path links: the paths a read brings are looked up before it is drawn
   // (`learnPaths`), each once (`PathLinksContext`).
-  const projectId = scope === "root" ? null : scope;
+  const projectId = projectIdOfScope(scope);
   // The folder the agent runs in: the spawn's resolved cwd (a local tab of a
   // remote project runs in its local mirror), not the stored `tab.cwd`, which
   // for such a project names its state folder.

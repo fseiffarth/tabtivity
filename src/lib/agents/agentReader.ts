@@ -2,6 +2,7 @@ import type { TranslationKey } from "../i18n";
 import type { SessionTranscript } from "../../../mobile-web/src/api";
 import type { TabEntry } from "../../stores/tabs";
 import { storageKey } from "../brand";
+import { projectIdOfScope } from "../terminal/ptyId";
 
 /**
  * The desktop agent pane's Reader: the phone's Focus Reader — the agent's
@@ -79,7 +80,7 @@ export function readerRequest(
   if (!tab.sessionId && !localModel && !FOLDER_AGENTS.has(readerAgent(tab))) return null;
   return {
     agent: readerAgent(tab),
-    projectId: scope === "root" ? null : scope,
+    projectId: projectIdOfScope(scope),
     tabDir: tab.cwd || cwd || null,
     since: tab.launchedAt && !tab.args?.includes("--continue") ? tab.launchedAt : null,
     sessionId: tab.sessionId ?? "",

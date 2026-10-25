@@ -3135,7 +3135,7 @@ function CodeEditor({
     const offered = acOutcome.current;
     if (!offered) return;
     acOutcome.current = null;
-    bumpUsage(scope ?? "root", `${accepted ? METRIC.AUTOCOMPLETE_ACCEPT : METRIC.AUTOCOMPLETE_DISMISS}.${offered.mode}.${offered.model}`);
+    bumpUsage(scope ?? ROOT_SCOPE, `${accepted ? METRIC.AUTOCOMPLETE_ACCEPT : METRIC.AUTOCOMPLETE_DISMISS}.${offered.mode}.${offered.model}`);
   }, [scope]);
 
   // Resolve the project the edited file belongs to (the longest project directory
@@ -4476,8 +4476,8 @@ function CodeEditor({
       const tabs = useTabsStore.getState();
       const context = (signal: AbortSignal) => completionContext({
         path, root: acProjectDir, draft: snapshot,
-        openPaths: (tabs.tabsByScope[scope ?? "root"] ?? tabs.tabs)
-          .filter((tab) => (!tab.scope || tab.scope === (scope ?? "root")) &&
+        openPaths: (tabs.tabsByScope[scope ?? ROOT_SCOPE] ?? tabs.tabs)
+          .filter((tab) => (!tab.scope || tab.scope === (scope ?? ROOT_SCOPE)) &&
             ["text", "markdown", "tex", "texworkspace"].includes(tab.viewer ?? ""))
           .flatMap((tab) => tab.embedPath ? [tab.embedPath] : []),
         manual: contextFiles.map((f) => ({ name: f.rel, content: f.content })),
@@ -7512,7 +7512,7 @@ function TextView({
   // The tab runs in the project's own scope, not whichever project happens to be
   // active — a viewer keeps working after you switch projects (see FileScopeContext),
   // and its Run button must not fire a terminal into a different project's layout.
-  const scope = projectId ?? "root";
+  const scope = projectId ?? ROOT_SCOPE;
   const cwd = runCwd(projectDir, path);
   // The local root this project's files mirror to (null for a local project) —
   // the same helper the Local/Remote switch and auto-sync path-building use, so

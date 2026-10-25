@@ -14,6 +14,7 @@
  */
 import { effectiveTabLocation, localTabCwd, type TabKind, type TabLocation } from "../stores/tabs";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectEntry } from "../types";
+import { ROOT_SCOPE } from "./terminal/ptyId";
 
 /** The type word the sidecar's list rows carry (`discovery::ProjectHost`). */
 export type ProjectHostKind = "local" | "remote" | "container" | "vm";
@@ -48,7 +49,7 @@ export function tabRunsInContainer(
   return (
     (kind === "agent" || kind === "shell") &&
     (containerScope === "all" || kind === "agent") &&
-    scopeKey !== "root" &&
+    scopeKey !== ROOT_SCOPE &&
     !!project?.sandbox?.enabled &&
     !project?.remote
   );

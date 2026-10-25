@@ -32,6 +32,7 @@ import { useSettingsStore } from "../../../stores/settings";
 import { PRIMARY_HOST } from "../../../stores/remote/remoteStatus";
 import { isHpcHost } from "./hpcHost";
 import { hostsForProject } from "../remoteHosts";
+import { ROOT_SCOPE } from "../../terminal/ptyId";
 
 /** Must match `services::hpc_mode::HPC_GUARD`. */
 export const HPC_GUARD = envName("HPC_GUARD");
@@ -120,7 +121,7 @@ export async function guardLoginNodeRun(opts: {
 }): Promise<boolean> {
   // The two cheap facts first, before any store is read: a run with no host
   // (the overwhelming majority — every local project) is answered at once.
-  if (!opts.projectId || opts.projectId === "root") return true;
+  if (!opts.projectId || opts.projectId === ROOT_SCOPE) return true;
   if (!opts.location || opts.location === "local") return true;
 
   const project = useProjectsStore.getState().projects.find((p) => p.id === opts.projectId);
