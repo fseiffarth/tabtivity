@@ -33,6 +33,7 @@ import {
   openCodeTurnFooter,
 } from "./openCodeMini";
 import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
+import { readAgentList } from "./subagentInput";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -100,6 +101,19 @@ function isInputLine(lines: readonly StatusLineLike[], index: number): boolean {
 /** How far up from the bottom the input line may sit. The box is always the
  * bottom of a live TUI frame; anything higher is quoted output. */
 const SEARCH_WINDOW = 8;
+/** Where Claude Code's agent list under its footer begins (`● main`, one
+ * `◯ general-purpose  Screen …` row per subagent), or `lines.length` without
+ * one. It grows a row per agent, so the box above it is looked for from here:
+ * counted from the screen's bottom, four agents put the box past
+ * `SEARCH_WINDOW`, and the box and footer read as a dialog. */
+function agentListStart(lines: readonly StatusLineLike[]): number {
+  const list = readAgentList(lines.slice(-SEARCH_WINDOW * 4).map((line) => line.text));
+  if (!list) return lines.length;
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].text.trim()) end -= 1;
+  return end - list.length;
+}
+
 /** Status lines read below the input line. Claude Code draws at most a mode
  * line plus a statusline/shortcut line. */
 const MAX_STATUS_LINES = 3;
@@ -446,8 +460,9 @@ export function sessionStatus(
   if (mini) return mini.status;
   const antigravity = antigravityFrame(lines, agentLabel);
   if (antigravity) return antigravity.status;
+  const bottom = agentListStart(lines);
   let inputIndex = -1;
-  for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
+  for (let index = bottom - 1; index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
     if (!isInputLine(lines, index)) continue;
     // A highlighted dialog row opens with the input line's `❯`; the rows under
     // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
@@ -458,7 +473,7 @@ export function sessionStatus(
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
   let read = 0;
-  for (let index = inputIndex + 1; index < lines.length && read < MAX_STATUS_LINES; index += 1) {
+  for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
     if (!text) continue;
     read += 1;
@@ -468,7 +483,7 @@ export function sessionStatus(
   // a custom statusline that can wrap to several rows on a narrow pane — past
   // the rows read above. The phrase is only ever the footer's, so every row of
   // the frame is looked through for it.
-  for (let index = inputIndex + 1; !status.goal && index < lines.length; index += 1) {
+  for (let index = inputIndex + 1; !status.goal && index < bottom; index += 1) {
     if (lines[index].text.split(SEGMENT_SPLIT).some((segment) => GOAL_ACTIVE.test(segment.trim()))) status.goal = true;
   }
   if (!status.mode) {
@@ -531,7 +546,8 @@ export function inputFrameStart(
   // finds the box on its own.
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
-  for (let index = lines.length - 1; start < 0 && index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
+  const bottom = agentListStart(lines);
+  for (let index = bottom - 1; start < 0 && index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
     if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index) || isStrayListRow(lines, index)) return lines.length;
