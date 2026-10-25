@@ -56,15 +56,40 @@ describe("startVisiblePoll", () => {
     poll.stop();
   });
 
-  it("aborts a run still in flight when the next one starts, and when stopped", () => {
+  it("lets a slow run finish: a tick skips while it is in flight", async () => {
+    let calls = 0;
+    const done: number[] = [];
+    const poll = startVisiblePoll((signal) => {
+      calls += 1;
+      const n = calls;
+      // Each read takes 1.5 intervals — longer than the interval, not hung.
+      return new Promise<void>((resolve) => setTimeout(() => { if (!signal.aborted) done.push(n); resolve(); }, 1500));
+    }, 1000);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(done.length).toBeGreaterThanOrEqual(2);
+    poll.stop();
+  });
+
+  it("replaces a hung run after two intervals, and aborts it when stopped", () => {
     const signals: AbortSignal[] = [];
     const poll = startVisiblePoll((signal) => { signals.push(signal); return new Promise(() => {}); }, 1000);
+    vi.advanceTimersByTime(1000);
+    expect(signals).toHaveLength(1);
     vi.advanceTimersByTime(1000);
     expect(signals).toHaveLength(2);
     expect(signals[0].aborted).toBe(true);
     expect(signals[1].aborted).toBe(false);
     poll.stop();
     expect(signals[1].aborted).toBe(true);
+  });
+
+  it("now() starts afresh even while a run is in flight", () => {
+    const signals: AbortSignal[] = [];
+    const poll = startVisiblePoll((signal) => { signals.push(signal); return new Promise(() => {}); }, 60_000);
+    poll.now();
+    expect(signals).toHaveLength(2);
+    expect(signals[0].aborted).toBe(true);
+    poll.stop();
   });
 
   it("swallows a rejected or throwing run and keeps polling", async () => {
