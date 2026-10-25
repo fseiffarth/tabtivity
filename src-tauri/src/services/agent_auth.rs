@@ -2090,15 +2090,18 @@ mod tests {
         assert_eq!(blocked.and_then(|b| b.config).as_deref(), Some("extra"));
 
         // A changed account, endpoint, or api key is not taken at all.
-        for changed in [
+        for (case, changed) in [
             format!(r#"{{"openai":{}}}"#, oauth("r9", r#","accountId":"other""#)),
             format!(r#"{{"openai":{}}}"#, oauth("r9", r#","accountId":"acc","enterpriseUrl":"https://evil.invalid""#)),
             r#"{"keyed":{"type":"api","key":"stolen"}}"#.to_string(),
-        ] {
-            write_in_place(&a.join(OC), &changed);
+        ]
+        .iter()
+        .enumerate()
+        {
+            write_in_place(&a.join(OC), changed);
             reconcile_all_in(state);
-            assert_eq!(stored()["openai"]["refresh"], "r3", "{changed}");
-            assert_eq!(stored()["keyed"]["key"], "k1", "{changed}");
+            assert_eq!(stored()["openai"]["refresh"], "r3", "case {case}");
+            assert_eq!(stored()["keyed"]["key"], "k1", "case {case}");
             assert!(std::fs::read_to_string(a.join(OC)).unwrap().contains("r3"), "the copy is put back");
         }
     }
