@@ -277,8 +277,13 @@ fn save_previous_sessions(
     project_id: Option<&str>,
     snapshot: &PreviousProjectSnapshot,
 ) {
-    let Some(sessions_dir) = app_sessions_dir(local_file) else {
-        return;
+    // Held open from the project folder: a linked `.tabtivity` is refused.
+    let (app_dir, sessions_dir) = match terminal_service::open_app_sessions_dirs(local_file) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            eprintln!("ProjectRuntime: write sessions: {e}");
+            return;
+        }
     };
 
     let file_tab_session = FileTabSession {
@@ -286,7 +291,7 @@ fn save_previous_sessions(
         side_panel_folder: snapshot.side_panel_folder.clone(),
         extra: Default::default(),
     };
-    if let Err(e) = storage::write_json(&sessions_dir.join("filetabs.json"), &file_tab_session) {
+    if let Err(e) = storage::write_json_in(&sessions_dir, "filetabs.json", &file_tab_session) {
         eprintln!("ProjectRuntime: write filetabs session: {e}");
     }
 
@@ -294,22 +299,20 @@ fn save_previous_sessions(
         active_layout_metadata: snapshot.active_layout_metadata.clone(),
         extra: Default::default(),
     };
-    if let Err(e) = storage::write_json(&sessions_dir.join("layout.json"), &layout_session) {
+    if let Err(e) = storage::write_json_in(&sessions_dir, "layout.json", &layout_session) {
         eprintln!("ProjectRuntime: write layout session: {e}");
     }
 
     // Write .tabtivity/state.json one level up from sessions/.
-    if let Some(app_dir) = sessions_dir.parent() {
-        if let Some(project_dir) = std::path::Path::new(local_file).parent() {
-            let state = ProjectState {
-                project_id: project_id.unwrap_or("").to_string(),
-                project_dir: project_dir.to_string_lossy().into_owned(),
-                saved_at: Some(storage::iso_now()),
-                extra: Default::default(),
-            };
-            if let Err(e) = storage::write_json(&app_dir.join("state.json"), &state) {
-                eprintln!("ProjectRuntime: write .{SLUG}/state.json: {e}");
-            }
+    if let Some(project_dir) = std::path::Path::new(local_file).parent() {
+        let state = ProjectState {
+            project_id: project_id.unwrap_or("").to_string(),
+            project_dir: project_dir.to_string_lossy().into_owned(),
+            saved_at: Some(storage::iso_now()),
+            extra: Default::default(),
+        };
+        if let Err(e) = storage::write_json_in(&app_dir, "state.json", &state) {
+            eprintln!("ProjectRuntime: write .{SLUG}/state.json: {e}");
         }
     }
 }
@@ -324,33 +327,25 @@ pub fn load_side_panel_folder(local_file: &str) -> Option<String> {
 /// fields already stored in `.tabtivity/sessions/filetabs.json`. Lets the active
 /// project's panel view survive a restart even without a project switch.
 pub fn save_side_panel_folder(local_file: &str, folder: Option<String>) -> Result<(), String> {
-    let Some(sessions_dir) = app_sessions_dir(local_file) else {
+    let Some(path) = app_sessions_dir(local_file).map(|dir| dir.join("filetabs.json")) else {
         return Err("cannot resolve project sessions directory".into());
     };
-    let path = sessions_dir.join("filetabs.json");
-    // A session file that does not parse (corrupt, or a newer build's) is an
-    // error and stays as it is — never a default whose empty tab list would
-    // replace the stored file tabs. Read and written like `save_previous_sessions`
-    // (in place, umask), not through `patch_json`: a project folder's file keeps
-    // the mode a group-shared project gives it.
-    let mut session: FileTabSession = if path.exists() {
-        storage::read_json(&path).map_err(|e| format!("{}: {e}", path.display()))?
-    } else {
-        FileTabSession::default()
-    };
+    // A session file that does not parse (corrupt, or a newer build's), or is
+    // a link or FIFO, is an error and stays as it is — never a default whose
+    // empty tab list would replace the stored file tabs.
+    let mut session: FileTabSession = storage::read_tree_json(&path)?.unwrap_or_default();
     session.side_panel_folder = folder;
-    storage::write_json(&path, &session).map_err(|e| e.to_string())
+    let (_, sessions_dir) = terminal_service::open_app_sessions_dirs(local_file)?;
+    storage::write_json_in(&sessions_dir, "filetabs.json", &session)
 }
 
 /// Load file tabs and side-panel folder from `.tabtivity/sessions/filetabs.json`.
 /// Returns (file_tabs, side_panel_folder).
 fn load_file_tab_session(local_file: &str) -> (Vec<serde_json::Value>, Option<String>) {
     if let Some(sessions_dir) = app_sessions_dir(local_file) {
-        let path = sessions_dir.join("filetabs.json");
-        if path.exists() {
-            if let Ok(session) = storage::read_json::<FileTabSession>(&path) {
-                return (session.file_tabs, session.side_panel_folder);
-            }
+        // Never waited on: a FIFO here would hang the startup restore.
+        if let Ok(Some(session)) = storage::read_tree_json::<FileTabSession>(&sessions_dir.join("filetabs.json")) {
+            return (session.file_tabs, session.side_panel_folder);
         }
     }
     (vec![], None)
@@ -517,5 +512,30 @@ mod tests {
         assert_eq!(state.project_id, "p-42");
         assert_eq!(std::path::Path::new(&state.project_dir), dir.path());
         assert!(state.saved_at.is_some());
+    }
+
+    /// The tree is attacker-controlled: a committed `.tabtivity -> elsewhere`
+    /// link must not get `state.json`, `filetabs.json` or `layout.json`
+    /// written where it points, and a linked `filetabs.json` is not written
+    /// through.
+    #[cfg(unix)]
+    #[test]
+    fn leaving_a_project_never_writes_through_a_linked_app_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join(crate::brand::PROJECT_DIR)).unwrap();
+        let local = project_file(&dir);
+        let snapshot: PreviousProjectSnapshot = serde_json::from_str("{}").unwrap();
+        save_previous_sessions(&local, Some("p-42"), &snapshot);
+        assert!(save_side_panel_folder(&local, Some("src".into())).is_err());
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0, "nothing lands where the link points");
+
+        let dir = tempfile::tempdir().unwrap();
+        let victim = elsewhere.path().join("victim");
+        std::fs::write(&victim, "precious\n").unwrap();
+        std::fs::create_dir_all(filetabs_path(&dir).parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&victim, filetabs_path(&dir)).unwrap();
+        assert!(save_side_panel_folder(&project_file(&dir), Some("src".into())).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious\n");
     }
 }

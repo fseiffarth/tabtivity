@@ -207,6 +207,13 @@ fn write_export_copy(local_file: &str, session: &TerminalSession) {
     let Some(sessions_dir) = app_sessions_dir(local_file) else {
         return;
     };
+    // A linked `.tabtivity` or `sessions` is refused, not written through. The
+    // copy itself is still replaced by path (a rename needs one), so only an
+    // agent swapping a folder for a link in between could redirect it.
+    if let Err(e) = open_app_sessions_dirs(local_file) {
+        eprintln!("terminal_service: no .{SLUG} export copy: {e}");
+        return;
+    }
     // A schedule binding is local control-plane state: exporting it would make a
     // copied/cloned project able to name an existing target in agent_tasks.json.
     // The authoritative state-dir copy keeps it; the travelling project copy
@@ -226,7 +233,7 @@ fn write_export_copy(local_file: &str, session: &TerminalSession) {
     // `HashMap`s, whose keys serialize in a different order every time.
     let path = sessions_dir.join(TERMINALS_FILE);
     let unchanged = serde_json::to_value(&exported).is_ok_and(|fresh| {
-        storage::read_json::<Value>(&path).is_ok_and(|on_disk| on_disk == fresh)
+        storage::read_tree_json::<Value>(&path).is_ok_and(|on_disk| on_disk == Some(fresh))
     });
     if unchanged {
         return;
@@ -743,17 +750,16 @@ pub fn load_open_apps(project_id: &str) -> Vec<OpenApp> {
 /// **Untrusted.** Every caller must sanitize.
 fn read_project_tree_session(local_file: &str) -> Option<TerminalSession> {
     if let Some(dir) = app_sessions_dir(local_file) {
-        let path = dir.join(TERMINALS_FILE);
-        if path.exists() {
-            if let Ok(session) = storage::read_json::<TerminalSession>(&path) {
-                return Some(session);
-            }
+        // Never followed at the name or waited on (a FIFO), like every read
+        // of the tree.
+        if let Ok(Some(session)) = storage::read_tree_json::<TerminalSession>(&dir.join(TERMINALS_FILE)) {
+            return Some(session);
         }
     }
     // Legacy: the layout used to be duplicated into project.json itself, and a
     // project last written by an older Tabtivity may only have that copy.
     let project: crate::schema::project::Project =
-        storage::read_json(&PathBuf::from(local_file)).ok()?;
+        storage::read_tree_json(&PathBuf::from(local_file)).ok().flatten()?;
     let tab_layout = project.tab_layout.unwrap_or_default();
     if tab_layout.is_empty() && project.open_apps.is_none() {
         return None;
@@ -923,6 +929,32 @@ pub fn app_sessions_dir(local_file: &str) -> Option<PathBuf> {
     Path::new(local_file)
         .parent()
         .map(|p| p.join(crate::brand::PROJECT_DIR).join("sessions"))
+}
+
+/// `<project>/.tabtivity` and its `sessions/` (see [`app_sessions_dir`]), made
+/// where missing and held open, for writing into. Both are reached from the
+/// project folder one name at a time (`mobile_control::files::ProjectDir`):
+/// the tree is attacker-controlled, so a committed `.tabtivity -> elsewhere`
+/// (or `sessions -> elsewhere`) link is refused, never followed — the session
+/// files would otherwise be created or rewritten wherever it points.
+pub(crate) fn open_app_sessions_dirs(
+    local_file: &str,
+) -> Result<(crate::services::mobile_control::files::ProjectDir, crate::services::mobile_control::files::ProjectDir), String>
+{
+    use crate::services::mobile_control::files::ProjectDir;
+    let root = Path::new(local_file).parent().ok_or("the project has no folder")?;
+    let not_plain = |name: &str| format!("{name} in {} is not a plain folder; nothing was saved in it", root.display());
+    let child = |dir: &ProjectDir, name: &str| -> Result<ProjectDir, String> {
+        dir.create_dir(name).map_err(|e| format!("{name}: {e}"))?;
+        match dir.lookup_dir(name) {
+            Ok(Some(held)) => Ok(held),
+            Ok(None) | Err(()) => Err(not_plain(name)),
+        }
+    };
+    let project = ProjectDir::open_root(root).map_err(|_| format!("{} is not available", root.display()))?;
+    let app = child(&project, crate::brand::PROJECT_DIR)?;
+    let sessions = child(&app, "sessions")?;
+    Ok((app, sessions))
 }
 
 #[cfg(test)]
@@ -1356,6 +1388,54 @@ mod tests {
         assert!(session.tab_layout[0]
             .extra
             .contains_key(SCHEDULE_TARGET_KEY));
+    }
+
+    /// A committed `.tabtivity -> elsewhere` (or `sessions -> elsewhere`) link
+    /// is refused: the export copy is never created where it points.
+    #[cfg(unix)]
+    #[test]
+    fn the_export_copy_is_never_written_through_a_linked_app_dir() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let project = tmp.path().join("p");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let local_file = project.join("project.json").to_string_lossy().into_owned();
+        let session = TerminalSession { tab_layout: vec![entry("claude")], ..TerminalSession::default() };
+
+        std::os::unix::fs::symlink(&elsewhere, project.join(crate::brand::PROJECT_DIR)).unwrap();
+        assert!(open_app_sessions_dirs(&local_file).is_err());
+        write_export_copy(&local_file, &session);
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing lands where the link points");
+
+        std::fs::remove_file(project.join(crate::brand::PROJECT_DIR)).unwrap();
+        std::fs::create_dir(project.join(crate::brand::PROJECT_DIR)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, project.join(crate::brand::PROJECT_DIR).join("sessions")).unwrap();
+        write_export_copy(&local_file, &session);
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+
+        // A plain project gets its folders made and the copy written.
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        write_export_copy(&plain.join("project.json").to_string_lossy(), &session);
+        assert!(plain.join(crate::brand::PROJECT_DIR).join("sessions").join(TERMINALS_FILE).is_file());
+    }
+
+    /// The tree's copies are read without waiting on a FIFO an agent planted
+    /// at `terminals.json` or `project.json`.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_the_tree_does_not_block_the_session_reads() {
+        let tmp = tempfile::tempdir().expect("temp");
+        let sessions = tmp.path().join(crate::brand::PROJECT_DIR).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        crate::services::home_io::mkfifo(&sessions.join(TERMINALS_FILE));
+        crate::services::home_io::mkfifo(&tmp.path().join("project.json"));
+        let local_file = tmp.path().join("project.json").to_string_lossy().into_owned();
+        let at = local_file.clone();
+        assert!(crate::services::home_io::within_deadline(move || read_project_tree_session(&at)).is_none());
+        let session = TerminalSession { tab_layout: vec![entry("claude")], ..TerminalSession::default() };
+        crate::services::home_io::within_deadline(move || write_export_copy(&local_file, &session));
     }
 
     #[cfg(unix)]

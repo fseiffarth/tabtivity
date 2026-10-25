@@ -514,7 +514,7 @@ pub fn migrate_panel_prefs_once() {
     }
     let result = patch_projects_list(|list| {
         for entry in list.iter_mut() {
-            let Ok(project) = storage::read_json::<Value>(Path::new(&entry.local_file)) else {
+            let Ok(Some(project)) = storage::read_tree_json::<Value>(Path::new(&entry.local_file)) else {
                 continue;
             };
             for key in PANEL_PREF_KEYS {
@@ -553,13 +553,14 @@ pub(crate) fn patch_project_entry_mirrored<R>(
         Ok((result, entry.local_file.clone()))
     })?;
     let proj_path = PathBuf::from(&local_file);
-    if proj_path.exists() {
-        let mut project: Project = storage::read_json(&proj_path).map_err(|e| {
-            format!(
-                "the registry was updated, but the project's own project.json \
-                 could not be read to mirror the change (it is now stale): {e}"
-            )
-        })?;
+    // Never followed at the name or waited on (a FIFO): the file is the tree's.
+    let read = storage::read_tree_json::<Project>(&proj_path).map_err(|e| {
+        format!(
+            "the registry was updated, but the project's own project.json \
+             could not be read to mirror the change (it is now stale): {e}"
+        )
+    })?;
+    if let Some(mut project) = read {
         patch_project(&mut project, &result);
         storage::write_json_atomic(&proj_path, &project).map_err(|e| e.to_string())?;
     }
@@ -1676,9 +1677,9 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
 
     // The registry is the source of truth; the rest is best effort, reported.
     let project_file = PathBuf::from(&updated.local_file);
-    if project_file.exists() {
-        let rewritten = storage::read_json::<Value>(&project_file)
-            .map_err(|e| e.to_string())
+    if fs::symlink_metadata(&project_file).is_ok() {
+        let rewritten = storage::read_tree_json::<Value>(&project_file)
+            .and_then(|v| v.ok_or_else(|| "project.json vanished".to_string()))
             .and_then(|mut v| {
                 if storage::rewrite_path_prefix(&mut v, old_s, new_s) {
                     storage::write_json_atomic(&project_file, &v).map_err(|e| e.to_string())
@@ -2698,7 +2699,9 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn load_project(local_file: String) -> Result<Project, String> {
     let path = PathBuf::from(&local_file);
-    let mut project: Project = storage::read_json(&path).map_err(|e| e.to_string())?;
+    // Never followed at the name or waited on (a FIFO an agent planted).
+    let mut project: Project = storage::read_tree_json(&path)?
+        .ok_or_else(|| format!("{}: No such file or directory", path.display()))?;
     if let Some(gt) = project.git_type.as_deref() {
         project.git_type = Some(normalize_git_type(gt));
     }
@@ -3626,7 +3629,20 @@ fn scaffold_is_missing_at(target: &Path, with_git: bool) -> bool {
             None => fs::symlink_metadata(&p).is_err(),
         }
     }) || (with_git && fs::symlink_metadata(target.join(".gitignore")).is_err())
-        || !target.join(".claude/settings.json").exists()
+        || !claude_settings_present(target)
+}
+
+/// Whether `.claude/settings.json` is there by the rule the scaffold keeps
+/// (`scaffold_claude_dir`, `write_scaffold_file`): a `.claude` that is not a
+/// plain folder (a link, dangling or not) is left alone, and so is anything at
+/// `settings.json`. Either counts as present, or no repair would ever clear it.
+fn claude_settings_present(target: &Path) -> bool {
+    let dot_claude = target.join(".claude");
+    match fs::symlink_metadata(&dot_claude) {
+        Ok(meta) if meta.is_dir() => fs::symlink_metadata(dot_claude.join("settings.json")).is_ok(),
+        Ok(_) => true,
+        Err(_) => false,
+    }
 }
 
 /// A single project's scaffold-repair outcome, for the "Repair scaffold
@@ -4605,6 +4621,9 @@ fn finish_import(
         return Err(conflict_message(&conflict));
     }
 
+    // Read before anything is written, so a refused one stops a clean import.
+    let adopted = project_json_to_adopt(&project_file)?;
+
     let mut git_type = normalize_git_type(req.git_type.as_deref().unwrap_or("local"));
 
     // Scaffold only LOCAL imports onto their (local) tree. A remote import's
@@ -4673,12 +4692,7 @@ fn finish_import(
         let _ = std::fs::create_dir_all(mirror);
     }
 
-    // Read without following a link or waiting on a FIFO. One that does not
-    // parse is replaced by a blank project, as before; one that is refused
-    // (a link, a FIFO) is refused again by the write below.
-    let adopted = read_project_json_no_follow(&project_file);
-    let project = if !matches!(adopted, Ok(None)) {
-        let mut existing: Project = adopted.ok().flatten().unwrap_or_default();
+    let project = if let Some(mut existing) = adopted {
         // The adopted `project.json` came with the folder — a foreign repository, a
         // clone, a fork, or a tree someone else wrote — so anything in it that
         // Tabtivity would later read back as *executable intent* must not be adopted
@@ -4805,6 +4819,12 @@ pub async fn extend_project_to_remote(
         return Err(format!("Local directory '{old_dir}' does not exist"));
     }
 
+    // The project.json this moves into the state dir, read before anything is
+    // touched: one that is refused or does not parse stops extend cleanly.
+    // Read the existing one so tabs/time/created_at/etc. survive.
+    let old_project_file = old_path.join("project.json");
+    let mut project = read_project_to_move(&old_project_file)?;
+
     // Best-effort create the empty remote root — same as create_project. Failure
     // is non-fatal (key/agent-auth hosts may need it to pre-exist; a password-auth
     // host connects and creates it at activation).
@@ -4830,9 +4850,7 @@ pub async fn extend_project_to_remote(
     clear_host_bound_state(&req.project_id, manifest).await;
 
     // Move project.json from the old (now mirror) tree into the state dir, tagging
-    // it remote. Read the existing one so tabs/time/created_at/etc. survive.
-    let old_project_file = old_path.join("project.json");
-    let mut project = read_project_to_move(&old_project_file)?;
+    // it remote.
     project.id = req.project_id.clone();
     project.name = list[idx].name.clone();
     project.directory = new_directory.clone();
@@ -5032,26 +5050,14 @@ pub async fn detach_project_from_remote(
     )
 }
 
-/// The most of a `project.json` Tabtivity reads; its time log is the only part
-/// that grows.
-const MAX_PROJECT_JSON_BYTES: u64 = 64 << 20;
-
-/// A `project.json` that may sit in a project folder (attacker-controlled,
-/// AGENTS.md): `Ok(None)` when nothing is at `path`. A link (dangling or
-/// not), a FIFO or anything else that is not a regular UTF-8 file of at most
-/// [`MAX_PROJECT_JSON_BYTES`] is refused without following or waiting on it,
-/// and so is one that does not parse.
-fn read_project_json_no_follow(path: &Path) -> Result<Option<Project>, String> {
-    match fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-        Ok(_) => {}
-    }
-    let text = crate::services::home_io::read_record_capped(path, MAX_PROJECT_JSON_BYTES)
-        .ok_or_else(|| format!("{} is not a readable regular file of at most 64 MB", path.display()))?;
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|e| format!("{} could not be read: {e}", path.display()))
+/// The folder's own `project.json` an import adopts, `Ok(None)` when there is
+/// none. Read without following a link or waiting on a FIFO; one that is
+/// refused — a link, a FIFO, one too large or not UTF-8 — is an error, since
+/// the import writes its project over it: taken for blank, a regular file past
+/// the size cap would lose its time and description. One that does not parse
+/// is replaced by a blank project, as it always was.
+fn project_json_to_adopt(path: &Path) -> Result<Option<Project>, String> {
+    Ok(storage::read_tree_json_text(path)?.map(|text| serde_json::from_str(&text).unwrap_or_default()))
 }
 
 /// The `project.json` extend or detach moves, or a fresh one when there is
@@ -5059,7 +5065,7 @@ fn read_project_json_no_follow(path: &Path) -> Result<Option<Project>, String> {
 /// is refused or does not parse is an error, never a blank project (which
 /// would lose its time, created_at and description).
 fn read_project_to_move(path: &Path) -> Result<Project, String> {
-    read_project_json_no_follow(path).map(Option::unwrap_or_default)
+    storage::read_tree_json(path).map(Option::unwrap_or_default)
 }
 
 /// A saved tab's cwd under the remote state dir, re-pointed at the same place
@@ -6410,6 +6416,19 @@ mod tests {
         assert!(dir.join(".claude").join("settings.json").is_file());
         assert!(!elsewhere.exists());
         assert!(!scaffold_is_missing_at(&dir, true), "a dangling link counts as present");
+
+        // A dangling `.claude` or `settings.json` link is left alone by the
+        // repair, so it must not read as missing for good either.
+        fs::remove_dir_all(dir.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".claude")).unwrap();
+        repair_project_scaffold_at(&dir, true).unwrap();
+        assert!(!scaffold_is_missing_at(&dir, true), "a linked .claude is left alone");
+        fs::remove_file(dir.join(".claude")).unwrap();
+        fs::create_dir(dir.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".claude").join("settings.json")).unwrap();
+        repair_project_scaffold_at(&dir, true).unwrap();
+        assert!(!scaffold_is_missing_at(&dir, true), "a dangling settings.json is left alone");
+        assert!(!elsewhere.exists());
     }
 
     /// Re-enabling git writes the default `.gitignore` only where there is
@@ -6466,6 +6485,49 @@ mod tests {
         let fifo = dir.path().join("fifo.json");
         crate::services::home_io::mkfifo(&fifo);
         assert!(crate::services::home_io::within_deadline(move || read_project_to_move(&fifo)).is_err());
+    }
+
+    /// An import writes its project over the folder's `project.json`: a
+    /// regular one past the size cap must stop it, not be taken for blank and
+    /// overwritten (losing its time and description). One that does not parse
+    /// is still replaced by a blank project, as it always was.
+    #[test]
+    fn an_oversized_project_json_stops_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("project.json");
+        assert!(project_json_to_adopt(&file).unwrap().is_none());
+        fs::write(&file, r#"{"id":"p1","name":"P","directory":"d","description":"kept"}"#).unwrap();
+        assert_eq!(project_json_to_adopt(&file).unwrap().unwrap().description.as_deref(), Some("kept"));
+        fs::write(&file, "{ not json").unwrap();
+        assert_eq!(project_json_to_adopt(&file).unwrap().unwrap().id, Project::default().id);
+
+        // Sparse: past the cap without writing 64 MB.
+        let big = fs::File::create(&file).unwrap();
+        big.set_len(storage::MAX_TREE_JSON_BYTES + 1).unwrap();
+        drop(big);
+        assert!(project_json_to_adopt(&file).is_err());
+        assert_eq!(fs::metadata(&file).unwrap().len(), storage::MAX_TREE_JSON_BYTES + 1);
+    }
+
+    /// A linked or FIFO `project.json` stops the import too (the write would
+    /// refuse it anyway), and `load_project` refuses either without
+    /// following the link or waiting on the FIFO.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_project_json_is_not_adopted_or_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        fs::write(&elsewhere, r#"{"id":"x","name":"X","directory":"d"}"#).unwrap();
+        let linked = dir.path().join("project.json");
+        std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+        assert!(project_json_to_adopt(&linked).is_err());
+        assert!(load_project(linked.to_string_lossy().into_owned()).is_err());
+
+        let fifo = dir.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        let at = fifo.clone();
+        assert!(crate::services::home_io::within_deadline(move || project_json_to_adopt(&at)).is_err());
+        assert!(crate::services::home_io::within_deadline(move || load_project(fifo.to_string_lossy().into_owned())).is_err());
     }
 
     /// `write_no_follow` rewrites only a regular file: a FIFO swapped in after
