@@ -3217,14 +3217,6 @@ pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Create one scaffold file unless something — a file, a folder, a symlink,
-/// dangling or not — is already at `path`. Returns whether it was written.
-///
-/// The never-overwrite rule in one place. An imported tree is attacker-controlled
-/// and the user's own, so an `exists()`-then-write pair was two holes: a dangling
-/// `CLAUDE.md -> ~/somewhere` passed the check and the write then created the
-/// link's target outside the project, and a file appearing between the check and
-/// the write was truncated. `create_new` + `O_NOFOLLOW` decide in the one open.
 /// The most of a scaffold doc read to tell a legacy stub from the user's own.
 const MAX_SCAFFOLD_DOC_BYTES: u64 = 4 << 20;
 
@@ -3236,6 +3228,14 @@ fn read_scaffold_doc(path: &Path) -> Option<String> {
     crate::services::home_io::read_record_capped(path, MAX_SCAFFOLD_DOC_BYTES)
 }
 
+/// Create one scaffold file unless something — a file, a folder, a symlink,
+/// dangling or not — is already at `path`. Returns whether it was written.
+///
+/// The never-overwrite rule in one place. An imported tree is attacker-controlled
+/// and the user's own, so an `exists()`-then-write pair was two holes: a dangling
+/// `CLAUDE.md -> ~/somewhere` passed the check and the write then created the
+/// link's target outside the project, and a file appearing between the check and
+/// the write was truncated. `create_new` + `O_NOFOLLOW` decide in the one open.
 fn write_scaffold_file(path: &Path, content: &str) -> std::io::Result<bool> {
     match write_no_follow(path, content.as_bytes(), true) {
         Ok(()) => Ok(true),
@@ -3319,12 +3319,21 @@ fn git_head_unborn(dir: &Path) -> bool {
 /// The `GITIGNORE_DEFAULT` patterns absent from `dir/.gitignore` — a missing
 /// file reports every default. Read-only: this is the migration plan's preview
 /// of what `ensure_gitignore_defaults` would append.
+///
+/// Anything but a regular file at that name (a link, dangling or not, or a
+/// FIFO) is the project's and left alone, as every scaffold path is: it
+/// reports nothing, so the plan and the repair go on with their other steps
+/// instead of failing on it.
 fn missing_gitignore_lines_at(dir: &Path) -> std::io::Result<Vec<String>> {
     let defaults: Vec<&str> = GITIGNORE_DEFAULT
         .lines()
         .filter(|l| !l.is_empty())
         .collect();
-    let Some(existing) = read_project_gitignore(&dir.join(".gitignore"))? else {
+    let path = dir.join(".gitignore");
+    if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.file_type().is_file()) {
+        return Ok(Vec::new());
+    }
+    let Some(existing) = read_project_gitignore(&path)? else {
         return Ok(defaults.into_iter().map(str::to_string).collect());
     };
     let existing_lines: HashSet<&str> = existing.lines().collect();
@@ -3609,11 +3618,14 @@ fn scaffold_is_missing_at(target: &Path, with_git: bool) -> bool {
         // An agent doc still holding its untouched legacy stub counts as
         // missing: a repair would change it, so the tag must not claim the
         // scaffold is complete (see `is_legacy_agent_stub`).
+        // Anything at the name counts as present — a dangling link too —
+        // because that is what `write_scaffold_file` keeps: `exists()` would
+        // call it missing for good, as no repair ever writes it.
         match read_scaffold_doc(&p) {
             Some(existing) => is_legacy_agent_stub(name, &existing),
-            None => !p.exists(),
+            None => fs::symlink_metadata(&p).is_err(),
         }
-    }) || (with_git && !target.join(".gitignore").exists())
+    }) || (with_git && fs::symlink_metadata(target.join(".gitignore")).is_err())
         || !target.join(".claude/settings.json").exists()
 }
 
@@ -6353,26 +6365,51 @@ mod tests {
         let victim = dir.path().join("victim");
         fs::write(&victim, "precious\n").unwrap();
         std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).unwrap();
-        assert!(ensure_gitignore_defaults(dir.path()).is_err());
+        assert_eq!(ensure_gitignore_defaults(dir.path()).unwrap(), Vec::<String>::new());
         assert_eq!(fs::read_to_string(&victim).unwrap(), "precious\n");
 
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = dir.path().join("elsewhere");
         std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
-        assert!(ensure_gitignore_defaults(dir.path()).is_err());
+        assert_eq!(ensure_gitignore_defaults(dir.path()).unwrap(), Vec::<String>::new());
         assert!(!elsewhere.exists());
     }
 
-    /// A planted FIFO `.gitignore` is refused, never waited on.
+    /// A planted FIFO `.gitignore` is left alone, never waited on.
     #[cfg(unix)]
     #[test]
-    fn a_fifo_gitignore_is_refused_without_blocking() {
+    fn a_fifo_gitignore_is_left_alone_without_blocking() {
         let dir = tempfile::tempdir().unwrap();
         crate::services::home_io::mkfifo(&dir.path().join(".gitignore"));
         let root = dir.path().to_path_buf();
-        assert!(crate::services::home_io::within_deadline(move || missing_gitignore_lines_at(&root)).is_err());
+        assert!(crate::services::home_io::within_deadline(move || missing_gitignore_lines_at(&root)).unwrap().is_empty());
         let root = dir.path().to_path_buf();
-        assert!(crate::services::home_io::within_deadline(move || ensure_gitignore_defaults(&root)).is_err());
+        assert!(crate::services::home_io::within_deadline(move || ensure_gitignore_defaults(&root)).unwrap().is_empty());
+    }
+
+    /// A linked `.gitignore` is left alone like every scaffold path, not a
+    /// failure of the whole repair or migration plan: the other steps
+    /// (`.claude/settings.json`) still run, and the project stops reading as
+    /// missing its scaffold once they have.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_gitignore_does_not_stop_the_rest_of_the_scaffold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        fs::create_dir(&dir).unwrap();
+        fs::create_dir(dir.join(".git")).unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".gitignore")).unwrap();
+
+        let steps = migration_steps_at(&dir, true).unwrap();
+        assert!(!steps.iter().any(|step| step.id == "gitignore"));
+        assert!(steps.iter().any(|step| step.id == "claude_settings"));
+
+        let report = repair_project_scaffold_at(&dir, true).unwrap();
+        assert!(report.gitignore_lines_added.is_empty());
+        assert!(dir.join(".claude").join("settings.json").is_file());
+        assert!(!elsewhere.exists());
+        assert!(!scaffold_is_missing_at(&dir, true), "a dangling link counts as present");
     }
 
     /// Re-enabling git writes the default `.gitignore` only where there is
