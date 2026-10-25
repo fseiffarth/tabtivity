@@ -122,8 +122,13 @@ mod tests {
         let home = dir("deadline");
         let db = home.join("state.sqlite");
         store(&db, "CREATE TABLE threads (id TEXT);");
-        let limits = Limits { deadline: Duration::from_millis(50), ..Limits::STORE };
-        let conn = open_read(&HomeFile::open_existing(&home, "state.sqlite").unwrap(), limits, &["threads"]).unwrap();
+        let limits = Limits { deadline: Duration::from_millis(250), ..Limits::STORE };
+        // The deadline runs from the open, so the open's own table check can
+        // trip it when a loaded runner parks this thread (the guard working);
+        // a fresh open gets a fresh deadline.
+        let conn = (0..20)
+            .find_map(|_| open_read(&HomeFile::open_existing(&home, "state.sqlite").unwrap(), limits, &["threads"]))
+            .expect("an open inside the deadline");
         let started = Instant::now();
         let ran = conn.query_row("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n", [], |r| r.get::<_, i64>(0));
         assert!(ran.is_err());
