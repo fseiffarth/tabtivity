@@ -933,16 +933,11 @@ fn launcher_path(session: &str) -> std::path::PathBuf {
 
 /// Write `script` as the session's launcher, executable by its owner only.
 fn write_launcher(session: &str, script: &str) -> std::io::Result<std::path::PathBuf> {
-    let path = launcher_path(session);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&path, script)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
-    }
+    write_launcher_at(launcher_path(session), script)
+}
+
+fn write_launcher_at(path: std::path::PathBuf, script: &str) -> std::io::Result<std::path::PathBuf> {
+    crate::storage::write_private_atomic_mode(&path, script.as_bytes(), 0o700).map_err(std::io::Error::other)?;
     Ok(path)
 }
 
@@ -1450,6 +1445,27 @@ mod tests {
             local_tmux_rename_args("old", "new"),
             vec!["rename-session", "-t", "old", "new"]
         );
+    }
+
+    /// The launcher replaces whatever sits at its path — never writes through
+    /// a link there — and exists only as an owner-only executable.
+    #[test]
+    #[cfg(unix)]
+    fn launcher_replaces_a_link_and_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let path = tmp.path().join("tmux-launch").join("s.sh");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+        write_launcher_at(path.clone(), "#!/bin/sh\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(meta.is_file());
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "#!/bin/sh\n");
     }
 
     #[test]

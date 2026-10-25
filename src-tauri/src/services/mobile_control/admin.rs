@@ -341,10 +341,7 @@ pub mod pipe {
             use std::fmt::Write;
             let _ = write!(token, "{byte:02x}");
         }
-        if let Some(parent) = socket.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(token_path(socket), &token)
+        crate::storage::write_private_atomic(&token_path(socket), token.as_bytes())
             .map_err(|e| format!("write control token: {e}"))?;
         Ok(token)
     }
@@ -806,6 +803,19 @@ mod tests {
 #[cfg(test)]
 mod frame_tests {
     use super::*;
+
+    /// The control token is the pipe's only credential: it is written whole
+    /// and owner-only, never with the ACL its folder would hand down.
+    #[cfg(windows)]
+    #[test]
+    fn the_control_token_does_not_inherit_its_folder_acl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let socket = tmp.path().join("control").join("admin.sock");
+        let token = pipe::create_token(&socket).unwrap();
+        assert_eq!(pipe::read_token(&socket).unwrap(), token);
+        let path = pipe::token_path(&socket);
+        assert!(crate::services::private_file::dacl_is_protected(&path), "{}", path.display());
+    }
 
     /// A frame is a big-endian u32 length followed by that many JSON bytes;
     /// what one side writes the other reads back unchanged.

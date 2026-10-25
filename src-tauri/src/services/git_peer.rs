@@ -356,7 +356,7 @@ pub fn is_dirty_tracked(porcelain: &str) -> bool {
         if line.len() < 2 {
             return false;
         }
-        &line[..2] != "??"
+        !line.starts_with("??")
     })
 }
 
@@ -1827,14 +1827,10 @@ async fn transfer_and_apply(
             }
             Some(d) if d != src_tag.sha => {
                 if force {
-                    let backup = backup_ref_name(&format!("tags/{}", src_tag.name), ts);
-                    let _ = dst_peer.run(&["update-ref", &backup, d]);
-                    let _ = dst_peer.run(&[
-                        "update-ref",
-                        &format!("refs/tags/{}", src_tag.name),
-                        &src_tag.sha,
-                    ]);
-                    result.applied += 1;
+                    match force_move_tag(&dst_peer, &src_tag.name, &src_tag.sha, d, ts) {
+                        Ok(()) => result.applied += 1,
+                        Err(e) => result.blocked = result.blocked.or(Some(e)),
+                    }
                 } else {
                     result.diverged.push(format!("tag:{}", src_tag.name));
                 }
@@ -2219,6 +2215,30 @@ fn force_reset_branch(
     Ok(())
 }
 
+/// Force-move `dest`'s tag `tag` from `dst_sha` to the authority's `src_sha` during a
+/// resolution — [`force_reset_branch`] for a tag: no move without its backup ref.
+fn force_move_tag(dst_peer: &Peer, tag: &str, src_sha: &str, dst_sha: &str, ts: u64) -> Result<(), String> {
+    let backup = backup_ref_name(&format!("tags/{tag}"), ts);
+    run_checked(dst_peer, &["update-ref", &backup, dst_sha], &format!("backing up tag '{tag}'"))?;
+    run_checked(
+        dst_peer,
+        &["update-ref", &format!("refs/tags/{tag}"), src_sha, dst_sha],
+        &format!("moving tag '{tag}'"),
+    )?;
+    Ok(())
+}
+
+/// Save every branch tip of a dest that should have been empty to the `ts`
+/// backup batch, so the pairing that follows can never lose one. A backup that
+/// did not land is an error: the pairing must stop before `git init`.
+fn back_up_branches(dest_peer: &Peer, branches: &[RefEntry], ts: u64) -> Result<(), String> {
+    for b in branches {
+        let backup = backup_ref_name(&b.name, ts);
+        run_checked(dest_peer, &["update-ref", &backup, &b.sha], &format!("backing up '{}'", b.name))?;
+    }
+    Ok(())
+}
+
 /// Copy the bundle file between the two machines over the pooled SFTP session.
 /// Streamed in bounded chunks (#28n Phase 3) so an initial-pairing bundle carrying
 /// a project's whole history never has to fit in memory on either end.
@@ -2302,20 +2322,15 @@ async fn init_pairing(
     // If a misprobe/race routed us here with a dest that actually already holds
     // commits, back every existing branch tip up to `refs/tabtivity/backup/*` BEFORE the
     // `reset --hard` below can move them — so an unexpected non-empty dest is always
-    // recoverable rather than silently wiped. Truly-empty dests probe clean and skip.
+    // recoverable rather than silently wiped — and a tip that cannot be backed up
+    // stops the pairing here. Truly-empty dests probe clean and skip.
     let pre = probe(&dest_peer);
     // #10: the caller saw an empty dest, but that was a probe ago. A dest that cannot be
     // read now can neither be backed up nor shown empty — stop before `git init`.
     if pre.probe_error {
         return Err(format!("the {dest_label}'s repository could not be read; refusing to initialize it"));
     }
-    if !pre.branches.is_empty() {
-        let ts = now_secs();
-        for b in &pre.branches {
-            let backup = backup_ref_name(&b.name, ts);
-            let _ = dest_peer.run(&["update-ref", &backup, &b.sha]);
-        }
-    }
+    back_up_branches(&dest_peer, &pre.branches, now_secs())?;
 
     // The host root must exist before any remote git can run: every remote command is
     // `cd '<remote_path>' && git …`, so a missing directory fails ALL of them — including
@@ -5651,6 +5666,91 @@ mod tests {
             .expect_err("a ref move onto an unknown commit must fail");
         assert!(err.contains("moving"), "{err}");
         assert_eq!(rev(dir, &format!("refs/heads/{branch}")), head);
+    }
+
+    /// Make `backup_ref_name(<anything>, ts)` unwritable in `dir`: a plain ref at the
+    /// batch's own name leaves no room for refs below it.
+    fn block_backup_batch(dir: &Path, ts: u64, sha: &str) {
+        let batch = format!("{}/{ts}", crate::brand::GIT_REF_BACKUP);
+        assert!(git_in(dir, &["update-ref", &batch, sha]).status.success());
+    }
+
+    #[test]
+    fn force_reset_branch_does_not_move_without_its_backup() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping force_reset_branch_does_not_move_without_its_backup");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let first = init_repo_with_file(dir, "a.txt", b"one\n");
+        std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+        git_in(dir, &["commit", "-qam", "two"]);
+        let second = rev(dir, "HEAD");
+        let branch = String::from_utf8_lossy(&git_in(dir, &["branch", "--show-current"]).stdout)
+            .trim()
+            .to_string();
+        let peer = Peer::Local(dir.to_path_buf());
+        block_backup_batch(dir, 1_700_000_003, &first);
+
+        let err = force_reset_branch(&peer, &branch, &first, &second, true, 1_700_000_003)
+            .expect_err("a failed backup must stop the reset");
+        assert!(err.contains("backing up"), "{err}");
+        assert_eq!(rev(dir, "HEAD"), second, "HEAD must not have moved");
+    }
+
+    #[test]
+    fn force_move_tag_does_not_move_without_its_backup() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping force_move_tag_does_not_move_without_its_backup");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let first = init_repo_with_file(dir, "a.txt", b"one\n");
+        git_in(dir, &["tag", "v1"]);
+        std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+        git_in(dir, &["commit", "-qam", "two"]);
+        let second = rev(dir, "HEAD");
+        let peer = Peer::Local(dir.to_path_buf());
+        block_backup_batch(dir, 1_700_000_004, &first);
+
+        let err = force_move_tag(&peer, "v1", &second, &first, 1_700_000_004)
+            .expect_err("a failed backup must stop the tag move");
+        assert!(err.contains("backing up"), "{err}");
+        assert_eq!(rev(dir, "refs/tags/v1"), first, "the tag must not have moved");
+
+        force_move_tag(&peer, "v1", &second, &first, 1_700_000_005).expect("move");
+        assert_eq!(rev(dir, "refs/tags/v1"), second);
+        assert_eq!(rev(dir, &backup_ref_name("tags/v1", 1_700_000_005)), first);
+    }
+
+    #[test]
+    fn back_up_branches_reports_a_backup_that_did_not_land() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping back_up_branches_reports_a_backup_that_did_not_land");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let head = init_repo_with_file(dir, "a.txt", b"one\n");
+        let peer = Peer::Local(dir.to_path_buf());
+        let branches = vec![RefEntry { name: "main".into(), sha: head.clone() }];
+
+        back_up_branches(&peer, &branches, 1_700_000_006).expect("backup");
+        assert_eq!(rev(dir, &backup_ref_name("main", 1_700_000_006)), head);
+
+        block_backup_batch(dir, 1_700_000_007, &head);
+        let err = back_up_branches(&peer, &branches, 1_700_000_007)
+            .expect_err("a backup that did not land must stop the pairing");
+        assert!(err.contains("backing up"), "{err}");
+    }
+
+    #[test]
+    fn dirty_tracked_reads_a_short_non_ascii_status_line_without_panicking() {
+        assert!(is_dirty_tracked("?é"));
+        assert!(!is_dirty_tracked("?? new.txt\n"));
+        assert!(is_dirty_tracked(" M a.txt\n"));
     }
 
     #[test]

@@ -1352,11 +1352,9 @@ pub fn begin(state_dir: &Path, root: &Path, owner: Owner, pdf: Option<PdfBefore>
     Ok(id)
 }
 
-fn save(dir: &Path, record: &Record) -> std::io::Result<()> {
-    let text = serde_json::to_vec_pretty(record).map_err(std::io::Error::other)?;
-    let temp = dir.join("round.json.tmp");
-    std::fs::write(&temp, text)?;
-    std::fs::rename(&temp, dir.join("round.json"))
+fn save(dir: &Path, record: &Record) -> Result<(), String> {
+    let text = serde_json::to_vec_pretty(record).map_err(|e| e.to_string())?;
+    crate::storage::write_private_atomic(&dir.join("round.json"), &text)
 }
 
 /// The round `id` of `owner`, with its folder.
@@ -1815,6 +1813,18 @@ mod tests {
             assert_eq!(undo(&state, &id, &phone()), Err(RoundError::Gone));
             assert_eq!(preview_err(&state, &id), RoundError::Gone);
         }
+    }
+
+    /// The record is staged under a fresh name each save, so something left at
+    /// (or planted on) one fixed staging name cannot fail the round.
+    #[test]
+    fn a_round_record_save_does_not_depend_on_a_fixed_staging_name() {
+        let (_tmp, root, state) = repo();
+        let id = begin(&state, &root, phone(), None).unwrap();
+        fs::create_dir(state.join(ROUNDS_DIR).join(&id).join("round.json.tmp")).unwrap();
+        agent_turn(&root);
+        settle(&state, &id, &phone()).unwrap();
+        assert!(record(&state, &id).tree_after.is_some());
     }
 
     fn preview_err(state: &Path, id: &str) -> RoundError {

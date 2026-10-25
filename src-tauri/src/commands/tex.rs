@@ -2285,25 +2285,33 @@ fn scan_tex_includes(root: &Path) -> Vec<std::path::PathBuf> {
 /// includes, so a later Compile in a child builds `root` instead of the
 /// fragment. Best-effort: failures to read/write the map are ignored.
 fn record_root_mappings(root: &Path) {
+    record_root_mappings_in(&tex_roots_path(), root);
+}
+
+fn record_root_mappings_in(path: &Path, root: &Path) {
     let root_abs = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let children = scan_tex_includes(&root_abs);
     if children.is_empty() {
         return;
     }
-    let path = tex_roots_path();
-    let mut map: std::collections::HashMap<String, String> =
-        crate::storage::read_json(&path).unwrap_or_default();
     let root_str = root_abs.to_string_lossy().into_owned();
     // Drop stale entries that pointed at this root but are no longer included.
     let child_set: std::collections::HashSet<String> = children
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    map.retain(|child, mapped_root| *mapped_root != root_str || child_set.contains(child));
-    for child in &child_set {
-        map.insert(child.clone(), root_str.clone());
-    }
-    let _ = crate::storage::write_json(&path, &map);
+    // A map that does not parse is left as it is, not replaced by this root's.
+    let _ = crate::storage::patch_json(
+        path,
+        std::collections::HashMap::new(),
+        |map: &mut std::collections::HashMap<String, String>| {
+            map.retain(|child, mapped_root| *mapped_root != root_str || child_set.contains(child));
+            for child in &child_set {
+                map.insert(child.clone(), root_str.clone());
+            }
+            Ok(())
+        },
+    );
 }
 
 /// Read the `% !TEX root = …` magic comment from the head of `source`, resolved
@@ -3285,6 +3293,26 @@ mod tests {
         assert!(names.contains("one.tex"), "got: {names:?}");
         assert!(names.contains("two.tex"), "got: {names:?}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A root map that does not parse stays as it is instead of being replaced
+    /// by this one compile's entries; a readable one gains them.
+    #[test]
+    fn record_root_mappings_leaves_an_unreadable_map_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("main.tex");
+        fs::write(&root, "\\input{one}\n").unwrap();
+        fs::write(tmp.path().join("one.tex"), "no includes\n").unwrap();
+        let map_path = tmp.path().join("tex_roots.json");
+        fs::write(&map_path, "{\"a\":").unwrap();
+        record_root_mappings_in(&map_path, &root);
+        assert_eq!(fs::read_to_string(&map_path).unwrap(), "{\"a\":");
+
+        fs::write(&map_path, "{\"elsewhere.tex\":\"other.tex\"}").unwrap();
+        record_root_mappings_in(&map_path, &root);
+        let map: std::collections::HashMap<String, String> = crate::storage::read_json(&map_path).unwrap();
+        assert_eq!(map.len(), 2, "{map:?}");
+        assert_eq!(map["elsewhere.tex"], "other.tex");
     }
 
     #[test]

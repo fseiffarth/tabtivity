@@ -58,8 +58,13 @@ pub(crate) fn find_by_id(id: &str) -> Option<GlobalMachine> {
     load_all().into_iter().find(|machine| machine.id == id)
 }
 
-fn save_all(list: &[GlobalMachine]) -> Result<(), String> {
-    storage::write_json(&global_machines_path(), &list.to_vec()).map_err(|e| e.to_string())
+/// One read-modify-write of the registry. A file that does not parse is an
+/// error and stays as it is — never an empty list the change is applied to.
+fn patch_all<R>(
+    path: &std::path::Path,
+    patch: impl FnOnce(&mut Vec<GlobalMachine>) -> Result<R, String>,
+) -> Result<R, String> {
+    storage::patch_json(path, Vec::new(), patch)
 }
 
 /// Every globally connected machine, for the header's Machines indicator.
@@ -91,29 +96,39 @@ pub fn global_machine_add(
     let label = label
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty());
-    let mut list = load_all();
-    // Idempotent by target: a machine *is* its `(user, host, port)` identity, so a
-    // second registration of the same host — the HPC-wizard login surfacing a
-    // cluster the user may already have added by hand, or a repeat wizard run —
-    // returns the existing row rather than stacking a duplicate. The caller has
-    // just authenticated the same target, so nothing new needs persisting.
-    if let Some(existing) = list
-        .iter()
-        .find(|m| m.user == user && m.host == host && m.port == port)
-    {
-        return Ok(existing.clone());
-    }
-    let machine = GlobalMachine {
-        id: crate::commands::projects::uuid_v4(),
-        user,
-        host,
-        port,
-        label,
-        auto_connect: None,
-    };
-    list.push(machine.clone());
-    save_all(&list)?;
-    Ok(machine)
+    add_in(&global_machines_path(), user, host, port, label)
+}
+
+fn add_in(
+    path: &std::path::Path,
+    user: Option<String>,
+    host: String,
+    port: Option<u16>,
+    label: Option<String>,
+) -> Result<GlobalMachine, String> {
+    patch_all(path, |list| {
+        // Idempotent by target: a machine *is* its `(user, host, port)` identity, so a
+        // second registration of the same host — the HPC-wizard login surfacing a
+        // cluster the user may already have added by hand, or a repeat wizard run —
+        // returns the existing row rather than stacking a duplicate. The caller has
+        // just authenticated the same target, so nothing new needs persisting.
+        if let Some(existing) = list
+            .iter()
+            .find(|m| m.user == user && m.host == host && m.port == port)
+        {
+            return Ok(existing.clone());
+        }
+        let machine = GlobalMachine {
+            id: crate::commands::projects::uuid_v4(),
+            user,
+            host,
+            port,
+            label,
+            auto_connect: None,
+        };
+        list.push(machine.clone());
+        Ok(machine)
+    })
 }
 
 /// Edit an existing machine's connection identity — `user`/`host`/`port`/`label`.
@@ -148,29 +163,29 @@ pub fn global_machine_update(
     let label = label
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty());
-    let mut list = load_all();
-    if !list.iter().any(|m| m.id == id) {
-        return Err("machine not found".to_string());
-    }
-    // A machine *is* its `(user, host, port)` identity — refuse to point two rows
-    // at the same target (rather than silently fold them, which `global_machine_add`
-    // would do on a re-add but is surprising as the result of an edit).
-    if list
-        .iter()
-        .any(|m| m.id != id && m.user == user && m.host == host && m.port == port)
-    {
-        return Err("another machine already uses that address".to_string());
-    }
-    for m in list.iter_mut() {
-        if m.id == id {
-            m.user = user.clone();
-            m.host = host.clone();
-            m.port = port;
-            m.label = label.clone();
+    patch_all(&global_machines_path(), |list| {
+        if !list.iter().any(|m| m.id == id) {
+            return Err("machine not found".to_string());
         }
-    }
-    save_all(&list)?;
-    Ok(list)
+        // A machine *is* its `(user, host, port)` identity — refuse to point two rows
+        // at the same target (rather than silently fold them, which `global_machine_add`
+        // would do on a re-add but is surprising as the result of an edit).
+        if list
+            .iter()
+            .any(|m| m.id != id && m.user == user && m.host == host && m.port == port)
+        {
+            return Err("another machine already uses that address".to_string());
+        }
+        for m in list.iter_mut() {
+            if m.id == id {
+                m.user = user.clone();
+                m.host = host.clone();
+                m.port = port;
+                m.label = label.clone();
+            }
+        }
+        Ok(list.clone())
+    })
 }
 
 /// Arm (or disarm) a machine for silent auto-connect on launch / VPN-up. Stores
@@ -183,14 +198,14 @@ pub fn global_machine_set_auto_connect(
     id: String,
     enabled: bool,
 ) -> Result<Vec<GlobalMachine>, String> {
-    let mut list = load_all();
-    for m in list.iter_mut() {
-        if m.id == id {
-            m.auto_connect = if enabled { Some(true) } else { None };
+    patch_all(&global_machines_path(), |list| {
+        for m in list.iter_mut() {
+            if m.id == id {
+                m.auto_connect = if enabled { Some(true) } else { None };
+            }
         }
-    }
-    save_all(&list)?;
-    Ok(list)
+        Ok(list.clone())
+    })
 }
 
 /// Drop a machine from the global list. Never touches the OS keychain — the
@@ -201,10 +216,10 @@ pub fn global_machine_set_auto_connect(
 /// info made at drop time, not a reference back here.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_remove(id: String) -> Result<Vec<GlobalMachine>, String> {
-    let mut list = load_all();
-    list.retain(|m| m.id != id);
-    save_all(&list)?;
-    Ok(list)
+    patch_all(&global_machines_path(), |list| {
+        list.retain(|m| m.id != id);
+        Ok(list.clone())
+    })
 }
 
 /// Persist a new display order for the global machines list — the frontend
@@ -217,18 +232,19 @@ pub fn global_machine_remove(id: String) -> Result<Vec<GlobalMachine>, String> {
 /// silently drop a machine.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_reorder(ids: Vec<String>) -> Result<Vec<GlobalMachine>, String> {
-    let list = load_all();
-    let mut reordered: Vec<GlobalMachine> = ids
-        .iter()
-        .filter_map(|id| list.iter().find(|m| &m.id == id).cloned())
-        .collect();
-    for m in &list {
-        if !reordered.iter().any(|r| r.id == m.id) {
-            reordered.push(m.clone());
+    patch_all(&global_machines_path(), |list| {
+        let mut reordered: Vec<GlobalMachine> = ids
+            .iter()
+            .filter_map(|id| list.iter().find(|m| &m.id == id).cloned())
+            .collect();
+        for m in list.iter() {
+            if !reordered.iter().any(|r| r.id == m.id) {
+                reordered.push(m.clone());
+            }
         }
-    }
-    save_all(&reordered)?;
-    Ok(reordered)
+        *list = reordered;
+        Ok(list.clone())
+    })
 }
 
 /// Write the selected machines to a shareable JSON file at `path`. `ids` is the
@@ -558,6 +574,25 @@ mod tests {
         assert!(global_machines_import_read(garbage).unwrap_err().starts_with("not a machines export file"));
         let missing = dir.path().join("nope.json").to_string_lossy().into_owned();
         assert!(global_machines_import_read(missing).unwrap_err().starts_with("failed to read"));
+    }
+
+    /// A registry that does not parse (corrupt, or written by a newer build) is
+    /// an error, never an empty list to add the one new row to.
+    #[test]
+    fn add_refuses_to_replace_a_registry_it_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("global_machines.json");
+        std::fs::write(&path, "[{\"id\":").unwrap();
+        assert!(add_in(&path, None, "a.example".into(), None, None).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[{\"id\":");
+
+        std::fs::remove_file(&path).unwrap();
+        let first = add_in(&path, None, "a.example".into(), None, None).unwrap();
+        let again = add_in(&path, None, "a.example".into(), None, None).unwrap();
+        assert_eq!(first.id, again.id);
+        add_in(&path, Some("me".into()), "b.example".into(), Some(2222), None).unwrap();
+        let list: Vec<GlobalMachine> = storage::read_json(&path).unwrap();
+        assert_eq!(list.len(), 2);
     }
 
     /// An exported row omits every absent field — and `user` is `None` on the

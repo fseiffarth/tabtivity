@@ -196,11 +196,7 @@ fn read_placed(store_dir: &Path, home: &Path, leaf: &str) -> Option<String> {
 }
 
 fn write_placed(store_dir: &Path, home: &Path, leaf: &str, hash: &str) {
-    let path = placed_file(store_dir, home, leaf);
-    if let Some(parent) = path.parent() {
-        let _ = crate::services::agent_home::create_private_dir(parent);
-    }
-    let _ = std::fs::write(path, hash);
+    let _ = write_store(&placed_file(store_dir, home, leaf), hash.as_bytes());
 }
 
 /// A non-blank file's bytes.
@@ -208,21 +204,12 @@ fn content(bytes: Option<Vec<u8>>) -> Option<Vec<u8>> {
     bytes.filter(|b| !b.iter().all(u8::is_ascii_whitespace))
 }
 
-/// Write a store file (`0600`) by temporary and rename: the store dir is
-/// Tabtivity's own, but a keeper pass and a spawn may run at once.
+/// Write a store file or sidecar owner-only and whole, in a `0700` folder:
+/// the store dir is Tabtivity's own, but a keeper pass and a spawn may run at once.
 fn write_store(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    use std::io::Write;
     let parent = path.parent().ok_or_else(|| io::Error::other("missing parent directory"))?;
     crate::services::agent_home::create_private_dir(parent)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tmp.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
-    tmp.write_all(bytes)?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    Ok(())
+    storage::write_private_atomic(path, bytes).map_err(io::Error::other)
 }
 
 /// The account a login file names, where a CLI's file does: Codex's
@@ -437,7 +424,7 @@ fn importable(cli: &str, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 
 fn write_blocked(store_dir: &Path, blocked: &Blocked) {
     if let Ok(body) = serde_json::to_vec(blocked) {
-        let _ = std::fs::write(store_dir.join(BLOCKED_FILE), body);
+        let _ = write_store(&store_dir.join(BLOCKED_FILE), &body);
     }
 }
 
@@ -478,7 +465,7 @@ fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -
         return false;
     }
     if let Some(account) = account {
-        let _ = std::fs::write(store_dir.join(ACCOUNT_FILE), account);
+        let _ = write_store(&store_dir.join(ACCOUNT_FILE), account.as_bytes());
     }
     let _ = std::fs::remove_file(store_dir.join(BLOCKED_FILE));
     if let Some(field) = refused {
@@ -857,7 +844,7 @@ fn link_claude_identity(store_dir: &Path, home: &Path) {
         .and_then(|b| serde_json::from_slice(&b).ok());
     let home_account = claude_account_in_home(home);
     let stored_account = read_sidecar(store_dir, ACCOUNT_FILE);
-    match (home_account, stored) {
+    match (home_account, &stored) {
         // The home is signed in: record its identity unless it is another
         // account, or the home is a receive-only local-model one.
         (Some(account), _)
@@ -866,10 +853,16 @@ fn link_claude_identity(store_dir: &Path, home: &Path) {
         {
             let mut keys = crate::services::agent_home::filtered_claude_json(&value, &[]);
             keys.as_object_mut().map(|o| o.remove("projects"));
-            if let Ok(body) = serde_json::to_vec(&keys) {
-                let _ = write_store(&identity, &body);
+            // This runs every keeper pass, and a store write is synced (and on
+            // Windows ACL'd): only what changed is written.
+            if stored.as_ref() != Some(&keys) {
+                if let Ok(body) = serde_json::to_vec(&keys) {
+                    let _ = write_store(&identity, &body);
+                }
             }
-            let _ = std::fs::write(store_dir.join(ACCOUNT_FILE), account);
+            if stored_account.is_none() {
+                let _ = write_store(&store_dir.join(ACCOUNT_FILE), account.as_bytes());
+            }
         }
         // Not signed in here, but the store knows who: seed the identity keys.
         (None, Some(stored)) => {
@@ -1095,7 +1088,7 @@ pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path, cli: &str) -
                 let bytes = importable(cli, bytes).map_err(|e| format!("{}: {e}", src.display()))?;
                 write_store(&store, &bytes).map_err(|e| format!("{}: {e}", store.display()))?;
                 if let Some(account) = account_of(cli, &bytes) {
-                    let _ = std::fs::write(store_dir.join(ACCOUNT_FILE), account);
+                    let _ = write_store(&store_dir.join(ACCOUNT_FILE), account.as_bytes());
                 }
                 copied += 1;
             }
@@ -1121,7 +1114,7 @@ pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path, cli: &str) -
                 .pointer("/oauthAccount/emailAddress")
                 .and_then(|v| v.as_str())
             {
-                let _ = std::fs::write(store_dir.join(ACCOUNT_FILE), account);
+                let _ = write_store(&store_dir.join(ACCOUNT_FILE), account.as_bytes());
             }
             if let Ok(body) = serde_json::to_vec(&keys) {
                 let _ = write_store(&store_dir.join("identity.json"), &body);
@@ -1638,6 +1631,26 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         reconcile_all_in(&state);
         assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+    }
+
+    /// The store's sidecars (account, blocked record, placed hashes) are
+    /// written like the logins beside them: owner-only and whole.
+    #[test]
+    #[cfg(unix)]
+    fn store_sidecars_are_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let (home, copy, _store) = settled_codex_pair(&state);
+        let store_dir = store_dir_in(&state, "codex");
+        // Another account signing in from the tab is refused and recorded.
+        write_in_place(&copy, r#"{"tokens":{"account_id":"two"}}"#);
+        reconcile_home_in(&state, &home);
+        let placed = placed_file(&store_dir, &home, &leaf_of(".codex/auth.json"));
+        for path in [store_dir.join(ACCOUNT_FILE), store_dir.join(BLOCKED_FILE), placed] {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", path.display());
+        }
     }
 
     #[test]
@@ -2637,6 +2650,28 @@ mod tests {
         assert_eq!(seeded["oauthAccount"]["emailAddress"], "me@x");
         assert!(seeded.get("projects").is_none());
         assert_eq!(read_sidecar(&store_dir_in(state, "claude"), ACCOUNT_FILE).as_deref(), Some("me@x"));
+    }
+
+    /// The keeper links a signed-in home every pass; a pass that learns
+    /// nothing new rewrites neither the identity nor the account file (each
+    /// store write is synced, and ACL'd on Windows).
+    #[test]
+    #[cfg(unix)]
+    fn an_unchanged_claude_identity_is_not_rewritten_each_pass() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"me@x"}}"#).unwrap();
+        link_claude_identity(&store, &home);
+        let ino = |name: &str| std::fs::metadata(store.join(name)).unwrap().ino();
+        let (identity, account) = (ino("identity.json"), ino(ACCOUNT_FILE));
+        link_claude_identity(&store, &home);
+        assert_eq!(ino("identity.json"), identity);
+        assert_eq!(ino(ACCOUNT_FILE), account);
+        assert_eq!(read_sidecar(&store, ACCOUNT_FILE).as_deref(), Some("me@x"));
     }
 
     #[test]
