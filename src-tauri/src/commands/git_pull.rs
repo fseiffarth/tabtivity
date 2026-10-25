@@ -115,10 +115,7 @@ fn resolve_branch(
     dir: &str,
     branch: Option<&str>,
 ) -> Result<(String, bool), String> {
-    let current = run_git(target, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| stdout_of(&o).trim().to_string())
+    let current = crate::commands::git::stdout(target, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .filter(|s| !s.is_empty());
     match branch {
         Some(b) => {

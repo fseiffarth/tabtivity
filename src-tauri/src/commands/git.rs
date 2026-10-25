@@ -614,6 +614,19 @@ pub(crate) fn hardened_git_command_in<S: AsRef<str>, P: AsRef<Path>>(
     git_command_in(project_dir.as_ref(), args, Hooks::Off)
 }
 
+/// `git <args>` in `dir` (on `target`'s host when remote), hooks pinned off:
+/// its stdout, trimmed, or `None` when git could not run (or was stopped) or
+/// exited non-zero. The one shape every "read one value out of git" caller
+/// wants; use [`run_git`] when the failure text matters.
+pub(crate) fn stdout<P: AsRef<Path>>(target: Option<&RemoteTarget>, dir: P, args: &[&str]) -> Option<String> {
+    use crate::services::git_bounded::BoundedOutput;
+    let out = match target {
+        Some(_) => run_git(target, &dir.as_ref().to_string_lossy(), args).ok()?,
+        None => hardened_git_command_in(dir, args).bounded_output().ok()?,
+    };
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// [`hardened_git_command_in`] with the repo's hooks left live — only for a verb
 /// [`require_hook_trust`] has just approved (push, Publish's push). Everything
 /// else about the call is hardened the same.
@@ -2077,8 +2090,7 @@ fn head_sha(dir: &std::path::Path) -> Option<String> {
 }
 
 fn rev_parse(dir: &std::path::Path, rev: &str) -> Option<String> {
-    let out = run_git(None, &dir.to_string_lossy(), &["rev-parse", "--verify", "-q", rev]).ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    stdout(None, dir, &["rev-parse", "--verify", "-q", rev])
 }
 
 // ── Clone (import from GitHub/GitLab) ───────────────────────────────────────

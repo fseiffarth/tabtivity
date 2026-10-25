@@ -1696,14 +1696,8 @@ fn read_pidfile(pidfile: &Path) -> Result<u32, String> {
 }
 
 fn pid_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        crate::commands::apps::pid_alive(pid)
-    }
+    // Only a successful probe counts: a pid we may not signal is not our QEMU.
+    crate::services::proc_table::pid_state(pid) == crate::services::proc_table::PidState::Alive
 }
 
 /// Whether `pid` is a live process that is (still) **our** QEMU.

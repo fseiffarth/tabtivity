@@ -855,16 +855,7 @@ impl CinnamonWorkspaceState {
     }
 }
 
-fn gsettings_get(schema: &str, key: &str) -> Option<String> {
-    let output = Command::new("gsettings")
-        .args(["get", schema, key])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
+use crate::commands::os_clock::gsettings_get;
 
 fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<(), String> {
     let output = Command::new("gsettings")

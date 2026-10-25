@@ -318,6 +318,8 @@ mod platform {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
 
+    use crate::paths::binary_on_path;
+
     /// Native region-capture tools we know how to drive, in preference order. The
     /// first one present on `PATH` is used when the global Screenshot app has no
     /// usable command. `grim` additionally needs `slurp` for region selection.
@@ -441,16 +443,8 @@ mod platform {
         NATIVE_TOOLS
             .iter()
             .copied()
-            .find(|&tool| on_path(tool) && (tool != "grim" || on_path("slurp")))
+            .find(|&tool| binary_on_path(tool) && (tool != "grim" || binary_on_path("slurp")))
             .map(String::from)
-    }
-
-    /// Whether an executable named `name` exists on `PATH`.
-    fn on_path(name: &str) -> bool {
-        match std::env::var_os("PATH") {
-            Some(path) => std::env::split_paths(&path).any(|dir| dir.join(name).is_file()),
-            None => false,
-        }
     }
 
     pub fn basename(exec: &str) -> String {

@@ -1252,13 +1252,7 @@ pub struct UnsyncedReport {
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
 /// Hookless: it inspects a mirror in the background.
 fn git_in(dir: &Path, args: &[&str]) -> String {
-    use crate::services::git_bounded::BoundedOutput;
-    crate::commands::git::hookless_git_command_in(dir, args)
-        .bounded_output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
+    crate::commands::git::stdout(None, dir, args).unwrap_or_default()
 }
 
 /// Inspect an archived remote project's mirror for commits that were never synced

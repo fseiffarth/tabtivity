@@ -1081,16 +1081,12 @@ fn sweep_stale_askpass_in(dir: &std::path::Path) {
         if pid == self_pid {
             continue;
         }
-        // SAFETY: `kill` takes no pointers; signal 0 performs the permission and
-        // existence check without delivering anything.
-        //
-        // **Only `ESRCH` licenses the delete**, not "the call failed". A living
-        // process we may not signal answers `EPERM`, and a `!= 0` test would
-        // read that as gone — which is the difference between a sweep and a
-        // sweep that deletes shims out from under running processes. `EINVAL`
-        // (a pid too large for `pid_t`) is likewise not evidence of an exit.
-        let gone = unsafe { libc::kill(pid as libc::pid_t, 0) } != 0
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        // **Only a positive "gone" licenses the delete**, not "the probe
+        // failed". A living process we may not signal answers `EPERM`, and
+        // reading that as gone is the difference between a sweep and a sweep
+        // that deletes shims out from under running processes. A pid too large
+        // for `pid_t` is likewise not evidence of an exit.
+        let gone = crate::services::proc_table::pid_state(pid) == crate::services::proc_table::PidState::Gone;
         if gone {
             let _ = std::fs::remove_file(&path);
         }
@@ -1895,10 +1891,7 @@ mod tests {
         // deliberately does not treat as an exit).
         let dead_pid = (1..=100_000)
             .rev()
-            .find(|p| {
-                (unsafe { libc::kill(*p as libc::pid_t, 0) }) != 0
-                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-            })
+            .find(|p| crate::services::proc_table::pid_state(*p) == crate::services::proc_table::PidState::Gone)
             .expect("a free pid");
         let dead = askpass.join(format!("ap-{dead_pid}-0.sh"));
         let stranger = askpass.join("README");

@@ -127,42 +127,17 @@ pub(crate) fn network_conn_type_blocking() -> String {
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Run `bin args…` and return its stdout, or `None` on spawn failure or when it
-/// exceeds [`PROBE_TIMEOUT`] (the child is killed). The slimmed-down twin of
-/// `printing.rs`'s `run_capped`: `netsh`/`networksetup` talk to OS services
-/// that can hang, and `.output()` alone would wait with them. stderr is
-/// discarded (these probes only pattern-match stdout), so a single reader
-/// thread suffices and cannot deadlock on a full pipe.
+/// exceeds [`PROBE_TIMEOUT`] (the subtree is stopped). `netsh`/`networksetup`
+/// talk to OS services that can hang, and `.output()` alone would wait with
+/// them; [`git_bounded::run`] drains both pipes on threads, so a chatty tool
+/// cannot deadlock the cap either.
 fn probe_output_capped(bin: &str, args: &[&str]) -> Option<String> {
-    use std::process::Stdio;
-    let mut child = crate::paths::command_no_window(bin)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut out_pipe = child.stdout.take();
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(40)),
-            Err(_) => return None,
-        }
-    }
-    Some(String::from_utf8_lossy(&reader.join().unwrap_or_default()).into_owned())
+    use crate::services::git_bounded::{self, Opts};
+    let mut cmd = crate::paths::command_no_window(bin);
+    cmd.args(args);
+    let opts = Opts { timeout: Some(PROBE_TIMEOUT), no_precheck: true, ..Opts::default() };
+    let ran = git_bounded::run(&mut cmd, opts).ok()?;
+    Some(String::from_utf8_lossy(&ran.output.stdout).into_owned())
 }
 
 /// The name (SSID) of the wireless network in use, or an empty string when

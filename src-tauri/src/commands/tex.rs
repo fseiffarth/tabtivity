@@ -17,7 +17,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Stdio;
 
 use base64::Engine as _;
 use serde::Serialize;
@@ -437,71 +436,34 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("run {bin}: {e}"))?;
-
-    // Drain both pipes on their own threads. A child that fills a pipe buffer
-    // deadlocks if nobody is reading, which would make the timeout fire on
-    // perfectly healthy builds with a lot of log output.
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-
-    let deadline = std::time::Instant::now() + timeout;
-    // Poll fast at first and back off: a fixed 50ms tick added up to 50ms of
-    // pure waiting to every short run, which the hover preview pays per hover —
-    // twice when it also rebuilds a preamble format. A run that is going to take
-    // seconds anyway ends up on the 50ms tick after the first few polls.
-    let mut poll = std::time::Duration::from_millis(2);
-    let status = loop {
-        match child.try_wait().map_err(|e| format!("wait {bin}: {e}"))? {
-            Some(s) => break Some(s),
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+    // Both pipes are drained on threads (a child that fills a pipe buffer would
+    // deadlock the timeout on a healthy build with a lot of log output), the
+    // wait is bounded, and a stuck build's whole subtree is stopped.
+    use crate::services::git_bounded::{self, Opts, RunError};
+    let opts = Opts { timeout: Some(timeout), no_precheck: true, ..Opts::default() };
+    match git_bounded::run(&mut cmd, opts) {
+        Ok(ran) => {
+            let out = ran.output;
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            if ran.cut {
+                text.push_str(&format!(
+                    "\n! {app} stopped {bin}: it wrote more than {} MiB of output.\n",
+                    git_bounded::DEFAULT_STDOUT_CAP / (1024 * 1024),
+                    app = crate::brand::DISPLAY
+                ));
             }
-            None => {
-                std::thread::sleep(poll);
-                poll = (poll * 2).min(std::time::Duration::from_millis(50));
-            }
+            Ok(RunOut { ok: out.status.success() && !ran.cut, text })
         }
-    };
-
-    let mut text = String::from_utf8_lossy(&out_reader.join().unwrap_or_default()).into_owned();
-    text.push_str(&String::from_utf8_lossy(
-        &err_reader.join().unwrap_or_default(),
-    ));
-
-    match status {
-        Some(s) => Ok(RunOut {
-            ok: s.success(),
-            text,
-        }),
-        None => {
-            text.push_str(&format!(
+        Err(RunError::TimedOut(_)) => Ok(RunOut {
+            ok: false,
+            text: format!(
                 "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
-                timeout.as_secs(), app = crate::brand::DISPLAY
-            ));
-            Ok(RunOut { ok: false, text })
-        }
+                timeout.as_secs(),
+                app = crate::brand::DISPLAY
+            ),
+        }),
+        Err(e) => Err(format!("run {bin}: {e}")),
     }
 }
 

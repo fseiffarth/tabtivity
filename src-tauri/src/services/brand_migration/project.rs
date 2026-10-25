@@ -47,10 +47,7 @@ fn git(root: &Path, args: &[&str]) -> Option<std::process::Output> {
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    let out = git(root, args)?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    crate::commands::git::stdout(None, root, args)
 }
 
 /// The repository's common git dir, absolute; `None` when `root` is not in a

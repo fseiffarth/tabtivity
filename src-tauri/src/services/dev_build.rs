@@ -230,7 +230,8 @@ fn lock_holder_alive(lock_dir: &Path) -> bool {
     let Some(pid) = read_trimmed(&lock_dir.join("pid")).and_then(|p| p.parse::<u32>().ok()) else {
         return false;
     };
-    crate::commands::apps::pid_alive(pid)
+    // An unprobeable pid (`EPERM`) still names a build that is running.
+    crate::services::proc_table::pid_state(pid) != crate::services::proc_table::PidState::Gone
 }
 
 fn commits_behind(root: &str, installed: &str) -> Option<u32> {

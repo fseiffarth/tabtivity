@@ -700,23 +700,16 @@ pub fn run_script_detached(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     crate::paths::augment_command_path(&mut cmd);
-    let child = cmd.spawn().map_err(|e| format!("run {script_path}: {e}"))?;
-    if let Some(run_id) = run_id {
-        let mut child = child;
-        std::thread::spawn(move || {
-            let success = child.wait().map(|s| s.success()).unwrap_or(false);
+    crate::paths::spawn_reaped_then(cmd, move |success| {
+        if let Some(run_id) = run_id {
             let _ = app.emit(
                 "script-finished",
                 serde_json::json!({ "runId": run_id, "success": success }),
             );
-        });
-    } else {
-        std::thread::spawn(move || {
-            let mut child = child;
-            let _ = child.wait();
-        });
-    }
-    Ok(())
+        }
+    })
+    .map(|_| ())
+    .map_err(|e| format!("run {script_path}: {e}"))
 }
 
 // ── Frameless embedding capability (TODO Group K #40, Phase 1) ──────────────
@@ -2156,7 +2149,9 @@ pub fn close_tracked_window(
 /// rows are never pruned — there is no liveness signal for them, and on
 /// Wayland the window list reads empty, which must not delete live rows.
 pub fn prune_dead_windows(reg: &mut WindowRegistry, project_id: Option<&str>) {
-    prune_dead_windows_with(reg, project_id, pid_alive, list_window_ids)
+    // An unprobeable pid (`EPERM`) is not dead: its window stays tracked.
+    let alive = |pid| crate::services::proc_table::pid_state(pid) != crate::services::proc_table::PidState::Gone;
+    prune_dead_windows_with(reg, project_id, alive, list_window_ids)
 }
 
 fn prune_dead_windows_with(
@@ -2182,58 +2177,6 @@ fn prune_dead_windows_with(
         if wid.is_none_or(|w| !live.contains(&w)) {
             reg.windows.remove(&id);
         }
-    }
-}
-
-pub fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    if cfg!(target_os = "linux") {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-    } else if cfg!(target_os = "windows") {
-        // Native liveness check: open the process and read its exit code.
-        // STILL_ACTIVE (259) means the process is still running. A handle to an
-        // already-exited process still opens successfully but GetExitCodeProcess
-        // then reports the real exit code, so OpenProcess succeeding alone is not
-        // enough — we must inspect the code. A failed OpenProcess (e.g. the PID
-        // no longer exists) is treated as dead.
-        #[cfg(target_os = "windows")]
-        {
-            use windows::Win32::Foundation::CloseHandle;
-            use windows::Win32::System::Threading::{
-                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            };
-            const STILL_ACTIVE: u32 = 259;
-            unsafe {
-                match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-                    Ok(handle) => {
-                        let mut code: u32 = 0;
-                        let alive =
-                            GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE;
-                        let _ = CloseHandle(handle);
-                        alive
-                    }
-                    Err(_) => false,
-                }
-            }
-        }
-        // On non-Windows targets this branch is never taken at runtime; the
-        // `false` keeps the expression well-typed when the cfg above is absent.
-        #[cfg(not(target_os = "windows"))]
-        {
-            false
-        }
-    } else {
-        // macOS / non-Linux Unix: kill(pid, 0) returns 0 if process exists.
-        // On non-Unix platforms this branch is never reached (Windows is
-        // handled above), so the `false` fallback is a compile-time safety net.
-        #[cfg(unix)]
-        {
-            return unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
-        }
-        #[allow(unreachable_code)]
-        false
     }
 }
 
@@ -2943,11 +2886,6 @@ mod tests {
     #[test]
     fn project_apps_for_id_empty_without_id() {
         assert!(project_apps_for_id(None).is_empty());
-    }
-
-    #[test]
-    fn pid_zero_is_never_alive() {
-        assert!(!pid_alive(0));
     }
 
     #[cfg(target_os = "macos")]

@@ -1493,6 +1493,8 @@ pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupL
                 Ok(Some(_)) | Err(_) => break,
                 Ok(None) if started.elapsed() > WARMUP_TIMEOUT => {
                     eprintln!("agent warm-up: {label} (pid {pid}) still running after {WARMUP_TIMEOUT:?}, killing");
+                    // The whole subtree: a CLI's own children would outlive the leader.
+                    crate::terminal::reap_child_subtree(pid, crate::terminal::ReapMode::Immediate);
                     let _ = child.kill();
                     let _ = child.wait();
                     break;

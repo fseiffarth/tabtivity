@@ -105,27 +105,10 @@ fn interactive_pidfile(config: &str) -> PathBuf {
 /// root, so an unprivileged probe gets EPERM for a perfectly healthy tunnel —
 /// treating that as dead is what keeps a VPN lamp dark while the tunnel is up
 /// (the 28l bug).
-#[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
-    // SAFETY: kill with signal 0 only probes for existence/permission.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-/// Windows analog: no `kill(0)`, so ask the task list. An elevated `openvpn.exe`
-/// is still enumerated for an unelevated query, so there is no EPERM-style trap
-/// here — but a failed probe is treated as *not* alive rather than guessed at.
-#[cfg(target_os = "windows")]
-fn pid_alive(pid: i32) -> bool {
-    let out = crate::paths::command_no_window("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .output();
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
-        Err(_) => false,
-    }
+    use crate::services::proc_table::{pid_state, PidState};
+    // `Unknown` (EPERM, Windows access denied) is the root-run daemon: alive.
+    u32::try_from(pid).is_ok_and(|p| pid_state(p) != PidState::Gone)
 }
 
 /// State of the interactive tunnel registered for `config`.

@@ -570,11 +570,17 @@ pub fn command_for_program(program: &Path) -> Command {
 
 /// Spawn a process whose result is intentionally ignored, retaining the Child
 /// in a background waiter so it cannot become a zombie or leak process handles.
-pub fn spawn_reaped(mut cmd: Command) -> std::io::Result<u32> {
+pub fn spawn_reaped(cmd: Command) -> std::io::Result<u32> {
+    spawn_reaped_then(cmd, |_| {})
+}
+
+/// [`spawn_reaped`], then `on_exit` runs on the waiter thread with whether the
+/// process exited successfully (`false` when waiting on it failed).
+pub fn spawn_reaped_then(mut cmd: Command, on_exit: impl FnOnce(bool) + Send + 'static) -> std::io::Result<u32> {
     let mut child: Child = cmd.spawn()?;
     let pid = child.id();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        on_exit(child.wait().map(|s| s.success()).unwrap_or(false));
     });
     Ok(pid)
 }
@@ -1049,6 +1055,20 @@ mod tests {
 
         let exe = command_for_program_for(OsKind::Windows, Path::new(r"C:\tools\fmt.exe"));
         assert_eq!(exe.get_program(), OsStr::new(r"C:\tools\fmt.exe"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_reaped_then_reports_the_exit_to_the_callback() {
+        for (bin, want) in [("true", true), ("false", false)] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let pid = spawn_reaped_then(Command::new(bin), move |ok| {
+                let _ = tx.send(ok);
+            })
+            .expect("spawn");
+            assert!(pid > 0);
+            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(want), "{bin}");
+        }
     }
 
     /// `ssh` runs a config's `Match exec` in a child of its own: a deadline
