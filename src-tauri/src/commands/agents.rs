@@ -1660,7 +1660,10 @@ pub async fn agent_tab_recent_prompts(
 /// `unchanged` without a parse. `local_model` marks a local-model tab, whose
 /// OpenCode keeps its sessions in the scope's local-model home. Always
 /// answers: an agent with no readable transcript comes back
-/// `available: false` with the reason, never an error.
+/// `available: false` with the reason, never an error. `remote_host` is the
+/// host (`primary` or a worker id) a remote project's tab runs on, whose
+/// conversation is on that host (`services::remote_transcript`); unset for a
+/// tab that runs here.
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_transcript(
@@ -1675,8 +1678,29 @@ pub async fn agent_tab_transcript(
     local_model: Option<bool>,
     watch: Option<String>,
     chat: Option<String>,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
+    if let (Some(project), Some(host), None, false) = (project_id.as_deref(), remote_host.as_deref(), chat.as_deref(), local_model == Some(true)) {
+        let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+        let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, agent_transcript::MAX_LIMIT);
+        let read = crate::services::remote_transcript::host_tab_transcript(
+            pool,
+            &agent,
+            project,
+            host,
+            &session_id,
+            subagent.as_deref(),
+            version.as_deref(),
+            limit,
+        )
+        .await;
+        // Nothing on disk here to watch: the Reader reads on its own clock.
+        if let Some(read) = read {
+            return read;
+        }
+    }
     app_core::rt::spawn_blocking(move || {
         if let Some(chat) = chat {
             let mut read = agent_transcript::stored_chat_transcript(

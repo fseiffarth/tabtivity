@@ -211,6 +211,8 @@ pub mod remote;
 pub use app_core::services::remote_agents;
 pub mod remote_credentials;
 pub mod remote_sync;
+// A host tab's conversation, copied from the host over the pooled SFTP session.
+pub mod remote_transcript;
 pub mod remote_usage;
 pub mod restore_service;
 pub mod root_mcp;
