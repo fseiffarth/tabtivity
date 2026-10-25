@@ -839,7 +839,15 @@ pub fn migrate_project_sessions_once() {
     if marker.exists() {
         return;
     }
-    let projects = crate::services::remote::projects().unwrap_or_default();
+    // An unreadable registry is not "no projects": the marker would then
+    // skip every project's migration for good. Try again next launch.
+    let projects = match crate::services::remote::projects() {
+        Ok(projects) => projects,
+        Err(e) => {
+            eprintln!("terminal_service: session migration postponed, projects.json unreadable: {e}");
+            return;
+        }
+    };
 
     let mut migrated = 0usize;
     for entry in projects.iter() {
