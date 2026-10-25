@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { isAgentSort, sortAgentTabs } from "../../../shared/agentSort";
 import { claudeModelLabel, shortModelName } from "../../lib/agents/agentModel";
 
-interface Row { id: string; decision?: boolean; working?: boolean; workingAt?: number; doneAt?: number }
-const keys = (row: Row) => ({ decision: row.decision, working: !!row.working, workingAt: row.workingAt, doneAt: row.doneAt });
+interface Row { id: string; decision?: boolean; working?: boolean; drafted?: boolean; workingAt?: number; doneAt?: number }
+const keys = (row: Row) => ({ decision: row.decision, working: !!row.working, drafted: row.drafted, workingAt: row.workingAt, doneAt: row.doneAt });
 const ids = (rows: Row[]) => rows.map((row) => row.id);
 
 describe("agent tab sorting (shared by the desktop and the phone)", () => {
@@ -36,6 +36,22 @@ describe("agent tab sorting (shared by the desktop and the phone)", () => {
     ];
     expect(ids(sortAgentTabs(asking, "lastWorking", keys)))
       .toEqual(["asking-2", "asking-1", "busy-2", "busy-1"]);
+  });
+
+  it("lifts a tab holding a phone draft under the working ones, newest finished turn first among them", () => {
+    const drafted: Row[] = [
+      ...rows,
+      { id: "draft-old", drafted: true, doneAt: 50 },
+      { id: "draft-new", drafted: true, doneAt: 950 },
+      { id: "draft-unseen", drafted: true },
+      // Asking or working outranks the draft it also holds.
+      { id: "asking-draft", decision: true, drafted: true },
+    ];
+    expect(ids(sortAgentTabs(drafted, "lastWorking", keys)))
+      .toEqual(["asking-draft", "busy", "draft-new", "draft-old", "draft-unseen", "old", "recent", "quiet", "quiet-2"]);
+    // The other orders have no tiers, so a draft moves nothing there.
+    expect(ids(sortAgentTabs(drafted, "lastDone", keys))[0]).toBe("draft-new");
+    expect(ids(sortAgentTabs(drafted, "native", keys))).toEqual(ids(drafted));
   });
 
   it("orders by the last finished turn, ignoring what is working now or asking", () => {

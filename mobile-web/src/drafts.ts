@@ -71,6 +71,12 @@ export function readDraft(tabId: string, storage?: DraftStorage): string {
   return load(storage ?? localStorage)[tabId]?.text ?? "";
 }
 
+/** Every tab's draft, by tab id — for the tab lists, which lift a tab holding
+ * one and show what it holds (`draftPreview`). */
+export function readDrafts(storage?: DraftStorage): Record<string, string> {
+  return Object.fromEntries(Object.entries(load(storage ?? localStorage)).map(([id, draft]) => [id, draft.text]));
+}
+
 /**
  * Keep this tab's draft — or forget it, which is what an empty field means: a
  * sent message and a cleared one both leave the composer empty, and in both

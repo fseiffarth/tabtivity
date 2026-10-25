@@ -39,9 +39,11 @@ export function scheduleLine(schedules: TabSchedules | undefined, t: Translate):
  *
  * The prompts still to come lead the list: the soonest scheduled ones, each
  * behind a ◷ and the desktop time it fires, so the list reads from what is
- * next down to what was asked last.
+ * next down to what was asked last. A message typed on this phone and not
+ * sent yet comes next, drawn like the newest prompt but with no time — it has
+ * not gone anywhere.
  */
-export function PromptLines({ tab }: { tab: TabRow }) {
+export function PromptLines({ tab, draft }: { tab: TabRow; draft?: string }) {
   const t = useT();
   const lines = promptLines(tab);
   const scheduled = tab.schedules?.upcoming ?? [];
@@ -54,13 +56,16 @@ export function PromptLines({ tab }: { tab: TabRow }) {
         <span className="tab-card-prompt-text">{prompt.text}</span>
       </p>;
     })}
+    {draft && <p className="tab-card-prompt latest draft">
+      <span className="tab-card-prompt-text">{draft}{isUntested("mobile.project.draftLine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+    </p>}
     {lines.length === 0
-      ? <p className="tab-card-prompt empty">{promptsFromTranscript(tab)
+      ? !draft && <p className="tab-card-prompt empty">{promptsFromTranscript(tab)
         ? t("mobile.project.noPromptsRead")
         : t("mobile.project.openCodeHistory")}</p>
       : lines.map((prompt, index) => {
         const when = promptClock(prompt.at);
-        return <p className={index === 0 ? "tab-card-prompt latest" : "tab-card-prompt"} key={`${prompt.at ?? ""}-${index}`}>
+        return <p className={index === 0 && !draft ? "tab-card-prompt latest" : "tab-card-prompt"} key={`${prompt.at ?? ""}-${index}`}>
           {when && <span className="tab-card-prompt-when">{when}</span>}
           <span className="tab-card-prompt-text">{prompt.text}</span>
         </p>;
@@ -94,8 +99,10 @@ export function firstGrapheme(text: string): string {
  * doing (turn time, PLAN/GOAL, worktree, subagents), then what it was asked.
  * Rename, colour and the rest live behind ⋯ (`moreFor`).
  */
-export function TabCard({ tab, statusShown, drag, canReorder, schedulesOffered, swiped, closing, moreOpen, scheduleOpen, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
+export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOffered, swiped, closing, moreOpen, scheduleOpen, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
   tab: TabRow;
+  /** What this phone's composer holds for the tab, unsent (`draftPreview`). */
+  draft?: string;
   /** False once a finished or interrupted tab has been opened here. */
   statusShown: boolean;
   drag: RowDrag;
@@ -187,7 +194,7 @@ export function TabCard({ tab, statusShown, drag, canReorder, schedulesOffered, 
         {...drag.gripProps(tab.id)}
       ><span aria-hidden="true">⠿</span></button>}
     </div>
-    {agent && <PromptLines tab={tab} />}
+    {agent && <PromptLines tab={tab} draft={draft} />}
     {/* The desktop's schedule summary, only when the tab has schedules; the
         upcoming ones are listed with the prompts above. */}
     {schedule && <div className="tab-card-foot">

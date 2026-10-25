@@ -19,6 +19,8 @@ import { ScheduleSheet } from "./ScheduleSheet";
 import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
 import { lastWorkedAt } from "../components/AgentModeMarks";
+import { draftPreview } from "../agentPrompts";
+import { readDrafts } from "../drafts";
 import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
 import { markDoneSeen, markInterruptedSeen, readSeenDone, readSeenInterrupted, showsStatusBadge, withoutResumed, writeSeenInterrupted } from "../seenDone";
 import { OutboxGallery } from "../components/OutboxGallery";
@@ -308,12 +310,23 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const chooseSort = (next: AgentSort) => { setSort(next); writeChoice("projectTabsSort", next); };
   /** The dropdown under the project's name, which picks the order. */
   const [sortMenu, setSortMenu] = useState(false);
+  /** The messages typed here and not sent, by tab — kept on the phone
+   * (`drafts.ts`) and re-read with every load, so a draft left in a session
+   * shows on its card when the reader comes back to this list. */
+  const drafts = useMemo(() => {
+    const stored = readDrafts();
+    return Object.fromEntries((detail?.tabs ?? []).flatMap((tab) => {
+      const preview = tab.kind === "agent" ? draftPreview(stored[tab.id]) : "";
+      return preview ? [[tab.id, preview]] : [];
+    })) as Record<string, string>;
+  }, [detail?.tabs]);
   const tabs = useMemo(() => sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
     decision: tab.agent_status === "question",
     working: tab.agent_status === "working",
+    drafted: tab.id in drafts,
     workingAt: tab.working_at,
     doneAt: lastWorkedAt(tab),
-  })), [detail?.tabs, sort]);
+  })), [detail?.tabs, drafts, sort]);
   // A tab that ran again forgets it was seen interrupted: its next interruption
   // is news.
   useEffect(() => {
@@ -723,6 +736,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     <section className="cards">{tabs.map((tab) => <TabCard
       key={tab.id}
       tab={tab}
+      draft={drafts[tab.id]}
       statusShown={showsStatusBadge(seenDone, seenInterrupted, tab)}
       drag={drag}
       canReorder={canReorder}
