@@ -350,11 +350,12 @@ fn write_box_member_links(folder: &Path, members: &[(String, PathBuf)]) -> std::
         folder,
         "box-links-manifest",
     );
-    let manifest: BoxLinksManifest = if manifest_path.exists() {
-        crate::storage::read_json(&manifest_path).unwrap_or_default()
-    } else {
-        BoxLinksManifest::new()
-    };
+    // A manifest that is there but unreadable (a bad edit, a FIFO, a link) is
+    // an error, never "no owned links": that read would orphan every owned link
+    // (each then counts as foreign) and the rewrite below would drop them all.
+    let manifest: BoxLinksManifest = crate::storage::read_tree_json(&manifest_path)
+        .map_err(std::io::Error::other)?
+        .unwrap_or_default();
 
     // Names in the folder that are NOT ours to (re)use: every entry that is not
     // a manifest-owned symlink. The planner routes members around them.
@@ -855,7 +856,9 @@ pub fn ensure_box_folder(box_id: String) -> Result<ProjectBox, String> {
     // failure here must not block opening the box).
     let members = member_projects(&member_ids);
     let _ = write_box_agent_docs(Path::new(&folder), &name, &members);
-    let _ = write_box_member_links(Path::new(&folder), &members);
+    if let Err(e) = write_box_member_links(Path::new(&folder), &members) {
+        eprintln!("[boxes] member links not refreshed: {e}");
+    }
     Ok(answered)
 }
 
@@ -878,7 +881,9 @@ pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     let members = member_projects(&b.member_ids);
     // Symlinks first, best-effort (the docs-write pattern): a failed link farm
     // must not block the doc refresh, and vice versa.
-    let _ = write_box_member_links(folder, &members);
+    if let Err(e) = write_box_member_links(folder, &members) {
+        eprintln!("[boxes] member links not refreshed: {e}");
+    }
     write_box_agent_docs(folder, &b.name, &members).map_err(|e| e.to_string())
 }
 
@@ -1426,6 +1431,28 @@ mod tests {
             // Second run: same plan, nothing recreated, nothing lost.
             write_box_member_links(&folder, &members).unwrap();
             assert_eq!(fs::read_link(&link).unwrap(), target);
+        }
+
+        /// A manifest that does not parse is refused, never read as "no owned
+        /// links": the owned links stay, nothing is planned around them, and
+        /// the manifest is not rewritten without them.
+        #[test]
+        fn a_corrupt_manifest_is_refused_not_rewritten() {
+            let tmp = tempfile::tempdir().unwrap();
+            let target = tmp.path().join("member");
+            fs::create_dir(&target).unwrap();
+            let folder = tmp.path().join("box");
+            fs::create_dir(&folder).unwrap();
+            let members = vec![("Alpha".to_string(), target.clone())];
+            write_box_member_links(&folder, &members).unwrap();
+
+            let manifest = folder.join(BOX_LINKS_MANIFEST);
+            fs::write(&manifest, b"{\"alpha\": ").unwrap();
+            assert!(write_box_member_links(&folder, &members).is_err());
+            assert_eq!(fs::read(&manifest).unwrap(), b"{\"alpha\": ", "manifest rewritten");
+            assert_eq!(fs::read_link(folder.join("alpha")).unwrap(), target);
+            let names: Vec<_> = fs::read_dir(&folder).unwrap().flatten().map(|e| e.file_name()).collect();
+            assert_eq!(names.len(), 2, "a second link was planned around the owned one: {names:?}");
         }
 
         #[test]

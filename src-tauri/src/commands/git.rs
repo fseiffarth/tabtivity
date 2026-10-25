@@ -6195,14 +6195,8 @@ filename note.txt
     }
 
     /// Functions allowed to read-default-then-write one file: `(file under
-    /// src/, fn, why)`. A3 of the screen fixed the stores; what stays is a file
-    /// that holds nothing of the user's.
-    const READ_DEFAULT_THEN_WRITE_ALLOWED: &[(&str, &str, &str)] = &[(
-        "commands/boxes.rs",
-        "write_box_member_links",
-        "a corrupt links manifest reads as \"no owned links\" on purpose: the folder holds only generated \
-         symlinks, the rewrite self-heals it, and refusing would stop the links ever refreshing",
-    )];
+    /// src/, fn, why)`. A3 of the screen fixed the stores; none is left.
+    const READ_DEFAULT_THEN_WRITE_ALLOWED: &[(&str, &str, &str)] = &[];
 
     #[test]
     fn no_store_reads_a_default_over_a_broken_file_and_writes_it_back() {
