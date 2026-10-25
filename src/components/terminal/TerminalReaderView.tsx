@@ -34,7 +34,7 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { hostTabCwd, type TabEntry } from "../../stores/tabs";
+import { hostTabCwd, hostTabId, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { withAssistantPromptTarget } from "../../lib/assistant";
@@ -1234,6 +1234,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // it) is not.
   const hostDir = useProjectsStore((s) =>
     !tab || localOnly ? null : hostTabCwd(tab, s.projects.find((p) => p.id === projectId)));
+  // The host such a tab runs on, whose copy of the conversation is read.
+  const remoteHost = useProjectsStore((s) =>
+    !tab || localOnly ? null : hostTabId(tab, s.projects.find((p) => p.id === projectId)));
   const pathContext = usePathLinkContext(projectId, tabDir, localOnly);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
@@ -1321,7 +1324,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const stop = watchedReads(async (watch) => {
       const current = tabRef.current;
       if (!current) return false;
-      const args = readerRequest(scope, current, cwd, version.current, limit, undefined, chatId);
+      const args = readerRequest(scope, current, cwd, version.current, limit, undefined, chatId, remoteHost);
       if (!args) {
         setTranscript({ available: false, reason: "no_session", entries: [], truncated: false });
         return false;
@@ -1338,7 +1341,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       cancelled = true;
       stop();
     };
-  }, [visible, scope, cwd, limit, sessionId, chatId, readTick, learnPaths]);
+  }, [visible, scope, cwd, limit, sessionId, chatId, readTick, learnPaths, remoteHost]);
 
   // The open subagent's conversation, read as the session is: at once, then
   // on each change while shown — a subagent still at work keeps writing.
@@ -1349,7 +1352,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const stop = watchedReads(async (watch) => {
       const current = tabRef.current;
       if (!current) return false;
-      const args = readerRequest(scope, current, cwd, subVersion, subLimit, subToken, chatId);
+      const args = readerRequest(scope, current, cwd, subVersion, subLimit, subToken, chatId, remoteHost);
       if (!args) return false;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
@@ -1366,7 +1369,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       cancelled = true;
       stop();
     };
-  }, [visible, scope, cwd, subToken, subLimit, sessionId, chatId, learnPaths]);
+  }, [visible, scope, cwd, subToken, subLimit, sessionId, chatId, learnPaths, remoteHost]);
 
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card

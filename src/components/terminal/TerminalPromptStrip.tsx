@@ -72,7 +72,9 @@ export function TerminalPromptStrip({
    * Diffs switch (`TerminalReaderChanges`), beside the chat or the terminal;
    * `cwd`, the pane's resolved folder, is whose earlier chats the Resume menu
    * lists (`TerminalReaderChats`). */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void }; cwd?: string };
+  /** `onHost`: the tab runs on a remote project's host, whose copy of the
+   * conversation the chat reads. */
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void }; cwd?: string; onHost?: boolean };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -306,6 +308,7 @@ export function TerminalPromptStrip({
               {t("terminal.reader.showTerminal")}
             </button>
             <UntestedTag id="terminal.reader.topbar" />
+            {reader.onHost && <UntestedTag id="terminal.reader.hostTab" />}
           </div>
         ) : <>
         {reader?.changes && (
