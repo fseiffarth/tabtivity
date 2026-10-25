@@ -871,6 +871,19 @@ fn update(id: &str, f: impl FnOnce(&mut Proposal)) -> Option<Proposal> {
     f(p);
     Some(p.clone())
 }
+/// A proposal just staged supersedes the same tab's older still-pending
+/// ones of its kind: their card describes a branch tip the newer one has
+/// replaced, so they are dismissed without the user pressing anything. The
+/// agent polling `git_push_status` sees the dismissal and why.
+fn supersede_older(id: &str) {
+    let mut list = proposals().lock_ok();
+    let Some((tab, kind)) = list.iter().find(|p| p.id == id).map(|p| (p.tab.clone(), p.kind)) else { return };
+    for p in list.iter_mut().filter(|p| p.id != id && p.tab == tab && p.kind == kind && p.status == Status::Pending) {
+        p.status = Status::Dismissed;
+        p.category = Some(Category::Dismissed);
+        p.message = "Superseded by a newer request of this tab.".into();
+    }
+}
 fn get(id: &str) -> Option<Proposal> {
     proposals().lock_ok().iter().find(|p| p.id == id).cloned()
 }
@@ -1047,6 +1060,7 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
             };
         }
     });
+    if staged { supersede_older(&id); }
     changed();
     if staged { return; }
     push_now(&id, &plan, token.as_deref(), &origins);
@@ -1175,6 +1189,7 @@ fn run_release(id: String, requested: Option<String>) {
         p.status = Status::Pending;
         p.message = "Staged for the user's approval; poll git_push_status for the outcome.".into();
     });
+    supersede_older(&id);
     changed();
 }
 
@@ -1300,7 +1315,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
             sanitize_note(args.note)?;
             // Refused as `window_required` below; a refusal costs nothing.
             if keyring_free() { return Ok(()); }
-            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && matches!(p.status, Status::Pending | Status::Running)).count();
+            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && !(p.kind == Kind::Push && p.status == Status::Pending) && matches!(p.status, Status::Pending | Status::Running)).count();
             if pending >= PENDING_LIMIT { return Err(format!("pending_limit: at most {PENDING_LIMIT} pending push requests per tab; cancel one or wait for the user")); }
             if !session.admit_push_rate() { return Err("rate_limited: six push requests per tab per hour".into()); }
             Ok(())
@@ -1310,7 +1325,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
             if let Some(tag) = &args.tag { super::git_release::validate_tag(tag).map_err(|e| format!("invalid_arguments: {e}"))?; }
             sanitize_note(args.note)?;
             if keyring_free() { return Ok(()); }
-            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && matches!(p.status, Status::Pending | Status::Running)).count();
+            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && !(p.kind == Kind::Release && p.status == Status::Pending) && matches!(p.status, Status::Pending | Status::Running)).count();
             if pending >= PENDING_LIMIT { return Err(format!("pending_limit: at most {PENDING_LIMIT} pending requests per tab; cancel one or wait for the user")); }
             if !session.admit_push_rate() { return Err("rate_limited: six push or release requests per tab per hour".into()); }
             Ok(())
@@ -1790,20 +1805,41 @@ mod tests {
     }
 
     #[test]
+    fn a_newly_staged_request_dismisses_the_tabs_older_pending_ones_of_its_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = session("tab:supersede", dir.path());
+        let other = session("tab:supersede-other", dir.path());
+        let (old, release, theirs, new) = (test_proposal(&s, dir.path()), test_proposal(&s, dir.path()), test_proposal(&other, dir.path()), test_proposal(&s, dir.path()));
+        for id in [&old, &release, &theirs, &new] { update(id, |p| p.status = Status::Pending); }
+        update(&release, |p| p.kind = Kind::Release);
+        supersede_older(&new);
+        let status = |id: &str| get(id).unwrap().status;
+        assert_eq!(status(&old), Status::Dismissed);
+        assert_eq!(get(&old).unwrap().category, Some(Category::Dismissed));
+        assert_eq!((status(&release), status(&theirs), status(&new)), (Status::Pending, Status::Pending, Status::Pending));
+        // A pending push never blocks the next push: it is about to be replaced.
+        let call = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_push","arguments":{}}});
+        let again = test_proposal(&s, dir.path());
+        update(&again, |p| p.status = Status::Pending);
+        assert!(admit(&s, &call).is_ok());
+        proposals().lock().unwrap().retain(|p| !p.tab.starts_with("tab:supersede"));
+    }
+
+    #[test]
     fn pending_limit_and_cancel_ownership() {
         let dir = tempfile::tempdir().unwrap();
         let s = session("tab:pending", dir.path());
         let other = session("tab:other", dir.path());
         let a = test_proposal(&s, dir.path());
         let b = test_proposal(&s, dir.path());
-        for id in [&a, &b] { update(id, |p| p.status = Status::Pending); }
+        update(&a, |p| { p.kind = Kind::Release; p.status = Status::Pending; });
+        update(&b, |p| p.status = Status::Running);
         let call = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_push","arguments":{}}});
         assert!(admit(&s, &call).unwrap_err().starts_with("pending_limit"));
         // Another tab cannot withdraw them, the owner can — once.
         assert_eq!(call_cancel(&other, &a).unwrap()["category"], "not_found");
         assert_eq!(call_cancel(&s, &a).unwrap()["status"], "dismissed");
         assert_eq!(call_cancel(&s, &a).unwrap()["category"], "not_found");
-        update(&b, |p| p.status = Status::Running);
         assert_eq!(call_cancel(&s, &b).unwrap()["category"], "busy");
         assert!(admit(&s, &call).is_ok(), "one pending slot is free again");
         proposals().lock().unwrap().retain(|p| p.tab != "tab:pending");
