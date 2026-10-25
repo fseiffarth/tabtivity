@@ -61,7 +61,6 @@ import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/term
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
-import { ReaderSuggestion } from "./ReaderSuggestion";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
@@ -579,9 +578,16 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     editDraft(suggestion.args ? `${suggestion.line} ` : suggestion.line);
     composerRef.current?.focus();
   };
-  const pickSuggestion = () => {
-    editDraft(suggestion);
-    composerRef.current?.focus();
+  /** Claude Code's prompt suggestion, as its own CLI shows it: dimmed in the
+   * empty box (the placeholder), taken into it by Tab or →, so the user still
+   * sends, edits or ignores it. */
+  const shownSuggestion = suggestion && !subagent && !sending ? suggestion : "";
+  const suggestionKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!shownSuggestion || draft || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
+    editDraft(shownSuggestion);
+    caretAt.current = shownSuggestion.length;
+    return true;
   };
   const forgetSlash = (line: string) => {
     forgetSlashCommand(cli, line);
@@ -843,7 +849,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     } else if (!e.nativeEvent.isComposing && actionMatches("readerDictate", shortcutOverrides, e)) {
       e.preventDefault();
       voice.toggle();
-    } else if (slashKey(e)) {
+    } else if (slashKey(e) || suggestionKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
@@ -872,7 +878,6 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   return <>
     <div className="terminal-reader-composer">
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
-      {suggestion && !draft && !subagent && !sending && <ReaderSuggestion text={suggestion} onPick={pickSuggestion} />}
       {chipSlot ? createPortal(chips, chipSlot) : chips}
       {voice.strip}
       <div className={voice.button ? "terminal-reader-input with-mic" : "terminal-reader-input"}>
@@ -880,12 +885,17 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           ref={composerRef}
           value={draft}
           rows={3}
-          placeholder={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
-          aria-label={subagent ? t("terminal.reader.subagentPlaceholder") : t("terminal.reader.placeholder")}
+          placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
+            : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
+            : t("terminal.reader.placeholder")}
+          aria-label={subagent ? t("terminal.reader.subagentPlaceholder")
+            : shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}`
+            : t("terminal.reader.placeholder")}
           onChange={(e) => editDraft(e.target.value, true)}
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
+        {shownSuggestion && !draft && <span className="terminal-reader-suggestion-tag"><UntestedTag id="terminal.reader.promptSuggestion" /></span>}
         {voice.button}
         <button
           type="button"

@@ -5125,7 +5125,7 @@ export const dict: Dict = {
   "terminal.reader.subagent": "Subagente",
   "terminal.reader.placeholder": "Messaggio all'agente — Invio invia, Maiusc+Invio per una nuova riga, ↑ per i messaggi precedenti",
   "terminal.reader.suggestion": "Claude suggerisce",
-  "terminal.reader.suggestionHint": "Riempie il campo del messaggio — non viene inviato nulla finché non invii",
+  "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab o → per usarlo",
   "terminal.reader.subagentPlaceholder": "Messaggio a questo subagente — Invio invia, Maiusc+Invio per una nuova riga, ↑ per i messaggi precedenti",
   "terminal.reader.subagentNotListed": "Non inviato — questo subagente non è più nell'elenco degli agenti di Claude, quindi non può ricevere messaggi. Il tuo testo è ancora qui.",
   "terminal.reader.subagentAmbiguous": "Non inviato — Claude elenca più di un subagente con questa descrizione. Il tuo testo è ancora qui.",
