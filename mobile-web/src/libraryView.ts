@@ -1,5 +1,6 @@
 import { storageKey } from "../../src/lib/brand";
 import type { ProjectFileEntry } from "./api";
+import { readJson, writeJson } from "../../src/lib/persist";
 
 /**
  * How the phone's files library (`FilesLibrary`) lays out a folder: grid or
@@ -36,8 +37,7 @@ type ViewStorage = Pick<Storage, "getItem" | "setItem">;
 
 /** The stored view, field by field: an unknown or missing value takes its default. */
 export function readLibraryView(storage?: ViewStorage): LibraryView {
-  try {
-    const parsed: unknown = JSON.parse((storage ?? localStorage).getItem(KEY) ?? "null");
+  return readJson(KEY, (parsed) => {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ...DEFAULT_LIBRARY_VIEW };
     const value = parsed as Partial<Record<keyof LibraryView, unknown>>;
     const flag = (key: "desc" | "foldersFirst" | "thumbs") =>
@@ -49,18 +49,13 @@ export function readLibraryView(storage?: ViewStorage): LibraryView {
       foldersFirst: flag("foldersFirst"),
       thumbs: flag("thumbs"),
     };
-  } catch {
-    return { ...DEFAULT_LIBRARY_VIEW };
-  }
+  }, { ...DEFAULT_LIBRARY_VIEW }, storage);
 }
 
 export function writeLibraryView(view: LibraryView, storage?: ViewStorage): void {
-  try {
-    const { layout, sort, desc, foldersFirst, thumbs } = view;
-    (storage ?? localStorage).setItem(KEY, JSON.stringify({ layout, sort, desc, foldersFirst, thumbs }));
-  } catch {
-    // A private browser may refuse storage; the choice then lasts this visit.
-  }
+  // A private browser may refuse storage; the choice then lasts this visit.
+  const { layout, sort, desc, foldersFirst, thumbs } = view;
+  writeJson(KEY, { layout, sort, desc, foldersFirst, thumbs }, storage);
 }
 
 /** What a tile draws: a folder, a picture, a PDF, a text, or a file. */

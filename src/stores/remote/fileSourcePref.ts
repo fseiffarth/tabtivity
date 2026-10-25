@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ConnState } from "./remoteStatus";
+import { cappedMap, readJson, writeJson } from "../../lib/persist";
 import { storageKey } from "../../lib/brand";
 
 /** Which side of a remote project a file view is showing. */
@@ -34,37 +35,25 @@ export function fileSourceSettled(ssh: ConnState | undefined): boolean {
 }
 
 function readPersisted(): Record<string, FileSourceSide> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
+  return readJson(STORAGE_KEY, (parsed) => {
     const out: Record<string, FileSourceSide> = {};
+    if (!parsed || typeof parsed !== "object") return out;
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       if (v === "local" || v === "remote") out[k] = v;
     }
     return out;
-  } catch {
-    return {};
-  }
+  }, {});
 }
 
 /** Merge one project's choice into the persisted map. Re-reads first, so two
  *  windows (main + a popout share one origin, hence one localStorage) can't
- *  clobber each other's rows with a stale in-memory snapshot. */
+ *  clobber each other's rows with a stale in-memory snapshot. Without
+ *  localStorage the choice still holds for this session. */
 function persistChoice(projectId: string, source: FileSourceSide) {
-  try {
-    const stored = readPersisted();
-    delete stored[projectId]; // re-insert last, so the cap drops the oldest
-    stored[projectId] = source;
-    const keys = Object.keys(stored);
-    const kept = keys.length > MAX_PERSISTED ? keys.slice(keys.length - MAX_PERSISTED) : keys;
-    const out: Record<string, FileSourceSide> = {};
-    for (const k of kept) out[k] = stored[k];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
-  } catch {
-    // localStorage unavailable — the choice still holds for this session.
-  }
+  const stored = readPersisted();
+  delete stored[projectId]; // re-insert last, so the cap drops the oldest
+  stored[projectId] = source;
+  writeJson(STORAGE_KEY, cappedMap(stored, MAX_PERSISTED));
 }
 
 /**

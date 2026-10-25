@@ -6,6 +6,7 @@
 // tab switch, so "hide done" was being asked for again a dozen times a session.
 
 import { storageKey } from "../../src/lib/brand";
+import { readJson, writeJson } from "../../src/lib/persist";
 
 const PREFIX = storageKey("mobile.");
 
@@ -126,22 +127,12 @@ const ORDER_CAP = 200;
  * array of strings (a hand-edited value, a half-written entry) is read as that
  * same empty list rather than being trusted into the sort. */
 export function readOrder(name: MobileIdList, storage?: FlagStorage): string[] {
-  try {
-    const stored = (storage ?? localStorage).getItem(`${PREFIX}${name}`);
-    if (!stored) return [];
-    const parsed: unknown = JSON.parse(stored);
-    return Array.isArray(parsed) && parsed.every((id): id is string => typeof id === "string") ? parsed : [];
-  } catch {
-    return [];
-  }
+  return readJson(`${PREFIX}${name}`, (parsed) =>
+    Array.isArray(parsed) && parsed.every((id): id is string => typeof id === "string") ? parsed : [], [], storage);
 }
 
 export function writeOrder(name: MobileIdList, ids: readonly string[], storage?: FlagStorage): void {
-  try {
-    (storage ?? localStorage).setItem(`${PREFIX}${name}`, JSON.stringify(ids.slice(0, ORDER_CAP)));
-  } catch {
-    // See readFlag.
-  }
+  writeJson(`${PREFIX}${name}`, ids.slice(0, ORDER_CAP), storage);
 }
 
 /** Which output view a terminal opens in: whatever the reader last chose for
