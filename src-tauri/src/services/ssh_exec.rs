@@ -1140,14 +1140,16 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
 /// pane, only while a row of its screen starts with `row_start` and holds
 /// `words` — the CLI saying a message still waits in its queue. Check and
 /// press are one script on the host, so no ssh round trip falls between
-/// them; shell builtins and tmux only. Prints `sent` when it pressed. `None`
+/// them; shell builtins and tmux only. The match runs byte-wise (`LC_ALL=C`):
+/// macOS's bash 3.2 `sh` never matches a quoted multibyte char (the prompt's
+/// `❯`) against a pattern in a UTF-8 locale. Prints `sent` when it pressed. `None`
 /// for an invalid name, or a hint that could break out of its quotes.
 pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str) -> Option<String> {
     let quotable = |text: &str| !text.chars().any(|c| matches!(c, '\'' | '"' | '\\' | '$' | '`') || c.is_control());
     (valid_tmux_session_name(session) && quotable(row_start) && quotable(words)).then(|| {
         host_sh(&format!(
             "{HOST_TMUX_EXACT}t=\"$e\"{session}\"$c\"; \
-             q=$(tmux -u capture-pane -p -J -t \"$t\" | while IFS= read -r l; do case \"$l\" in \"{row_start}\"*\"{words}\"*) echo 1;; esac; done); \
+             q=$(tmux -u capture-pane -p -J -t \"$t\" | (LC_ALL=C; while IFS= read -r l; do case \"$l\" in \"{row_start}\"*\"{words}\"*) echo 1;; esac; done)); \
              [ -n \"$q\" ] && tmux send-keys -t \"$t\" Escape && echo sent"
         ))
     })
@@ -2368,6 +2370,8 @@ mod tests {
                 "case \"$1 $2\" in \"-u capture-pane\") printf '%s\\n' '{screen}';; \"send-keys \"*) shift; echo \"pressed $*\";; esac"
             );
             let out = run_host_script(&script, Some(("3.6", &body)));
+            // Shown only when the test fails.
+            eprintln!("stderr: {}", String::from_utf8_lossy(&out.stderr));
             String::from_utf8_lossy(&out.stdout).trim().to_string()
         };
         let queued = run("✻ Pondering… (9s)\n───\n❯ Press up to edit queued messages\n───");
