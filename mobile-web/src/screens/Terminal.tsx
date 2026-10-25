@@ -159,6 +159,7 @@ import { SignInSheet } from "./SignInSheet";
 import { copiedSignIn, hasSignInTab, osc52Text, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, signInPageKeys, type SignIn, type SignInPage } from "../terminal/signIn";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
+import { ChatChanges } from "../components/ChatChanges";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
 import {
   onDeviceSpeechAsked,
@@ -1342,6 +1343,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * Focus reads from, the stored session or the screen. A dimmed Session row
    * says why it cannot be read — a phone shows no tooltip. */
   const [focusMenu, setFocusMenu] = useState(false);
+  /** The Diffs view (`ChatChanges`) over the chat or the terminal, picked in
+   * the view pill's list like the desktop's Diffs tab; never remembered. */
+  const [diffsOpen, setDiffsOpen] = useState(false);
   /** The project's name while the desktop's "Project files on the phone"
    * switch is on for it (`detail.files`) — null while off, or unknown. */
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
@@ -1409,6 +1413,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
 
   useEffect(() => {
     setView(subagentTab.current === tab.id ? "focus" : initialView(tab));
+    setDiffsOpen(false);
     viewChosen.current = readTerminalView(viewAgentOf(tab)) !== null;
     // The draft is the tab's, not the screen's: this tab's own half-typed
     // message, which is nothing at all for most of them (`drafts.ts`).
@@ -4074,6 +4079,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const chat = tab.kind === "agent";
   /** What the non-terminal view is called: a chat on an agent tab. */
   const focusLabel = chat ? "mobile.focus.chat" : "mobile.focus.reader";
+  /** The Diffs view: an agent tab of a scope with a folder, on this machine
+   * (`GET /tabs/{id}/changes` refuses Tabby's chats and host tabs). */
+  const diffsOffered = chat && !bare && !tab.on_host;
+  const diffsShown = diffsOpen && diffsOffered;
   /** The live screen after the last prompt echo — what the session is
    * drawing right now. Shown under the stored session while it holds a
    * choice the session is waiting on, which the transcript cannot carry. */
@@ -4611,17 +4620,29 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         aria-expanded={focusMenu}
         title={t("mobile.focus.outputView")}
         onClick={() => setFocusMenu((open) => !open)}
-      >{t(view === "terminal" ? "mobile.focus.terminal" : focusLabel)}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
+      >{t(diffsShown ? "terminal.reader.changes" : view === "terminal" ? "mobile.focus.terminal" : focusLabel)}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
     {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
-        {([["focus", focusLabel], ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => <button key={choice} role="menuitemradio" aria-checked={view === choice} onClick={() => {
-          setFocusMenu(false);
-          if (view !== choice) chooseView(choice);
-        }}>
-          <span><strong>{t(label)}</strong></span>
-          {view === choice && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
-        </button>)}
-        {chat && view === "focus" && <>
+        {/* Chat / Diffs / Terminal, in the desktop's order. */}
+        {([["focus", focusLabel], ...(diffsOffered ? [["diffs", "terminal.reader.changes"] as const] : []), ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => {
+          const checked = choice === "diffs" ? diffsShown : view === choice && !diffsShown;
+          return <button key={choice} role="menuitemradio" aria-checked={checked} onClick={() => {
+            setFocusMenu(false);
+            if (choice === "diffs") {
+              setDiffsOpen(true);
+              return;
+            }
+            setDiffsOpen(false);
+            if (view !== choice) chooseView(choice);
+          }}>
+            <span>
+              <strong>{t(label)}{choice === "diffs" && isUntested("mobile.focus.diffs") && <em>{t("mobile.focus.untested")}</em>}</strong>
+              {choice === "diffs" && <small>{t("mobile.focus.diffsHint")}</small>}
+            </span>
+            {checked && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+          </button>;
+        })}
+        {chat && view === "focus" && !diffsShown && <>
         <hr className="focus-menu-rule" />
         {/* Dimmed when the stored session cannot be read (an agent whose
             transcript Tabtivity does not read, no session id yet); the row then
@@ -4679,6 +4700,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     <div className="terminal-body">
       <div ref={host} className={`terminal${view === "focus" ? " focus-source" : ""}`} />
       <div ref={wideHint} className="terminal-wide-hint" aria-hidden="true" />
+      {diffsShown && <ChatChanges tabId={tab.id} subagent={view === "focus" ? openStep?.token : undefined}
+        subagentTitle={openStep?.task || openStep?.role} visible onClose={() => setDiffsOpen(false)} />}
       {/* The stored session does not depend on the screen, so a full-screen
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionShown && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span>{openCode && !transcript?.available && <span>{t("mobile.focus.openCodeMini")}</span>}{tab.kind === "agent" && transcript?.available && <button onClick={() => setFocusSource("session")}>{t("mobile.focus.sessionHint")}</button>}<button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}

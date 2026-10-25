@@ -31,6 +31,7 @@ use super::{
     admin,
     alarms,
     auth::AuthStore,
+    chat_changes,
     chat_uncommitted,
     config::{verify_tailscale_serve, HostConfig},
     discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
@@ -4281,6 +4282,69 @@ async fn tab_uncommitted(
     (StatusCode::OK, Json(json!(answer)))
 }
 
+/// `?version=` is the fingerprint the phone last saw, `?subagent=` the handle
+/// of the subagent whose changes are read, `?limit=` how many of the newest.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ChangesQuery {
+    version: Option<String>,
+    limit: Option<usize>,
+    subagent: Option<String>,
+}
+
+/// `GET /api/v1/tabs/{tab_id}/changes` — the diffs the agent tab's
+/// conversation (or `subagent`'s) recorded, for the chat screen's Diffs view
+/// (`chat_changes`). File content, so behind the "Project files on the phone"
+/// switch like the file library; answered here, window open or not, from the
+/// CLI's own transcript. Read-only; paths cross checkout-relative.
+async fn tab_changes(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<ChangesQuery>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !files::files_open(&state.config.state_dir) {
+        return api_error(StatusCode::NOT_FOUND, "files_off");
+    }
+    if query
+        .subagent
+        .as_deref()
+        .is_some_and(|token| !crate::services::agent_transcript::is_subagent_token(token))
+    {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_subagent");
+    }
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = snapshot.tab(&tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if let Err(error) = has_folder(project) {
+        return error;
+    }
+    if tab.public.kind != "agent" {
+        return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
+    }
+    if let Err(error) = not_on_host(tab) {
+        return error;
+    }
+    let raw_id = project.raw_id.clone();
+    let roots = if project.roots.is_empty() { vec![project.root.clone()] } else { project.roots.clone() };
+    let tab = tab.clone();
+    let Ok(answer) = tokio::task::spawn_blocking(move || {
+        chat_changes::for_tab(&raw_id, &roots, &tab, query.subagent.as_deref(), query.version.as_deref(), query.limit)
+    })
+    .await
+    else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed");
+    };
+    (StatusCode::OK, Json(json!(answer)))
+}
+
 /// A transcript as the phone may see it: the shell commands the desktop
 /// Reader shows beside its working row are command lines, and the folders the
 /// agent and its subagents work in are paths, neither of which crosses the
@@ -7183,6 +7247,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/status", get(agent_status))
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
+        .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/terminal", get(terminal))
         // The phone's drop box takes a whole photo; every other body stays at
         // the control-message limit below (the inner layer wins).
@@ -8053,6 +8118,7 @@ mod tests {
         "/api/v1/tabs/anything/schedules",
         "/api/v1/tabs/anything/transcript",
         "/api/v1/tabs/anything/uncommitted",
+        "/api/v1/tabs/anything/changes",
         "/api/v1/projects/anything/prompts",
         "/api/v1/tabs/anything/desktop-images",
         "/api/v1/tabs/anything/markup/questions",
@@ -9414,6 +9480,7 @@ mod tests {
             // Repository.
             ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
             ("GET", format!("/api/v1/tabs/{t}/uncommitted"), Value::Null, &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/changes"), Value::Null, &["not_a_project", "files_off"]),
             // Files drawer and uploads.
             ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),

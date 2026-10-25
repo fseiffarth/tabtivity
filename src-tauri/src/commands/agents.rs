@@ -1797,8 +1797,8 @@ pub fn agent_transcript_unwatch(watch_id: String) {
 
 /// The files the tab's conversation — or `subagent`'s — changed, as the
 /// diffs its CLI recorded (`services::agent_changes`): the desktop Reader's
-/// Changes panel. Takes `agent_tab_transcript`'s arguments; never reaches
-/// the phone.
+/// Diffs tab. Takes `agent_tab_transcript`'s arguments; the phone reads the
+/// same through `mobile_control::chat_changes`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_changes(

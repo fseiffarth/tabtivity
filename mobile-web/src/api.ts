@@ -1024,6 +1024,55 @@ export async function getUncommitted(tabId: string, signal?: AbortSignal): Promi
   }
 }
 
+/** One file one call of the chat changed, as the diff its CLI recorded:
+ * unified-diff hunks, each opened by its `@@` line. `path` (and `moved_to`)
+ * is relative to its checkout; `worktree` names a linked worktree (or a box
+ * member's folder) it is in, never by path. */
+export interface ChatChange {
+  path: string;
+  worktree?: TabWorktree;
+  kind: "edit" | "add" | "delete" | "write";
+  diff: string;
+  added: number;
+  removed: number;
+  at?: string;
+  cut?: boolean;
+  moved_to?: string;
+}
+/** The Diffs view's feed. `outside` counts changes to files in no checkout
+ * of the project (left out). `available: false` with `reason` — `files_off`
+ * while the desktop's "Project files on the phone" switch is off. */
+export interface ChatChanges {
+  available: boolean;
+  reason?: string;
+  version?: string;
+  unchanged?: boolean;
+  changes: ChatChange[];
+  truncated: boolean;
+  outside?: number;
+}
+
+/** `GET /api/v1/tabs/{id}/changes` — the diffs the chat (or `subagent`'s
+ * conversation) recorded; `version` as `getTranscript`'s. The route sits
+ * behind the "Project files on the phone" switch: refused as `files_off`, it
+ * answers unavailable with that reason; a host older than the route (a
+ * bodiless 404) as `unsupported`. */
+export async function getChanges(tabId: string, version?: string, subagent?: string, signal?: AbortSignal): Promise<ChatChanges> {
+  const query = new URLSearchParams();
+  if (version) query.set("version", version);
+  if (subagent) query.set("subagent", subagent);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  try {
+    const body = await api<Partial<ChatChanges>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/changes${suffix}`, { signal });
+    return { ...body, available: body.available === true, changes: body.changes ?? [], truncated: body.truncated === true };
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && (reason.code === "files_off" || reason.code === "request_failed")) {
+      return { available: false, reason: reason.code === "files_off" ? "files_off" : "unsupported", changes: [], truncated: false };
+    }
+    throw reason;
+  }
+}
+
 /** A file the phone dropped into the tab's project inbox. `reference` is
  * project-relative (`.tabtivity/inbox/<file>`) — the one path shape that crosses
  * this boundary, because it carries no host component and is exactly what the

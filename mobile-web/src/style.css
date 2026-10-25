@@ -812,6 +812,37 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .focus-menu small { color:#98a0b4; font-size:.8rem; overflow-wrap:anywhere; }
 .focus-menu svg { width:19px; height:19px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .terminal-body { position:relative; min-height:0; overflow:hidden; }
+/* The Diffs view (components/ChatChanges): over the chat or the terminal,
+   the readable stream's ground; its head is the chat strip's. */
+.readable-output.chat-changes { z-index:3; }
+.chat-changes-head { align-items:center; }
+.chat-changes-title { display:grid; flex:1 1 auto; gap:1px; min-width:0; }
+.chat-changes-title strong { font-size:.85rem; }
+.chat-changes-title em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+.chat-changes-title small { color:var(--ink-muted); font-size:.72rem; }
+.chat-changes-head select { flex:0 1 46%; width:auto; padding:6px 30px 6px 9px; font-size:.78rem; background-position:right 10px center; }
+.chat-changes-close { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; background:transparent; }
+.chat-changes-close svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
+.chat-changes-scope { display:block; margin:0 0 8px; color:var(--ink-muted); font-size:.75rem; }
+.chat-changes-list { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.chat-change { min-width:0; border:1px solid #2c3a55; border-radius:10px; background:#151b28; overflow:hidden; }
+.chat-change.fresh { border-color:#6c5ce7; }
+.chat-change-head { display:grid; gap:3px; width:100%; padding:9px 11px; border:0; border-radius:0; background:transparent; color:#dbe4f6; text-align:left; }
+.chat-change-path { display:flex; gap:6px; align-items:baseline; min-width:0; }
+.chat-change-path em { flex:0 0 auto; color:#8fb8ff; font-size:.64rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+.chat-change-path strong { min-width:0; font-size:.82rem; font-weight:600; overflow-wrap:anywhere; }
+.chat-change-head small { color:var(--ink-muted); font-size:.72rem; }
+.chat-change-head small i { color:#a99cf0; font-style:normal; }
+.chat-change-head .add, .chat-diff-line.add span { color:#56d364; }
+.chat-change-head .del, .chat-diff-line.del span { color:#f8817a; }
+.chat-change-diff { display:grid; padding:0 0 6px; border-top:1px solid #262a3a; font:400 .75rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-x:auto; }
+.chat-diff-line { display:flex; min-width:0; }
+.chat-diff-line span { flex:0 0 auto; width:4ch; padding-right:6px; color:#5d6479; text-align:right; -webkit-user-select:none; user-select:none; }
+.chat-diff-line code { flex:1; min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.chat-diff-line.add { background:rgba(63,185,80,.14); }
+.chat-diff-line.del { background:rgba(248,81,73,.14); }
+.chat-diff-line.note { padding:4px 8px; color:#8a91a6; background:#10131b; }
+.chat-change-note { display:block; padding:6px 10px 0; color:var(--ink-muted); font-size:.72rem; }
 /* tmux sizes a window to its widest client, so the phone's emulator is a
    desktop-width screen (see terminal/wideOutput.ts). Terminal view pans across
    it, and across the rows below the fold, on both axes — `touch-action:none`
