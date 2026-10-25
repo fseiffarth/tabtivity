@@ -7,7 +7,7 @@ import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uplo
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
-import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS, tabColorCss } from "../tabColors";
+import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { useThumb } from "../thumbs";
@@ -805,7 +805,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           {TAB_COLOR_IDS.map((id) => <button key={id} type="button" className={`tab-color-chip${current === id ? " is-current" : ""}`} aria-pressed={current === id}
             onClick={() => setFolderColor(placeId, place, id)}>
             <span className="tab-color-chip-dot" style={{ background: TAB_COLORS[id] }} aria-hidden="true" />
-            {TAB_COLOR_LABELS[id] ? t(TAB_COLOR_LABELS[id]) : id}
+            {t(`tabColor.${id}`)}
           </button>)}
         </div>
         <div className="mobile-schedule-form">

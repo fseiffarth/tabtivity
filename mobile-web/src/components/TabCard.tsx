@@ -3,7 +3,7 @@ import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "
 import type { TabRow, TabSchedules } from "../api";
 import { type FileTab } from "../filesPlace";
 import type { RowDrag } from "../rowDrag";
-import { tabColorCss } from "../tabColors";
+import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { AgentStatusMark } from "./AgentStatusPill";

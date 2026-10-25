@@ -5,7 +5,7 @@ import { readDrafts } from "../drafts";
 import { ApiError, getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
 import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass, lastWorkedAt } from "../components/AgentModeMarks";
-import { tabColorCss } from "../tabColors";
+import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";

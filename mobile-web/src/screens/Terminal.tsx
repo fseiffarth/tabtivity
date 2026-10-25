@@ -179,17 +179,10 @@ import {
 import { startDictation, type DictationSession } from "../voiceSession";
 import { usePenWriting } from "../penWriting";
 import { speak, speechOutputSupported, stopSpeaking, unlockSpeech } from "../speechOutput";
-import { spokenSend, spokenText } from "../../../shared/voice";
+import { paintMicLevel, spokenSend, spokenText } from "../../../shared/voice";
 
 /** A line the dictation strip shows: a key, not a sentence, so switching the
  * language retranslates what is already on screen. */
-/** The microphone's level goes straight onto the dictate button as a CSS
- * variable: it changes a dozen times a second, and nothing else reads it. */
-function paintMicLevel(button: HTMLElement | null, level: number | null) {
-  if (level === null) button?.style.removeProperty("--mic-level");
-  else button?.style.setProperty("--mic-level", level.toFixed(2));
-}
-
 type VoiceNote = { key: TranslationKey; language?: string };
 const PING_INTERVAL = 20_000;
 /** Floor between two rebuilds of the reading view. */
