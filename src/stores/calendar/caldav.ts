@@ -120,6 +120,8 @@ export function isCalDavConflict(err: unknown): boolean {
 interface CalDavStore {
   accounts: CalDavAccount[];
   loaded: boolean;
+  /** Why the last (re)load failed; the accounts shown are then the last good copy. */
+  loadError: string | null;
   /** Keyed by collection href. */
   status: Record<string, CalDavSyncStatus>;
   /** Unanswered conflicts, newest last. Empty is the normal state. */
@@ -390,9 +392,13 @@ function markDirty(kind: "event" | "task", rowId: string): void {
   );
 }
 
+/** Latest `reload` — an answer from an older one is dropped. */
+let reloadSeq = 0;
+
 export const useCalDavStore = create<CalDavStore>((set, get) => ({
   accounts: [],
   loaded: false,
+  loadError: null,
   status: {},
   conflicts: [],
   deferred: [],
@@ -404,12 +410,20 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
   },
 
   reload: async () => {
-    const answer = await caldavAccountsList().catch(() => []);
-    // A rejected invoke is not the only way this can arrive empty-handed: a
-    // bridge that resolves with nothing (an older backend, a stubbed one) hands
-    // back `null`, and storing that turns every reader's `.filter` into a
+    const seq = ++reloadSeq;
+    let answer: CalDavAccount[];
+    try {
+      answer = await caldavAccountsList();
+    } catch (error) {
+      // A failed read is not "no accounts": keep what is shown.
+      if (seq === reloadSeq) set({ loadError: String(error instanceof Error ? error.message : error) });
+      return;
+    }
+    if (seq !== reloadSeq) return;
+    // A bridge that resolves with nothing (an older backend, a stubbed one)
+    // hands back `null`, and storing that turns every reader's `.filter` into a
     // crash. "No accounts" is the honest reading of an answer that names none.
-    set({ accounts: Array.isArray(answer) ? answer : [], loaded: true });
+    set({ accounts: Array.isArray(answer) ? answer : [], loaded: true, loadError: null });
   },
 
   upsert: async (account, password, remember) => {

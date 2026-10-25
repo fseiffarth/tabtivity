@@ -272,6 +272,7 @@ export class WsClient {
       } catch {
         return;
       }
+      if (typeof frame !== "object" || frame === null) return;
       switch (frame.t) {
         case "hello": {
           const protocol = frame.protocol ?? 0;

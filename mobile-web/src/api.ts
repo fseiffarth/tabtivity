@@ -605,7 +605,9 @@ export async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUE
   if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   // A truncated body on a 200 used to become `{}` and reach callers as `T`,
   // which then read `undefined.map` and white-screened the whole app.
-  if (body === undefined) throw new ApiError(response.status, "malformed_response");
+  // Valid JSON that is no object (`null`, a number) is the same: callers read
+  // fields off `T`.
+  if (typeof body !== "object" || body === null) throw new ApiError(response.status, "malformed_response");
   return body as T;
 }
 

@@ -69,6 +69,8 @@ function stripBoxIds<T extends { id: string }>(projects: T[]): T[] {
 interface BoxesStore {
   boxes: ProjectBox[];
   loaded: boolean;
+  /** Why the last load failed; the boxes shown are then the last good copy. */
+  loadError: string | null;
   /** Load boxes; strips any stale persisted `box_id` off the in-memory projects. */
   load: () => Promise<void>;
   createBox: (name: string) => Promise<ProjectBox>;
@@ -186,13 +188,26 @@ async function persistBoxPatch(boxId: string, before: ProjectBox, patch: BoxPatc
   }
 }
 
+/** Latest `load` — an answer from an older one is dropped. */
+let loadSeq = 0;
+
 export const useBoxesStore = create<BoxesStore>((set, get) => ({
   boxes: [],
   loaded: false,
+  loadError: null,
 
   load: async () => {
-    const boxes = await invoke<ProjectBox[]>("get_boxes").catch(() => [] as ProjectBox[]);
-    set({ boxes, loaded: true });
+    const seq = ++loadSeq;
+    let boxes: ProjectBox[];
+    try {
+      boxes = await invoke<ProjectBox[]>("get_boxes");
+    } catch (error) {
+      // A failed read is not "no boxes": keep what is shown.
+      if (seq === loadSeq) set({ loadError: String(error instanceof Error ? error.message : error) });
+      return;
+    }
+    if (seq !== loadSeq) return;
+    set({ boxes, loaded: true, loadError: null });
     // Membership is `member_ids`-only now. Strip any stale persisted `box_id`
     // off the in-memory projects (no write here; the next save_projects drops
     // the keys from disk).

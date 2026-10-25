@@ -84,6 +84,18 @@ describe("Mobile activity list — what it says when it cannot answer", () => {
     expect(onConnection).toHaveBeenLastCalledWith("desktop_down");
   });
 
+  it("keeps the last good list when an answer carries no tab list", async () => {
+    answer([tab("Claude", "done")]);
+    render(<Activity open={() => {}} onConnection={() => {}} />);
+    await screen.findByText("Claude");
+
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ desktop_available: true }), { status: 200 }));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("Showing the last list this session loaded.")).toBeTruthy());
+    expect(screen.getByText("Claude")).toBeTruthy();
+  });
+
   it("distinguishes the desktop being closed from nothing happening", async () => {
     answer([], false);
     const { unmount } = render(<Activity open={() => {}} onConnection={() => {}} />);

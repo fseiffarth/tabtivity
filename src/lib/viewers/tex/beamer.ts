@@ -198,7 +198,7 @@ export function parseOverlayCommandAt(text: string, at: number): OverlayCommandA
   const m = /^\\([A-Za-z]+)</.exec(text.slice(at, at + 24));
   if (!m) return null;
   const cmd = m[1] as BeamerOverlayCommand;
-  if (!(cmd in BEAMER_ARITY)) return null;
+  if (!Object.prototype.hasOwnProperty.call(BEAMER_ARITY, cmd)) return null;
   const spec = overlaySpecAt(text, at + m[0].length - 1);
   if (!spec) return null;
   const args: Array<{ start: number; end: number }> = [];

@@ -60,6 +60,10 @@ interface AgentSchedulesStore {
   refreshLoaded: () => Promise<void>;
 }
 
+/** Per cache key: bumped each time a write stores a list, so a `list` that left
+ *  before it cannot paint its older answer over it. */
+const writeEpoch = new Map<string, number>();
+
 export const useAgentSchedulesStore = create<AgentSchedulesStore>((set, get) => ({
   byTarget: {},
   loading: {},
@@ -67,11 +71,13 @@ export const useAgentSchedulesStore = create<AgentSchedulesStore>((set, get) => 
   load: async (projectId, scheduleTargetId) => {
     const key = scheduleCacheKey(projectId, scheduleTargetId);
     set((state) => ({ loading: { ...state.loading, [key]: true } }));
+    const epoch = writeEpoch.get(key) ?? 0;
     try {
       const schedules = await invoke<ScheduledAgentPrompt[]>("agent_schedules_list", {
         projectId,
         scheduleTargetId,
       });
+      if ((writeEpoch.get(key) ?? 0) !== epoch) return get().byTarget[key] ?? schedules;
       set((state) => ({ byTarget: { ...state.byTarget, [key]: schedules } }));
       return schedules;
     } finally {
@@ -89,6 +95,7 @@ export const useAgentSchedulesStore = create<AgentSchedulesStore>((set, get) => 
       ...(opts?.expectExistingOn ? { expectExistingOn: opts.expectExistingOn } : {}),
     });
     const key = scheduleCacheKey(projectId, scheduleTargetId);
+    writeEpoch.set(key, (writeEpoch.get(key) ?? 0) + 1);
     set((state) => ({ byTarget: { ...state.byTarget, [key]: schedules } }));
     void persistScopeLayout(projectId);
     return schedules;
@@ -102,6 +109,7 @@ export const useAgentSchedulesStore = create<AgentSchedulesStore>((set, get) => 
       ...(opts?.expectUndelivered ? { expectUndelivered: true } : {}),
     });
     const key = scheduleCacheKey(projectId, scheduleTargetId);
+    writeEpoch.set(key, (writeEpoch.get(key) ?? 0) + 1);
     set((state) => ({
       byTarget: {
         ...state.byTarget,

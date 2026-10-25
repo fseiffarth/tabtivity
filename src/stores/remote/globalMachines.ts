@@ -61,6 +61,8 @@ interface GlobalMachinesStore {
    *  failure) so it survives until the next real attempt. */
   errors: Record<string, string>;
   loaded: boolean;
+  /** Why the last load failed; the machines shown are then the last good copy. */
+  loadError: string | null;
 
   load: () => Promise<void>;
   add: (m: {
@@ -179,18 +181,31 @@ interface GlobalMachinesStore {
   setStatus: (id: string, status: ConnState) => void;
 }
 
+/** Latest `load` — an answer from an older one is dropped. */
+let loadSeq = 0;
+
 export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => ({
   machines: [],
   status: {},
   reachable: {},
   errors: {},
   loaded: false,
+  loadError: null,
 
   load: async () => {
-    // `.catch` only covers a rejection — a command that resolves to nothing must
-    // not leave `machines` non-iterable, since every consumer maps over it.
-    const list = await invoke<GlobalMachine[]>("global_machines_list").catch(() => []);
-    set({ machines: Array.isArray(list) ? list : [], loaded: true });
+    const seq = ++loadSeq;
+    let list: GlobalMachine[];
+    try {
+      list = await invoke<GlobalMachine[]>("global_machines_list");
+    } catch (error) {
+      // A failed read is not "no machines": keep what is shown.
+      if (seq === loadSeq) set({ loadError: String(error instanceof Error ? error.message : error) });
+      return;
+    }
+    if (seq !== loadSeq) return;
+    // A command that resolves to nothing must not leave `machines`
+    // non-iterable, since every consumer maps over it.
+    set({ machines: Array.isArray(list) ? list : [], loaded: true, loadError: null });
   },
 
   add: async ({ user, host, port, label, password, remember }) => {

@@ -29,6 +29,14 @@ describe(`${BRAND.display} Mobile API client`, () => {
     await expect(api("/api/v1/projects")).rejects.toMatchObject({ code: "malformed_response" });
   });
 
+  it("rejects a 200 whose body is valid JSON but no object", async () => {
+    // `null` reached callers as `T` and was dereferenced there.
+    for (const body of ["null", "5", "\"ok\"", "true"]) {
+      respondWith(body, { status: 200 });
+      await expect(api("/api/v1/projects")).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+
   it("returns a parsed body on success", async () => {
     respondWith(JSON.stringify({ projects: [] }), { status: 200 });
     await expect(api<{ projects: unknown[] }>("/api/v1/projects")).resolves.toEqual({ projects: [] });

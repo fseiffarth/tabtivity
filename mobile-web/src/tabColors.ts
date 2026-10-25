@@ -42,5 +42,5 @@ export const TAB_COLOR_LABELS: Record<string, TranslationKey> = {
 /** The CSS a published colour renders as, or `undefined` for an uncoloured tab
  *  (and for an id from a newer desktop than this bundle). */
 export function tabColorCss(value: string | undefined | null): string | undefined {
-  return value && value in TAB_COLORS ? TAB_COLORS[value] : undefined;
+  return value && Object.prototype.hasOwnProperty.call(TAB_COLORS, value) ? TAB_COLORS[value] : undefined;
 }

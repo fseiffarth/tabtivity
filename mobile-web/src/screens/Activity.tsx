@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { draftPreview, lastPrompt } from "../agentPrompts";
 import { readDrafts } from "../drafts";
-import { getActivity, type ActivityTab } from "../api";
+import { ApiError, getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
 import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass, lastWorkedAt } from "../components/AgentModeMarks";
 import { tabColorCss } from "../tabColors";
@@ -111,6 +111,8 @@ export function Activity({ open, onConnection }: {
       void getActivity(controller.signal)
         .then((body) => {
           if (disposed) return;
+          // An answer with no list is a failed one: keep the last good list.
+          if (!Array.isArray(body.tabs)) throw new ApiError(200, "malformed_response");
           setTabs(body.tabs);
           setNow(Date.now());
           setDesktop(body.desktop_available);

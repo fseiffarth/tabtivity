@@ -1984,6 +1984,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         } catch {
           return;
         }
+        if (typeof control !== "object" || control === null) return;
         if (control.type === "pong") {
           lastPong = Date.now();
           pongs += 1;

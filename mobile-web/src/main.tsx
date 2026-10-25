@@ -9,7 +9,18 @@ import "./style.css";
 import "./themes.css";
 import { applyPhoneTheme } from "./theme";
 import { rememberPushLanguage } from "./pushTitles";
+import { hardenPrototype } from "../../src/lib/hardenPrototype";
+import { traceConnect } from "./api";
 
+hardenPrototype();
+// An uncaught error or a rejection nobody awaited is otherwise invisible on a
+// phone; the connect trace is the one place a failed sign-in already shows.
+const traceFailure = (kind: string, cause: unknown) => {
+  const text = cause instanceof Error ? cause.message : String(cause);
+  traceConnect(`${kind}: ${text.slice(0, 160)}`);
+};
+window.addEventListener("error", (event) => traceFailure("error", event.error ?? event.message));
+window.addEventListener("unhandledrejection", (event) => traceFailure("unhandled rejection", event.reason));
 applyPhoneTheme();
 rememberPushLanguage();
 if ("serviceWorker" in navigator) window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js"));

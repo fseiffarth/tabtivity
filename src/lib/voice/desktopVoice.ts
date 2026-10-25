@@ -42,7 +42,7 @@ export const VOICE_ERROR_KEYS: Record<VoiceErrorCode, TranslationKey> = {
 };
 
 function isVoiceErrorCode(value: unknown): value is VoiceErrorCode {
-  return typeof value === "string" && value in VOICE_ERROR_KEYS;
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(VOICE_ERROR_KEYS, value);
 }
 
 /** The message for whatever a voice command or event failed with. */

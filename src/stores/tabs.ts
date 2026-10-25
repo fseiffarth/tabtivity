@@ -9,6 +9,7 @@ import type { InternalViewer } from "../lib/viewers/fileUtils";
 import type { AutocompleteMode } from "../types";
 import type { LoginTarget } from "../lib/remote/loginTarget";
 import { forgetPty } from "../lib/agents/promptCount";
+import { forgetTypedLine } from "../lib/agents/typedClear";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
@@ -2549,8 +2550,10 @@ let layoutPersistFailureReported = false;
  */
 function forgetClosedTab(scope: string, key: string): void {
   useLinkRoutingStore.getState().purgeForTab(key);
-  forgetPty(`${scope}:${key}`);
-  forgetPromptTrail(`${scope}:${key}`);
+  const ptyId = `${scope}:${key}`;
+  forgetPty(ptyId);
+  forgetPromptTrail(ptyId);
+  forgetTypedLine(ptyId);
 }
 
 /** Persist a scope's tabs+layout+focus into the per-scope maps, mirroring the
@@ -3407,13 +3410,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       get().removeTabInScope(owner, key);
       return;
     }
-    // Discard any session-only link routes that pointed FROM this tab (#50).
-    useLinkRoutingStore.getState().purgeForTab(key);
     bumpUsage(get().scope, METRIC.TAB_CLOSED);
-    // The PTY is gone; drop its half-typed-prompt state so a recycled id can
-    // never inherit it.
-    forgetPty(`${get().scope}:${key}`);
-    forgetPromptTrail(`${get().scope}:${key}`);
+    forgetClosedTab(get().scope, key);
     set((s) => {
       const { tabs, layout, focusedGroupId } = currentScopeState(s);
       const nextTabs = tabs.filter((t) => t.key !== key);
@@ -3458,10 +3456,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         invoke("pty_kill", { id: `${scope}:${key}` }).catch(() => {});
       }
     }
-    useLinkRoutingStore.getState().purgeForTab(key);
     bumpUsage(scope, METRIC.TAB_CLOSED);
-    forgetPty(`${scope}:${key}`);
-    forgetPromptTrail(`${scope}:${key}`);
+    forgetClosedTab(scope, key);
     const emptiesPopout =
       !!detached && orderedTabKeys(detached.subtree).length === 1;
     set((s) => {
@@ -3541,14 +3537,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       }
       invoke("attach_subwindow", { registryId: entry.label }).catch(() => {});
     }
-    // Discard any session-only link routes from the closing tabs (#50), and the
-    // half-typed-prompt state a recycled id must never inherit.
-    const purge = useLinkRoutingStore.getState().purgeForTab;
-    for (const t of tabs) {
-      purge(t.key);
-      forgetPty(`${target}:${t.key}`);
-      forgetPromptTrail(`${target}:${t.key}`);
-    }
+    for (const t of tabs) forgetClosedTab(target, t.key);
     set((s) => {
       // Empty the scope entirely: no tabs, no layout, no detached/hidden records
       // (a hidden group's keys would otherwise dangle against dropped payloads).
@@ -3576,12 +3565,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const tabs = state.tabsByScope[scope] ?? [];
     const detached = state.detachedGroupsByScope[scope] ?? [];
 
-    const purge = useLinkRoutingStore.getState().purgeForTab;
-    for (const tab of tabs) {
-      purge(tab.key);
-      forgetPty(`${scope}:${tab.key}`);
-      forgetPromptTrail(`${scope}:${tab.key}`);
-    }
+    for (const tab of tabs) forgetClosedTab(scope, tab.key);
 
     set((s) => {
       const without = <T,>(record: Record<string, T>): Record<string, T> => {
@@ -5304,11 +5288,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     }
     if (doomedByScope.size === 0) return;
     for (const [scope, keys] of doomedByScope) {
-      for (const key of keys) {
-        useLinkRoutingStore.getState().purgeForTab(key);
-        forgetPty(`${scope}:${key}`);
-        forgetPromptTrail(`${scope}:${key}`);
-      }
+      for (const key of keys) forgetClosedTab(scope, key);
     }
     set((s) => {
       // Fold scope by scope: `writeScope` derives its maps from the state it is
