@@ -80,8 +80,10 @@ export function writeFlag(name: MobileFlag, value: boolean, storage?: FlagStorag
  * asking dial, a digit 0–4. `markupOpen` is the mode
  * a markable PDF opens in (`markupOpen.ts`). `newTabAgent` is the agent a
  * tap on the project screen's ＋ starts (`newTabDefault.ts`), an id the
- * desktop's catalog lists; unset, the desktop's default agent is used. */
-export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent";
+ * desktop's catalog lists, or `api:<id>` / `local:<id>` for the sheet's API and
+ * local-model rows, whose `newTabLabel` is the name it was starred under; unset,
+ * the desktop's default agent is used. */
+export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent" | "newTabLabel";
 
 export function readChoice<T extends string>(name: MobileChoice, accept: (value: unknown) => value is T, fallback: T, storage?: FlagStorage): T {
   try {

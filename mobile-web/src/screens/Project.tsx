@@ -9,7 +9,7 @@ import { useRowDrag } from "../rowDrag";
 import { applyServerOrder, placeBeside } from "../tabReorder";
 import { ColorSheet } from "./ColorSheet";
 import { NewTabSheet, type NewTabLaunch } from "./NewTabSheet";
-import { newTabAgent, readNewTabAgent, useTapHold, writeNewTabAgent } from "../newTabDefault";
+import { newTabTarget, readNewTabAgent, readNewTabLabel, useTapHold, writeNewTabAgent } from "../newTabDefault";
 import { isAssistantScope, rememberScopeKind } from "../scopeKind";
 import { useProjectInbox } from "../components/ProjectInbox";
 import { PromptsSheet } from "./PromptsSheet";
@@ -146,6 +146,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const [newTabOpen, setNewTabOpen] = useState(false);
   /** The agent this phone starred in that sheet for a tap on ＋ ("" none). */
   const [starredAgent, setStarredAgent] = useState(readNewTabAgent);
+  const [starredLabel, setStarredLabel] = useState(readNewTabLabel);
   /** Which finished / interrupted tabs this phone has opened: their card
    *  badge goes, as the desktop's lamp does (`seenDone.ts`). */
   const [seenDone, setSeenDone] = useState(() => readSeenDone());
@@ -481,9 +482,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * a hold opens the sheet of every choice, which is also where the default
    * is starred. With no agent to start — a host without tmux, a desktop
    * listing none — the tap opens that sheet as before. */
-  const quickAgent = creates ? newTabAgent(detail?.agents ?? [], starredAgent) : undefined;
+  const quickTarget = creates ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
+  const quickLabel = quickTarget?.kind === "api" ? t("newTabMenu.apiKeyEntry", { label: quickTarget.label }) : quickTarget?.label;
   const fabPress = useTapHold(
-    () => { if (!quickAgent) setNewTabOpen(true); else if (!creating) void create("agent", quickAgent); },
+    () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch); },
     () => { dropHint("hold"); setNewTabOpen(true); },
   );
   /** The tab being started, by tab id: an agent tab the desktop is
@@ -657,7 +659,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const showReorderHint = canReorder && !hintsGone.reorder;
   const showSwipeHint = tabs.length > 0 && !hintsGone.swipe;
   // Only while a tap starts one agent: the sheet of the others sits behind a hold.
-  const showHoldHint = !!quickAgent && tabs.length > 0 && !hintsGone.hold;
+  const showHoldHint = !!quickTarget && tabs.length > 0 && !hintsGone.hold;
   return <main className="screen project-screen" ref={screenRef}>
     {/* One dense row, shaped like an agent tab's header: chevron, the name
         (ellipsized) with the order it sorts by under it, then the drawer's ☰
@@ -772,7 +774,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       <span>
         {showReorderHint && <><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>} </>}
         {showSwipeHint && <>{t("mobile.project.swipeCloseHint")}{isUntested("mobile.project.swipeClose") && <span className="untested">{t("mobile.newTab.untested")}</span>} </>}
-        {showHoldHint && <>{t("mobile.project.fabHoldHint", { agent: quickAgent?.label ?? "" })}{isUntested("mobile.project.fabHoldHint") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>}
+        {showHoldHint && <>{t("mobile.project.fabHoldHint", { agent: quickLabel ?? "" })}{isUntested("mobile.project.fabHoldHint") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>}
         {isUntested("mobile.project.hintDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </span>
       <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); if (showHoldHint) dropHint("hold"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
@@ -815,8 +817,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       aria-expanded={newTabOpen}
       aria-busy={creating}
       aria-label={t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send")}
-      title={quickAgent ? t("mobile.project.fabQuick", { agent: quickAgent.label }) : t(creates ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
-    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickAgent && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
+      title={quickTarget ? t("mobile.project.fabQuick", { agent: quickLabel ?? "" }) : t(creates ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickTarget && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""
@@ -833,8 +835,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       headless={!detail.desktop_available}
       creates={creates}
       agentsOnly={createVerdict === "agents"}
-      defaultAgent={quickAgent?.id}
-      onDefault={(agent) => { writeNewTabAgent(agent.id); setStarredAgent(agent.id); }}
+      defaultTarget={quickTarget?.key}
+      defaultLabel={quickLabel}
+      onDefault={(key, label) => { writeNewTabAgent(key, label); setStarredAgent(key); setStarredLabel(label); }}
       onClose={() => setNewTabOpen(false)}
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
