@@ -171,13 +171,11 @@ export default tseslint.config(
     },
   },
   {
-    // Raw `listen(` leftovers, neither a component lifecycle: detachedDropTargets
-    // resolves its own `listening` promise (D3 handoff); FileViewerPane's
-    // `listenSourceJump` is registered once at startup and hands back its unlisten.
-    files: [
-      'src/components/tabs/detachedDropTargets.ts',
-      'src/components/embed/FileViewerPane.tsx',
-    ],
+    // Raw `listen(` leftover, not a component lifecycle: detachedDropTargets
+    // resolves its own `listening` promise (D3 handoff). FileViewerPane's one
+    // (`listenSourceJump`) is disabled on its line, so the guard holds for the
+    // rest of that file.
+    files: ['src/components/tabs/detachedDropTargets.ts'],
     rules: {
       'no-restricted-syntax': ['error', ...PATH_SYNTAX],
     },

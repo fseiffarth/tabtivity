@@ -1234,6 +1234,8 @@ function jumpToStandaloneSource(input: string, line: number, column: number, anc
  */
 export async function listenSourceJump(): Promise<() => void> {
   try {
+    // Registered once at startup and hands back its unlisten — not a component lifecycle.
+    // eslint-disable-next-line no-restricted-syntax
     return await listen<SourceJumpEnvelope>(SOURCE_JUMP_EVENT, (ev) => {
       const { input, line, column, anchorPath } = ev.payload;
       applySourceJump(input, line, column, anchorPath);
