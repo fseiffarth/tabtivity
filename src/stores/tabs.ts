@@ -6724,24 +6724,34 @@ export function localTabCwd(
   return `${opts.projectDirectory.replace(/[/\\]+$/, "")}/mirror`;
 }
 
+/** The host shape {@link hostTabId} and {@link hostTabCwd} read. */
+type TabHostProject = {
+  remote?: { remote_path: string };
+  compute_hosts?: readonly { id: string; remote_path: string }[];
+  vm?: { enabled?: boolean };
+};
+
+/**
+ * The host a PTY tab of a remote `project` runs on — `"primary"` or a worker
+ * id — or `null` for a tab that runs locally (or a local project). A worker id
+ * the project no longer has falls back to the primary, as the backend does.
+ */
+export function hostTabId(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
+  if (!project?.remote) return null;
+  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
+  if (!hostId || hostId === "primary") return hostId;
+  return project.compute_hosts?.some((h) => h.id === hostId) ? hostId : "primary";
+}
+
 /**
  * The folder a PTY tab that runs ON a host starts in: that host's `remote_path`
  * (`ssh_exec::wrap_pty_options` cds into the project root there), or `null` for
  * a tab that runs locally. Its spawn cwd is only the local state folder the
- * backend resolves to the host, so it is no path to show. A worker id the
- * project no longer has falls back to the primary, as the backend does.
+ * backend resolves to the host, so it is no path to show.
  */
-export function hostTabCwd(
-  tab: { kind: TabKind; location?: TabLocation },
-  project: {
-    remote?: { remote_path: string };
-    compute_hosts?: readonly { id: string; remote_path: string }[];
-    vm?: { enabled?: boolean };
-  } | undefined,
-): string | null {
-  if (!project) return null;
-  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
-  if (!hostId) return null;
+export function hostTabCwd(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
+  const hostId = hostTabId(tab, project);
+  if (!hostId || !project) return null;
   const worker = hostId === "primary" ? undefined : project.compute_hosts?.find((h) => h.id === hostId);
   return (worker ?? project.remote)?.remote_path || null;
 }
