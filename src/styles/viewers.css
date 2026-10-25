@@ -4459,26 +4459,6 @@ select.file-viewer-run-args-input {
   pointer-events: none;
 }
 
-/* Select-and-copy uses the same page-local drag geometry as redaction, but its
-   result is ephemeral: the blue wash is only the rectangle that will become a
-   pasteable clipboard image. Width/height are set from the canvas so the page
-   number gap below the canvas can never be selected. */
-.file-viewer-pdf-copy-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  cursor: var(--cur-crosshair, crosshair);
-  touch-action: none;
-  /* The blackout surface's reason: an armed tool owns the plain drag. */
-  z-index: 5;
-}
-.file-viewer-pdf-copy-draft {
-  position: absolute;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  outline: 1px solid var(--accent);
-  pointer-events: none;
-}
-
 /* Mark up (`PdfMarkupLayer`, `usePdfMarkup`). The drawing surface covers the
    page above every other layer — the remarks' markers (4) and cards (6) and the
    blackout boxes (6) included — so while it is on the page takes no other click:
@@ -4840,9 +4820,6 @@ select.file-viewer-run-args-input {
   color: var(--text-secondary, var(--text-muted));
   background: var(--control-bg);
   border-bottom: 1px solid var(--border-subtle);
-}
-.file-viewer-pdf-copy-success {
-  color: var(--success);
 }
 
 /* The tool's strip under the toolbar. */
