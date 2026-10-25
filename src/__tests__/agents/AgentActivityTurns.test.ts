@@ -5,7 +5,7 @@
  * done-quiet silence, marked whether or not the tab is being looked at).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { _clearPtyActivityForTest, notePtyOutput, noteUserInput, useActivityStore } from "../../stores/activity";
+import { _clearPtyActivityForTest, agentTurnStartedAt, notePtyOutput, notePtyResize, noteUserInput, useActivityStore } from "../../stores/activity";
 import { useTabsStore } from "../../stores/tabs";
 
 const PTY = "proj-a:agent-1";
@@ -93,5 +93,72 @@ describe("activity store — last working and last done", () => {
     useActivityStore.getState().recompute();
     expect(useActivityStore.getState().lastDoneByTab[PTY]).toBeUndefined();
     expect(useActivityStore.getState().lastWorkingByTab[PTY]).toBeUndefined();
+  });
+});
+
+describe("activity store — the repaint of an opened or resized tab", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _clearPtyActivityForTest();
+    seedAgentTab();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A full-screen TUI (OpenCode) settling after its pane changed size: text
+   *  for two seconds, past the work onset. */
+  function repaint(id: string) {
+    for (let elapsed = 0; elapsed <= 2000; elapsed += 200) {
+      notePtyOutput(id, "│ Write it to docs first │\n");
+      vi.advanceTimersByTime(200);
+    }
+  }
+
+  it("books no turn for the repaint of a tab put on a screen", () => {
+    sustain(PTY); // yesterday's turn
+    vi.advanceTimersByTime(3000);
+    useActivityStore.getState().recompute();
+    const done = useActivityStore.getState().lastDoneByTab[PTY];
+    const started = agentTurnStartedAt(PTY);
+    vi.advanceTimersByTime(600_000);
+
+    useActivityStore.getState().clearAttention(PTY); // opened on the phone
+    repaint(PTY);
+    useActivityStore.getState().recompute();
+    expect(useActivityStore.getState().busyByTab[PTY]).toBeUndefined();
+    vi.advanceTimersByTime(3000);
+    useActivityStore.getState().recompute();
+    expect(useActivityStore.getState().lastDoneByTab[PTY]).toBe(done);
+    expect(agentTurnStartedAt(PTY)).toBe(started);
+  });
+
+  it("books no turn for the repaint after a pane resize", () => {
+    sustain(PTY);
+    vi.advanceTimersByTime(3000);
+    useActivityStore.getState().recompute();
+    const done = useActivityStore.getState().lastDoneByTab[PTY];
+    vi.advanceTimersByTime(600_000);
+
+    notePtyResize(PTY);
+    repaint(PTY);
+    vi.advanceTimersByTime(3000);
+    useActivityStore.getState().recompute();
+    expect(useActivityStore.getState().lastDoneByTab[PTY]).toBe(done);
+  });
+
+  it("keeps counting a turn already running when the tab is opened", () => {
+    sustain(PTY);
+    useActivityStore.getState().clearAttention(PTY);
+    repaint(PTY);
+    useActivityStore.getState().recompute();
+    expect(useActivityStore.getState().busyByTab[PTY]).toBe(true);
+  });
+
+  it("counts the answer to a prompt typed right after opening the tab", () => {
+    useActivityStore.getState().clearAttention(PTY);
+    sustain(PTY);
+    useActivityStore.getState().recompute();
+    expect(useActivityStore.getState().busyByTab[PTY]).toBe(true);
   });
 });

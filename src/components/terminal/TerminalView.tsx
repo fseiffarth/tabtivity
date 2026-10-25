@@ -10,7 +10,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
@@ -858,6 +858,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       fitRef.current?.fit();
       flushPending();
       noteFit(built.cols, built.rows);
+      notePtyResize(id);
       invoke("pty_resize", { id, cols: built.cols, rows: built.rows }).catch(() => {});
       if (focusedRef.current) built.focus();
       // The pane may keep growing right after open — the startup fullscreen
@@ -1882,7 +1883,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       resizeTimer = null;
       const size = pendingResize;
       pendingResize = null;
-      if (size) invoke("pty_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
+      if (!size) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
     };
     const queueResize = (cols: number, rows: number) => {
       pendingResize = { cols, rows };
