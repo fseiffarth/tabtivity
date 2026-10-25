@@ -26,6 +26,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
 import { fileMtime } from "../fileAccess";
 import { useT } from "../../../lib/i18n";
 import { holdPhonePrompt } from "../../../lib/agents/phoneHolds";
@@ -533,19 +534,7 @@ export function usePdfMarkup({
   const listening = asksKey !== null || idleKey !== null || (active && projectId !== null && targets.length > 0);
   useEffect(() => {
     if (!listening) return;
-    let live = true;
-    let unlisten: (() => void) | null = null;
-    void listen(MARKUP_MCP_CHANGED, () => setAsksChanged((n) => n + 1)).then(
-      (stop) => {
-        if (live) unlisten = stop;
-        else stop();
-      },
-      () => {},
-    );
-    return () => {
-      live = false;
-      unlisten?.();
-    };
+    return subscribeTauri(() => listen(MARKUP_MCP_CHANGED, () => setAsksChanged((n) => n + 1)));
   }, [listening]);
   // Read while the pane is on screen — a change heard while hidden is caught
   // up on show — and never while an answer is on its way: the card it is

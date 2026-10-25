@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { IdeMenuItems } from "./IdeMenuItems";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -1486,14 +1487,6 @@ export function ProjectPill({
     [project.id, project.name, moveRemoteMirror],
   );
 
-  // Close context menu on outside click
-  useEffect(() => {
-    if (!contextMenu) return;
-    const dismiss = () => setContextMenu(null);
-    window.addEventListener("pointerdown", dismiss);
-    return () => window.removeEventListener("pointerdown", dismiss);
-  }, [contextMenu]);
-
   // The Remote machines manager can open without a pointer press on this menu
   // (a lamp, a header machine drop, the keyboard): the menu would then stay
   // above the dialog's backdrop with its hover hint, so any open closes it.
@@ -1741,19 +1734,17 @@ export function ProjectPill({
       {pillDialogs}
 
       {/* Right-click context menu */}
-      {contextMenu && createPortal(
-        <div
+      {contextMenu && (
+        // Opens downward from the pill, so a long menu (remote, git, Python
+        // entries all present) ran past the window's bottom edge. `keepBelow`
+        // caps it to the room below the anchor; the inner wrapper scrolls,
+        // keeping the accent wash (`::before`, inset 0) covering the whole menu.
+        <ContextMenuPortal
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
           className="context-menu project-pill-menu"
-          // Opens downward from the pill, so a long menu (remote, git, Python
-          // entries all present) ran past the window's bottom edge. Cap it to
-          // the room below the anchor; the inner wrapper scrolls, keeping the
-          // accent wash (`::before`, inset 0) covering the whole menu.
-          style={{
-            left: contextMenu.x,
-            top: contextMenu.y,
-            maxHeight: `calc(100vh - ${contextMenu.y}px - 8px)`,
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
+          keepBelow
         >
           <div className="project-pill-menu-scroll">
           {/* View / inspect */}
@@ -2399,8 +2390,7 @@ export function ProjectPill({
             )}
           </div>
           </div>
-        </div>,
-        document.body,
+        </ContextMenuPortal>
       )}
 
       {/* Activity window */}

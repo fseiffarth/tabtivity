@@ -13,6 +13,7 @@ import { useSearchText } from "./useSearchText";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
@@ -2322,18 +2323,11 @@ function PdfCanvas({
   // for a window nobody asked for is a subscription that never pays for itself.
   useEffect(() => {
     if (!presentOpen) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
-      if (e.payload.label === presentLabel) seedPresentRef.current();
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribeTauri(() =>
+      listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
+        if (e.payload.label === presentLabel) seedPresentRef.current();
+      }),
+    );
   }, [presentOpen, presentLabel]);
 
   /** A metadata field's name. Only the eight standard `/Info` keys are translated —

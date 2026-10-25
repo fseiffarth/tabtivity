@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
@@ -65,9 +66,7 @@ export function useGitPushProposals(projectId: string | null | undefined): GitPu
   }, [projectId]);
   useEffect(() => {
     refresh();
-    let alive = true;
-    const stop = listen(GIT_PUSH_MCP_CHANGED, () => { if (alive) refresh(); });
-    return () => { alive = false; void stop.then((s) => s()).catch(() => undefined); };
+    return subscribeTauri(() => listen(GIT_PUSH_MCP_CHANGED, refresh));
   }, [refresh]);
   return rows;
 }

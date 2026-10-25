@@ -1,8 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   needsSeparateKeyPassphrase,
   type ComputeHost,
@@ -30,20 +28,13 @@ import {
   markVpnError,
   releaseVpn,
 } from "../../stores/remote/vpn/vpnStatus";
-import type { LogLine } from "../common/ConnectionLog";
+import {
+  forgetVpnPassword as forgetStoredVpnPassword,
+  pickAndStoreOvpnConfig,
+  useOpenVpnLog,
+  useVpnReadyMarker,
+} from "../../hooks/useOpenVpn";
 import { withHostKeyConfirm } from "../../lib/remote/hostKey";
-
-// OpenVPN prints this once the tunnel is fully up (mirrors the backend's
-// READY_MARKER in services/openvpn.rs). The embedded VPN login terminal is
-// watched for it to flip the lamp green — identical to the new-project dialog
-// (see useRemoteSession).
-const VPN_READY_MARKER = "Initialization Sequence Completed";
-
-// Shape of the `terminal-output` event payload (PTY id + raw output chunk).
-interface TerminalOutput {
-  id: string;
-  data: string;
-}
 
 // Monotonic id source for the reconnect-panel embedded terminals. The id has no
 // ":" so it never collides with a tab PTY id (`<scope>:<key>`) or trips the
@@ -217,8 +208,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   // Live OpenVPN handshake log for the headless connect (fed by the backend's
   // `openvpn-progress` event, same as the new-project dialog). Capped so a
   // chatty handshake can't grow unbounded.
-  const [vpnLog, setVpnLog] = useState<LogLine[]>([]);
-  const vpnLogSeq = useRef(0);
+  const { log: vpnLog, clearLog: clearVpnLog } = useOpenVpnLog(vpnConfig);
 
   // Whether a password is already saved in the OS keychain for this project's SSH
   // host, so the Connect modal can pre-check the "Save password" box. The shared
@@ -382,23 +372,19 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   const selectVpnConfig = (path: string) => {
     setVpnConfig(path);
     setVpnError("");
-    setVpnLog([]);
+    clearVpnLog();
     persistVpnConfig(path);
   };
 
   // Pick a `.ovpn` file and copy it into Tabtivity's store, then adopt it. Joins the
   // recents list for future reuse.
   const browseVpnConfig = async () => {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: t("remoteProjectSection.vpnConfigLabel"), extensions: ["ovpn", "conf"] }],
-    });
-    if (typeof picked !== "string") return;
     try {
-      const stored = await invoke<string>("openvpn_store_config", { config: picked });
+      const stored = await pickAndStoreOvpnConfig(t("remoteProjectSection.vpnConfigLabel"));
+      if (stored === null) return;
       setVpnConfig(stored);
       setVpnError("");
-      setVpnLog([]);
+      clearVpnLog();
       persistVpnConfig(stored);
       refreshVpnConfigs();
     } catch (e) {
@@ -442,41 +428,14 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
 
   // Flip the VPN lamp green once the interactive tunnel comes up. The embedded
   // login spawns `pkexec openvpn` in its own PTY, so the tunnel is not in the
-  // backend's registry — watch the terminal's own output for the ready marker
-  // (a small rolling buffer in case it straddles two chunks), mirroring the
-  // dialog's watcher.
-  useEffect(() => {
-    const term = vpnTermRef.current;
-    if (!term) return;
-    const termId = term.id;
-    let cancelled = false;
-    let un: (() => void) | undefined;
-    let buf = "";
-    // Visible-only streaming: a hidden pane's PTY stops emitting
-    // terminal-output entirely, and this panel's terminal can be hidden while
-    // the tunnel comes up — the watch keeps its raw stream flowing so the
-    // marker scan below still sees it.
-    void invoke("pty_watch", { id: termId }).catch(() => {});
-    void listen<TerminalOutput>("terminal-output", (ev) => {
-      if (ev.payload.id !== termId) return;
-      buf = (buf + ev.payload.data).slice(-512);
-      // The marker is the fastest signal the tunnel is up (the backend also knows,
-      // via the pidfile its `--writepid` arming recorded — but only once OpenVPN
-      // gets around to writing it).
-      if (buf.includes(VPN_READY_MARKER) && vpnConfig) {
-        markVpnConnected(projectId, vpnConfig);
-      }
-    }).then((u) => {
-      if (cancelled) u();
-      else un = u;
-    });
-    return () => {
-      cancelled = true;
-      un?.();
-      void invoke("pty_unwatch", { id: termId }).catch(() => {});
-    };
-    // vpnTerm is ref-held; re-run when its identity changes via the force tick.
-  }, [vpnTermRef.current?.id, projectId, vpnConfig]);
+  // backend's registry — watch the terminal's own output for the ready marker,
+  // mirroring the dialog's watcher. The marker is the fastest signal the tunnel
+  // is up (the backend also knows, via the pidfile its `--writepid` arming
+  // recorded — but only once OpenVPN gets around to writing it).
+  // vpnTerm is ref-held; the id is re-read on every render (the force tick).
+  useVpnReadyMarker(vpnTermRef.current?.id, () => {
+    if (vpnConfig) markVpnConnected(projectId, vpnConfig);
+  });
 
   // Bring the OpenVPN tunnel up in an embedded login terminal. OpenVPN is the
   // PTY's own program, so the user types the passphrase in that visible terminal
@@ -634,25 +593,6 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   // Tabtivity feeds the password to the backend itself (no visible login terminal);
   // the OpenVPN handshake streams into `vpnLog` as a read-only progress view.
 
-  // Stream the live OpenVPN handshake into `vpnLog` (only lines for this
-  // project's config; the backend tags each line with its config path).
-  useEffect(() => {
-    if (!vpnConfig) return;
-    let cancelled = false;
-    let un: (() => void) | undefined;
-    void listen<{ config: string; line: string }>("openvpn-progress", (ev) => {
-      if (ev.payload.config !== vpnConfig) return;
-      setVpnLog((prev) => [...prev, { id: vpnLogSeq.current++, text: ev.payload.line }].slice(-500));
-    }).then((u) => {
-      if (cancelled) u();
-      else un = u;
-    });
-    return () => {
-      cancelled = true;
-      un?.();
-    };
-  }, [vpnConfig]);
-
   // Bring the OpenVPN tunnel up with the supplied secrets. `keyPassphrase` is only
   // a distinct secret for a config that has an encrypted key *and* an
   // `auth-user-pass` account (see `needsSeparateKeyPassphrase`); otherwise
@@ -674,7 +614,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
     const gen = ++vpnGen.current;
     markVpnConnecting(projectId, vpnConfig);
     setVpnError("");
-    setVpnLog([]);
+    clearVpnLog();
     try {
       await invoke("openvpn_connect", {
         config: vpnConfig,
@@ -802,12 +742,9 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   // `vpn_forget_password` clears both accounts).
   const forgetVpnPassword = async () => {
     if (!vpnConfig) return;
-    try {
-      await invoke("vpn_forget_password", { config: vpnConfig });
-      setVpnSaved(false);
-    } catch (e) {
-      setVpnError(String(e));
-    }
+    const failed = await forgetStoredVpnPassword(vpnConfig);
+    if (failed) setVpnError(failed);
+    else setVpnSaved(false);
   };
 
   // "Forget saved password": drop every credential this project has stored.

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { MAIL_PAGE_SIZE, useMailStore } from "../../stores/mail";
 import { useSettingsStore } from "../../stores/settings";
 import { onMailSync, mailAiAllowed, planMailDelete } from "../../lib/mail";
@@ -173,25 +174,18 @@ export function MailPane({ visible }: MailPaneProps) {
   // `mail:new` half is deliberately NOT here: arrivals are announced by the
   // header badge (`MailIndicator`), which is mounted whether or not this pane is.
   useEffect(() => {
-    // `listen` resolves asynchronously, so an unmount that beats the resolution
-    // would otherwise leave the listener installed against a dead component.
-    let cancelled = false;
-    let off: (() => void) | undefined;
-    void onMailSync((e) => {
-      useMailStore.getState().applySyncEvent(e.account_id, {
-        phase: e.phase,
-        folderId: e.folder_id,
-        newMessages: e.new_messages,
-        error: e.error,
-      });
-    }).then((un) => {
-      if (cancelled) un();
-      else off = un;
-    });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
+    // `subscribeTauri`: an unmount that beats `listen` resolving still drops
+    // the listener instead of leaving it against a dead component.
+    return subscribeTauri(() =>
+      onMailSync((e) => {
+        useMailStore.getState().applySyncEvent(e.account_id, {
+          phase: e.phase,
+          folderId: e.folder_id,
+          newMessages: e.new_messages,
+          error: e.error,
+        });
+      }),
+    );
   }, []);
 
   const folders = selectedAccountId ? (foldersByAccount[selectedAccountId] ?? []) : [];

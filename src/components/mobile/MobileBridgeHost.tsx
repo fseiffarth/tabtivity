@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
@@ -3074,9 +3075,8 @@ export function MobileBridgeHost() {
   }, [mobileHostOn]);
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
     refreshRootFacts();
-    void listen<DesktopRequest>(MOBILE_DESKTOP_EVENT, (event) => {
+    const unlisten = subscribeTauri(() => listen<DesktopRequest>(MOBILE_DESKTOP_EVENT, (event) => {
       const request = event.payload;
       const run = async () => {
         let response: DesktopResponse;
@@ -3095,13 +3095,10 @@ export function MobileBridgeHost() {
       const domain = mutationDomain(request.type);
       if (domain) void enqueueMutation(domain, run);
       else void run();
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
+    }));
     return () => {
       disposed = true;
-      unlisten?.();
+      unlisten();
     };
   }, []);
   return null;

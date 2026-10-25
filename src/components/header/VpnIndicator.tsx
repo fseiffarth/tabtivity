@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { forgetVpnPassword, pickAndStoreOvpnConfig } from "../../hooks/useOpenVpn";
 import { ConnLamp } from "../common/ConnLamp";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
@@ -384,11 +384,8 @@ export function VpnIndicator() {
       setError("");
       if (!save) {
         await setVpnCredentialSaved(config, false);
-        try {
-          await invoke("vpn_forget_password", { config });
-        } catch (e) {
-          setError(String(e));
-        }
+        const failed = await forgetVpnPassword(config);
+        if (failed) setError(failed);
         setSilent((prev) => ({ ...prev, [config]: false }));
         // A tunnel that can no longer connect without a prompt must not stay armed to
         // connect on launch — auto-connect's promise is that it never prompts.
@@ -452,22 +449,19 @@ export function VpnIndicator() {
    */
   const browseAndAdd = useCallback(async () => {
     setError("");
-    const picked = await openDialog({
-      multiple: false,
-      filters: [{ name: t("remoteProjectSection.vpnConfigLabel"), extensions: ["ovpn", "conf"] }],
-    }).catch(() => null);
-    if (typeof picked !== "string") return;
-    let stored: string;
+    let stored: string | null;
     try {
-      stored = await invoke<string>("openvpn_store_config", { config: picked });
+      stored = await pickAndStoreOvpnConfig(t("remoteProjectSection.vpnConfigLabel"));
     } catch (e) {
       setError(String(e));
       return;
     }
+    if (stored === null) return;
+    const path = stored;
     setConfigs((prev) =>
-      prev.some((c) => c.path === stored)
+      prev.some((c) => c.path === path)
         ? prev
-        : [...prev, { path: stored, name: fileOf(stored) }],
+        : [...prev, { path, name: fileOf(path) }],
     );
   }, [t]);
 

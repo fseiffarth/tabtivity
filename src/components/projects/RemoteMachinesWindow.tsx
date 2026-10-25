@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { parseSshAddress, type ParsedSshAddress } from "./scaffold";
 import { RemoteFolderBrowser } from "./RemoteFolderBrowser";
 import { useRemoteBrowse } from "./useRemoteBrowse";
@@ -521,19 +522,12 @@ export function RemoteMachinesWindow({
   // Last sync report per host (for the "last synced" line).
   const [reports, setReports] = useState<Record<string, WorkerSyncReport>>({});
   useEffect(() => {
-    let un: (() => void) | undefined;
-    let cancelled = false;
-    void listen<WorkerSyncReport>("worker-sync-report", (ev) => {
-      if (ev.payload.project_id !== project.id) return;
-      setReports((prev) => ({ ...prev, [ev.payload.host_id]: ev.payload }));
-    }).then((u) => {
-      if (cancelled) u();
-      else un = u;
-    });
-    return () => {
-      cancelled = true;
-      un?.();
-    };
+    return subscribeTauri(() =>
+      listen<WorkerSyncReport>("worker-sync-report", (ev) => {
+        if (ev.payload.project_id !== project.id) return;
+        setReports((prev) => ({ ...prev, [ev.payload.host_id]: ev.payload }));
+      }),
+    );
   }, [project.id]);
 
   const addMachine = async () => {

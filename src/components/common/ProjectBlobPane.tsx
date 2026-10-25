@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ContextMenuPortal } from "./ContextMenuPortal";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
@@ -700,26 +701,18 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
     [clearClickTimer],
   );
 
-  // Dismiss the context menu on any outside pointer (incl. an orbit drag start).
+  // Esc steps back up / exits the file viewer. Not while the pane is hidden or
+  // another handler already took it — an open context menu (its portal closes
+  // on Escape and marks the key handled) comes first.
   useEffect(() => {
-    if (!menu) return;
-    const dismiss = () => setMenu(null);
-    window.addEventListener("pointerdown", dismiss);
-    return () => window.removeEventListener("pointerdown", dismiss);
-  }, [menu]);
-
-  // Esc closes the context menu first, then steps back up / exits the file
-  // viewer. Not while the pane is hidden or another handler already took it.
-  useEffect(() => {
-    if (!focus && !menu) return;
+    if (!focus) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || !visible || e.defaultPrevented) return;
-      if (menu) setMenu(null);
-      else ascend();
+      ascend();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focus, menu, visible, ascend]);
+  }, [focus, visible, ascend]);
 
   // Drop the pending single-click timer if the pane unmounts.
   useEffect(() => () => clearClickTimer(), [clearClickTimer]);
@@ -944,12 +937,8 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
       )}
 
       {/* Right-click menu for a project node. */}
-      {menu && createPortal(
-        <div
-          className="context-menu blob-context-menu"
-          style={{ left: menu.x, top: menu.y }}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
+      {menu && (
+        <ContextMenuPortal x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button
             onClick={() => {
               setMenu(null);
@@ -986,8 +975,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
               {t("blob.inactivate")}
             </button>
           )}
-        </div>,
-        document.body,
+        </ContextMenuPortal>
       )}
 
       {/* Hover info card, anchored to the node (pinned each frame by the rAF

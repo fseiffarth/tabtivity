@@ -5,6 +5,7 @@ import { Toggle } from "../common/Toggle";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
@@ -681,12 +682,14 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
     invoke<GitPeerState>("git_peer_status", { projectId })
       .then((s) => alive && setLockstep(s))
       .catch(() => {});
-    const un = listen<{ projectId: string; state: GitPeerState }>("git-peer-status", (e) => {
-      if (alive && e.payload.projectId === projectId) setLockstep(e.payload.state);
-    });
+    const un = subscribeTauri(() =>
+      listen<{ projectId: string; state: GitPeerState }>("git-peer-status", (e) => {
+        if (alive && e.payload.projectId === projectId) setLockstep(e.payload.state);
+      }),
+    );
     return () => {
       alive = false;
-      un.then((f) => f());
+      un();
     };
   }, [lockstepEligible, projectId, connected]);
 
