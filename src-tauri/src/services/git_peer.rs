@@ -2334,6 +2334,10 @@ async fn cleanup_bundles(pool: &RemotePoolState, project_id: &str, spec: &Remote
 /// empty side (selective/auto file-sync mirrored them) become the tracked tree; a
 /// `reset --hard`/detached checkout materializes any that git manages but are missing,
 /// and untracked files are left untouched (they stay file-sync's domain).
+///
+/// `Ok(Some(why))` when the pairing completed but a ref the transfer had to create
+/// was refused (see [`pairing_left_behind`]): the caller reports it rather than
+/// a green pairing.
 async fn init_pairing(
     pool: &RemotePoolState,
     manifest: &SyncManifestState,
@@ -2341,7 +2345,7 @@ async fn init_pairing(
     spec: &RemoteSpec,
     source_is_local: bool,
     source: &PeerSnapshot,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let (dest_peer, to_remote) = if source_is_local {
         (Peer::Remote(spec.clone()), true)
     } else {
@@ -2403,10 +2407,9 @@ async fn init_pairing(
     // recognize; reporting it means the user sees why, and the next pass retries the seed
     // instead of settling into a permanent head mismatch.
     let dest = probe(&dest_peer);
-    transfer_and_apply(
-        pool, manifest, project_id, spec, to_remote, source, &dest, false,
-    )
-    .await?;
+    let left_behind = pairing_left_behind(
+        transfer_and_apply(pool, manifest, project_id, spec, to_remote, source, &dest, false).await?,
+    );
 
     // Position HEAD + populate the working tree to match the source's HEAD. The
     // `reset --hard` here is only reached once `pairing_conflicts` has confirmed that
@@ -2468,7 +2471,19 @@ async fn init_pairing(
     if let Some(url) = should_propagate_origin(src_url.as_deref(), dst_url.as_deref()) {
         let _ = dest_peer.run(&["remote", "add", "origin", &url]);
     }
-    Ok(())
+    Ok(left_behind)
+}
+
+/// What an initial pairing's transfer left unapplied: a branch or tag create the
+/// fresh dest refused (a case-folding name clash on the mirror's file system, a
+/// ref that appeared there since the probe). The pairing still positions HEAD,
+/// so the dest is seeded and the next pass retries the ref as a plain sync —
+/// but it is reported, never a green pairing over a ref that never arrived
+/// (it used to be discarded, as the transfer's own unchecked creates once were).
+fn pairing_left_behind(result: TransferResult) -> Option<String> {
+    result
+        .blocked
+        .map(|why| format!("Initial pairing could not apply every ref: {why}"))
 }
 
 /// The files an initial pairing would destroy (#28p D3): paths that exist on the
@@ -2905,7 +2920,9 @@ async fn reconcile_with(
                 let source = if source_is_local { &local } else { &remote };
                 match init_pairing(pool, manifest, project_id, spec, source_is_local, source).await
                 {
-                    Ok(()) => {
+                    Ok(left_behind) => {
+                        // A ref the fresh dest refused is said, not settled as green.
+                        blocked = blocked.or(left_behind);
                         // Pairing just materialized both sides to the same HEAD, so every
                         // tracked file is byte-identical across host and mirror. Seed the
                         // selective-sync manifest for them so the file tree shows them green
@@ -6038,6 +6055,21 @@ mod tests {
         assert_eq!(rev(dir, "refs/heads/side"), first, "the branch must not have moved");
         create_branch(&peer, "fresh", &second).expect("create");
         assert_eq!(rev(dir, "refs/heads/fresh"), second);
+    }
+
+    /// A ref the initial pairing's transfer could not create is the pairing's
+    /// report, not dropped: `init_pairing` used to discard the transfer's
+    /// `blocked`, so a pairing that left a branch behind read as green. (The
+    /// pairing itself needs an SSH peer; this pins the translation it reports.)
+    #[test]
+    fn a_ref_the_pairing_could_not_create_is_reported() {
+        let refused = TransferResult {
+            blocked: Some("creating 'Feature' failed: cannot lock ref".to_string()),
+            ..Default::default()
+        };
+        let said = pairing_left_behind(refused).expect("a refused create is reported");
+        assert!(said.contains("creating 'Feature'"), "{said}");
+        assert_eq!(pairing_left_behind(TransferResult { applied: 3, ..Default::default() }), None);
     }
 
     /// A fast-forward of a branch that is not checked out is guarded by the tip the
