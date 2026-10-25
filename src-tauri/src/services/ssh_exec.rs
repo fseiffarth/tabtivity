@@ -1142,14 +1142,16 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
 /// press are one script on the host, so no ssh round trip falls between
 /// them; shell builtins and tmux only. The match runs byte-wise (`LC_ALL=C`):
 /// macOS's bash 3.2 `sh` never matches a quoted multibyte char (the prompt's
-/// `❯`) against a pattern in a UTF-8 locale. Prints `sent` when it pressed. `None`
+/// `❯`) against a pattern in a UTF-8 locale. Its case pattern opens with `(`:
+/// bash 3.2 otherwise takes the pattern's `)` for the end of the `$(…)`.
+/// Prints `sent` when it pressed. `None`
 /// for an invalid name, or a hint that could break out of its quotes.
 pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str) -> Option<String> {
     let quotable = |text: &str| !text.chars().any(|c| matches!(c, '\'' | '"' | '\\' | '$' | '`') || c.is_control());
     (valid_tmux_session_name(session) && quotable(row_start) && quotable(words)).then(|| {
         host_sh(&format!(
             "{HOST_TMUX_EXACT}t=\"$e\"{session}\"$c\"; \
-             q=$(tmux -u capture-pane -p -J -t \"$t\" | (LC_ALL=C; while IFS= read -r l; do case \"$l\" in \"{row_start}\"*\"{words}\"*) echo 1;; esac; done)); \
+             q=$(tmux -u capture-pane -p -J -t \"$t\" | (LC_ALL=C; while IFS= read -r l; do case \"$l\" in (\"{row_start}\"*\"{words}\"*) echo 1;; esac; done)); \
              [ -n \"$q\" ] && tmux send-keys -t \"$t\" Escape && echo sent"
         ))
     })
