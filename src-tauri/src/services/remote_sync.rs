@@ -1147,15 +1147,22 @@ pub fn should_use_rsync(rsync_local: bool, rsync_host: bool, is_dir: bool) -> bo
 /// Build the `ssh …` string for rsync's `-e` so the transfer rides the shared
 /// `cm-%C` ControlMaster (no second auth) with `ControlMaster=no` (use, don't
 /// create). Includes the port and keepalive. Pure (the control dir is a stable
-/// per-user path), unit-tested for the ControlPath wiring.
+/// per-user path), unit-tested for the ControlPath wiring and its quoting.
 pub fn rsync_ssh_transport(port: Option<u16>) -> String {
-    let control_path = crate::services::ssh_exec::control_dir().join("cm-%C");
+    rsync_ssh_transport_in(&crate::services::ssh_exec::control_dir(), port)
+}
+
+fn rsync_ssh_transport_in(control_dir: &Path, port: Option<u16>) -> String {
+    let control_path = control_dir.join("cm-%C");
     let mut parts: Vec<String> = vec![
         "ssh".to_string(),
         "-o".to_string(),
         "ControlMaster=no".to_string(),
         "-o".to_string(),
-        format!("ControlPath={}", control_path.to_string_lossy()),
+        // rsync splits this string on spaces outside quotes. (It reads `\` as
+        // a literal, so a path holding `'` fails to parse and the pull falls
+        // back to SFTP.)
+        crate::quote::posix(&format!("ControlPath={}", control_path.to_string_lossy())),
     ];
     for a in RSYNC_SSH_KEEPALIVE {
         parts.push((*a).to_string());
@@ -1196,6 +1203,9 @@ pub fn rsync_pull_flags(files_from: &Path) -> Vec<String> {
         "--exclude=.git".to_string(),
         "--from0".to_string(),
         format!("--files-from={}", files_from.to_string_lossy()),
+        // The host path (and the list's paths) reach the remote rsync as-is,
+        // never through the remote shell's word splitting and expansion.
+        "--protect-args".to_string(),
     ]
 }
 
@@ -2252,6 +2262,30 @@ mod tests {
         assert!(args[transport + 1].contains("ControlPath="));
         assert_eq!(args[transport + 2], "alice@host.example:/srv/p/");
         assert_eq!(args[transport + 3], "/local/mirror/");
+    }
+
+    /// rsync splits `-e` on spaces outside quotes: a ControlPath under a dir
+    /// with a space must stay one word. Checked through `sh`, which splits
+    /// single-quoted words the way rsync does.
+    #[cfg(unix)]
+    #[test]
+    fn rsync_transport_quotes_a_control_path_with_a_space() {
+        let dir = Path::new("/run/user/1000/my dir");
+        let e = rsync_ssh_transport_in(dir, Some(2222));
+        let out = std::process::Command::new("sh").arg("-c").arg(format!("printf '%s\\n' {e}")).output().unwrap();
+        let words: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect();
+        assert!(words.contains(&format!("ControlPath={}", dir.join("cm-%C").display())), "{words:?}");
+        assert_eq!(words[0], "ssh");
+        assert!(words.windows(2).any(|w| w[0] == "-p" && w[1] == "2222"), "{words:?}");
+    }
+
+    /// The host path is sent without the remote shell parsing it, so a
+    /// space or `$` in a project dir is one path, not two words or an expansion.
+    #[test]
+    fn rsync_pull_args_protect_the_host_path() {
+        let args = rsync_pull_args(&None, "host.example", None, "/srv/my $proj/", "/m/", Path::new("/tmp/list"));
+        assert!(args.iter().any(|arg| arg == "--protect-args"), "{args:?}");
+        assert!(args.iter().any(|arg| arg == "host.example:/srv/my $proj/"));
     }
 
     #[test]

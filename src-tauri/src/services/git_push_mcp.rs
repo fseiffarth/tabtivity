@@ -20,7 +20,6 @@
 //! survives a restart.
 use std::collections::HashMap;
 use app_core::sync::LockExt;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -47,6 +46,9 @@ const INLINE_WAIT: Duration = Duration::from_secs(18);
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const REMOTE_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const TRANSPORT_TIMEOUT: Duration = Duration::from_secs(600);
+/// stdout kept from a lane process (`ls-remote`, the pre-push hook, the push);
+/// past it the process is stopped.
+pub(crate) const LANE_OUTPUT_CAP: u64 = 4 * 1024 * 1024;
 /// Unapproved proposals expire after a day; records are kept as long.
 const RETENTION: Duration = Duration::from_secs(24 * 3600);
 const OUTPUT_CAP: usize = 8 * 1024;
@@ -364,44 +366,17 @@ pub fn is_protected(branch: &str, default_branch: Option<&str>, policy: &Project
 
 // ── Running processes with a cap ────────────────────────────────────────────
 
-use crate::services::git_bounded::BoundedOutput;
+use crate::services::git_bounded::{BoundedOutput, RunError};
 
-pub(crate) struct Ran { pub success: bool, pub code: Option<i32>, pub stdout: String, pub stderr: String }
+/// [`git_bounded::run`](crate::services::git_bounded::run) options for a lane
+/// process: stdout capped at [`LANE_OUTPUT_CAP`], stopped at `timeout`.
+pub(crate) fn lane_opts(stdin: Option<Vec<u8>>, timeout: Duration) -> crate::services::git_bounded::Opts {
+    crate::services::git_bounded::Opts { stdin, stdout_cap: Some(LANE_OUTPUT_CAP), timeout: Some(timeout), ..Default::default() }
+}
 
-/// Spawn, feed `stdin`, collect both streams, and give up after `timeout`
-/// (the whole subtree is reaped). `Err(None)` is a timeout.
-pub(crate) fn run_capped(mut cmd: std::process::Command, stdin: Option<&[u8]>, timeout: Duration) -> Result<Ran, Option<String>> {
-    use std::process::Stdio;
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| Some(e.to_string()))?;
-    if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        let _ = pipe.write_all(bytes);
-        drop(pipe);
-    }
-    let reader = |stream: Option<std::process::ChildStdout>| stream.map(|mut s| std::thread::spawn(move || { let mut b = Vec::new(); let _ = s.read_to_end(&mut b); b }));
-    let err_reader = |stream: Option<std::process::ChildStderr>| stream.map(|mut s| std::thread::spawn(move || { let mut b = Vec::new(); let _ = s.read_to_end(&mut b); b }));
-    let out = reader(child.stdout.take());
-    let err = err_reader(child.stderr.take());
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() >= timeout => {
-                crate::terminal::reap_child_subtree(child.id(), crate::terminal::ReapMode::Immediate);
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => return Err(Some(e.to_string())),
-        }
-    };
-    let collect = |h: Option<std::thread::JoinHandle<Vec<u8>>>| h.and_then(|h| h.join().ok()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-    let (stdout, stderr) = (collect(out), collect(err));
-    match status {
-        Some(status) => Ok(Ran { success: status.success(), code: status.code(), stdout, stderr }),
-        None => Err(None),
-    }
+/// A lane process's streams as text.
+pub(crate) fn lane_text(out: &std::process::Output) -> (String, String) {
+    (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 /// The hardened git command for this lane, with replace refs ignored:
@@ -543,21 +518,23 @@ pub(crate) fn ls_remote_raw(dir: &Path, url: &str, refs: &[String], token: Optio
     let mut cmd = hardened_git_command_in(dir, &args);
     if let Some(tok) = token { cmd.env(crate::app_env!("GIT_TOKEN"), tok); }
     cmd.env("GIT_TERMINAL_PROMPT", "0");
-    let ran = match run_capped(cmd, None, REMOTE_TIMEOUT) {
+    let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(None, REMOTE_TIMEOUT)) {
         Ok(ran) => ran,
-        Err(None) => return Err(Failure::new(Category::Network, "The remote did not answer within two minutes; try again later.")),
-        Err(Some(e)) => return Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
+        Err(RunError::TimedOut(_)) => return Err(Failure::new(Category::Network, "The remote did not answer within two minutes; try again later.")),
+        Err(e) => return Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
     };
-    if !ran.success {
-        let category = classify_remote_error(&ran.stderr);
+    let (stdout, stderr) = lane_text(&ran.output);
+    // A cut listing is stopped mid-line: never parsed as the remote's answer.
+    if ran.cut || !ran.output.status.success() {
+        let category = classify_remote_error(&stderr);
         let message = match category {
             Category::AuthFailed => "The remote refused the stored credentials. Ask the user to check the token in Settings → Git Hosting.",
             Category::Network => "The remote could not be reached; try again later.",
             _ => "The remote could not be queried.",
         };
-        return Err(Failure::new(category, message).with_output(clean_output(&format!("{}{}", ran.stdout, ran.stderr), token)));
+        return Err(Failure::new(category, message).with_output(clean_output(&format!("{stdout}{stderr}"), token)));
     }
-    Ok(ran.stdout)
+    Ok(stdout)
 }
 
 fn commits_between(dir: &Path, base: &str, head: &str) -> (Vec<String>, String) {
@@ -685,17 +662,21 @@ fn preflight(dir: &Path, boundary: HookBoundary<'_>, mut plan: Plan) -> Result<(
     let Some(hook) = resolve_pre_push_hook(dir) else { return Ok((plan, String::new())) };
     let mut outputs: Vec<String> = Vec::new();
     for round in 0..2 {
-        let cmd = preflight_command(boundary, &hook, dir, &plan.remote, &plan.url)?;
+        let mut cmd = preflight_command(boundary, &hook, dir, &plan.remote, &plan.url)?;
         let line = format!("refs/heads/{b} {h} refs/heads/{b} {r}\n", b = plan.branch, h = plan.head, r = plan.remote_sha);
-        let ran = match run_capped(cmd, Some(line.as_bytes()), PREFLIGHT_TIMEOUT) {
+        let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(Some(line.into_bytes()), PREFLIGHT_TIMEOUT)) {
             Ok(ran) => ran,
-            Err(None) => return Err(Failure::new(Category::PreflightTimeout, "The pre-push hook did not finish within five minutes and was stopped; nothing was pushed.")),
-            Err(Some(e)) => return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook could not be started: {e}"))),
+            Err(RunError::TimedOut(_)) => return Err(Failure::new(Category::PreflightTimeout, "The pre-push hook did not finish within five minutes and was stopped; nothing was pushed.")),
+            Err(e) => return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook could not be started: {e}"))),
         };
-        outputs.push(join_streams(&ran.stdout, &ran.stderr));
+        let (stdout, stderr) = lane_text(&ran.output);
+        outputs.push(join_streams(&stdout, &stderr));
         let output = clean_output(&outputs.join("\n"), None);
-        if !ran.success {
-            return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook exited with status {}; nothing was pushed. Fix what its output reports and ask again.", ran.code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into()))).with_output(output));
+        if ran.cut {
+            return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook wrote more than {} MiB of output and was stopped; nothing was pushed.", LANE_OUTPUT_CAP / (1024 * 1024))).with_output(output));
+        }
+        if !ran.output.status.success() {
+            return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook exited with status {}; nothing was pushed. Fix what its output reports and ask again.", ran.output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()))).with_output(output));
         }
         // The hook may have committed (a version bump): re-resolve and re-check.
         let head = git(dir, &["rev-parse", "--verify", &format!("refs/heads/{}^{{commit}}", plan.branch)]).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
@@ -732,18 +713,19 @@ fn transport(dir: &Path, plan: &Plan, token: Option<&str>, origins: &[String]) -
     // shown on the approved card (Propose) is what leaves, wherever the
     // branch points by now.
     let refspec = refspec(&plan.head, &plan.branch).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
-    let cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
+    let mut cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
     before_transport();
-    let ran = match run_capped(cmd, None, TRANSPORT_TIMEOUT) {
+    let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(None, TRANSPORT_TIMEOUT)) {
         Ok(ran) => ran,
-        Err(None) => return Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
-        Err(Some(e)) => return Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
+        Err(RunError::TimedOut(_)) => return Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
+        Err(e) => return Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
     };
-    let output = clean_output(&join_streams(&ran.stdout, &ran.stderr), token);
-    if ran.success {
+    let (stdout, stderr) = lane_text(&ran.output);
+    let output = clean_output(&join_streams(&stdout, &stderr), token);
+    if ran.output.status.success() {
         return Ok(output);
     }
-    let category = classify_remote_error(&format!("{}\n{}", ran.stdout, ran.stderr));
+    let category = classify_remote_error(&format!("{stdout}\n{stderr}"));
     let message = match category {
         Category::AuthFailed => "The remote refused the stored credentials. Ask the user to check the token in Settings → Git Hosting.",
         Category::Network => "The remote could not be reached; try again later.",
@@ -2014,6 +1996,29 @@ mod tests {
         assert!(failure.output.contains("hook says hi"));
     }
 
+    /// The hook is agent-writable: one that floods stdout is stopped at the
+    /// lane's cap and refused, never read whole into the main process.
+    #[cfg(unix)]
+    #[test]
+    fn a_preflight_hook_flooding_stdout_is_stopped_at_the_cap() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, remote, work) = pair();
+        commit(&work, "b.txt");
+        let hooks = work.join(".githooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-push");
+        std::fs::write(&hook, format!("#!/bin/sh\nhead -c {} /dev/zero\n", LANE_OUTPUT_CAP * 4)).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        sh(&work, &["config", "core.hooksPath", ".githooks"]);
+        let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
+        let before = plan(&work, &policy, None, None, &[]).unwrap();
+        let failure = preflight(&work, HookBoundary::Host, before).unwrap_err();
+        assert_eq!(failure.category, Category::PreflightFailed);
+        assert!(failure.message.contains("output"), "{}", failure.message);
+        assert!(failure.output.len() as u64 <= LANE_OUTPUT_CAP + 1024, "kept {} bytes", failure.output.len());
+    }
+
     /// Gap 18: the hook is agent-writable, so a Pusher whose binding holds no
     /// fence scope is refused and the hook never runs on the host; a recorded
     /// scope is where the preflight goes, and a fence that cannot run there
@@ -2074,12 +2079,12 @@ mod tests {
         // The scope is the root work dir: a known scope without a project entry.
         let root = crate::storage::root_work_dir();
         let _ = std::fs::create_dir_all(&root);
-        let cmd = match super::super::agent_fence::one_shot_command("root", &hook.path().to_string_lossy(), &[], &root) {
+        let mut cmd = match super::super::agent_fence::one_shot_command("root", &hook.path().to_string_lossy(), &[], &root) {
             Ok(cmd) => cmd,
             Err(e) => { eprintln!("fence refused ({e}) — skipping"); return; }
         };
-        let ran = run_capped(cmd, None, Duration::from_secs(30)).expect("bwrap ran");
-        assert!(!marker.exists(), "the fenced hook wrote into $HOME: {}", ran.stderr);
+        let ran = crate::services::git_bounded::run(&mut cmd, lane_opts(None, Duration::from_secs(30))).expect("bwrap ran");
+        assert!(!marker.exists(), "the fenced hook wrote into $HOME: {}", lane_text(&ran.output).1);
         let _ = std::fs::remove_file(&marker);
     }
 

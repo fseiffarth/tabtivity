@@ -84,9 +84,9 @@
 
 use std::collections::{HashMap, HashSet};
 use app_core::sync::LockExt;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -402,56 +402,16 @@ const LIST_LIMIT: usize = 64 * 1024 * 1024;
 /// Runs `cmd` with `stdin` fed in, its output read whole (at most `limit`
 /// bytes of stdout), killed at [`call_deadline`].
 fn run(mut cmd: Command, stdin: Option<Vec<u8>>, limit: usize) -> Result<Output, RunError> {
-    let deadline = call_deadline();
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { RunError::Missing } else { RunError::Io })?;
-    let writer = match (stdin, child.stdin.take()) {
-        (Some(bytes), Some(mut pipe)) => Some(std::thread::spawn(move || {
-            let _ = pipe.write_all(&bytes);
-        })),
-        _ => None,
-    };
-    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(RunError::Io);
-    };
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.take(limit as u64 + 1).read_to_end(&mut buf);
-        buf
-    });
-    let errors = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.take(64 * 1024).read_to_end(&mut buf);
-        buf
-    });
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
-                // The whole subtree, so no descendant keeps the pipes the
-                // readers below are joined on (#2349).
-                crate::terminal::reap_child_subtree(child.id(), crate::terminal::ReapMode::Immediate);
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
-    let stdout = reader.join().unwrap_or_default();
-    let stderr = errors.join().unwrap_or_default();
-    if let Some(writer) = writer {
-        let _ = writer.join();
-    }
-    match status {
-        Some(status) if stdout.len() <= limit => Ok(Output { status, stdout, stderr }),
-        _ => Err(RunError::Timeout),
+    use crate::services::git_bounded as bounded;
+    let timeout = call_deadline().saturating_duration_since(Instant::now());
+    // No pre-check: the round vets the files it reads itself (a FIFO
+    // `info/attributes` is "no undo", not a failure), and the deadline bounds git.
+    let opts = bounded::Opts { stdin, stdout_cap: Some(limit as u64 + 1), timeout: Some(timeout), no_precheck: true };
+    match bounded::run(&mut cmd, opts) {
+        Ok(ran) if !ran.cut => Ok(ran.output),
+        Ok(_) | Err(bounded::RunError::TimedOut(_)) => Err(RunError::Timeout),
+        Err(bounded::RunError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(RunError::Missing),
+        Err(_) => Err(RunError::Io),
     }
 }
 

@@ -1490,13 +1490,14 @@ fn remove_blob_files(files: &[std::path::PathBuf]) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn remove_blob_files_elevated(files: &[&std::path::PathBuf]) -> Result<(), String> {
-    if !crate::paths::binary_on_path("pkexec") {
+    // Both by absolute path: pkexec looks a bare `rm` up on this user's PATH.
+    let Ok([pkexec, rm]) = crate::paths::pkexec_argv("rm") else {
         return Err(
             "permission denied: these files belong to the Ollama system service, and pkexec is not available to remove them".into(),
         );
-    }
-    let status = std::process::Command::new("pkexec")
-        .arg("rm")
+    };
+    let status = std::process::Command::new(pkexec)
+        .arg(rm)
         .arg("-f")
         .arg("--")
         .args(files)

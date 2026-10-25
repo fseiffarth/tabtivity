@@ -481,10 +481,12 @@ pub fn docker_exec_args(
     a.push(name.to_string());
     a.push("sh".to_string());
     a.push("-c".to_string());
-    // `pidfile` is built from `storage::project_key` output — shell-safe by construction.
     let bin = container_path(&crate::services::agent_bin::bin_dir().to_string_lossy());
-    let bin = bin.replace('\'', "'\"'\"'");
-    a.push(format!("export PATH='{bin}':\"$PATH\"; echo $$ > {pidfile}; exec \"$@\""));
+    a.push(format!(
+        "export PATH={}:\"$PATH\"; echo $$ > {}; exec \"$@\"",
+        crate::quote::posix(&bin),
+        crate::quote::posix(pidfile)
+    ));
     a.push("sh".to_string());
     a.push(cmd.to_string());
     a.extend(cmd_args.iter().cloned());
@@ -2295,10 +2297,34 @@ mod tests {
         assert_eq!(out[name + 2], "-c");
         assert!(out[name + 3].starts_with("export PATH='"));
         assert!(out[name + 3].contains("/bin"));
-        assert!(out[name + 3].ends_with(concat!("echo $$ > /tmp/", crate::app_slug!(), "-tab-t1-0.pid; exec \"$@\"")));
+        assert!(out[name + 3].ends_with(concat!("echo $$ > '/tmp/", crate::app_slug!(), "-tab-t1-0.pid'; exec \"$@\"")));
         assert_eq!(out[name + 4], "sh");
         // Original command + resume args preserved in order after the wrapper.
         assert_eq!(&out[name + 5..], &["claude", "--resume", "uuid-1"]);
+    }
+
+    /// The wrapper script quotes what it embeds: a pidfile path with a space
+    /// or an apostrophe is written whole, and the command runs with its args.
+    #[cfg(unix)]
+    #[test]
+    fn exec_wrapper_quotes_the_pidfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("tab it's 0.pid");
+        let out = docker_exec_args(
+            "c",
+            "/w",
+            &env(&[]),
+            &env(&[]),
+            &pidfile.to_string_lossy(),
+            "printf",
+            &args(&["%s", "a b"]),
+        );
+        let name = pos(&out, "c").unwrap();
+        let ran = std::process::Command::new(&out[name + 1]).args(&out[name + 2..]).output().unwrap();
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+        assert_eq!(ran.stdout, b"a b");
+        let pid = std::fs::read_to_string(&pidfile).expect("the pid lands at the quoted path");
+        assert!(pid.trim().parse::<u32>().is_ok(), "{pid:?}");
     }
 
     #[test]

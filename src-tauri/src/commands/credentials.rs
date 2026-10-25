@@ -799,8 +799,12 @@ mod tests {
         let mut opts = hostile("root:vpn-ok", serde_json::json!({ "kind": "vpn", "config": config }));
         let target = apply_login(&mut opts, &window()).unwrap();
         assert_eq!(target, Some(LoginTarget::Vpn { config: config.clone() }));
-        assert_eq!(opts.cmd, "pkexec");
-        assert_eq!(&opts.args[..3], ["openvpn", "--config", config.as_str()]);
+        // Both by absolute path: pkexec resolves a bare name through the caller's PATH.
+        let stem = |p: &str| std::path::Path::new(p).file_stem().map(|s| s.to_string_lossy().into_owned());
+        assert!(std::path::Path::new(&opts.cmd).is_absolute(), "{}", opts.cmd);
+        assert_eq!(stem(&opts.cmd).as_deref(), Some("pkexec"));
+        assert_eq!(stem(&opts.args[0]).as_deref(), Some("openvpn"));
+        assert_eq!(&opts.args[1..3], ["--config", config.as_str()]);
         assert!(opts.env.is_empty());
     }
 

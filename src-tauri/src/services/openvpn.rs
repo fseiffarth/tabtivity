@@ -258,17 +258,49 @@ fn is_declined(config: &str) -> bool {
 /// connect does (a plain kill would get EPERM).
 #[cfg(target_os = "linux")]
 fn kill_root_pid(pid: i32) {
+    pkexec_kill(pid);
+}
+
+/// `pkexec kill -TERM` a root-owned pid, reporting whether it was delivered (vs.
+/// a refused polkit prompt, or no root-owned `pkexec`/`kill` to run). Already
+/// TERMed (or already gone) counts as delivered without asking again: a second
+/// `pkexec` would only cost the user a second password. See `signalled_pids`.
+#[cfg(target_os = "linux")]
+fn pkexec_kill(pid: i32) -> bool {
     if kill_already_handled(pid) {
-        return;
+        return true;
     }
-    let status = Command::new("pkexec")
-        .arg("kill")
+    let Ok(argv) = pkexec_argv("kill") else { return false };
+    let ok = Command::new(&argv[0])
+        .args(&argv[1..])
         .arg("-TERM")
         .arg(pid.to_string())
-        .status();
-    if matches!(status, Ok(s) if s.success()) {
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok {
         mark_signalled(pid);
     }
+    ok
+}
+
+/// `pkexec <program>`, both by absolute path from the root-owned system dirs
+/// ([`crate::paths::pkexec_argv`]): never a bare name pkexec would look up on
+/// the caller's `PATH`.
+#[cfg(target_os = "linux")]
+fn pkexec_argv(program: &str) -> Result<Vec<String>, String> {
+    crate::paths::elevated_argv(program, system_bin)
+        .map(|argv| argv.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+        .map_err(|bin| format!("no root-owned `{bin}` in the system directories — install {bin} to use VPN-gated projects"))
+}
+
+/// [`crate::paths::system_executable`]; tests on a host without pkexec or
+/// OpenVPN get a stand-in path under `/usr/bin` (nothing is run through it).
+#[cfg(target_os = "linux")]
+fn system_bin(bin: &str) -> Option<PathBuf> {
+    let found = crate::paths::system_executable(bin);
+    #[cfg(test)]
+    let found = found.or_else(|| Some(Path::new("/usr/bin").join(bin)));
+    found
 }
 
 #[cfg(target_os = "macos")]
@@ -492,7 +524,7 @@ pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
 /// How each OS starts the elevated `openvpn` of [`interactive_connect_argv`].
 #[cfg(target_os = "linux")]
 fn interactive_launcher() -> Result<Vec<String>, String> {
-    Ok(vec!["pkexec".to_string(), "openvpn".to_string()])
+    pkexec_argv("openvpn")
 }
 
 /// Windows: no `pkexec`; `openvpn.exe` must already be running elevated. Resolved
@@ -505,13 +537,17 @@ fn interactive_launcher() -> Result<Vec<String>, String> {
 
 /// macOS: `sudo` on the visible tty (no `pkexec`/polkit on macOS; the user types
 /// the password straight into the terminal). The binary is resolved to an absolute
-/// path because a GUI app's `PATH` lacks the Homebrew prefixes.
+/// path because a GUI app's `PATH` lacks the Homebrew prefixes; `sudo` is the
+/// root-owned system one, never a copy on the user's `PATH` that would read the
+/// password typed into it.
 #[cfg(target_os = "macos")]
 fn interactive_launcher() -> Result<Vec<String>, String> {
+    let sudo = crate::paths::system_executable("sudo")
+        .ok_or_else(|| "no root-owned `sudo` in the system directories".to_string())?;
     let exe = resolve_openvpn()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "openvpn".to_string());
-    Ok(vec!["sudo".to_string(), exe])
+    Ok(vec![sudo.to_string_lossy().into_owned(), exe])
 }
 
 /// Any other OS has no interactive tunnel.
@@ -604,11 +640,12 @@ struct InteractiveArm {
     management: Vec<String>,
 }
 
-/// True if `openvpn` and `pkexec` are both available on `PATH` (both are needed:
-/// OpenVPN to build the tunnel, polkit's `pkexec` to launch it elevated).
+/// True if root-owned `openvpn` and `pkexec` are both in the system directories
+/// (both are needed: OpenVPN to build the tunnel, polkit's `pkexec` to launch it
+/// elevated; a copy on the user's `PATH` is never run as root).
 #[cfg(target_os = "linux")]
 pub fn openvpn_available() -> bool {
-    crate::paths::binary_on_path("openvpn") && crate::paths::binary_on_path("pkexec")
+    crate::paths::system_executable("openvpn").is_some() && crate::paths::system_executable("pkexec").is_some()
 }
 
 /// True if `openvpn.exe` can be located (PATH, a per-user dir, or the standard
@@ -1151,12 +1188,8 @@ pub fn management_args(port: u16, pwfile: &Path) -> Vec<String> {
 /// is armed and teardown keeps the elevated kill.
 #[cfg(unix)]
 fn random_hex(bytes: usize) -> Option<String> {
-    use std::io::Read;
     let mut buf = vec![0u8; bytes];
-    std::fs::File::open("/dev/urandom")
-        .ok()?
-        .read_exact(&mut buf)
-        .ok()?;
+    getrandom::fill(&mut buf).ok()?;
     Some(crate::digest::hex(&buf))
 }
 
@@ -1564,8 +1597,15 @@ pub fn connect_streaming(
         }
     };
 
-    let spawn_result = Command::new("pkexec")
-        .arg("openvpn")
+    let launcher = match pkexec_argv("openvpn") {
+        Ok(argv) => argv,
+        Err(e) => {
+            remove_credfiles();
+            return Err(e);
+        }
+    };
+    let spawn_result = Command::new(&launcher[0])
+        .args(&launcher[1..])
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1780,7 +1820,7 @@ pub fn disconnect(config: &str) -> Result<(), String> {
 fn disconnect_interactive_checked(config: &str) -> bool {
     match interactive_state(config) {
         Interactive::Alive(pid) => {
-            if !kill_root_pid_checked(pid) {
+            if !pkexec_kill(pid) {
                 return false;
             }
             if let Some(pidfile) = interactive_registry().lock_ok().remove(config) {
@@ -1795,28 +1835,6 @@ fn disconnect_interactive_checked(config: &str) -> bool {
         }
         Interactive::None => true,
     }
-}
-
-/// `pkexec kill -TERM` a root-owned pid, reporting whether it was delivered (vs. a
-/// refused polkit prompt). The checked twin of [`kill_root_pid`].
-#[cfg(target_os = "linux")]
-fn kill_root_pid_checked(pid: i32) -> bool {
-    // Already TERMed (or already gone) — the tunnel is down or going down, and a
-    // second `pkexec` would only cost the user a second password. See `signalled_pids`.
-    if kill_already_handled(pid) {
-        return true;
-    }
-    let ok = Command::new("pkexec")
-        .arg("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if ok {
-        mark_signalled(pid);
-    }
-    ok
 }
 
 /// Like [`disconnect`], but reports whether the tunnel actually went down.
@@ -1887,23 +1905,10 @@ fn kill_pidfile(pidfile: &Path) -> bool {
     let Some(pid) = pidfile_pid(pidfile) else {
         return true;
     };
-    // Already TERMed (or already gone): report success without re-elevating, so the
+    // Already TERMed (or already gone): success without re-elevating, so the
     // exit-time `disconnect_all` never re-prompts for a tunnel the on-quit teardown
-    // already took down. See `signalled_pids`.
-    if kill_already_handled(pid) {
-        return true;
-    }
-    let ok = Command::new("pkexec")
-        .arg("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if ok {
-        mark_signalled(pid);
-    }
-    ok
+    // already took down.
+    pkexec_kill(pid)
 }
 
 /// Tear down every live tunnel. Used at app exit; errors are swallowed so
@@ -3171,7 +3176,11 @@ mod tests {
         let cfg = "/home/u/my work.ovpn";
         let argv = interactive_connect_argv(cfg).unwrap();
         // Elevated via pkexec; passphrase typed interactively (no --askpass file).
-        assert_eq!(&argv[..4], ["pkexec", "openvpn", "--config", cfg]);
+        // Both by absolute path: pkexec resolves a bare name through the caller's PATH.
+        assert!(Path::new(&argv[0]).is_absolute() && Path::new(&argv[1]).is_absolute(), "{argv:?}");
+        assert_eq!(Path::new(&argv[0]).file_stem().unwrap(), "pkexec");
+        assert_eq!(Path::new(&argv[1]).file_stem().unwrap(), "openvpn");
+        assert_eq!(&argv[2..4], ["--config", cfg]);
         // #868: the config's own scripts never run as root — and the override
         // follows the config, so the file's `script-security 2` cannot win.
         assert_eq!(&argv[4..6], ["--script-security", "1"]);

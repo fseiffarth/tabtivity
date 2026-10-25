@@ -22,7 +22,8 @@
 //!   the same check (the user's global values are left alone). Nested
 //!   `.gitignore`s can't all be checked cheaply; the timeout covers them.
 //! - [`run`]/[`output`]: spawn in its own process group, read both streams on
-//!   threads, and stop at a deadline — the whole child subtree is killed and
+//!   threads (each capped: [`DEFAULT_STDOUT_CAP`], [`STDERR_CAP`]), and stop
+//!   at a deadline — the whole child subtree is killed and
 //!   the child reaped — answering a clear error, never a fake empty output.
 //!
 //! Timeouts never cut legitimate work: [`READ_TIMEOUT`] (2 min) for reads and
@@ -309,12 +310,21 @@ fn warn_once(why: &str) {
 
 // ── Bounded run ─────────────────────────────────────────────────────────────
 
+/// stdout kept when [`Opts::stdout_cap`] is `None`: far over any listing,
+/// diff or blob Tabtivity shows, and a bound on a child that writes forever.
+pub(crate) const DEFAULT_STDOUT_CAP: u64 = 256 * 1024 * 1024;
+
+/// stderr kept: its first and last halves. The rest is read and dropped, so
+/// a chatty command is never stopped for it.
+pub(crate) const STDERR_CAP: u64 = 4 * 1024 * 1024;
+
 /// What [`run`] may add to a plain `output()`.
 #[derive(Default)]
 pub(crate) struct Opts {
     /// Bytes fed to stdin (from a thread); `None` = stdin is null.
     pub stdin: Option<Vec<u8>>,
-    /// Stop reading stdout after this many bytes and stop git ([`Ran::cut`]).
+    /// Stop reading stdout after this many bytes and stop git ([`Ran::cut`]);
+    /// `None` = [`DEFAULT_STDOUT_CAP`].
     pub stdout_cap: Option<u64>,
     /// The ceiling; `None` = [`timeout_for`] the command's own arguments.
     pub timeout: Option<Duration>,
@@ -328,15 +338,41 @@ pub(crate) struct Ran {
     pub cut: bool,
 }
 
+/// Why [`run`] has no output to give.
+#[derive(Debug)]
+pub(crate) enum RunError {
+    /// [`hazard`] found a blocking file; nothing ran.
+    Refused(String),
+    /// The program could not be started or waited on.
+    Io(std::io::Error),
+    /// Stopped at its ceiling.
+    TimedOut(String),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(why) | Self::TimedOut(why) => f.write_str(why),
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<RunError> for String {
+    fn from(e: RunError) -> String {
+        e.to_string()
+    }
+}
+
 /// `cmd.output()`, bounded: refused when [`hazard`] finds a blocking file,
 /// and stopped (subtree killed, child reaped) at [`timeout_for`] its verb.
 pub(crate) fn output(mut cmd: Command) -> Result<Output, String> {
-    run(&mut cmd, Opts::default()).map(|r| r.output)
+    whole(run(&mut cmd, Opts::default())?)
 }
 
 /// [`output`] with an explicit ceiling.
 pub(crate) fn output_within(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
-    run(&mut cmd, Opts { timeout: Some(timeout), ..Opts::default() }).map(|r| r.output)
+    whole(run(&mut cmd, Opts { timeout: Some(timeout), ..Opts::default() })?)
 }
 
 /// [`output`] as a method, for a builder chain:
@@ -347,17 +383,67 @@ pub(crate) trait BoundedOutput {
 
 impl BoundedOutput for Command {
     fn bounded_output(&mut self) -> Result<Output, String> {
-        run(self, Opts::default()).map(|r| r.output)
+        whole(run(self, Opts::default())?)
     }
 }
 
+/// A run at the default cap: a cut stdout is an error, never a short output
+/// that reads as git's whole answer.
+fn whole(ran: Ran) -> Result<Output, String> {
+    if ran.cut {
+        return Err(format!(
+            "git wrote more than {} MiB and was stopped.",
+            DEFAULT_STDOUT_CAP / (1024 * 1024)
+        ));
+    }
+    Ok(ran.output)
+}
+
+/// Read `s` to its end, keeping the first and last `cap / 2` bytes and a
+/// marker for what was dropped between them.
+fn read_head_and_tail(mut s: impl Read, cap: u64) -> Vec<u8> {
+    let half = (cap / 2) as usize;
+    let mut head = Vec::new();
+    let mut tail = Vec::new();
+    let mut dropped: u64 = 0;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = match s.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        let mut bytes = &chunk[..n];
+        if head.len() < half {
+            let take = bytes.len().min(half - head.len());
+            head.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+        }
+        tail.extend_from_slice(bytes);
+        if tail.len() > 2 * half {
+            let excess = tail.len() - half;
+            dropped += excess as u64;
+            tail.drain(..excess);
+        }
+    }
+    if tail.len() > half {
+        let excess = tail.len() - half;
+        dropped += excess as u64;
+        tail.drain(..excess);
+    }
+    if dropped > 0 {
+        head.extend_from_slice(format!("\n[… {dropped} bytes cut …]\n").as_bytes());
+    }
+    head.extend_from_slice(&tail);
+    head
+}
+
 /// Spawn `cmd`, feed and read it, and stop it at its deadline.
-pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, String> {
+pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, RunError> {
     let initializing = matches!(verb(&cmd.get_args().collect::<Vec<_>>()).as_deref(), Some("init" | "clone"));
     if !opts.no_precheck && !initializing {
         if let Some(why) = cmd.get_current_dir().and_then(hazard) {
             warn_once(&why);
-            return Err(why);
+            return Err(RunError::Refused(why));
         }
     }
     let timeout = capped(opts.timeout.unwrap_or_else(|| timeout_of(cmd)));
@@ -370,7 +456,7 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, String> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let mut child = cmd.spawn().map_err(RunError::Io)?;
     #[cfg(test)]
     LAST_PID.with(|p| p.set(Some(child.id())));
     let feeder = match (opts.stdin, child.stdin.take()) {
@@ -382,29 +468,18 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, String> {
     let (done_tx, done_rx) = mpsc::channel::<bool>();
     let stdout = child.stdout.take().map(|s| {
         let tx = done_tx.clone();
-        let cap = opts.stdout_cap;
+        let cap = opts.stdout_cap.unwrap_or(DEFAULT_STDOUT_CAP);
         std::thread::spawn(move || {
             let mut buf = Vec::new();
-            let cut = match cap {
-                Some(cap) => {
-                    let _ = s.take(cap).read_to_end(&mut buf);
-                    buf.len() as u64 >= cap
-                }
-                None => {
-                    let mut s = s;
-                    let _ = s.read_to_end(&mut buf);
-                    false
-                }
-            };
-            let _ = tx.send(cut);
+            let _ = s.take(cap).read_to_end(&mut buf);
+            let _ = tx.send(buf.len() as u64 >= cap);
             buf
         })
     });
-    let stderr = child.stderr.take().map(|mut s| {
+    let stderr = child.stderr.take().map(|s| {
         let tx = done_tx.clone();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = s.read_to_end(&mut buf);
+            let buf = read_head_and_tail(s, STDERR_CAP);
             let _ = tx.send(false);
             buf
         })
@@ -449,7 +524,7 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, String> {
                 }
                 Err(e) => {
                     stop(&mut child);
-                    return Err(e.to_string());
+                    return Err(RunError::Io(e));
                 }
             }
         }
@@ -478,11 +553,11 @@ pub(crate) fn run(cmd: &mut Command, opts: Opts) -> Result<Ran, String> {
     let (stdout, stderr) = (collect(stdout), collect(stderr));
     if timed_out {
         let what = verb(&cmd.get_args().collect::<Vec<_>>()).unwrap_or_default();
-        return Err(format!(
+        return Err(RunError::TimedOut(format!(
             "git {what} timed out after {} s and was stopped. A file it reads (an ignore or attributes \
              file, the index, a ref) may be a named pipe or device.",
             timeout.as_secs()
-        ));
+        )));
     }
     Ok(Ran { output: Output { status, stdout, stderr }, cut })
 }
@@ -720,6 +795,37 @@ mod tests {
         let sleeper = sleeper.expect("the shell never started its sleeper");
         // The sleeper is reparented and reaped by init; give it a moment.
         assert!(crate::test_util::wait_until(crate::test_util::PATIENCE, || gone(sleeper)), "the grandchild survived");
+    }
+
+    /// A child writing without end (an agent-writable hook running `yes`)
+    /// is stopped at the default stdout cap instead of filling memory.
+    #[cfg(unix)]
+    #[test]
+    fn unbounded_stdout_is_cut_at_the_default_cap() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exec yes"]);
+        let ran = run(&mut cmd, Opts { timeout: Some(NOT_A_HANG), ..Opts::default() }).expect("ran");
+        assert!(ran.cut, "not cut at the default cap");
+        assert_eq!(ran.output.stdout.len() as u64, DEFAULT_STDOUT_CAP);
+        assert!(!ran.output.status.success(), "a cut child is stopped");
+        // The plain wrappers answer an error, not the cut output.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exec yes"]);
+        assert!(output_within(cmd, NOT_A_HANG).unwrap_err().contains("MiB"));
+    }
+
+    /// stderr keeps its head and tail within [`STDERR_CAP`]; the child is
+    /// drained, not stopped, so a chatty but working command still succeeds.
+    #[cfg(unix)]
+    #[test]
+    fn a_flood_on_stderr_is_capped_and_drained() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("printf first >&2; head -c {} /dev/zero >&2; printf last >&2", STDERR_CAP * 4)]);
+        let out = output_within(cmd, NOT_A_HANG).expect("ran");
+        assert!(out.status.success());
+        assert!(out.stderr.len() as u64 <= STDERR_CAP + 64, "kept {} bytes", out.stderr.len());
+        assert!(out.stderr.starts_with(b"first"));
+        assert!(out.stderr.ends_with(b"last"));
     }
 
     #[cfg(unix)]

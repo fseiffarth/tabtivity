@@ -172,6 +172,23 @@ pub fn system_executable(bin: &str) -> Option<PathBuf> {
     }
 }
 
+/// `[pkexec, program]` for an elevated spawn, both from [`system_executable`]:
+/// pkexec looks a bare name up on the caller's `PATH`, so a planted
+/// `~/.local/bin/kill` would run as root once polkit approved. `Err` is the
+/// name of the one that has no root-owned copy.
+#[cfg(target_os = "linux")]
+pub fn pkexec_argv(program: &str) -> Result<[PathBuf; 2], String> {
+    elevated_argv(program, system_executable)
+}
+
+/// [`pkexec_argv`] over a resolver. Never answers a bare name.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn elevated_argv(program: &str, resolve: impl Fn(&str) -> Option<PathBuf>) -> Result<[PathBuf; 2], String> {
+    let pkexec = resolve("pkexec").ok_or_else(|| "pkexec".to_string())?;
+    let program_path = resolve(program).ok_or_else(|| program.to_string())?;
+    Ok([pkexec, program_path])
+}
+
 /// The program to spawn for one of Tabtivity's own helpers ([`TRUSTED_HELPERS`]):
 /// its root-owned system copy when there is one. `None` for any other name,
 /// and for a helper the system lacks (Homebrew's tmux, a per-user Git for
@@ -812,6 +829,17 @@ fn die_with_parent(command: &mut Command) {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Elevation takes both programs from the resolver, by absolute path, and
+    /// refuses when either is missing rather than handing pkexec a bare name.
+    #[test]
+    fn elevated_argv_never_falls_back_to_a_bare_name() {
+        let root = if cfg!(windows) { Path::new(r"C:\sys") } else { Path::new("/sys-bin") };
+        let argv = elevated_argv("kill", |bin: &str| Some(root.join(bin))).unwrap();
+        assert_eq!(argv, [root.join("pkexec"), root.join("kill")]);
+        assert_eq!(elevated_argv("kill", |bin: &str| (bin != "pkexec").then(|| root.join(bin))).unwrap_err(), "pkexec");
+        assert_eq!(elevated_argv("kill", |bin: &str| (bin != "kill").then(|| root.join(bin))).unwrap_err(), "kill");
+    }
 
     fn env<'a>(values: &'a [(&str, &str)]) -> impl FnMut(&str) -> Option<String> + 'a {
         let map = values.iter().copied().collect::<HashMap<_, _>>();
