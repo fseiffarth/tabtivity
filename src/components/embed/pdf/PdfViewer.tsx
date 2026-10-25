@@ -2846,7 +2846,7 @@ function PdfCanvas({
   }, [marking, markup.key, markupOwner]);
   // While a round of these marks is with an agent tab, that tab's prompt strip
   // offers the way back here (`stores/viewers/markupLinks`).
-  const linkTarget = marking && markup.round && tabKey ? markup.target : null;
+  const linkTarget = marking && markup.round && tabKey ? markup.roundTarget : null;
   usePdfMarkupLink(
     linkTarget?.ptyId ?? null,
     linkTarget && tabKey ? { tabKey, name: basename(path), owner: markupOwner } : null,
