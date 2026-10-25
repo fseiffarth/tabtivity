@@ -1062,10 +1062,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * newer one further down (the reader already shows a prompt, and a pinned
    * older one would read as the question to the answer below it). Read off
    * the chat as drawn (`data-prompt`), so the stored session and the screen
-   * reading pin alike. The subagent index sticks over the top of the chat:
+   * reading pin alike, with the bubble's own time (`.transcript-time`). The subagent index sticks over the top of the chat:
    * a bubble behind it is out of sight too, and the pin sits under it
    * (`pinnedTop`, px below the view's top) — drawn over it, it was hidden. */
   const [pinnedPrompt, setPinnedPrompt] = useState("");
+  const [pinnedTime, setPinnedTime] = useState("");
   const [pinnedTop, setPinnedTop] = useState(0);
   const pinnedPromptEl = useRef<HTMLElement | null>(null);
   const checkPinnedPrompt = useCallback(() => {
@@ -1087,6 +1088,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     }
     pinnedPromptEl.current = owner;
     setPinnedPrompt((owner?.dataset.prompt ?? "").trim());
+    setPinnedTime(owner?.querySelector(":scope > .transcript-time")?.textContent ?? "");
   }, []);
   /** Whether Terminal view is panned to the newest rows. Kept from the box's
    * own scroll events rather than measured when it is wanted: a resize is the
@@ -4776,6 +4778,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {!openStep && pinnedPrompt && <button className="readable-pinned-prompt" style={pinnedTop ? { top: pinnedTop + 6 } : undefined} aria-label={t("mobile.focus.lastPrompt")}
           onClick={() => pinnedPromptEl.current?.scrollIntoView({ block: "start", behavior: "smooth" })}>
           <span className="readable-pinned-prompt-text">{pinnedPrompt}</span>
+          {pinnedTime && <small className="transcript-time">{pinnedTime}</small>}
           {isUntested("mobile.focus.pinnedPrompt") && <em>{t("mobile.focus.untested")}</em>}
         </button>}
         {/* A chat copies message by message and picks its source under the

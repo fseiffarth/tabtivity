@@ -1107,6 +1107,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
    back to the whole of it. */
 .readable-pinned-prompt { position:absolute; top:6px; right:14px; z-index:1; display:flex; align-items:baseline; gap:8px; max-width:min(88%, calc(100% - 28px)); padding:6px 12px; border:1px solid #4a3f8a; border-radius:14px 14px 4px 14px; background:#2b2650; color:#e9e4ff; font:400 .82rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; box-shadow:0 4px 14px rgba(0,0,0,.45); }
 .readable-pinned-prompt-text { display:-webkit-box; min-width:0; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:pre-wrap; overflow-wrap:anywhere; }
+.readable-pinned-prompt .transcript-time { flex:0 0 auto; margin:0; align-self:flex-end; color:#a69fd4; }
 .readable-pinned-prompt em { flex:0 0 auto; color:#a99cf0; font-size:.68rem; font-style:normal; }
 .readable-jump { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); padding:8px 14px; border:1px solid #4c5165; border-radius:999px; background:rgba(23,26,36,.94); color:#e7e9f2; font-size:.78rem; box-shadow:0 6px 18px rgba(0,0,0,.35); }
 .terminal-controls { min-height:0; overflow:auto; }
