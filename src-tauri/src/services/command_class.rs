@@ -437,7 +437,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("create_file", Core),
     ("delete_dir", Core),
     ("delete_file", Core),
-    ("detect_mime", Core),
     ("dir_size", Core),
     ("dir_size_breakdown", Core),
     ("extract_archive", Core),

@@ -2218,7 +2218,6 @@ pub fn run() {
             commands::fs::write_project_file_bytes,
             commands::fs::update_gitignore_rule,
             commands::fs::create_dir,
-            commands::fs::detect_mime,
             commands::fs::file_source,
             commands::fs::read_file_text,
             commands::fs::write_file_text,

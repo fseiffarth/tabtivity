@@ -1477,60 +1477,6 @@ fn resolve_transfer(
     Ok((src, dest))
 }
 
-// ── MIME detection (magic bytes) ──────────────────────────────────────────
-
-/// Detect a file's MIME type. Local projects sniff magic bytes (then fall back to
-/// the extension); remote projects (mount-free, Phase 3) use the **extension**
-/// only — avoiding a network fetch just to classify — after confining the path to
-/// the remote project root.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn detect_mime(
-    path: String,
-    project_id: Option<String>,
-    ctx: Ctx,
-) -> Result<String, String> {
-    let _ = &ctx;
-    if let Some(pid) = project_id.as_deref() {
-        if let Some(target) = crate::services::remote::remote_target_for(pid) {
-            // SSH-sync G2: a mirror-local path is classified on the LOCAL fs
-            // (magic bytes); a host path uses the extension only (no fetch).
-            if !crate::services::remote_sync::is_under_mirror(pid, &path) {
-                confine_remote_abs(&target.spec.remote_path, &path)?;
-                return Ok(ext_mime_or_octet(&path));
-            }
-        }
-    }
-    detect_mime_local(&path, project_id.as_deref())
-}
-
-/// Extension-based MIME for `path`, defaulting to `application/octet-stream`.
-fn ext_mime_or_octet(path: &str) -> String {
-    Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(mime_for_ext)
-        .unwrap_or_else(|| "application/octet-stream".to_string())
-}
-
-/// Local-fs MIME detection: magic bytes from a file opened through [`open_confined`].
-pub fn detect_mime_local(path: &str, scope_id: Option<&str>) -> Result<String, String> {
-    let p = PathBuf::from(path);
-    confine_abs_read(&p, scope_id)?;
-    // 1. Try magic bytes via infer, from a file opened through the held-folder
-    //    walk (a link swapped in after the check is refused, not followed).
-    if let Ok(mut f) = open_confined(&p, &allowed_roots(scope_id), Confined::Read) {
-        let mut buf = [0u8; 8192];
-        use std::io::Read;
-        if let Ok(n) = f.read(&mut buf) {
-            if let Some(kind) = infer::get(&buf[..n]) {
-                return Ok(kind.mime_type().to_string());
-            }
-        }
-    }
-    // 2. Fall back to extension.
-    Ok(ext_mime_or_octet(path))
-}
-
 // ── Viewer source classification (remote-native vs local mirror) ──────────
 
 /// Classify where an in-app viewer's bytes come from, for the viewer's source
@@ -2398,7 +2344,7 @@ pub const NO_FOLDER_LINK_HEADER: &str = "x-no-folder-link";
 /// Open the absolute path `p` inside one of `roots` without following a link
 /// that was not there when the path was checked — the viewers' one way to the
 /// local disk (`read_file_*_local`, `write_file_*_local`, `file_mtime_local`,
-/// `file_size_local`, `detect_mime_local`).
+/// `file_size_local`).
 ///
 /// The longest root holding the path is opened, and every folder below it is
 /// walked one name at a time through held handles
@@ -2557,11 +2503,6 @@ fn read_opened(file: fs::File, max: u64) -> Result<Vec<u8>, String> {
 fn write_opened(mut file: fs::File, content: &[u8]) -> Result<(), String> {
     use std::io::Write;
     file.write_all(content).map_err(|e| e.to_string())
-}
-
-/// Confine a read of an absolute path to the scope's known roots.
-fn confine_abs_read(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
-    confine_abs(p, scope_id)
 }
 
 /// Confine a path a **non-file** command is about to act on (today:

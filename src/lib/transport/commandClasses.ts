@@ -241,7 +241,6 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["create_file", "core"],
   ["delete_dir", "core"],
   ["delete_file", "core"],
-  ["detect_mime", "core"],
   ["dir_size", "core"],
   ["dir_size_breakdown", "core"],
   ["extract_archive", "core"],

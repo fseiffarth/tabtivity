@@ -250,7 +250,7 @@ enum Kind {
     ProjectDir,
     /// A project's `project.json`: must be a known project's `local_file`.
     LocalFile,
-    /// The body confines it already (`open_confined`, `confine_abs_read`,
+    /// The body confines it already (`open_confined`,
     /// `confine_project_path`, `sqlite::confine`, `enforce_confinement`
     /// within a held [`Kind::ProjectDir`], a worktree root) or never touches
     /// the filesystem with it. Listed so the coverage test knows it was looked at.
@@ -430,10 +430,9 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("workspace_sync", "localFile", LocalFileOpt),
     // ── Confined by the body ────────────────────────────────────────────
     // Viewer I/O by absolute path, scoped to the viewer's project
-    // (`open_confined` / `confine_abs_read` / `confine_project_path` /
+    // (`open_confined` / `confine_project_path` /
     // `sqlite::confine`; a remote project's path is held to its remote root).
     ("copilot_complete", "path", BodyConfined), // `policy::authorize_document` under the project root
-    ("detect_mime", "path", BodyConfined),
     ("file_mtime", "path", BodyConfined),
     ("file_size", "path", BodyConfined),
     ("file_source", "path", BodyConfined), // only says which side holds it
