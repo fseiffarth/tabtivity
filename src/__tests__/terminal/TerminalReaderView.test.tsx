@@ -29,14 +29,14 @@ vi.mock("../../lib/terminal/terminalInput", () => ({
 
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
-import { composerHistory, mergeTranscript, readerOffered, readerRequest, rememberReader, rememberedReader, shortPath } from "../../lib/agents/agentReader";
+import { changesOffered, composerHistory, mergeTranscript, readerOffered, readerRequest, rememberReader, rememberedReader, shortPath } from "../../lib/agents/agentReader";
 import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
-import { noteSentPrompt } from "../../lib/agents/sentPrompts";
+import { clearSentPrompts, noteSentPrompt } from "../../lib/agents/sentPrompts";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import type { Terminal } from "@xterm/xterm";
 import { NAMES, envName, storageKey } from "../../lib/brand";
@@ -79,6 +79,9 @@ function reader(host: HTMLElement, cwd = "/p") {
   );
 }
 
+// A sent prompt is kept outside the Reader until one lets it go.
+beforeEach(() => clearSentPrompts());
+
 describe("the agent pane's Reader", () => {
   let host: HTMLElement;
   beforeEach(() => {
@@ -106,15 +109,15 @@ describe("the agent pane's Reader", () => {
     expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({
       agent: "claude", projectId: "p", sessionId: "launch-1", tabDir: "/p", since: 1000, version: null,
     }));
-    // A long session that never spawned a subagent has no "Subagents (0+)".
+    // A long session that never spawned a subagent has no "Subagents (0)".
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
   });
 
-  it("offers the subagents of earlier turns only when those turns hold one", async () => {
+  it("counts the subagents of earlier turns only when those turns hold one", async () => {
     invoke.mockImplementation((command: string) =>
-      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: true } : []));
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: 2 } : []));
     reader(host);
-    await screen.findByRole("button", { name: /^Subagents \(0\+\)/ });
+    await screen.findByRole("button", { name: /^Subagents \(2\)/ });
   });
 
   it("sends a prompt through the prompt box's path and shows it as sending", async () => {
@@ -155,6 +158,68 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it("still shows a queued prompt after the pane went to its terminal and back", async () => {
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      const first = reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "queued before the switch"));
+      first.unmount();
+      // Sent from steering's box while the terminal shows: no Reader mounted.
+      noteSentPrompt("st-1", "queued while on the terminal");
+      reader(host);
+      await screen.findByText("fix the parser");
+      const shown = [...host.querySelectorAll(".terminal-reader-turn.pending")].map((turn) => turn.textContent);
+      expect(shown[0]).toContain("queued before the switch");
+      expect(shown[1]).toContain("queued while on the terminal");
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
+  it("says the turn is only in the terminal when the stored conversation never records a sent prompt", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "a turn the store never shows"));
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeTruthy();
+      expect(host.textContent).not.toContain("the chat can't find that turn");
+      await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+      expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull();
+      expect(host.querySelector(".terminal-reader-stray")?.textContent).toContain("the chat can't find that turn");
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+      expect(useAgentReaderStore.getState().byAgent.claude).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets no sent prompt go while its pane is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      const view = reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "queued behind a long turn"));
+      view.rerender(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible={false} focused={false} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+      view.rerender(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(host.querySelector(".terminal-reader-turn.pending")?.textContent).toContain("queued behind a long turn");
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
+    }
+  });
+
   it("takes a queued prompt back out of Claude's queue on ↑ and drops its bubble", async () => {
     const rule = "─".repeat(40);
     const queue: string[] = [];
@@ -163,9 +228,9 @@ describe("the agent pane's Reader", () => {
     const term = fakeTerminal(rows);
     const draw = () => {
       const lines = box ? box.split("\n") : [queue.length ? "Press up to edit queued messages" : ""];
-      rows.splice(4, rows.length - 6, ...lines.map((line, index) => `${index ? "  " : "❯ "}${line}`));
+      rows.splice(4, rows.length - 6, ...lines.map((line, index) => `${index ? "  " : "❯\u00a0"}${line}`));
     };
-    // Claude 2.1.303 as probed: ↑ moves the queue into the box, Ctrl+U
+    // Claude 2.1.303 as probed (2.1.310 draws the ❯'s space as a no-break one): ↑ moves the queue into the box, Ctrl+U
     // deletes back to the line's start, or the break before it.
     const hear = (text: string) => {
       if (text === "\u001b[A" && !box) box = queue.splice(0).join("\n");
@@ -752,6 +817,16 @@ describe("the Reader's live rows", () => {
     await waitFor(() => expect(facts.textContent).toContain("5h 29%"));
     expect(facts.textContent).toContain("week 6%");
     expect(host.querySelector(".terminal-reader-fact.high")?.textContent).toBe("week 6%");
+
+    // A click on either limit flips both to bars of what is left, and back.
+    fireEvent.click(screen.getByRole("button", { name: "5h 29%" }));
+    const bars = [...facts.querySelectorAll<HTMLElement>(".terminal-reader-limit-bar > span")];
+    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%"]);
+    expect(facts.textContent).not.toContain("5h 29%");
+    expect(screen.getByRole("button", { name: "week 6%" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "week 6%" }));
+    expect(facts.querySelector(".terminal-reader-limit-bar")).toBeNull();
+    expect(facts.textContent).toContain("5h 29%");
   });
 
   it("shows the mode, the effort the busy row named, the folder and its worktree", async () => {
@@ -823,7 +898,8 @@ describe("the Reader's live rows", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(written).toEqual(["\u001b[Z"]);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+    // The facts row's mode chip, not the composer's Plan chip.
+    expect(within(document.querySelector(".terminal-reader-facts") as HTMLElement).getByRole("button", { name: "Plan" })).toBeTruthy();
   });
 
   it("chooses Codex permissions from its native picker and follows the Full Access confirmation", async () => {
@@ -907,6 +983,41 @@ describe("the Reader's live rows", () => {
     expect(written).toEqual([]);
   });
 
+  it("switches a Tabby chat's model by restarting it, never through its disabled /model or /effort", async () => {
+    submitCommand.mockClear();
+    written.length = 0;
+    const chat: TabEntry = { ...tab, assistant: { cli: "claude", model: "opus" } };
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { ...state.tabsByScope, assistant: [chat] } }));
+    invoke.mockImplementation((command: string) => {
+      if (command === "agent_tab_transcript") return Promise.resolve(transcript);
+      if (command === "assistant_options") {
+        return Promise.resolve({
+          clis: [{ id: "claude", label: "Claude", local: false, installed: true, signedIn: true, ready: true }],
+          localModels: [], ollamaReachable: false, defaultCli: null, defaultModel: null,
+          search: { kind: null, searxngUrl: null, ollamaKeyStored: false, keyring: "unlocked", configured: false },
+        });
+      }
+      return Promise.resolve([]);
+    });
+    const rows = [">", "~/p · Opus 4.1 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("assistant:agent-1", term);
+    render(<TerminalReaderView host={host} ptyId="assistant:agent-1" scope="assistant" tabKey="agent-1" cwd="/p" visible focused />);
+    const chip = await screen.findByRole("button", { name: /Opus 4\.1/ });
+    const facts = host.querySelector(".terminal-reader-facts") as HTMLElement;
+    // `/effort` and `/status` cannot reach the chat: shown, not offered.
+    expect(within(facts).queryByRole("button", { name: /Effort|Status/ })).toBeNull();
+    await act(async () => { fireEvent.click(chip); });
+    const list = await screen.findByRole("dialog", { name: "Select model" });
+    expect(submitCommand).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(await within(list).findByRole("button", { name: /sonnet/ })); });
+    await waitFor(() => expect(useTabsStore.getState().tabsByScope.assistant?.[0].assistant).toEqual({ cli: "claude", model: "sonnet" }));
+    expect(useTabsStore.getState().tabsByScope.assistant?.[0].relaunchSeq).toBe(1);
+    expect(submitCommand).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
+    unregisterTerminal("assistant:agent-1", term);
+  });
+
   it("opens the session's own /model picker as a list and answers it there", async () => {
     submitCommand.mockClear();
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
@@ -965,6 +1076,63 @@ describe("the Reader's live rows", () => {
     expect(submitCommand).toHaveBeenCalledTimes(2);
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Codex status" })).toBeNull();
+  });
+
+  it("draws Claude's /context card as a bar, a legend and folded listings", async () => {
+    submitCommand.mockClear();
+    sendSteeringPrompt.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    const rows = [">", "~/p (develop) · Opus 5.5 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const box = await screen.findByRole("textbox");
+    fireEvent.change(box, { target: { value: "/context" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/context");
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    rows.splice(0, rows.length, "❯ /context", "  ⎿  Context Usage",
+      "     ⛁ ⛁ ⛶ ⛶   Opus 5.5", "     ⛶ ⛶ ⛶ ⛶   31.2k/1m tokens (3%)",
+      "     ⛁ System tools: 19.2k tokens (1.9%)", "     ⛁ Messages: 10 tokens (0.0%)",
+      "     ⛶ Free space: 935.8k (93.6%)", "     ⛝ Autocompact buffer: 33k tokens (3.3%)", "",
+      "     Memory files · /memory", "     ├ ~/.claude/CLAUDE.md: 14 tokens", "     └ ~/.claude/RTK.md: 371 tokens", ">");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    const panel = screen.getByRole("dialog", { name: "Claude context" });
+    expect(panel.textContent).toContain("31.2k of 1m tokens");
+    expect(panel.textContent).toContain("3% used");
+    const bar = panel.querySelector(".terminal-reader-context-bar")!;
+    expect(bar.getAttribute("aria-label")).toContain("System tools: 19.2k");
+    // Free space is the track, not a segment; the buffer is hatched.
+    expect(bar.children).toHaveLength(3);
+    expect(bar.querySelector(".reserved")).not.toBeNull();
+    expect(panel.querySelector(".terminal-reader-context-legend li.free")?.textContent).toContain("935.8k");
+    expect(panel.querySelector(".terminal-reader-context-section summary")?.textContent).toContain("Memory files");
+    expect(panel.querySelector(".terminal-reader-context-section")?.textContent).toContain("~/.claude/RTK.md");
+    fireEvent.click(within(panel).getByRole("button", { name: "Refresh /context" }));
+    expect(submitCommand).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Claude context" })).toBeNull();
+  });
+
+  it("shows Claude's account limits from its usage panel on the /status card", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    invoke.mockImplementation((command: string) => Promise.resolve(
+      command === "agent_tab_transcript" ? { ...transcript, truncated: false }
+        : command === "agent_usage" ? {
+          agent: "claude", label: "Claude", supported: true, cached: false,
+          raw: "Current session: 2% used\nCurrent week (all models): 99% used",
+        }
+          : []));
+    term = fakeTerminal([">", "~/p (develop) · Opus 5.5 · 85% context left"]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const facts = host.querySelector(".terminal-reader-facts")!;
+    await waitFor(() => expect(facts.textContent).toContain("5h 98%"));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Status/ })); });
+    const panel = screen.getByRole("dialog", { name: "Claude status" });
+    expect(within(panel).getByRole("meter", { name: "5-hour limit" }).getAttribute("aria-valuenow")).toBe("98");
+    expect(within(panel).getByRole("meter", { name: "Weekly limit" }).getAttribute("aria-valuenow")).toBe("1");
+    expect(panel.querySelector(".terminal-reader-status-meter.low")?.textContent).toContain("1% left");
   });
 
   it("opens /status from Codex's chat composer without sending an agent prompt or replacing busy input", async () => {
@@ -1047,6 +1215,14 @@ describe("agentReader helpers", () => {
     expect(readerOffered({ kind: "agent", cmd: "gemini", localDriver: "opencode" })).toBe(false);
     expect(readerOffered({ kind: "shell", cmd: "bash" })).toBe(false);
     expect(readerOffered(undefined)).toBe(false);
+  });
+
+  it("reads an Antigravity tab by its folder, as OpenCode's: no launch id, no Diffs", () => {
+    const agy = { ...tab, cmd: "agy", sessionId: undefined };
+    expect(readerOffered(agy)).toBe(true);
+    expect(readerRequest("p", agy, "/p", undefined, 60)).toMatchObject({ agent: "agy", sessionId: "", localModel: false });
+    expect(changesOffered("agy")).toBe(false);
+    expect(changesOffered("claude")).toBe(true);
   });
 
   it("builds the read like the phone bridge: root has no project, --continue has no launch floor", () => {

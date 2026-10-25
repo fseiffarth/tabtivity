@@ -163,6 +163,7 @@ fn start_agent_work() {
     if let Err(error) = crate::services::agent_session::install_session_start_hook() {
         eprintln!("{SLUG}-serverd: agent session hooks: {error}");
     }
+    crate::services::agent_auth::sweep_unadmissible();
     crate::services::agent_auth::start();
     std::thread::spawn(crate::services::ssh_exec::sweep_stale_control_sockets);
     std::thread::spawn(crate::services::ssh_common::sweep_stale_askpass);

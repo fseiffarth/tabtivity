@@ -54,7 +54,8 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
-import { BRAND, storageKey } from "../../lib/brand";
+import { resetInboxFiles } from "../../../mobile-web/src/terminal/inboxRefs";
+import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 /** A bubble's words, without the time a messenger puts in its corner. */
 function said(bubble: Element | null | undefined): string | null {
@@ -140,6 +141,24 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
   });
 
+  it("hands even a chosen Focus over to Terminal when the agent has no stored session, and dims Chat", async () => {
+    // Chat is the stored session only: with none, there is nothing to read.
+    localStorage.setItem(storageKey("mobile.view.kimi-code"), "focus");
+    vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "unsupported", entries: [], truncated: false })));
+    render(<Terminal tab={{ ...TAB, label: "Kimi Code", agent_label: "Kimi Code" }} back={() => {}} />);
+    await settle();
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
+    // Not written over: the reader's choice stands for an agent that reads.
+    expect(localStorage.getItem(storageKey("mobile.view.kimi-code"))).toBe("focus");
+    fireEvent.click(screen.getByTitle("Output view"));
+    const chat = screen.getByRole("menuitemradio", { name: /Chat/ });
+    expect(chat.getAttribute("aria-disabled")).toBe("true");
+    expect(chat.textContent).toContain("No stored session for this agent");
+    fireEvent.click(chat);
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
+    expect(screen.queryByRole("menuitemradio", { name: /Screen/ })).toBeNull();
+  });
+
   it.each(["Google Gemini", "Google Antigravity"])("shows %s's stored conversation instead of its startup logo", async (agent) => {
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     terminalState.lines = ["  ▄▀▀▄  " + agent, "  Gemini 3.1 Pro", "> add a clear button", "✦ screen answer", ">", "? for shortcuts"];
@@ -155,8 +174,8 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
 
   it("stays in the Reader for a tab with no session id yet, and paints the session once it reads", async () => {
     // A tab the phone just created: the bridge answers `no_session` until the
-    // agent's hook records one. The Reader reads the screen meanwhile and
-    // never hands over to Terminal — nothing would bring it back.
+    // agent's hook records one. The Reader waits on it meanwhile and never
+    // hands over to Terminal — nothing would bring it back.
     let stored: unknown = { available: false, reason: "no_session", entries: [], truncated: false };
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -203,7 +222,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     screen.getByTestId("session-transcript");
   });
 
-  it("puts the starting screen one tap away", async () => {
+  it("puts Terminal one tap away from a starting chat, without remembering it", async () => {
     vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false })));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -212,10 +231,61 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     new Uint8Array(payload).set(bytes);
     act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    // The chat never paints the screen: what the CLI printed is in Terminal.
     expect(screen.queryByText(/could not reach the model/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Show the screen" }));
+    fireEvent.click(within(screen.getByTestId("session-starting")).getByRole("button", { name: "Switch to Terminal" }));
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
     expect(screen.queryByTestId("session-starting")).toBeNull();
-    expect(screen.getByText(/could not reach the model/)).toBeTruthy();
+    expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
+  });
+
+  // Built in parts: the privacy scan refuses a literal session URL, fake or not.
+  const CLOUD_SESSION = "session_011SU65rAbc";
+  const CLOUD_PAGE = `https://claude.ai/code/${CLOUD_SESSION}`;
+
+  it("shows a cloud tab's link to open at once, with no session to wait for", async () => {
+    // `claude --cloud "<task>"` creates the session, prints its link and
+    // exits: no local session will ever be recorded to wait for.
+    vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false })));
+    render(<Terminal tab={{ ...TAB, cloud: true }} back={() => {}} />);
+    await settle();
+    const bytes = new TextEncoder().encode(`Created cloud session: Free hands voice plan\r\nView: ${CLOUD_PAGE}?from=cli\r\nResume with: claude --teleport ${CLOUD_SESSION}\r\n$ \r\n`);
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.queryByTestId("session-starting")).toBeNull();
+    const card = screen.getByTestId("session-unavailable");
+    // The screen is Terminal's; the chat carries only what it printed to open.
+    expect(screen.queryByText(/Created cloud session/)).toBeNull();
+    within(card).getByRole("button", { name: "Switch to Terminal" });
+    const open = within(card).getByRole("link", { name: /Open the cloud session/ });
+    expect(open.getAttribute("href")).toBe(`${CLOUD_PAGE}?from=cli`);
+    expect(open.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("teleports a cloud tab's session into a new tab by the id it printed", async () => {
+    const base = sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false }));
+    const teleported = { ...TAB, id: "tab-tp", label: "Claude (cloud) · teleport-011SU65rAbc" };
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => (url.endsWith("/teleport")
+      ? Promise.resolve(jsonResponse(200, { tab: teleported }))
+      : base(url)));
+    vi.stubGlobal("fetch", fetchMock);
+    const openTab = vi.fn();
+    render(<Terminal tab={{ ...TAB, cloud: true }} back={() => {}} openTab={openTab} />);
+    await settle();
+    const bytes = new TextEncoder().encode(`Created cloud session: Plan\r\nView: ${CLOUD_PAGE}\r\nResume with: claude --teleport ${CLOUD_SESSION}\r\n$ \r\n`);
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.getByText(/the project folder and its other tabs stay as they are/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Teleport into a worktree/ }));
+    await settle();
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/teleport"));
+    expect(call?.[0]).toContain(`/api/v1/tabs/${TAB.id}/teleport`);
+    expect(JSON.parse(String(call?.[1]?.body)).session).toBe(CLOUD_SESSION);
+    expect(openTab).toHaveBeenCalledWith(teleported);
   });
 
   it("keeps the chat while the composer has focus, even when a read answers the session unavailable", async () => {
@@ -359,6 +429,27 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(card.querySelector(".asked-none")?.textContent).toBe("Not answered");
   });
 
+  it("opens a message's menu on a click-hold, and leaves a flick of the chat alone", async () => {
+    vi.stubGlobal("fetch", sidecarFetch(() => STORED));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const prompt = within(screen.getByTestId("session-transcript")).getByRole("group", { name: "Your prompt" });
+
+    // A finger that wanders is scrolling the chat, and the hold is off.
+    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, clientX: 40, clientY: 200 });
+    fireEvent.pointerMove(prompt, { button: 0, pointerId: 1, clientX: 44, clientY: 130 });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // A finger that stays opens the menu for that bubble.
+    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, clientX: 40, clientY: 200 });
+    fireEvent.pointerMove(prompt, { button: 0, pointerId: 1, clientX: 42, clientY: 203 });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    const sheet = within(screen.getByRole("dialog", { name: "Message" }));
+    sheet.getByText("add a clear button");
+    sheet.getByRole("button", { name: "Copy message" });
+  });
+
   it("lets a message's text be selected in part and copies only what is marked", async () => {
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
@@ -441,7 +532,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(scrollIntoView.mock.contexts[0]).toBe(prompts[prompts.length - 1]);
   });
 
-  it("falls back to the screen when the session is unavailable, and can be switched to it", async () => {
+  it("keeps a chosen Chat on the stored session while none reads yet, never the screen", async () => {
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     let stored: unknown = { available: false, reason: "no_session", entries: [], truncated: false };
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
@@ -453,32 +544,18 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     new Uint8Array(payload).set(bytes);
     act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.getByTitle("Output view").textContent).toBe("Chat");
     expect(screen.queryByTestId("session-transcript")).toBeNull();
-    expect(screen.getByText("Hi there.").closest(".readable-turn")?.className).toBe("readable-turn agent answer");
-    // The choice is a list under the Focus button; Session is there, dimmed,
-    // saying why, and a tap on it does not switch.
-    expect(screen.queryByRole("menu")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
-    const dimmed = screen.getByRole("menuitemradio", { name: /Session/ });
-    expect(dimmed.getAttribute("aria-disabled")).toBe("true");
-    expect(dimmed.textContent).toContain("No session id for this tab yet");
-    expect(screen.getByRole("menuitemradio", { name: /Screen/ }).getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(dimmed);
-    expect(screen.queryByTestId("session-transcript")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByText("Hi there.")).toBeNull();
+    // No source to pick under the view pill: Chat is the session.
+    fireEvent.click(screen.getByTitle("Output view"));
+    expect(screen.queryByRole("menuitemradio", { name: /Session/ })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /Screen/ })).toBeNull();
+    fireEvent.click(screen.getByTitle("Output view"));
 
     stored = STORED;
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
-    screen.getByTestId("session-transcript");
-    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /Screen/ }));
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(screen.queryByTestId("session-transcript")).toBeNull();
-    expect(screen.getByText("Hi there.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /Session/ }));
     screen.getByTestId("session-transcript");
   });
 
@@ -504,20 +581,13 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     // shape check as a dialog on a scrolling screen.
     within(screen.getByRole("group", { name: "Waiting for your answer" })).getByText("Yes");
 
-    // Switched to the screen, the full-screen program says so, as before.
-    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /Screen/ }));
-    screen.getByText("Full-screen program");
-    expect(screen.queryByTestId("session-transcript")).toBeNull();
-
-    // The notice leads back to the stored session; with none, it is only the notice.
-    fireEvent.click(screen.getByRole("button", { name: "Read the agent's stored conversation" }));
-    screen.getByTestId("session-transcript");
+    // With no stored session after all, the tab is Terminal's: the
+    // full-screen notice is a shell's only.
     stored = { available: false, reason: "unsupported", entries: [], truncated: false };
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
-    screen.getByText("Full-screen program");
-    expect(screen.queryByRole("button", { name: "Read the agent's stored conversation" })).toBeNull();
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
+    expect(screen.queryByText("Full-screen program")).toBeNull();
   });
 
   it("shows a sent prompt as the reader's bubble at once, and never changes it", async () => {
@@ -554,6 +624,41 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(prompts()[1]).toBe(bubble);
     expect(said(bubble)).toBe("also the tests");
     expect(said(bubble.nextElementSibling)).toBe("Still on the button.");
+  });
+
+  it("shows a picture sent from Terminal view in its own place once the chat is opened", async () => {
+    resetInboxFiles();
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "terminal");
+    const leaf = "20261022-175701-photo.jpg";
+    const stored = { ...STORED, version: "1300:2", entries: [
+      ...STORED.entries,
+      { kind: "prompt", text: `@${NAMES.inboxDir}/${leaf}`, at: "2026-09-15T05:52:00.000Z" },
+      { kind: "answer", text: "That is the error dialog.", at: "2026-09-15T05:52:30.000Z" },
+    ] };
+    const sidecar = sidecarFetch(() => stored);
+    vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/inbox?")
+      ? Promise.resolve(jsonResponse(200, { files: [{ name: leaf, kind: "image/jpeg", size: 1024, modified: 0 }] }))
+      : sidecar(url)));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    // Terminal view reads no session: nothing the phone holds says where the
+    // prompt stands in it.
+    fireEvent.change(screen.getByRole("textbox", { name: "Message agent" }), { target: { value: `@${NAMES.inboxDir}/${leaf}` } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle();
+
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Chat" }));
+    await settle();
+    await settle();
+    // Where the session recorded it — above the answer to it, not over the
+    // whole conversation — and as a picture, not as a reference.
+    const chat = screen.getByTestId("session-transcript");
+    const prompts = [...chat.querySelectorAll(".readable-turn.user")];
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1].className).toBe("readable-turn user with-files");
+    expect(prompts[1].querySelector(".inbox-album img")).not.toBeNull();
+    expect(said(prompts[1].nextElementSibling)).toBe("That is the error dialog.");
   });
 
   it("keeps a sent prompt in Reader while Codex is binding its rollout", async () => {

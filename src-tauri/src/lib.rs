@@ -987,6 +987,27 @@ fn build_macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<t
     Menu::with_items(app, &refs)
 }
 
+/// macOS: every webview's permission request is denied — camera, microphone,
+/// screen capture, everything (docs/browser_plan_b.md §5.2). Since the bundle
+/// declares the microphone for the Chat's native dictation (2026-10-23), the OS
+/// no longer refuses it to the process, and wry's `WKUIDelegate` answers
+/// *Grant* to a media-capture request when no handler is set: without this a
+/// browsed page could open the mic. The app's own UI asks for no web
+/// permission (its notifications are the native plugin's). Linux keeps
+/// WebKitGTK's unhandled default (deny) and Windows its own deny handler
+/// (`commands::browser`); `tests/capability_scope.rs` holds the line.
+#[cfg(feature = "desktop")]
+#[cfg(target_os = "macos")]
+fn with_macos_permission_deny(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder.on_permission_request(|_, _| tauri::webview::PermissionResponse::Deny)
+}
+
+#[cfg(feature = "desktop")]
+#[cfg(not(target_os = "macos"))]
+fn with_macos_permission_deny(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder
+}
+
 /// macOS: install the explicit menu bar (see [`macos_menu_plan`]) and route its
 /// custom Quit through the main window's close, so the frontend teardown runs.
 #[cfg(feature = "desktop")]
@@ -1404,7 +1425,7 @@ pub fn run() {
         pick_grants,
     } = s;
 
-    with_macos_menu(with_webview_crash_reporter(tauri::Builder::default()))
+    with_macos_permission_deny(with_macos_menu(with_webview_crash_reporter(tauri::Builder::default())))
         .manage(pty_registry)
         .manage(win_registry)
         .manage(workspace)
@@ -1424,6 +1445,18 @@ pub fn run() {
         .manage(usage_watch.clone())
         .manage(mobile_desktop.clone())
         .manage(pick_grants)
+        // A reload (`src/` hot-reloads into the window) drops the page that
+        // showed the mic was on; the mic goes off with it. Every webview's
+        // own load handler still runs as well.
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                use tauri::Manager;
+                if webview.app_handle().try_state::<app_core::CoreCtx>().is_some() {
+                    let ctx = tauri_host::system_ctx(webview.app_handle());
+                    services::voice::stop_for_window(&ctx, webview.label());
+                }
+            }
+        })
         .setup(move |_app| {
             // The main window is built here, not by Tauri from the config,
             // so it gets the new-window gate (`create_main_window`). Before
@@ -1603,6 +1636,9 @@ pub fn run() {
             // files, Cline's provider config) from the store and the Host
             // home, so neither the import nor the keeper sees them again.
             services::agent_auth::retire_shared_paths();
+            // Login files that fail their CLI's content check (OpenCode's
+            // `wellknown` entries) go aside, before the import and the keeper.
+            services::agent_auth::sweep_unadmissible();
             services::agent_auth::import_once();
             services::agent_global::import_once();
             services::agent_auth::start();
@@ -1632,6 +1668,11 @@ pub fn run() {
             // process that died before it could. Off-thread — one `kill(pid, 0)`
             // per file, and the directory can hold thousands.
             std::thread::spawn(services::ssh_common::sweep_stale_askpass);
+            // Delete what has sat in the phone's drop boxes past its keep
+            // (outbox 30 days, project inbox 90) — nothing else prunes them.
+            // Now, then hourly, on a thread of its own (the server daemon
+            // starts its own from the host).
+            services::mobile_control::drop_sweep::start(storage::state_dir());
             // Re-adopt OpenVPN tunnels a previous run left running (a crash, an OOM
             // kill, a refused quit-time prompt): the daemon runs as root and outlives
             // the app, still rerouting the machine, but the live-tunnel registries are
@@ -1749,6 +1790,14 @@ pub fn run() {
             commands::vm::vm_set_spec,
             commands::vm::remote_download_size,
             commands::vm::remote_download_to,
+            commands::voice::voice_status,
+            commands::voice::voice_model_install_script,
+            commands::voice::voice_listen_start,
+            commands::voice::voice_listen_pause,
+            commands::voice::voice_listen_stop,
+            commands::voice::voice_speak,
+            commands::voice::voice_speak_stop,
+            commands::voice::voice_voices,
             commands::projects::set_project_remote_control,
                         commands::projects::set_project_schedule_mcp,
             commands::projects::set_project_git_push_mcp,
@@ -1760,6 +1809,7 @@ pub fn run() {
             commands::markup_mcp::markup_mcp_answer,
             commands::markup_mcp::markup_mcp_dismiss,
             commands::markup_mcp::markup_mcp_reopen,
+            commands::assistant::assistant_claude_models,
             commands::assistant::assistant_options,
             commands::assistant::assistant_new_chat,
             commands::assistant::assistant_set_search,
@@ -2225,19 +2275,23 @@ pub fn run() {
             commands::terminal::agent_fence_marks,
             commands::terminal::register_host_bound_tab,
             commands::terminal::pty_drop_files,
+            commands::terminal::pty_paste_clipboard_image,
             commands::terminal::pty_write,
             commands::terminal::pty_resize,
             commands::terminal::pty_kill,
             commands::terminal::pty_kill_scope,
             commands::terminal::pty_set_visible,
+            commands::terminal::pty_input_from,
             commands::terminal::pty_remove_view,
             commands::terminal::pty_scrollback,
             commands::terminal::pty_watch,
             commands::terminal::pty_unwatch,
+            commands::terminal::agent_tab_features,
             commands::terminal::local_tmux_kill,
             commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,
             commands::terminal::local_tmux_screen,
+            commands::terminal::local_tmux_pane_dead,
             commands::terminal::project_cpu_percent,
             // External apps / window tracking
             commands::apps::launch_app,
@@ -2313,6 +2367,7 @@ pub fn run() {
             commands::git_pull::git_merge_sides,
             commands::git::git_clone,
             commands::git::git_remote_visibility,
+            commands::git::git_folder_origin,
             commands::git::git_file_statuses,
             commands::git::git_unpushed_commits,
             commands::git::git_change_stats,
@@ -2403,6 +2458,7 @@ pub fn run() {
             commands::agents::probe_binaries,
             commands::agents::list_agents,
             commands::agents::codex_hook_status,
+            commands::agents::codex_hook_trust,
             commands::agents::install_agent,
             commands::agents::install_agent_remote,
             commands::agents::install_agent_remote_command,
@@ -2412,6 +2468,7 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::agent_login_scope_sign_out,
             commands::agents::agent_login_use_admin_key,
             commands::share::share_list,
             commands::share::share_create,
@@ -2434,6 +2491,8 @@ pub fn run() {
             commands::shared_calendar::shared_calendar_unshare,
             commands::shared_calendar::shared_calendar_wait,
             commands::agents::agent_api_keys_status,
+            commands::agents::api_proxy_port_notice,
+            commands::agents::api_proxy_port_notice_ack,
             commands::agents::agent_api_key_set,
             commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,
@@ -2443,6 +2502,8 @@ pub fn run() {
             commands::agents::agent_usage,
             commands::agents::agent_versions,
             commands::agents::dismiss_agent_version,
+            commands::agents::remembered_model_rows,
+            commands::agents::remember_model_rows,
             commands::agents::check_agent_updates,
             commands::agents::update_agent,
             commands::agents::agent_tab_model,
@@ -2455,6 +2516,7 @@ pub fn run() {
             commands::agents::agent_tab_undo_clear,
             commands::agents::agent_tab_chats,
             commands::agents::agent_tab_resume_chat,
+            commands::agents::agent_tab_move_session,
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
             commands::ollama::ollama_models_dir_plan,
@@ -2556,6 +2618,8 @@ pub fn run() {
                 if label != services::window_service::MAIN_WINDOW_LABEL {
                     crate::terminal::route_drop_window_views(label);
                 }
+                // A mic whose window is gone has nothing left to show it is on.
+                services::voice::stop_for_window(&tauri_host::system_ctx(_app), label);
                 if label.starts_with("detached-") {
                     // Guard against a same-label window already re-created
                     // (rapid destroy → re-detach): only clean up when no live
@@ -2614,6 +2678,9 @@ pub fn run() {
                 // streams in flight briefly. Before the PTY teardown below, so
                 // its tab-gone hooks find nothing left to sweep.
                 services::api_proxy::stop_for_exit();
+                // The microphone, whisper and any speech: nothing of the
+                // voice outlives the quit (bounded at half a second).
+                services::voice::stop_for_exit();
                 // Abort every terminal's process subtree so no inner process (a
                 // dev server, a build, a training run) outlives Tabtivity. Runs
                 // before the container teardown below, since a containerized

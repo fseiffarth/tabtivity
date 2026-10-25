@@ -21,8 +21,6 @@ import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
   useSettingsStore,
-  applyTheme,
-  THEME_CHANGED_EVENT,
 } from "../../../stores/settings";
 import { osFullscreenChord } from "../../../lib/shortcuts/shortcutHint";
 import {
@@ -53,6 +51,7 @@ import { dirOf, gifKey, interstitialsOf, resolveRel, useDeckGifs, useDeckImages 
 import { InterstitialView, PresentedSlide } from "./DeckSlideView";
 import { useT } from "../../../lib/i18n";
 import { subscribeTauri, useTauriListener } from "../../../hooks/useTauriListener";
+import { useCrossWindowAppearance } from "../../../hooks/useCrossWindowAppearance";
 
 /** How often to re-announce readiness until a seed lands. The presenter window
  *  may still be mounting its listener when this window first asks. */
@@ -85,7 +84,7 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
     void loadSettings({ skipZoom: true });
   }, [loadSettings]);
 
-  useTauriListener(() => listen<string>(THEME_CHANGED_EVENT, (e) => applyTheme(e.payload)), []);
+  useCrossWindowAppearance();
 
   useEffect(() => {
     let live = true;

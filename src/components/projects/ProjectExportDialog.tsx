@@ -1,4 +1,5 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
+import { useTauriListener } from "../../hooks/useTauriListener";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -113,15 +114,14 @@ export function ProjectExportDialog({
   // Progress for a tree that can take minutes: a bundle is written file by
   // file, and a dialog that only says "Exporting…" for three minutes is
   // indistinguishable from one that has hung.
-  useEffect(() => {
-    const unlisten = listen<ExportProgress>("project-export", (event) => {
-      if (event.payload.projectId !== project.id) return;
-      setProgress(event.payload.phase === "done" ? null : event.payload);
-    });
-    return () => {
-      void unlisten.then((off) => off());
-    };
-  }, [project.id]);
+  useTauriListener(
+    () =>
+      listen<ExportProgress>("project-export", (event) => {
+        if (event.payload.projectId !== project.id) return;
+        setProgress(event.payload.phase === "done" ? null : event.payload);
+      }),
+    [project.id],
+  );
 
   /** Bytes the current toggles would carry — the preview's parts, summed. */
   const estimate = useMemo(() => {

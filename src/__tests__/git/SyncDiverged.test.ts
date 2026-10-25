@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { mtimeDivergenceCue } from "../../components/files/ProjectFilesView";
+import { splitByNewerSide } from "../../stores/remote/sync";
 import type { TranslationKey } from "../../lib/i18n";
 
 // The cue's text is asserted as the raw key — the wording is i18n's business.
@@ -73,5 +74,25 @@ describe("mtimeDivergenceCue", () => {
     const cue = mtimeDivergenceCue(t, 100, 100, false, false, true);
     expect(cue.text).toBe("projectFilesView.sameTime");
     expect(cue.tone).toBe("neutral");
+  });
+});
+
+describe("splitByNewerSide", () => {
+  const e = (hostMtime: number | null, localMtime: number | null, hostDiverged: boolean, localDiverged: boolean) =>
+    ({ state: "amber", selected: true, isDir: false, auto: false, excluded: false, hostMtime, localMtime, hostDiverged, localDiverged, hostChecked: true }) as never;
+
+  it("direction wins over mtimes, both-changed falls back to mtimes, deletions and ties are skipped", () => {
+    const map = {
+      "host.txt": e(100, 5000, true, false), // skewed clocks: only the host moved
+      "local.txt": e(5000, 100, false, true),
+      "both-host.txt": e(300, 200, true, true),
+      "both-local.txt": e(200, 300, true, true),
+      "tie.txt": e(100, 100, true, true),
+      "gone-host.txt": e(null, 100, false, true),
+      "gone-local.txt": e(100, null, true, false),
+    };
+    const out = splitByNewerSide(map, [...Object.keys(map), "unknown.txt"]);
+    expect(out.host).toEqual(["host.txt", "both-host.txt"]);
+    expect(out.local).toEqual(["local.txt", "both-local.txt"]);
   });
 });

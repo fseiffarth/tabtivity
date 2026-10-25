@@ -73,6 +73,12 @@ fn newest_db_in(dir: &Path, stem: &str) -> Option<PathBuf> {
     best.map(|(_, path)| path)
 }
 
+/// A store of Codex's, opened guarded ([`crate::services::agent_sqlite`]):
+/// `.codex/<store>` of an agent home, so two components below it.
+pub(crate) fn open(db: &Path) -> Option<rusqlite::Connection> {
+    crate::services::agent_sqlite::open_below(db, 2, &["threads", "thread_spawn_edges", "thread_goals"])
+}
+
 /// Whether the store at `db` still holds the thread `thread_id`.
 ///
 /// This is the successor to walking `~/.codex/sessions` for a
@@ -91,9 +97,9 @@ pub fn thread_exists(db: &Path, thread_id: &str) -> bool {
 /// The store's archive verdict for one thread. `None` means no row or an
 /// unreadable store; a legacy rollout may still be the only record then.
 pub(crate) fn thread_archived(db: &Path, thread_id: &str) -> Option<bool> {
-    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+    use rusqlite::OptionalExtension;
 
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = open(db)?;
     let archived: Option<i64> = conn
         .query_row("SELECT archived FROM threads WHERE id = ?1", [thread_id], |row| row.get(0))
         .optional()
@@ -108,9 +114,7 @@ pub(crate) fn thread_archived(db: &Path, thread_id: &str) -> Option<bool> {
 /// application's state. A locked, missing, or differently-shaped store is not
 /// an error here — it is simply no tag.
 pub fn thread_model(db: &Path, thread_id: &str) -> Option<String> {
-    use rusqlite::{Connection, OpenFlags};
-
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = open(db)?;
     let model: Option<String> = conn
         .query_row("SELECT model FROM threads WHERE id = ?1", [thread_id], |row| {
             row.get(0)
@@ -124,9 +128,9 @@ pub fn thread_model(db: &Path, thread_id: &str) -> Option<String> {
 /// complete. A thread with no row has no goal. `None` when the store cannot
 /// be read or has another shape.
 pub fn thread_goal_active(db: &Path, thread_id: &str) -> Option<bool> {
-    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+    use rusqlite::OptionalExtension;
 
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = open(db)?;
     let status: Option<String> = conn
         .query_row("SELECT status FROM thread_goals WHERE thread_id = ?1", [thread_id], |row| row.get(0))
         .optional()
@@ -186,9 +190,7 @@ pub fn descendant_threads(db: &Path, root: &str, depth: usize) -> Vec<SpawnedThr
 }
 
 fn query_spawned(db: &Path, sql: &str, params: impl rusqlite::Params) -> Vec<SpawnedThread> {
-    use rusqlite::{Connection, OpenFlags};
-
-    let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+    let Some(conn) = open(db) else {
         return Vec::new();
     };
     let Ok(mut stmt) = conn.prepare(sql) else {
@@ -364,5 +366,25 @@ mod tests {
         let junk = dir.join("state_6.sqlite");
         std::fs::write(&junk, b"not a database").unwrap();
         assert_eq!(thread_model(&junk, "01a07c18-3a25-7fa1-9ac4-74fa84d4e12a"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_fifo_or_view_is_no_thread_and_never_blocks() {
+        let dir = unique_tmp(concat!(crate::app_slug!(), "-codex-store"));
+        let id = "01a07c18-3a25-7fa1-9ac4-74fa84d4e12a";
+        let fifo = dir.join("state_8.sqlite");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(!thread_exists(&fifo, id));
+        assert_eq!(thread_model(&fifo, id), None);
+        assert!(spawned_threads(&fifo, id).is_empty());
+
+        let view = dir.join("state_9.sqlite");
+        rusqlite::Connection::open(&view)
+            .unwrap()
+            .execute_batch("CREATE VIEW threads AS SELECT 'x' AS id, 'm' AS model, 0 AS archived;")
+            .unwrap();
+        assert_eq!(thread_model(&view, id), None);
     }
 }

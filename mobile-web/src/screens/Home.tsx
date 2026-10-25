@@ -28,9 +28,10 @@ import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
-import { AssistantGlyph } from "../../../src/components/header/HeaderGlyphs";
+import { AssistantIcon } from "../../../src/components/common/icons/Icon";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
+import { useVisiblePoll } from "../visiblePoll";
 
 /** A reorder hint with the drag grip drawn where its `{grip}` stands, so the
  * sentence stays one translatable string. The project screen's hint too. */
@@ -73,8 +74,10 @@ function projectTile(project: ProjectRow): string {
 type HomeView = "active" | "agents" | "search";
 const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["search", "mobile.home.viewSearch"]];
 
-export function Home({ open, openTab, todo, mail }: {
+export function Home({ open, openTab, tabby, todo, mail }: {
   open: (id: string) => void;
+  /** Opens Tabby's one chat (the FAB): the assistant scope is no row here. */
+  tabby: (id: string) => void;
   openTab: (projectId: string, tab: ActivityTab) => void;
   todo: (card?: string) => void;
   mail: () => void;
@@ -154,7 +157,8 @@ export function Home({ open, openTab, todo, mail }: {
           for (const project of body.projects) rememberScopeKind(project.id, project.kind);
           const assistant = body.projects.find((project) => project.kind === "assistant");
           if (assistant || view === "active") setAssistantId(assistant?.id ?? null);
-          setRows(body.projects); setOffline(null); setLoaded(true);
+          // Tabby is reached through the FAB, not listed as a project.
+          setRows(body.projects.filter((project) => project.kind !== "assistant")); setOffline(null); setLoaded(true);
         })
         .catch((error: unknown) => { if (!controller.signal.aborted) setOffline(classifyUnavailable(error)); });
     }, view === "search" ? 180 : 0);
@@ -177,34 +181,14 @@ export function Home({ open, openTab, todo, mail }: {
   }, []);
   /** While the last load failed, try again on a slow clock — the project
    * screen's own poll does this for its tab list (`Project.tsx`). */
-  useEffect(() => {
-    if (!offline) return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") setReload((count) => count + 1);
-    }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [offline]);
-  useEffect(() => {
-    // Alerts are rows of Needs you, which only the active view draws: the
-    // agents mode shows agent tabs and nothing else, and a search result is
-    // an answer to a query. Polling a feed no view draws would be a
-    // minute-timer for nobody.
-    if (view !== "active") return;
-    let disposed = false;
-    const load = () => {
-      void api<{ alerts: MobileAlerts }>("/api/v1/alerts")
-        .then((body) => { if (!disposed) setAlerts(body.alerts); })
-        .catch(() => { if (!disposed) setAlerts(null); });
-    };
-    load();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 60_000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [view]);
+  useVisiblePoll(() => setReload((count) => count + 1), 30_000, { enabled: !!offline, immediate: false, catchUp: false });
+  // Alerts are rows of Needs you, which only the active view draws: the
+  // agents mode shows agent tabs and nothing else, and a search result is
+  // an answer to a query. Polling a feed no view draws would be a
+  // minute-timer for nobody.
+  useVisiblePoll((signal) => api<{ alerts: MobileAlerts }>("/api/v1/alerts")
+    .then((body) => { if (!signal.aborted) setAlerts(body.alerts); })
+    .catch(() => { if (!signal.aborted) setAlerts(null); }), 60_000, { enabled: view === "active", catchUp: false }, []);
   /** The rows as they are drawn. The active list is the reader's own order with
    * the host's as the fallback; a search result is not arranged at all — it is
    * an answer to a query, and the best match belongs at the top of it. */
@@ -309,7 +293,7 @@ export function Home({ open, openTab, todo, mail }: {
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.kind === "assistant" && isUntested("mobile.assistant") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"
@@ -365,14 +349,14 @@ export function Home({ open, openTab, todo, mail }: {
       </section>
     </div>}
     {/* The assistant one tap from anywhere on Home, in the place the project
-        screen keeps its ＋: its row sits wherever the list put it, often
-        below the fold under Needs you. */}
+        screen keeps its ＋, straight into its one chat; the list has no row
+        for it. */}
     {assistantId && <button
       className="primary fab fab-round fab-chat"
-      onClick={() => open(assistantId)}
+      onClick={() => tabby(assistantId)}
       aria-label={t("assistant.button")}
       title={t("assistant.button")}
-    ><AssistantGlyph className="fab-chat-icon" />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
+    ><AssistantIcon className="fab-chat-icon" size={28} />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}

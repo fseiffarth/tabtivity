@@ -13,6 +13,7 @@ import { useSearchText } from "./useSearchText";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
@@ -167,6 +168,7 @@ import {
   synctexEdit,
   synctexStatus,
   syncNoticeKind,
+  texSourceCandidates,
   resolveTexRoot,
   refineToWord,
   type SyncNoticeKind,
@@ -1669,8 +1671,9 @@ function PdfPageCanvas({
           Above the remark layer because it is a live control over what the reader is
           doing right now, while a marker stands for something already written. */}
       {/* The markup layer (`usePdfMarkup`), over every other page layer — the
-          remarks included, which it leaves visible but out of reach. */}
-      {markup && cssSize && (
+          remarks included, which it leaves visible but out of reach. Only on a
+          near page: its canvas is a full-resolution backing store. */}
+      {markup && cssSize && near && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
       )}
       {tickBadges && tickBadges.badges.length > 0 && cssSize && (
@@ -2320,18 +2323,11 @@ function PdfCanvas({
   // for a window nobody asked for is a subscription that never pays for itself.
   useEffect(() => {
     if (!presentOpen) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
-      if (e.payload.label === presentLabel) seedPresentRef.current();
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    return subscribeTauri(() =>
+      listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
+        if (e.payload.label === presentLabel) seedPresentRef.current();
+      }),
+    );
   }, [presentOpen, presentLabel]);
 
   /** A metadata field's name. Only the eight standard `/Info` keys are translated —
@@ -2845,7 +2841,7 @@ function PdfCanvas({
   }, [marking, markup.key, markupOwner]);
   // While a round of these marks is with an agent tab, that tab's prompt strip
   // offers the way back here (`stores/viewers/markupLinks`).
-  const linkTarget = marking && markup.round && tabKey ? markup.target : null;
+  const linkTarget = marking && markup.round && tabKey ? markup.roundTarget : null;
   usePdfMarkupLink(
     linkTarget?.ptyId ?? null,
     linkTarget && tabKey ? { tabKey, name: basename(path), owner: markupOwner } : null,
@@ -2925,11 +2921,15 @@ function PdfCanvas({
   const reloadKeepZoom = useRef(false);
   // True when a `.synctex(.gz)` sits beside the PDF, enabling reverse search.
   const [syncable, setSyncable] = useState(false);
+  // The `.tex` that built this PDF by its name (`texSourceCandidates`), or null:
+  // what a reverse-search click opens when there is no map to name the line.
+  const [texSource, setTexSource] = useState<string | null>(null);
   // True while Ctrl/⌘ is held: reverse-search clicks fire and pages show the
   // crosshair cursor only then, leaving plain clicks free for text selection.
   const [syncArmed, setSyncArmed] = useState(false);
+  const reverseArmable = syncable || texSource != null;
   useEffect(() => {
-    if (!syncable) return;
+    if (!reverseArmable) return;
     const sync = (e: KeyboardEvent | MouseEvent) =>
       setSyncArmed(e.ctrlKey || e.metaKey);
     const clear = () => setSyncArmed(false);
@@ -2943,7 +2943,7 @@ function PdfCanvas({
       window.removeEventListener("mousemove", sync);
       window.removeEventListener("blur", clear);
     };
-  }, [syncable]);
+  }, [reverseArmable]);
 
   // Why a reverse-search click did nothing, or may have landed on the wrong
   // line — worded from `synctexStatus` after every click (see `syncNoticeKind`).
@@ -2956,6 +2956,8 @@ function PdfCanvas({
     /** `"remote"`: the PDF is read from a remote host, whose map the SyncTeX
      *  commands (local disk only) cannot reach — no call is made. */
     kind: SyncNoticeKind | "remote";
+    /** True when the click opened `source` at its top for want of a map. */
+    opened: boolean;
     source: string;
     sources: string[];
     canRecompile: boolean;
@@ -4069,6 +4071,24 @@ function PdfCanvas({
     return () => { cancelled = true; };
   }, [path, scope, diskVersion, remoteSource]);
 
+  // The source by name — a PDF with no map still opens the `.tex` that built it.
+  // Probed once per local file; a remote one is asked only on a click
+  // (`onSyncClick`), never at mount: a stat per restored tab over SFTP, hidden or
+  // not, connected or not, is the probe the map check above declines too.
+  const findTexSource = useCallback(async () => {
+    for (const candidate of texSourceCandidates(path)) {
+      if (await fileMtime(candidate, scope).then(() => true, () => false)) return candidate;
+    }
+    return null;
+  }, [path, scope]);
+  useEffect(() => {
+    setTexSource(null);
+    if (remoteSource) return;
+    let cancelled = false;
+    void findTexSource().then((found) => { if (!cancelled) setTexSource(found); });
+    return () => { cancelled = true; };
+  }, [findTexSource, remoteSource]);
+
   // Reverse search: a click on a page → which source line produced it → jump.
   // Resolve the clicked source's root (the main `.tex` that produces this PDF) and
   // pass it as the routing anchor, so a subfile with no tab yet opens in the
@@ -4079,35 +4099,53 @@ function PdfCanvas({
   // nearby line beats nothing), or an honest miss on a current map. The status
   // probe runs after the resolve, not before, so a clean hit on a current map
   // costs one extra command answered from the map cache and a few stats.
+  //
+  // With no map to ask (none beside the PDF, or a remote PDF's out of reach) the
+  // click still opens the `.tex` that built the PDF, at its top, and says why.
   const onSyncClick = useCallback(
     async (page: number, x: number, y: number) => {
       setSyncNotice(null);
-      // The SyncTeX commands read the map off local disk; a PDF read from a
-      // remote host has none there, so say so and ask nothing. A mirror path is
-      // local and goes on.
-      if (remoteSource) {
-        setSyncNotice({ kind: "remote", source: path, sources: [], canRecompile: false });
-        return;
-      }
-      const src = syncable ? await synctexEdit(path, page, x, y) : null;
-      if (src) {
+      const jump = async (src: SyncSource) => {
         const anchor = await resolveTexRoot(src.input).catch(() => src.input);
         // In a TeX workspace the host handles reverse search itself (it switches
         // the docked editor's center to the producing child); standalone falls
         // back to the module jump (open/focus the source tab).
         if (onReverseSource) onReverseSource(src, anchor);
         else jumpToSource(src.input, src.line, src.column, anchor);
+      };
+      const openByName = (source: string | null) => {
+        if (!source) return false;
+        void jump({ input: source, line: 1, column: 0 });
+        return true;
+      };
+      // The SyncTeX commands read the map off local disk; a PDF read from a
+      // remote host has none there, so say so and ask nothing. A mirror path is
+      // local and goes on.
+      if (remoteSource) {
+        const found = await findTexSource();
+        const opened = openByName(found);
+        setSyncNotice({
+          kind: "remote",
+          opened,
+          source: found ?? path,
+          sources: [],
+          canRecompile: false,
+        });
+        return;
       }
+      const src = syncable ? await synctexEdit(path, page, x, y) : null;
+      if (src) await jump(src);
       const status = syncable ? await synctexStatus(path) : null;
       const kind = syncable
         ? syncNoticeKind(status, src != null)
         : ("noMap" satisfies SyncNoticeKind);
       if (!kind) return;
-      const source = src?.input ?? path.replace(/\.pdf$/i, ".tex");
+      const opened = kind === "noMap" && !src && openByName(texSource);
+      const source = src?.input ?? texSource ?? path.replace(/\.pdf$/i, ".tex");
       const canRecompile = await canRecompileTexSource(source).catch(() => false);
-      setSyncNotice({ kind, source, sources: status?.newer_sources ?? [], canRecompile });
+      setSyncNotice({ kind, opened, source, sources: status?.newer_sources ?? [], canRecompile });
     },
-    [path, remoteSource, syncable, onReverseSource],
+    [path, remoteSource, syncable, texSource, findTexSource, onReverseSource],
   );
 
   // Poll mtime; on a change (e.g. a recompile wrote a new PDF), bump
@@ -5372,9 +5410,13 @@ function PdfCanvas({
           <span>
             {t(
               syncNotice.kind === "remote"
-                ? "pdfViewer.syncRemoteMsg"
+                ? syncNotice.opened
+                  ? "pdfViewer.syncRemoteOpenedMsg"
+                  : "pdfViewer.syncRemoteMsg"
                 : syncNotice.kind === "noMap"
-                  ? "pdfViewer.syncNoMapMsg"
+                  ? syncNotice.opened
+                    ? "pdfViewer.syncNoMapOpenedMsg"
+                    : "pdfViewer.syncNoMapMsg"
                   : syncNotice.kind === "pdfNewer"
                     ? "pdfViewer.syncPdfNewerMsg"
                     : syncNotice.kind === "stale"
@@ -5382,9 +5424,11 @@ function PdfCanvas({
                       : "pdfViewer.syncMissMsg",
               {
                 files: syncNotice.sources.map((f) => basename(f)).join(", "),
+                file: basename(syncNotice.source),
               },
             )}
             {syncNotice.kind === "remote" && <UntestedTag id="pdfViewer.syncRemoteMsg" />}
+            {syncNotice.opened && <UntestedTag id="pdfViewer.syncOpenedByName" />}
           </span>
           {syncNotice.canRecompile && (
             <button

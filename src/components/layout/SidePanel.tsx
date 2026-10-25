@@ -16,13 +16,12 @@ import { useShallow } from "zustand/react/shallow";
 import { useActivityStore, type AttentionKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
 import { useT } from "../../lib/i18n";
-import { RailChevronIcon, RailSwitchSideIcon } from "../common/EdgeRailIcons";
+import { formatBytes } from "../../lib/gpu";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import { terminalCharsPerSecond } from "../../dev/terminalOutputRate";
 import {
   RENDERER_CEILING_MB,
   ensureOwnRendererPid,
-  formatRssKib,
   readRendererRss,
   rendererName,
   type RendererRss,
@@ -49,10 +48,8 @@ interface Props {
   onResizeStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   onResizeMove?: (e: React.PointerEvent<HTMLDivElement>) => void;
   onResizeEnd?: (e: React.PointerEvent<HTMLDivElement>) => void;
-  onHide?: () => void;
   /** Double-click on the resize sash: back to the default width. */
   onResizeReset?: () => void;
-  onToggleSide?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
 }
@@ -154,7 +151,7 @@ function RendererRssDisplay() {
       className={hot ? "renderer-rss hot" : "renderer-rss"}
       title={t("sidePanel.rendererRssTitle")}
     >
-      RSS {rows.map((r) => `${rendererName(r)} ${formatRssKib(r.rss_kib)}`).join(" · ")}
+      RSS {rows.map((r) => `${rendererName(r)} ${formatBytes(r.rss_kib * 1024)}`).join(" · ")}
     </span>
   );
 }
@@ -177,9 +174,7 @@ export function SidePanel({
   onResizeStart,
   onResizeMove,
   onResizeEnd,
-  onHide,
   onResizeReset,
-  onToggleSide,
   onMouseEnter,
   onMouseLeave,
 }: Props) {
@@ -341,37 +336,6 @@ export function SidePanel({
     />
   ) : null;
 
-  // The panel header's left-edge chrome: a side-flip toggle and the pin. Both ride
-  // the single `pin` slot ProjectFilesView exposes (a tab passes neither), so no
-  // extra slot is threaded through the shared viewer.
-  const chrome =
-    onHide || onToggleSide ? (
-      <>
-        {onToggleSide && (
-          <button
-            className="side-panel-pin side-panel-flip"
-            onClick={onToggleSide}
-            title={t(side === "left" ? "sidePanel.moveRight" : "sidePanel.moveLeft")}
-            aria-label={t(side === "left" ? "sidePanel.moveRight" : "sidePanel.moveLeft")}
-          >
-            {/* The same picture the closed panel's rail shows for this: the panel
-                on the edge it is on, an arrow at the edge it goes to. */}
-            <RailSwitchSideIcon side={side} />
-          </button>
-        )}
-        {onHide && (
-          <button
-            className="side-panel-pin"
-            onClick={onHide}
-            title={t("sidePanel.hideTitle")}
-            aria-label={t("sidePanel.hideTitle")}
-          >
-            <RailChevronIcon dir={side === "left" ? "left" : "right"} />
-          </button>
-        )}
-      </>
-    ) : null;
-
   const hidden =
     hiddenGroups && hiddenGroups.length > 0 ? (
       <div className="hidden-subwindows">
@@ -518,7 +482,6 @@ export function SidePanel({
       containerStyle={width ? { width } : undefined}
       containerProps={{ onMouseEnter, onMouseLeave }}
       resizeHandle={resizeHandle}
-      pin={chrome}
       hidden={hidden}
       footer={versionFooter}
       view={panelView}

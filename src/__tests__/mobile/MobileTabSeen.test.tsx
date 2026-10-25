@@ -17,7 +17,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(), emit: vi.fn() }));
 
 import { MobileBridgeHost } from "../../components/mobile/MobileBridgeHost";
-import { notePtyOutput, useActivityStore } from "../../stores/activity";
+import { _clearPtyActivityForTest, notePtyOutput, useActivityStore } from "../../stores/activity";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
@@ -52,6 +52,7 @@ async function ask(request: Record<string, unknown>) {
 
 describe("Mobile bridge — a phone that looked at an agent tab", () => {
   beforeEach(async () => {
+    _clearPtyActivityForTest();
     vi.mocked(invoke).mockImplementation((command: string) => {
       if (command === "list_agents") return Promise.resolve([]);
       if (command === "agent_schedules_list") return Promise.resolve([]);

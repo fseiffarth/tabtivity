@@ -30,6 +30,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import {
+  agentSwitchChoices,
   agentWorktreeChoices,
   isProjectWorktreeCwd,
   restoredAgentCwd,
@@ -124,6 +125,23 @@ describe("agentWorktreeChoices", () => {
 function proj(id: string, dir: string): ProjectEntry {
   return { id, name: id, status: "active", position: 10, local_file: `${dir}/project.json` };
 }
+
+describe("agentSwitchChoices (the Reader's branch chip)", () => {
+  it("lists the project folder and its own linked worktrees, main first", () => {
+    expect(agentSwitchChoices([MAIN, FEATURE], "/p/p1")).toEqual([MAIN, FEATURE]);
+  });
+
+  it("leaves out a worktree a restore would not keep, and one without a checkout", () => {
+    const claudes = wt({ path: "/p/p1/.claude/worktrees/x", branch: "x" });
+    const gone = wt({ path: `/p/p1/${NAMES.worktreesDir}/gone`, is_prunable: true });
+    expect(agentSwitchChoices([MAIN, claudes, gone, FEATURE], "/p/p1")).toEqual([MAIN, FEATURE]);
+  });
+
+  it("is empty with nothing linked to move to", () => {
+    expect(agentSwitchChoices([MAIN], "/p/p1")).toEqual([]);
+    expect(agentSwitchChoices([MAIN, wt({ path: "/elsewhere/wt", branch: "w" })], "/p/p1")).toEqual([]);
+  });
+});
 
 describe("restore keeps a worktree agent where it was", () => {
   beforeEach(() => {

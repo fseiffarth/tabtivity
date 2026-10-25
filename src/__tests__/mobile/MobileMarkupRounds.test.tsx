@@ -350,7 +350,7 @@ describe("MarkupView · rounds", () => {
     expect(screen.queryByRole("button", { name: /^Chat/ })).toBeNull();
     fireEvent.click(submitButton());
     fireEvent.click(await screen.findByRole("button", { name: /^Chat/ }));
-    expect(toChat).toHaveBeenCalledWith("plot.png");
+    expect(toChat).toHaveBeenCalledWith(expect.objectContaining({ file: PICTURE, scope: { tab: "t1" } }));
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -369,7 +369,7 @@ describe("MarkupView · rounds", () => {
     const answer = screen.getByRole("button", { name: /^Answer in chat/ });
     expect(answer.className).toContain("markup-submit");
     fireEvent.click(answer);
-    expect(toChat).toHaveBeenCalledWith("plot.png");
+    expect(toChat).toHaveBeenCalledWith(expect.objectContaining({ file: PICTURE, scope: { tab: "t1" } }));
     // Answered: back to the plain Chat button, no line.
     rerender(view("working"));
     expect(screen.queryByText("“Do you want to make this edit to main.tex?”")).toBeNull();
@@ -698,6 +698,34 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(within(document.querySelector(".markup-away-notice") as HTMLElement).getByRole("button"));
     await waitFor(() => expect(host().classList.contains("away")).toBe(false));
     expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
+  });
+
+  it("keeps the way back to a tucked-away view when the tab is left and opened again", async () => {
+    const files = () => [{ name: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000, from_tab: true }];
+    chat(files, "working");
+    fireEvent.click(await screen.findByRole("button", { name: "Files from the agent (1)" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Files from the agent" })).getByRole("button", { name: "Open plot.png" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
+    showPicture();
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(document.querySelector(".markup-chat")).toBeTruthy());
+    fireEvent.click(document.querySelector(".markup-chat")!);
+    await waitFor(() => expect(document.querySelector(".markup-away-notice")).toBeTruthy());
+
+    // The tab left, then opened again: the bar is back, and leads to the file.
+    cleanup();
+    chat(files, "working");
+    const bar = await screen.findByText(/plot\.png/, { selector: ".markup-away-notice span" });
+    fireEvent.click(within(bar.closest(".markup-away-notice") as HTMLElement).getByRole("button"));
+    await waitFor(() => expect(document.querySelector(".markup-host")!.classList.contains("away")).toBe(false));
+    expect(screen.getByRole("dialog", { name: "Mark up plot.png" })).toBeTruthy();
+
+    // Brought back, it is no longer kept: the next visit opens on the chat.
+    cleanup();
+    chat(files, "working");
+    await screen.findByRole("button", { name: "Files from the agent (1)" });
+    expect(document.querySelector(".markup-away-notice")).toBeNull();
   });
 
   it("opened from a markup view's Open tab, offers the way back to it from the chat", async () => {

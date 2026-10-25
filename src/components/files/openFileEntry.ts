@@ -6,7 +6,7 @@ import {
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useWindowsStore } from "../../stores/windows";
 import { openTexWorkspace } from "../embed/openTexWorkspace";
-import { openTabInScope } from "../tabs/tabScopeContext";
+import { openTabInNewSubwindow, openTabInScope } from "../tabs/tabScopeContext";
 
 /**
  * The single open-a-file policy shared by every file listing (the FileTree in
@@ -20,6 +20,9 @@ import { openTabInScope } from "../tabs/tabScopeContext";
  *    window (like the Python ▶ Run) instead of the main window's tab store.
  *  - A file with **no native viewer**, or an explicit `external` open
  *    (Shift+double-click), opens in the OS default app via `open_file`.
+ *
+ * `newSubwindow` (Ctrl+click on an agent's file link) puts the viewer tab in a
+ * new subwindow beside the focused one instead (`openTabInNewSubwindow`).
  *
  * `disabled` honours the per-type viewer opt-out (#48); omit it to treat every
  * viewer as enabled.
@@ -42,8 +45,14 @@ export function openFileEntry(opts: {
   /** The scope the tab belongs to when it is not the active one — the root
    *  console's (`TabScopeContext`). Omit/null = the active scope. */
   scope?: string | null;
+  /** Open the viewer tab in a new subwindow beside the focused one. */
+  newSubwindow?: boolean;
 }): void {
-  const { entry, projectDir, projectId, origin, external, disabled, placeTab, scope } = opts;
+  const { entry, projectDir, projectId, origin, external, disabled, scope, newSubwindow } = opts;
+  const tabScope = scope ?? useTabsStore.getState().scope;
+  const placeTab = opts.placeTab ?? (newSubwindow
+    ? (tab: Omit<TabEntry, "key">) => openTabInNewSubwindow(tabScope, tab)
+    : undefined);
   if (entry.is_dir) return;
 
   const viewer = internalViewerFor(entry, disabled);
@@ -72,13 +81,17 @@ export function openFileEntry(opts: {
     viewer,
   };
 
+  const sameFile = (t: TabEntry) =>
+    t.kind === "embed" && t.viewer === viewer && t.embedPath === entry.path;
+  if (newSubwindow && !opts.placeTab) {
+    openTabInNewSubwindow(tabScope, tab, sameFile);
+    return;
+  }
   if (placeTab) {
     placeTab(tab);
     return;
   }
 
-  const sameFile = (t: TabEntry) =>
-    t.kind === "embed" && t.viewer === viewer && t.embedPath === entry.path;
   if (scope) {
     openTabInScope(scope, tab, sameFile);
     return;

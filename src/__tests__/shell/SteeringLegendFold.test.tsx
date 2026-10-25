@@ -86,6 +86,8 @@ describe("steering legend fold (H)", () => {
     expect(document.querySelector(".steering-legend")).toBeNull();
     const fab = document.querySelector(".steering-legend-fab-button");
     expect(fab?.querySelector("kbd")?.textContent).toBe("H");
+    // Space, the exit, as a symbol only.
+    expect(fab?.querySelector(".steering-legend-fab-exit")?.textContent).toBe("␣");
     // The window still wears the steering frame.
     expect(document.documentElement.dataset.steer).toBe("tabs");
 

@@ -311,7 +311,10 @@ describe("the strip's new tools over the real hook", () => {
     down(pageLayer(), 350, 400);
     up(pageLayer(), 350, 400);
     expect(await screen.findByText("1 selected")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Dashed" }));
+    // One style button, the stroke's own drawn; a click opens every style.
+    fireEvent.click(screen.getByRole("button", { name: "Pen style: Plain pen" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Dashed" }));
+    expect(screen.queryByRole("menu", { name: "Pen style" })).toBeNull();
     await waitFor(() => expect(lastSaved()?.pages[1].marks[1]).toEqual({ ...STROKE, style: "dashed" }));
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     const box = screen.getByPlaceholderText("What should change here?");
@@ -325,12 +328,32 @@ describe("the strip's new tools over the real hook", () => {
     await waitFor(() => expect(lastSaved()?.pages[1].marks[1]).toEqual({ ...STROKE, style: "dashed" }));
   });
 
+  it("keeps the pen's styles behind one button that opens them, each drawn and named", async () => {
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    const trigger = screen.getByRole("button", { name: "Pen style: Plain pen" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.querySelector("svg.file-viewer-pdf-markup-sample")).toBeTruthy();
+    fireEvent.click(trigger);
+    const items = screen.getAllByRole("menuitemradio");
+    expect(items.map((item) => item.textContent?.replace("✓", ""))).toEqual(["Plain pen", "Marker", "Dashed", "Arrow"]);
+    expect(items.every((item) => item.querySelector("svg.file-viewer-pdf-markup-sample"))).toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /Plain pen/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Arrow/ }));
+    expect(screen.queryByRole("menuitemradio")).toBeNull();
+    expect(screen.getByRole("button", { name: "Pen style: Arrow" })).toBeTruthy();
+    // Escape closes it untouched.
+    fireEvent.click(screen.getByRole("button", { name: "Pen style: Arrow" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menuitemradio")).toBeNull();
+  });
+
   it("arms a preset from its chip", async () => {
     render(<Harness />);
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Preset 2" }));
     expect(pressed("Pen")).toBe("true");
-    expect(pressed("Marker")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Marker" })).toBeTruthy();
     expect(pressed("Colour: Yellow")).toBe("true");
     expect(pressed("Preset 2")).toBe("true");
     // Save as preset keeps a fifth pen by dropping the oldest.

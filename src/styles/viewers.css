@@ -487,7 +487,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 220px;
+  width: min(420px, calc(100vw - 16px));
+  box-sizing: border-box;
   padding: 8px;
   color: var(--text-primary);
 }
@@ -503,6 +504,10 @@
   padding: 3px 6px;
   font-family: var(--font-mono, monospace);
   font-size: 11px;
+}
+/* The interpreter picker: a long venv path must not stretch the popover. */
+select.file-viewer-run-args-input {
+  max-width: 100%;
 }
 .file-viewer-run-args-input:focus {
   outline: none;
@@ -639,11 +644,15 @@
   pointer-events: none;
 }
 .file-viewer-run-argshint-label {
+  display: block;
   color: var(--text-muted);
-  margin-right: 4px;
 }
+/* The saved args as a list, one option per line (`runArgsFormat.ts`). */
 .file-viewer-run-argshint-val {
+  display: block;
   font-family: var(--font-mono, monospace);
+  white-space: pre;
+  line-height: 1.5;
 }
 
 /* #45 in-tab AI-assist controls: Autocomplete on/off + length mode, Grammar
@@ -4644,6 +4653,24 @@
 }
 .file-viewer-pdf-markup-more .dropdown-menu {
   min-width: 180px;
+}
+/* The pen's style button: the chosen style drawn, and a caret saying it
+   opens; its menu draws each style beside its name. */
+.file-viewer-pdf-markup-bar .file-viewer-pdf-markup-style-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.file-viewer-pdf-markup-caret {
+  font-size: 9px;
+  opacity: 0.75;
+}
+.file-viewer-pdf-markup-style .dropdown-menu {
+  min-width: 150px;
+}
+.file-viewer-pdf-markup-style .dropdown-menu .file-viewer-pdf-markup-sample {
+  vertical-align: middle;
+  margin-right: 8px;
 }
 .file-viewer-pdf-markup-round {
   display: inline-flex;

@@ -56,7 +56,7 @@ class FakeWebSocket {
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { SubagentsSheet } from "../../../mobile-web/src/screens/SubagentsSheet";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
 import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
@@ -124,6 +124,21 @@ describe("the pure path through subagents", () => {
     expect(stepSibling(next, 1)).toBe(next);
     expect(stepSibling(path, -1)).toBe(path);
     expect(stepSibling([], 1)).toEqual([]);
+  });
+
+  it("walks into a workflow run and its agents, and types to neither", () => {
+    const run: TranscriptEntry[] = [
+      { kind: "agent", text: "Improve the chart", role: "chart-improve", subagent: "00000000000000c3", workflow: true, running: true, background: true },
+    ];
+    expect(subagentsIn(run)[0]).toMatchObject({ token: "00000000000000c3", workflow: true, background: true });
+    const agents: TranscriptEntry[] = [{ kind: "agent", text: "reviewer R1", role: "Review", subagent: "00000000000000d4", running: true, background: true }];
+    const inRun = openSubagent(openSubagent([], subagentsIn(run)[0], run, 0), subagentsIn(agents)[0], agents, 0);
+    // The agent is not itself a workflow, but sits inside one.
+    expect(inRun[1].workflow).toBeUndefined();
+    expect(inWorkflow(inRun)).toBe(true);
+    expect(inWorkflow(inRun.slice(0, 1))).toBe(true);
+    expect(inWorkflow(openSubagent([], subagentsIn(agents)[0], agents, 0))).toBe(false);
+    expect(inWorkflow([])).toBe(false);
   });
 
   it("knows an open subagent at work by the session's live entries", () => {
@@ -349,7 +364,7 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
       if (url.includes("/transcript")) {
         const expanded = new URL(url, "http://phone").searchParams.get("limit") === "240";
         return Promise.resolve(jsonResponse(200, { transcript: {
-          available: true, version: expanded ? "older:2" : "older:1", truncated: !expanded, agentsEarlier: !expanded,
+          available: true, version: expanded ? "older:2" : "older:1", truncated: !expanded, agentsEarlier: expanded ? 0 : MAIN.entries.filter((entry) => entry.kind === "agent").length,
           entries: expanded ? MAIN.entries : MAIN.entries.filter((entry) => entry.kind !== "agent"),
         } }));
       }
@@ -359,7 +374,7 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
     const index = screen.getByRole("navigation", { name: "Subagents in this conversation" });
-    fireEvent.click(within(index).getByRole("button", { name: /^Subagents \(0\+\)/ }));
+    fireEvent.click(within(index).getByRole("button", { name: /^Subagents \(3\)/ }));
     fireEvent.click(within(index).getByRole("button", { name: "Find subagents in earlier turns" }));
     await settle();
     within(index).getByRole("button", { name: "Explore · Map the backend" });

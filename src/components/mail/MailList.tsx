@@ -14,10 +14,14 @@ import { useUse24h } from "../../lib/timeFormat";
 import { UntestedTag } from "../common/UntestedTag";
 import type { MailHeader, MailPriority, MailSort } from "../../types/mail";
 import { PaperclipIcon } from "../common/icons/Icon";
+import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 
 /** One frozen instance, so a list without marks does not re-render on a new
  *  empty set each time. */
 const EMPTY_MARKS: ReadonlySet<string> = new Set();
+
+/** How far a press travels before it is a drag rather than a click. */
+const DRAG_THRESHOLD_PX = 5;
 
 /**
  * The header list — the middle pane.
@@ -70,7 +74,7 @@ export interface MailListProps {
   /** The rows ticked for a bulk action (`stores/mail`'s `checkedIds`). */
   checkedIds: string[];
   loading: boolean;
-  /** A plain click or Enter: open the message in its own mail-window tab. */
+  /** Double-click or Enter: open the message in its own mail-window tab. */
   onOpen: (id: string) => void;
   /**
    * A row was picked for the bulk selection. `only` replaces the set (a plain
@@ -84,6 +88,16 @@ export interface MailListProps {
    */
   onCheck: (header: MailHeader, mode: MailCheckMode, order: string[]) => void;
   onClearChecks: () => void;
+  /**
+   * Rows dragged onto a folder of the rail. Pointer-driven, not HTML5 DnD
+   * (unreliable on WebKitGTK): the list hit-tests `[data-mail-drop-folder]`
+   * itself. `onDragRows` freezes the dragged rows at the start and clears them
+   * (`null`) at the end; `onDragOverFolder` reports the folder under the pointer;
+   * `onDropRows` is the release over one. A drag never opens mail.
+   */
+  onDragRows?: (headers: MailHeader[] | null) => void;
+  onDragOverFolder?: (folderId: string | null) => void;
+  onDropRows?: (folderId: string) => void;
   /**
    * Delete these messages. The list neither confirms nor decides where they go:
    * a delete is a move to Trash for some rows and permanent for others
@@ -201,6 +215,9 @@ function MailListImpl({
   onOpen,
   onCheck,
   onClearChecks,
+  onDragRows,
+  onDragOverFolder,
+  onDropRows,
   onDelete,
   deletePlan,
   onToggleFlag,
@@ -245,6 +262,13 @@ function MailListImpl({
   useEffect(() => {
     if (rowsRef.current) rowsRef.current.scrollTop = 0;
   }, [offset]);
+  // Set once a press became a drag, so the click that may follow the release
+  // neither collapses the selection nor opens anything; a fresh press clears it.
+  const dragged = useRef(false);
+  // The "N messages" label under the pointer. Moved by writing its style, not
+  // through state: a re-render of every row per pointermove is what this avoids.
+  const ghostRef = useRef<HTMLDivElement>(null);
+  const [ghost, setGhost] = useState<{ count: number; x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<RowMenu | null>(null);
   const checked = new Set(checkedIds);
   const order = headers.map((h) => h.id);
@@ -256,6 +280,70 @@ function MailListImpl({
    *  one of them, otherwise that row alone. */
   const targetsFor = (header: MailHeader) =>
     checked.has(header.id) && checkedHere.length > 1 ? checkedHere : [header];
+
+  /**
+   * Press on a row: a click (handled by `onClick`) unless it travels past the
+   * threshold, then a drag of `targetsFor(h)` onto the folder rail. Every
+   * listener is bound here, inside the pointerdown — on WebKitGTK one added
+   * mid-gesture never sees the release.
+   */
+  const onRowPointerDown = (e: React.PointerEvent<HTMLDivElement>, h: MailHeader) => {
+    dragged.current = false;
+    if (e.button !== 0 || !onDragRows || (e.target as HTMLElement).closest("button")) return;
+    // WebKitGTK's native selection gesture would otherwise claim the pointer
+    // stream. That also skips the focus a mousedown gives, so focus by hand —
+    // Enter and Delete are read off the focused row.
+    e.preventDefault();
+    e.currentTarget.focus();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let rows: MailHeader[] | null = null;
+    let folderId: string | null = null;
+    const onMove = (ev: PointerEvent) => {
+      if (!rows) {
+        if (
+          Math.abs(ev.clientX - startX) < DRAG_THRESHOLD_PX &&
+          Math.abs(ev.clientY - startY) < DRAG_THRESHOLD_PX
+        ) {
+          return;
+        }
+        rows = targetsFor(h);
+        // Dragging a row outside the selection drags that row alone, and the
+        // selection follows it so the ticks show what is travelling.
+        if (!checked.has(h.id)) onCheck(h, "only", order);
+        dragged.current = true;
+        setMenu(null);
+        setGhost({ count: rows.length, x: ev.clientX, y: ev.clientY });
+        onDragRows(rows);
+      }
+      const el = ghostRef.current;
+      if (el) {
+        el.style.left = `${ev.clientX}px`;
+        el.style.top = `${ev.clientY}px`;
+      }
+      const over = document
+        .elementFromPoint(ev.clientX, ev.clientY)
+        ?.closest<HTMLElement>("[data-mail-drop-folder]");
+      const next = over?.dataset.mailDropFolder ?? null;
+      if (next !== folderId) {
+        folderId = next;
+        onDragOverFolder?.(next);
+      }
+    };
+    // The drop goes to the folder the highlight last showed, never re-resolved
+    // at the release point (WebKitGTK can hit-test something else there).
+    const finish = (commit: boolean) => {
+      window.removeEventListener("pointermove", onMove);
+      if (!rows) return;
+      setGhost(null);
+      if (commit && folderId) onDropRows?.(folderId);
+      onDragOverFolder?.(null);
+      onDragRows(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    if (dragPlatform.needsPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+    bindDragRelease({ onCommit: () => finish(true), onAbort: () => finish(false) });
+  };
 
   const file = (priority: MailPriority | null) => {
     if (!menu) return;
@@ -378,6 +466,7 @@ function MailListImpl({
           {/* For the per-row ✕ at the far end: a pill in a 14px column on every
               row would bury the list, so it is said once, up here. */}
           <UntestedTag id="mailList.1" />
+          <UntestedTag id="mailList.openOnDoubleClick" />
         </span>
         {sortHeader({
           field: "size",
@@ -426,8 +515,10 @@ function MailListImpl({
             }${h.seen ? "" : " unread"}`}
             role="button"
             tabIndex={0}
+            onPointerDown={(e) => onRowPointerDown(e, h)}
             title={t("mail.selectHint", { modifier: modifierLabel() })}
             onClick={(e) => {
+              if (dragged.current) return;
               // A modified click picks rows and deliberately opens nothing:
               // building a selection of ten messages must not fetch ten bodies
               // and mark ten of them read on the way. `preventDefault` because
@@ -442,22 +533,28 @@ function MailListImpl({
                 onCheck(h, "toggle", order);
                 return;
               }
-              // A plain click is both: open this message in its tab, and make it
-              // the whole selection — so the ticks never survive as an invisible
-              // set that the next right-click would act on.
               onCheck(h, "only", order);
+            }}
+            onDoubleClick={(e) => {
+              if (dragged.current || e.shiftKey || e.ctrlKey || e.metaKey ||
+                  (e.target as HTMLElement).closest("button")) return;
               onOpen(h.id);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "Enter") {
                 e.preventDefault();
-                onCheck(h, "only", order);
                 onOpen(h.id);
+                return;
+              }
+              if (e.key === " ") {
+                e.preventDefault();
+                onCheck(h, e.shiftKey ? "range" : e.ctrlKey || e.metaKey ? "toggle" : "only", order);
                 return;
               }
               if (e.key === "Delete") {
                 e.preventDefault();
-                onDelete(targetsFor(h));
+                onDelete(checkedHere.length > 0 ? checkedHere : [h]);
               }
             }}
             onContextMenu={(e) => {
@@ -485,7 +582,7 @@ function MailListImpl({
               </button>
               {/* Beside the star because it is the same kind of control — a
                   per-message state toggled in place — and `stopPropagation` for
-                  the same reason: the row itself opens the message, and opening
+                  the same reason: a double-click on the row opens the message, and opening
                   it marks it read, which would undo the click that was just
                   made. A filled dot is unread, a hollow one read; the glyph
                   matches the row's own unread emphasis rather than adding a
@@ -815,6 +912,15 @@ function MailListImpl({
               })()}
           </ContextMenuPortal>
         )}
+      {ghost && (
+        // The tab drag's ghost, reused: `pointer-events: none`, or it would be
+        // `elementFromPoint`'s answer and no folder could be found under it.
+        <div ref={ghostRef} className="tab-drag-ghost" style={{ left: ghost.x, top: ghost.y }}>
+          <span className="tab-drag-ghost-label">
+            {t("mail.dragCount", { count: ghost.count })}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

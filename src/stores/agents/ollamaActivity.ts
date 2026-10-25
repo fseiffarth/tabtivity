@@ -59,8 +59,9 @@ interface OllamaActivityState {
   modelsError: "not_running" | "failed" | null;
   /** Live pull progress per model ref (from the global `ollama-pull-progress`
       events emitted by `pull_ollama_model`), so downloads started anywhere show
-      here too. `pct` is null during the manifest/verify phases (no byte totals). */
-  downloads: Record<string, { pct: number | null }>;
+      here too. `pct` is null during the manifest/verify phases (no byte totals);
+      `status` is Ollama's own phase line ("pulling manifest", …). */
+  downloads: Record<string, { pct: number | null; status?: string }>;
   /** Models whose download the user paused this session — each offers
    *  Resume/Delete. An array, not a Set: zustand compares by reference. */
   paused: string[];
@@ -90,6 +91,9 @@ interface OllamaActivityState {
   fetchModels: () => Promise<void>;
   markLoad: (model: string, state: "loading" | "error") => void;
   clearPaused: (model: string) => void;
+  /** Forget a model's live download — the pull settled without a `success`
+   *  event (it failed), so nothing else would ever remove its row. */
+  dropDownload: (model: string) => void;
   dropUpdate: (model: string) => void;
   setUpdates: (updates: Record<string, OllamaModelUpdate>) => void;
   setCheckingUpdates: (checking: boolean) => void;
@@ -104,7 +108,7 @@ const initial = {
   models: [] as LocalModelInfo[],
   modelsLoading: false,
   modelsError: null as OllamaActivityState["modelsError"],
-  downloads: {} as Record<string, { pct: number | null }>,
+  downloads: {} as Record<string, { pct: number | null; status?: string }>,
   paused: [] as string[],
   loads: {} as Record<string, "loading" | "error">,
   updates: {} as Record<string, OllamaModelUpdate>,
@@ -141,6 +145,13 @@ export const useOllamaActivityStore = create<OllamaActivityState>((set, get) => 
 
   clearPaused: (model) =>
     set((s) => (s.paused.includes(model) ? { paused: s.paused.filter((m) => m !== model) } : s)),
+
+  dropDownload: (model) =>
+    set((s) => {
+      if (!(model in s.downloads)) return s;
+      const { [model]: _drop, ...rest } = s.downloads;
+      return { downloads: rest };
+    }),
 
   dropUpdate: (model) =>
     set((s) => {
@@ -205,11 +216,13 @@ export function initLocalModelEvents(): () => void {
               return { downloads: rest };
             }
             // One event per Ollama NDJSON line, many a second: hand back the same
-            // state while the shown whole percent hasn't moved, so no subscriber
-            // (the always-mounted header button among them) re-renders for it.
+            // state while the shown whole percent and phase line haven't moved, so
+            // no subscriber (the always-mounted header button among them)
+            // re-renders for it.
             const pct = total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : null;
-            if (s.downloads[model]?.pct === pct) return s;
-            return { downloads: { ...s.downloads, [model]: { pct } } };
+            const prev = s.downloads[model];
+            if (prev?.pct === pct && prev.status === status) return s;
+            return { downloads: { ...s.downloads, [model]: { pct, status } } };
           });
         },
       ),

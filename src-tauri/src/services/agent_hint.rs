@@ -40,7 +40,7 @@ use crate::storage;
 
 /// What every CLI is told.
 pub const HINT: &str =
-    concat!("To put a file in front of the user on their phone, run `", crate::app_slug!(), "-send <file>` (local and container tabs).");
+    concat!("When the user asks you to send or show them a file, run `", crate::app_slug!(), "-send <file>` (local and container tabs): it goes to the screen they last typed from, the phone or the desktop. Do what its output says: for the desktop, name the path it prints in your reply, and the chat shows the pictures and PDFs a reply names. Add `--phone` or `--desktop` when the user names a screen.");
 
 #[cfg(not(windows))]
 const SCRIPT_NAME: &str = crate::brand::AGENT_HINT_SH;
@@ -149,12 +149,18 @@ fn command(shape: Shape) -> String {
 }
 
 /// The app's variables the script reads; see `agent_session::HOOK_ENV`.
-const HINT_ENV: &[&str] = &["TAB_UID", "PROJECT_DIR"];
+const HINT_ENV: &[&str] = &["TAB_UID", "TAB_AGENT", "PROJECT_DIR"];
 
 /// POSIX body. Every printed string is a single-quoted literal, which is why
 /// [`HINT`] must never hold a `'` (a test pins that).
 #[cfg_attr(windows, allow(dead_code))]
 fn posix_script_body() -> String {
+    posix_script_body_in(&crate::services::agent_session::live_sessions_dir().to_string_lossy())
+}
+
+/// [`posix_script_body`] recording Copilot's session under `live_dir`.
+#[cfg_attr(windows, allow(dead_code))]
+fn posix_script_body_in(live_dir: &str) -> String {
     let mut cases = String::new();
     for shape in Shape::ALL {
         cases.push_str(&format!("  {}) printf '%s\\n' '{}' ;;\n", shape.arg(), shape.output()));
@@ -168,18 +174,30 @@ fn posix_script_body() -> String {
          # {DISPLAY} agent hint (SessionStart): tells an agent in a {DISPLAY} project tab\n\
          # how to put a file on the user's phone, in the output shape its CLI reads\n\
          # ($1). Silent anywhere else. Managed by {DISPLAY}; do not edit.\n\
-         {legacy_env}if [ -z \"${UPPER}_TAB_UID\" ] || [ -z \"${UPPER}_PROJECT_DIR\" ]; then\n\
+         {legacy_env}# Copilot's start also says which session the tab is in (a /new or an in-CLI\n\
+         # /resume rolls it): record it under the tab's key, where the next spawn pins it\n\
+         # (`copilot_session`). Only the CLI the tab runs may move the record; a nested one\n\
+         # inherits {UPPER}_TAB_UID.\n\
+         if [ \"$1\" = copilot ] && [ \"${UPPER}_TAB_AGENT\" = copilot ] && [ -n \"${UPPER}_TAB_UID\" ]; then\n\
+         \x20 case \"${UPPER}_TAB_UID\" in *[!a-zA-Z0-9-]*) ;; *)\n\
+         \x20   sid=$(cat | tr '\\n' ' ' | sed -n 's/.*\"sessionId\"[[:space:]]*:[[:space:]]*\"\\([0-9a-fA-F-]*\\)\".*/\\1/p')\n\
+         \x20   if [ -n \"$sid\" ] && mkdir -p \"{live_dir}\" 2>/dev/null; then printf '%s' \"$sid\" > \"{live_dir}/${UPPER}_TAB_UID\"; fi ;;\n\
+         \x20 esac\n\
+         fi\n\
+         if [ -z \"${UPPER}_TAB_UID\" ] || [ -z \"${UPPER}_PROJECT_DIR\" ]; then\n\
          \x20 case \"$1\" in\n{quiet}  esac\n\
          \x20 exit 0\n\
          fi\n\
          case \"$1\" in\n{cases}esac\n",
         legacy_env = crate::services::brand_migration::compat::script_preamble_sh(HINT_ENV),
+        live_dir = live_dir,
     )
 }
 
 /// PowerShell twin, for a Windows host.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn powershell_script_body() -> String {
+    let live_dir = crate::quote::powershell(&crate::services::agent_session::live_sessions_dir().to_string_lossy());
     let mut cases = String::new();
     for shape in Shape::ALL {
         cases.push_str(&format!("  '{}' {{ Write-Output '{}' }}\r\n", shape.arg(), shape.output()));
@@ -191,12 +209,23 @@ fn powershell_script_body() -> String {
     format!(
         "param([string]$Shape = 'plain')\r\n\
          # {DISPLAY} agent hint (SessionStart) - see the POSIX twin. Managed by {DISPLAY}; do not edit.\r\n\
-         {legacy_env}if (-not $env:{UPPER}_TAB_UID -or -not $env:{UPPER}_PROJECT_DIR) {{\r\n\
+         {legacy_env}# Copilot's start says which session the tab is in: record it (see the POSIX twin).\r\n\
+         if (($Shape -eq 'copilot') -and ($env:{UPPER}_TAB_AGENT -eq 'copilot') -and ($env:{UPPER}_TAB_UID -match '^[A-Za-z0-9-]+$')) {{\r\n\
+         \x20 $payload = [Console]::In.ReadToEnd()\r\n\
+         \x20 $m = [regex]::Match($payload, '\"sessionId\"\\s*:\\s*\"([0-9A-Fa-f-]+)\"')\r\n\
+         \x20 if ($m.Success) {{\r\n\
+         \x20   $dir = {live_dir}\r\n\
+         \x20   [void](New-Item -ItemType Directory -Force -Path $dir -ErrorAction SilentlyContinue)\r\n\
+         \x20   [IO.File]::WriteAllText((Join-Path $dir $env:{UPPER}_TAB_UID), $m.Groups[1].Value)\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
+         if (-not $env:{UPPER}_TAB_UID -or -not $env:{UPPER}_PROJECT_DIR) {{\r\n\
          \x20 switch ($Shape) {{\r\n{quiet}  }}\r\n\
          \x20 exit 0\r\n\
          }}\r\n\
          switch ($Shape) {{\r\n{cases}}}\r\n",
         legacy_env = crate::services::brand_migration::compat::script_preamble_ps1(HINT_ENV),
+        live_dir = live_dir,
     )
 }
 
@@ -419,6 +448,45 @@ mod tests {
             assert_eq!(run(shape, false, true), quiet, "{shape:?} outside a tab");
             assert_eq!(run(shape, true, false), quiet, "{shape:?} without a project");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copilot_start_records_the_session_for_the_tabs_own_copilot_only() {
+        use std::io::Write;
+        use std::process::Stdio;
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let script = dir.path().join("hint.sh");
+        std::fs::write(&script, posix_script_body_in(&live.to_string_lossy())).unwrap();
+        const UID: &str = "aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb";
+        const SID: &str = "0123abcd-0000-4000-8000-00000000cafe";
+        let payload = format!(r#"{{"sessionId":"{SID}","timestamp":1,"cwd":"/w","source":"new","initialPrompt":"a \"sessionId\":\"deadbeef\" b"}}"#);
+        let run = |shape: &str, agent: Option<&str>, uid: &str| {
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg(&script).arg(shape).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("PROJECT_DIR"), dir.path())
+                .stdin(Stdio::piped()).stdout(Stdio::piped());
+            if let Some(agent) = agent { cmd.env(crate::app_env!("TAB_AGENT"), agent); }
+            let mut child = cmd.spawn().unwrap();
+            // A script that records nothing never reads its stdin, and may be gone
+            // before the payload is written.
+            match child.stdin.take().unwrap().write_all(payload.as_bytes()) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("{e}"),
+                _ => {}
+            }
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success());
+            String::from_utf8(out.stdout).unwrap()
+        };
+        // Not the tab's Copilot (a Claude tab running a nested one), another CLI's shape, a bad key: nothing.
+        run("copilot", Some("claude"), UID);
+        run("context", Some("copilot"), UID);
+        run("copilot", Some("copilot"), "../x");
+        assert!(!live.exists());
+        // The hint still prints, and the session is recorded under the tab's key.
+        assert_eq!(run("copilot", Some("copilot"), UID), format!("{}\n", Shape::Copilot.output()));
+        assert_eq!(std::fs::read_to_string(live.join(UID)).unwrap(), SID);
     }
 
     #[test]

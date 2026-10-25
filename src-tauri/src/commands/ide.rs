@@ -1,7 +1,8 @@
 //! "Open in <IDE>": the project opened in the IDE its tree carries markers
 //! for. Detection and launcher resolution are `services::ide_detect`; this
 //! layer maps a project id to the directory that is scanned, launches through
-//! the shared window registry (`commands::apps::do_launch`) and edits the
+//! the shared window registry (`commands::apps::do_launch`) — or, when the
+//! IDE already shows the project, raises that window instead — and edits the
 //! per-IDE override in `settings.json`.
 //!
 //! The directory always comes from the trusted `projects.json` — the frontend
@@ -10,18 +11,20 @@
 //! SSH probe runs and nothing here needs a connected session.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use app_core::sync::LockExt;
 use serde::Serialize;
-use tauri::State;
 
 use crate::commands::apps::{
     do_launch, list_installed_apps, TrackedWindow, WindowRegistryState,
     ORIGIN_PROJECT_IDE,
 };
+use crate::commands::workspace::WorkspaceStateArc;
 use crate::schema::Settings;
 use crate::services::ide_detect::{self, Detected, HostProbe, IdeId, Launcher};
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 /// One IDE the project offers, with the program that would open it when one
 /// was found. `exec` is `None` when nothing is installed for it (nor for any
@@ -133,14 +136,18 @@ pub async fn detect_project_ides(project_id: String) -> Result<Vec<IdeCandidate>
 
 /// Launch `ide_id` on the project. Detection runs again here — the frontend's
 /// list is a display, never the thing that is executed — and the window is
-/// tracked with [`ORIGIN_PROJECT_IDE`].
+/// tracked with [`ORIGIN_PROJECT_IDE`]. When the IDE already has a window on
+/// the project, that window is brought to the front instead (`None` unless the
+/// registry tracks it): a second launch only hands the folder to the running
+/// instance, whose window the window manager then keeps behind Tabtivity.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_project_in_ide(
-    registry: State<'_, WindowRegistryState>,
+    ctx: Ctx,
     project_id: String,
     ide_id: String,
-) -> Result<TrackedWindow, String> {
-    let registry = registry.inner().clone();
+) -> Result<Option<TrackedWindow>, String> {
+    let registry = ctx.get::<WindowRegistryState>().clone();
+    let workspace = ctx.get::<WorkspaceStateArc>().clone();
     app_core::rt::try_blocking("app", move || {
         let ide = IdeId::parse(&ide_id).ok_or_else(|| format!("unknown IDE {ide_id}"))?;
         let (dir, found) = candidates(&project_id)?;
@@ -150,17 +157,51 @@ pub async fn open_project_in_ide(
             .ok_or_else(|| format!("{} is not set up for {}", project_id, ide.label()))?;
         let launcher = launcher.ok_or_else(|| format!("{} is not installed", ide.label()))?;
         let target = launcher.target_for(&detected, &dir);
+        if let Some(window_id) = raise_open_window(&workspace, launcher.ide, &dir, &target) {
+            return Ok(registry
+                .lock_ok()
+                .windows
+                .values()
+                .find(|w| w.window_id == Some(window_id))
+                .cloned());
+        }
         do_launch(
             &registry,
             &launcher.exec,
-            &[],
+            &launcher.args_for(&target),
             Some(&target.to_string_lossy()),
             Some(&project_id),
             Some("ide"),
             ORIGIN_PROJECT_IDE,
         )
+        .map(Some)
     })
     .await
+}
+
+/// Bring `ide`'s window on this project to the front, if one is open — opened
+/// from here or not. Its id when it was raised; `None` sends the caller on to
+/// launch (no such window, a platform that cannot list or raise windows, or a
+/// native Wayland window, which no app may raise).
+fn raise_open_window(
+    workspace: &WorkspaceStateArc,
+    ide: IdeId,
+    dir: &Path,
+    target: &Path,
+) -> Option<u64> {
+    let names = ide_detect::project_window_names(dir, target);
+    let window = crate::platform::named_windows()
+        .into_iter()
+        .find(|w| ide_detect::window_shows_project(ide, &w.class, &w.title, &names))?;
+    // Back from a parking backend's hidden desktop first; a no-op elsewhere.
+    let _ = workspace.lock_ok().backend.show_window(window.id);
+    match crate::platform::activate_window(window.id) {
+        Ok(()) => Some(window.id),
+        Err(e) => {
+            eprintln!("open_project_in_ide: raising {}: {e}", window.title);
+            None
+        }
+    }
 }
 
 /// Set (or, with `None`/blank, clear) the user's program for `ide_id`.

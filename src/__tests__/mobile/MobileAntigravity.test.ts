@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inputFrameStart, sessionStatus, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
+import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import {
   antigravityEffortKeys,
   antigravityFooter,
@@ -188,8 +188,6 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort`, () => {
     // Not at the `>` of a model row, and not below the dialog either: the
     // whole of it is the frame the model sheet is showing.
     expect(inputFrameStart(screen, LABEL)).toBe(1);
-    expect(statusFrameLines(screen, LABEL))
-      .toEqual(["                                                       Gemini 3.6 Flash · medium"]);
     // The status the chips read is the session's, not the highlighted row's.
     expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.6 Flash", effort: "medium" });
   });
@@ -289,5 +287,60 @@ describe(`${BRAND.display} Mobile — Antigravity 1.3.3, captured`, () => {
       "? for shortcuts                                          Gemini 3.8 Flash · high",
     ]);
     expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.8 Flash", effort: "high" });
+  });
+});
+
+describe(`${BRAND.display} Mobile — Antigravity 1.4.5, captured`, () => {
+  // Same setup as 1.3.3's. The catalog gained Gemini 4 Argon, and the dialog
+  // now opens with the highlight on the session's own model — so the gauge it
+  // draws is that model's: Gemini 3.1 Pro's two stops.
+  const BANNER = ["  Antigravity CLI 1.4.5", "  Gemini API key", "  Gemini 3.1 Pro (Low)", "  ~/work", ""];
+  const BOX = [RULE, ">", RULE];
+
+  it("reads the /model dialog opened on the current row, and its two-stop gauge", () => {
+    const screen = capturedScreen([
+      ...BANNER, ...BOX,
+      "Switch Model",
+      "",
+      "  Search:",
+      `          ${"─".repeat(20)}`,
+      "",
+      "  Gemini 4 Argon",
+      "  Gemini 3.8 Flash",
+      "  Gemini 3.7 Flash",
+      "  Gemini 3.6 Flash",
+      "> Gemini 3.1 Pro   (current)",
+      "",
+      "  Effort  ◂            ◉──────────────────────○            ▸",
+      "                      low                   high",
+      "            Faster responses, lighter reasoning — great for simpler tasks",
+      "",
+      "Keyboard: ↑/↓ Navigate  ←/→ Effort  enter Select  esc Go Back",
+      "",
+      "                                                            Gemini 3.1 Pro · low",
+    ]);
+    const picker = readAntigravityPicker(screen);
+    expect(picker!.options.map((option) => option.label)).toEqual([
+      "Gemini 4 Argon", "Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.1 Pro",
+    ]);
+    expect(picker!.current).toBe(4);
+    expect(picker!.options[4].description).toBe("(current)");
+    expect(readAntigravityEffort(screen)).toEqual({
+      current: 0,
+      stops: [
+        { label: "low", description: "Faster responses, lighter reasoning — great for simpler tasks" },
+        { label: "high" },
+      ],
+    });
+  });
+
+  it("reads the new model's footer once Enter has applied it", () => {
+    const screen = capturedScreen([
+      "> /model",
+      "  ⎿  Model set to Gemini 4 Argon (High)",
+      "", ...BOX,
+      "? for shortcuts                                            Gemini 4 Argon · high",
+    ]);
+    expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 4 Argon", effort: "high" });
   });
 });

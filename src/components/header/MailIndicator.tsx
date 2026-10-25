@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import {
   accountInboxUnread,
   backgroundCheckBlocked,
@@ -151,18 +152,11 @@ export function MailIndicator() {
 
   useEffect(() => {
     if (!live) return;
-    let cancelled = false;
-    let off: (() => void) | undefined;
-    // `listen` resolves asynchronously, so a settings flip that unmounts this
-    // between the call and its resolution would otherwise leave it installed.
-    void onMailNew((e) => useMailStore.getState().noteArrival(e.account_id, e.count)).then((un) => {
-      if (cancelled) un();
-      else off = un;
-    });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
+    // `subscribeTauri`: a settings flip that unmounts this between the call and
+    // `listen` resolving still drops the listener.
+    return subscribeTauri(() =>
+      onMailNew((e) => useMailStore.getState().noteArrival(e.account_id, e.count)),
+    );
   }, [live]);
 
   // The opt-in poll. `checkMail` is serialized per account by the backend's own

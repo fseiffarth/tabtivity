@@ -5,15 +5,8 @@ import { createPortal } from "react-dom";
 import { useTimerStore } from "../../stores/timer";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { ActivityCalendar } from "../projects/ActivityCalendar";
-import { useT, type TranslationKey } from "../../lib/i18n";
-
-function formatTime(t: (key: TranslationKey) => string, secs: number): string {
-  if (secs < 60) return t("projectHoverCard.timeUnderMinute");
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
+import { useT } from "../../lib/i18n";
+import { formatWorkedTime } from "../../lib/formatWorkedTime";
 
 function GlobalActivityWindow({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -58,7 +51,7 @@ export function AppTimerDisplay({ inMenu = false }: { inMenu?: boolean }) {
 
   useEffect(() => {
     const update = () => {
-      setDisplayText(formatTime(t, useTimerStore.getState().getAppSecs()));
+      setDisplayText(formatWorkedTime(t, useTimerStore.getState().getAppSecs()));
     };
     update();
     if (paused) return;

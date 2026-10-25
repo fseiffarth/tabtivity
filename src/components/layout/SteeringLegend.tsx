@@ -10,7 +10,13 @@ import {
   steeringRowLabel,
   type SteeringKeyDef,
 } from "../../lib/shortcuts/shortcuts";
-import { steeringRowKeys, steeringSlotKey, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
+import {
+  steeringKeyLabel,
+  steeringKeys,
+  steeringRowKeys,
+  steeringSlotKey,
+  type SteeringKeyMap,
+} from "../../lib/shortcuts/steeringBindings";
 import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
 import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
 import { statusTabs } from "../../lib/shortcuts/statusJump";
@@ -191,7 +197,9 @@ export function SteeringLegend() {
   const legendKey = steeringRowKeys(["legend"], steerKeys);
   if (legendHidden) {
     // Folded (H): a hexagonal badge at the bottom centre still says steering is on; H
-    // again — or a click — unfolds the key list.
+    // again — or a click — unfolds the key list. The exit key sits on the other
+    // rim as a bare glyph, so the way out stays in sight.
+    const exitKey = steeringKeys("exit", steerKeys)[0];
     return createPortal(
       <div className="steering-legend-fab" role="status" aria-label={t("steering.legendTitle")}>
         <UntestedTag id="steering.legendToggle" />
@@ -205,6 +213,11 @@ export function SteeringLegend() {
         >
           <KeyboardIcon size={16} />
           <kbd>{legendKey}</kbd>
+          {exitKey && (
+            <kbd className="steering-legend-fab-exit" title={t("steering.exit.label")}>
+              {keyGlyph(exitKey)}
+            </kbd>
+          )}
         </button>
       </div>,
       document.body,
@@ -379,6 +392,13 @@ function OrbitLegend({ label, where, hub, blobs }: { label: string; where: strin
       {where && <span className="steering-legend-where">{where}</span>}
     </div>
   );
+}
+
+/** A key as a symbol, never a word: Space and Esc get their glyphs. */
+function keyGlyph(key: string): string {
+  if (key === " ") return "␣";
+  if (key === "Escape") return "⎋";
+  return steeringKeyLabel(key);
 }
 
 /** "1–N" when the slots are the default digits 1..N, else the keys in order. */

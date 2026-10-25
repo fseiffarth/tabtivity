@@ -242,10 +242,88 @@ pub fn detect_serve_settings_json(
     candidates.sort_by(|a, b| a.origin.cmp(&b.origin).then(a.port.cmp(&b.port)));
     candidates.dedup();
     match candidates.len() {
-        1 => Ok(candidates.remove(0)),
+        1 => {
+            let found = candidates.remove(0);
+            match funnel_exposure(status, found.port) {
+                Some(authority) => Err(funnel_exposure_error(&authority)),
+                None => Ok(found),
+            }
+        }
         0 => Err("No private HTTPS root handler proxies to http://127.0.0.1:<port>".into()),
         _ => Err(concat!("Multiple eligible Tailscale Serve mappings were found; keep only the ", crate::app_name!(), " root mapping before detecting settings").into()),
     }
+}
+
+/// The loopback port a Serve proxy / TCP-forward target names, in any of the
+/// spellings `tailscale serve` takes (`http://127.0.0.1:8742/x`,
+/// `https+insecure://localhost:8742`, `127.0.0.1:8742`, `8742`). None for a
+/// target that is not loopback or names no port.
+fn serve_target_loopback_port(target: &str) -> Option<u16> {
+    let rest = target.trim();
+    let rest = rest.split_once("://").map_or(rest, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit('@').next().unwrap_or_default();
+    if authority.bytes().all(|b| b.is_ascii_digit()) {
+        return authority.parse().ok();
+    }
+    let (host, port) = authority.rsplit_once(':')?;
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    let loopback = host == "localhost"
+        || host == "::1"
+        || host == "::"
+        || host == "0.0.0.0"
+        || host.starts_with("127.");
+    if !loopback {
+        return None;
+    }
+    port.parse().ok()
+}
+
+/// A Funnel-enabled mapping anywhere in the Serve config that reaches the
+/// bridge (`port`) or its user-content origin (`port + 1`): every
+/// `Web[*].Handlers[*].Proxy` and `TCP[*].TCPForward` of a public authority
+/// Funnel exposes, not only the configured root handler (gap 59). The bridge
+/// authenticates every request, so this is drift to catch rather than an open
+/// door.
+fn funnel_exposure(status: &serde_json::Value, port: u16) -> Option<String> {
+    let bridge = [port, super::web_client::content_port_for(port)];
+    let reaches = |target: &serde_json::Value| {
+        target
+            .as_str()
+            .and_then(serve_target_loopback_port)
+            .is_some_and(|p| bridge.contains(&p))
+    };
+    let funnel = status.get("AllowFunnel")?.as_object()?;
+    for (authority, on) in funnel {
+        if on.as_bool() != Some(true) {
+            continue;
+        }
+        let handlers = status
+            .get("Web")
+            .and_then(|web| web.get(authority))
+            .and_then(|server| server.get("Handlers"))
+            .and_then(serde_json::Value::as_object);
+        if handlers.is_some_and(|h| h.values().any(|handler| handler.get("Proxy").is_some_and(reaches))) {
+            return Some(authority.clone());
+        }
+        let public_port = authority.rsplit(':').next().unwrap_or_default();
+        if status
+            .get("TCP")
+            .and_then(|tcp| tcp.get(public_port))
+            .and_then(|entry| entry.get("TCPForward"))
+            .is_some_and(reaches)
+        {
+            return Some(authority.clone());
+        }
+    }
+    None
+}
+
+fn funnel_exposure_error(authority: &str) -> String {
+    format!(
+        "Tailscale Funnel exposes {authority}, which maps to the {} Mobile listener; disable Funnel for it",
+        crate::app_name!()
+    )
 }
 
 pub fn verify_serve_json(
@@ -289,6 +367,9 @@ pub fn verify_serve_json(
         == Some(true)
     {
         return Err(concat!("The configured origin is exposed through Tailscale Funnel; disable Funnel before enabling ", crate::app_name!(), " Mobile").into());
+    }
+    if let Some(authority) = funnel_exposure(status, port) {
+        return Err(funnel_exposure_error(&authority));
     }
     Ok(())
 }
@@ -513,6 +594,71 @@ mod tests {
             "Handlers": { "/": { "Proxy": "http://127.0.0.1:9000" } }
         });
         assert!(detect_serve_settings_json(&ambiguous).is_err());
+    }
+
+    #[test]
+    fn serve_targets_name_their_loopback_port_in_every_spelling() {
+        for (target, port) in [
+            ("http://127.0.0.1:8742", Some(8742)),
+            ("http://127.0.0.1:8742/x?y=1", Some(8742)),
+            ("https+insecure://localhost:8743", Some(8743)),
+            ("127.0.0.1:8742", Some(8742)),
+            ("http://[::1]:8742", Some(8742)),
+            ("http://u:p@127.0.0.1:8742", Some(8742)),
+            ("8742", Some(8742)),
+            ("http://0.0.0.0:8742", Some(8742)),
+            ("http://example.com:8742", None),
+            ("http://203.0.113.1:8742", None),
+            ("unix:/run/x.sock", None),
+            ("http://127.0.0.1", None),
+            ("", None),
+        ] {
+            assert_eq!(serve_target_loopback_port(target), port, "{target}");
+        }
+    }
+
+    #[test]
+    fn a_funnel_mapping_to_the_bridge_or_its_content_port_is_refused() {
+        let funnel_other = |web_key: &str, handler: serde_json::Value| {
+            let mut s = serve_status();
+            s["TCP"]["8443"] = serde_json::json!({ "HTTPS": true });
+            s["Web"][web_key] = serde_json::json!({ "Handlers": handler });
+            s["AllowFunnel"] = serde_json::json!({ web_key: true });
+            s
+        };
+        let verify = |s: &serde_json::Value| verify_serve_json(s, "https://desk.example.ts.net", 8742);
+        // A second authority, a non-root path, and the +1 content port.
+        for (key, handlers) in [
+            ("desk.example.ts.net:8443", serde_json::json!({ "/": { "Proxy": "http://127.0.0.1:8742" } })),
+            ("desk.example.ts.net:8443", serde_json::json!({ "/a": { "Proxy": "http://localhost:8742/a" } })),
+            ("desk.example.ts.net:8443", serde_json::json!({ "/": { "Proxy": "http://127.0.0.1:8743" } })),
+            ("desk.example.ts.net:8443", serde_json::json!({ "/ok": { "Proxy": "http://127.0.0.1:9000" }, "/b": { "Proxy": "127.0.0.1:8743" } })),
+        ] {
+            let status = funnel_other(key, handlers.clone());
+            assert!(verify(&status).is_err(), "{handlers}");
+            assert!(funnel_exposure(&status, 8742).is_some());
+        }
+        // A Funnel TCP forward to either port.
+        for target in ["127.0.0.1:8742", "127.0.0.1:8743"] {
+            let mut s = serve_status();
+            s["TCP"]["10000"] = serde_json::json!({ "TCPForward": target });
+            s["AllowFunnel"] = serde_json::json!({ "desk.example.ts.net:10000": true });
+            assert!(verify(&s).is_err(), "{target}");
+        }
+        // Funnel on something else, or the mapping not Funnel-enabled, is fine.
+        let elsewhere = funnel_other("desk.example.ts.net:8443", serde_json::json!({ "/": { "Proxy": "http://127.0.0.1:9000" } }));
+        assert!(verify(&elsewhere).is_ok());
+        let mut private = funnel_other("desk.example.ts.net:8443", serde_json::json!({ "/": { "Proxy": "http://127.0.0.1:8742" } }));
+        private["AllowFunnel"] = serde_json::json!({ "desk.example.ts.net:8443": false });
+        assert!(verify(&private).is_ok());
+    }
+
+    #[test]
+    fn detection_refuses_a_funnel_mapping_to_the_bridge_elsewhere() {
+        let mut s = serve_status();
+        s["TCP"]["10000"] = serde_json::json!({ "TCPForward": "127.0.0.1:8743" });
+        s["AllowFunnel"] = serde_json::json!({ "desk.example.ts.net:10000": true });
+        assert!(detect_serve_settings_json(&s).is_err());
     }
 
     #[test]

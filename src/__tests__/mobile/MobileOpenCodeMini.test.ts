@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatTurns } from "../../../mobile-web/src/terminal/chatTurns";
-import { inputFrameStart, sessionStatus, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
+import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { currentMode, modeChoices, modeFixed } from "../../../mobile-web/src/terminal/agentModes";
 import { agentWorking } from "../../../mobile-web/src/terminal/agentBusy";
 import {
@@ -15,6 +15,7 @@ import {
   type OpenCodePickerRow,
 } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readableScreen, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { groupOpenCodeModels } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../../lib/agents/readerLive";
 import { BRAND } from "../../lib/brand";
 
@@ -97,7 +98,6 @@ describe(`${BRAND.display} Mobile OpenCode mini status`, () => {
       " BUILD",
     );
     expect(inputFrameStart(screen, "OpenCode")).toBe(1);
-    expect(statusFrameLines(screen, "OpenCode")).toEqual([" BUILD"]);
   });
 });
 
@@ -148,10 +148,35 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
   it("cuts the box, its placeholder and the footer out of the reading view", () => {
     const screen = fullFrame(" ~/projects/app                 tab agents  ctrl+p commands");
     expect(inputFrameStart(screen, "OpenCode")).toBe(1);
-    expect(statusFrameLines(screen, "OpenCode")).toEqual([
-      " Build · Muse Spark 1.3 Free OpenCode Zen · high",
-      " ~/projects/app                 tab agents  ctrl+p commands",
-    ]);
+  });
+
+  it("reads the start screen's centred box above its own version footer", () => {
+    // 2.1.3's start screen at 120×40 (tmux capture; 2.1.2 the same but its
+    // version and placeholder), through `readableScreen`: the logo is dropped,
+    // the `┃` 23 columns in is not. The composer row carries its colours.
+    const pad = " ".repeat(23);
+    const composer: ReadableLine = {
+      key: `l${seq += 1}`,
+      text: `${pad}┃  Build · Flint 40B Free OpenCode`,
+      spans: [
+        { text: `${pad}┃  ` },
+        { text: "Build", color: "#5c9cf5" },
+        { text: " · ", color: "#808080" },
+        { text: "Flint 40B Free", color: "#eeeeee" },
+        { text: " OpenCode", color: "#808080" },
+      ],
+    };
+    const screen = [
+      line(`${pad}┃  Ask anything… "What is the tech stack of this project?"`),
+      composer,
+      line(`${pad}/…/scratchpad/oc/proj  shift+tab agents  ctrl+p commands`),
+      line(""),
+      line(`${" ".repeat(113)}2.1.3`),
+    ];
+    expect(inputFrameStart(screen, "OpenCode")).toBe(0);
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ mode: "build", model: "Flint 40B Free" });
+    // A version printed as output under no box is still not a frame.
+    expect(inputFrameStart(lines("Bumped to", "", "2.1.3"), "OpenCode")).toBe(3);
   });
 
   it("names no mode in shell mode", () => {
@@ -305,6 +330,20 @@ describe(`${BRAND.display} Mobile OpenCode mode chip`, () => {
 });
 
 describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
+  it("shows free models first, then model families and remaining providers without changing picks", () => {
+    const options = [
+      { label: "GPT-5.4", description: "OpenCode Zen", keys: ["gpt"] },
+      { label: "Claude Sonnet 4.5", description: "Anthropic", keys: ["claude"] },
+      { label: "Big Pickle", description: "OpenCode Zen · Free", keys: ["free"] },
+      { label: "MAI-Code", description: "GitHub Copilot", keys: ["mai"] },
+      { label: "Gemini 3.8 Flash", description: "Google", keys: ["gemini"] },
+    ];
+    const groups = groupOpenCodeModels(options);
+    expect(groups.map((group) => group.key)).toEqual(["free", "claude", "openai", "gemini", "provider:GitHub Copilot"]);
+    expect(groups.flatMap((group) => group.options)).toEqual([options[2], options[1], options[0], options[4], options[3]]);
+    expect(groups[0].options[0]).toBe(options[2]);
+  });
+
   const picker = [
     ...lines(
       "  Select model 25                                                          esc",

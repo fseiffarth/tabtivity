@@ -165,6 +165,18 @@ pub fn is_app_local_tmux_session(session: &str) -> bool {
     crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session).is_some()
 }
 
+/// Whether the app's own local session `session` is running: a spawn wrapped
+/// in `new-session -A` then attaches to it rather than starting anything
+/// (the AI switch lets such a reattach through, `launch_prep::prepare`).
+pub fn app_session_alive(session: &str) -> bool {
+    is_app_local_tmux_session(session)
+        && tmux_available()
+        && tmux_command()
+            .args(["has-session", "-t", &format!("={session}")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+}
+
 /// The tab variables worth putting in a session's environment, sorted so the
 /// argv is deterministic (and testable).
 ///
@@ -345,44 +357,26 @@ fn is_fence(cmd: &str, env: &HashMap<String, String>) -> bool {
         )
 }
 
-/// Run between a fenced command and the pane's trailing login shell: read and
-/// discard whatever is waiting in the terminal's input queue (a CLI typed
-/// into a shell tab gets the same from `agent_shim::run`). On a kernel that
-/// still honours `TIOCSTI` (Linux before 6.2 or with `legacy_tiocsti=1`,
-/// macOS), a fenced agent can push bytes into its own terminal's input and exit;
-/// the next reader of that queue is the *unfenced* shell below, which would run
-/// them. The fence's pid namespace dies with the agent, so nothing fenced can
-/// add more after this runs. `min 0 time 0` makes `cat` see end-of-file the
-/// moment the queue is empty; the saved modes are put back for the shell.
-const FENCE_INPUT_DRAIN: &str = "s=$(stty -g 2>/dev/null); stty raw -echo min 0 time 0 2>/dev/null \
-&& cat >/dev/null 2>&1; [ -n \"$s\" ] && stty \"$s\" 2>/dev/null; ";
-
-/// What a command tab's pane runs once its command has exited: a login shell,
-/// which keeps a finished run reattachable. After a fenced command it first
-/// drains the terminal ([`FENCE_INPUT_DRAIN`]) and drops every [`SECRET_ENV`]
-/// variable: the pane's `sh` holds the session environment, and the shell
-/// left in the tab is **unfenced** — it must not inherit the agent's MCP
-/// tokens, Copilot token or provider API keys (their carriers: the pane's
-/// `sh` never ran `agent_exec`, so it holds no CLI-named key). (`env -u` is in
-/// GNU and BSD `env`.) After an unfenced command whose environment `carries`
-/// a key (the root console's Host session, `agent_exec` in front of its CLI)
-/// the shell is the user's own and keeps everything but the carriers: a key
-/// handed to that one agent is not handed on to whatever the user runs next.
-fn trailing_shell(fenced: bool, carries: bool) -> String {
-    if !fenced {
-        if !carries {
-            return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
-        }
-        // Every carrier `SECRET_ENV` knows: the proxy tokens'.
-        let unset: String = SECRET_ENV
-            .iter()
-            .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
-            .map(|k| format!("-u {k} "))
-            .collect();
-        return format!("exec env {unset}\"${{SHELL:-/bin/bash}}\" -l");
+/// What an **unfenced** command tab's pane runs once its command has exited: a
+/// login shell, which keeps a finished run reattachable. A fenced command gets
+/// none (`local_tmux_args_on_end`: the pane stays, dead, with `remain-on-exit`
+/// — a shell outside the fence is a shell the phone can type into). After an
+/// unfenced command whose environment `carries` a key (the root console's Host
+/// session, `agent_exec` in front of its CLI) the shell is the user's own and
+/// keeps everything but the carriers: a key handed to that one agent is not
+/// handed on to whatever the user runs next. (`env -u` is in GNU and BSD
+/// `env`.)
+fn trailing_shell(carries: bool) -> String {
+    if !carries {
+        return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
     }
-    let unset: String = SECRET_ENV.iter().map(|k| format!("-u {k} ")).collect();
-    format!("{FENCE_INPUT_DRAIN}exec env {unset}\"${{SHELL:-/bin/bash}}\" -l")
+    // Every carrier `SECRET_ENV` knows: the proxy tokens'.
+    let unset: String = SECRET_ENV
+        .iter()
+        .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
+        .map(|k| format!("-u {k} "))
+        .collect();
+    format!("exec env {unset}\"${{SHELL:-/bin/bash}}\" -l")
 }
 
 /// The inline `<cmd> <args>` half of a command tab's tmux target, with the
@@ -472,6 +466,8 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     // client's environment, never a `-e` value on the world-readable argv.
     // (`WEB_URL_ENV` is a loopback URL, not a secret.)
     crate::services::root_mcp::WEB_TOKEN_ENV,
+    // Append to preserve every existing update-environment slot (8639).
+    crate::services::agent_api_keys::OPENAI_CARRIER,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -591,17 +587,27 @@ fn local_tmux_args_on_end(
     args.push(session.to_string());
     if let Some(line) = line {
         // One positional arg = the command line tmux runs via `sh -c`. Keeping a
-        // login shell after it is what makes a finished run reattachable.
-        if ends {
+        // login shell after it is what makes a finished run reattachable — for an
+        // unfenced command. A fenced one ends with the pane (`remain-on-exit`
+        // below keeps it visible, reattachable and dead): the shell that would
+        // follow is outside the fence.
+        if ends || fenced {
             args.push(line.to_string());
         } else {
             args.push(format!(
                 "{line}; {}",
-                trailing_shell(fenced, crate::services::agent_exec::has_carriers(env))
+                trailing_shell(crate::services::agent_exec::has_carriers(env))
             ));
         }
     }
-    // Session options as trailing tmux commands (standalone ';' tokens split argv).
+    // The first of the session options (standalone ';' tokens split argv): a
+    // fenced command's pane stays when the command exits — shown dead, no input
+    // taken, ended by the desktop's Restart / Open a shell here or a close.
+    if fenced && line.is_some() && !ends {
+        for tok in [";", "set-window-option", "-t", session, "remain-on-exit", "on"] {
+            args.push(tok.to_string());
+        }
+    }
     for tok in [
         ";",
         "set-option",
@@ -713,6 +719,24 @@ pub fn local_tmux_screen_args(session: &str) -> Vec<String> {
         "-t".into(),
         format!("={session}:"),
     ]
+}
+
+/// `tmux display-message -p -t =<session>: #{pane_dead}` argv: `1` once the
+/// session's pane has ended and `remain-on-exit` keeps it (a fenced agent that
+/// quit, `local_tmux_args_on_end`), else `0`.
+pub fn local_tmux_pane_dead_args(session: &str) -> Vec<String> {
+    vec![
+        "display-message".into(),
+        "-p".into(),
+        "-t".into(),
+        format!("={session}:"),
+        "#{pane_dead}".into(),
+    ]
+}
+
+/// Whether a `display-message` answer to [`local_tmux_pane_dead_args`] says dead.
+pub fn pane_dead_answer(stdout: &str) -> bool {
+    stdout.trim() == "1"
 }
 
 /// `tmux rename-session -t <old> <new>` argv.
@@ -929,6 +953,12 @@ pub fn remove_launcher(session: &str) {
     let _ = std::fs::remove_file(launcher_path(session));
 }
 
+/// The text of a session's launcher script, if one is still on disk: where a
+/// tmux without `new-session -e` keeps the session's plain environment.
+pub(crate) fn launcher_text(session: &str) -> Option<String> {
+    std::fs::read_to_string(launcher_path(session)).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::brand::SLUG;
@@ -1093,20 +1123,56 @@ mod tests {
         );
     }
 
+    /// A fenced agent's pane is not followed by a login shell outside the fence
+    /// (a phone on the exited tab would type into it with `shell_tabs` off): it
+    /// ends, and `remain-on-exit` keeps it on screen, dead. An unfenced command
+    /// keeps its trailing shell.
     #[test]
-    fn only_a_fenced_command_drains_input_before_the_unfenced_shell() {
+    fn the_pane_dead_probe_names_the_session_exactly() {
+        let argv = local_tmux_pane_dead_args(concat!(crate::app_slug!(), "-s"));
+        assert_eq!(argv[3], format!("={}-s:", crate::app_slug!()));
+        assert_eq!(argv[4], "#{pane_dead}");
+        assert!(pane_dead_answer("1\n"));
+        assert!(!pane_dead_answer("0\n"));
+        assert!(!pane_dead_answer(""));
+    }
+
+    #[test]
+    fn a_fenced_command_leaves_a_dead_pane_and_no_shell() {
         let env = env_of(&[]);
-        let shell = "exec \"${SHELL:-/bin/bash}\" -l";
+        let session = concat!(crate::app_slug!(), "-x");
         for fence in ["bwrap", "/usr/bin/sandbox-exec"] {
-            let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), fence, &["claude".into()], &env, true);
-            let line = args.iter().find(|a| a.ends_with("\"${SHELL:-/bin/bash}\" -l")).unwrap();
-            assert!(line.contains(&format!("; {FENCE_INPUT_DRAIN}exec env -u ")), "{line}");
+            let args = local_tmux_args_with(session, fence, &["claude".into()], &env, true);
+            let at = args.iter().position(|a| a == "-s").unwrap() + 2;
+            assert_eq!(args[at], format!("'{fence}' 'claude'"), "{args:?}");
+            assert!(!args.iter().any(|a| a.contains("SHELL") || a.contains("stty")), "{args:?}");
+            let kept = args.windows(6).any(|w| w == [";", "set-window-option", "-t", session, "remain-on-exit", "on"]);
+            assert!(kept, "{args:?}");
         }
-        let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "claude", &[], &env, true);
-        assert!(args.iter().any(|a| a == &format!("'claude'; {shell}")));
-        // A shell tab has no command line and so no trailing shell to guard.
-        let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "", &[], &env, true);
-        assert!(!args.iter().any(|a| a.contains("stty")));
+        // The fence's own marker counts as well as the launcher's name.
+        let marked = env_of(&[(crate::app_env!("AGENT_FENCE"), "1")]);
+        let args = local_tmux_args_with(session, "/bin/sh", &["-c".into(), "x".into()], &marked, true);
+        assert!(args.iter().any(|a| a == "remain-on-exit"), "{args:?}");
+        // An unfenced command and a shell tab keep today's behaviour.
+        let args = local_tmux_args_with(session, "claude", &[], &env, true);
+        assert!(args.iter().any(|a| a == &format!("'claude'; {}", trailing_shell(false))));
+        assert!(!args.iter().any(|a| a == "remain-on-exit"), "{args:?}");
+        let args = local_tmux_args_with(session, "", &[], &env, true);
+        assert!(!args.iter().any(|a| a == "remain-on-exit"), "{args:?}");
+    }
+
+    /// The pane stays dead *before* the rest of the session options, so an agent
+    /// that fails at once cannot take the session with it.
+    #[test]
+    fn remain_on_exit_comes_right_after_the_new_session() {
+        let env = env_of(&[]);
+        let session = concat!(crate::app_slug!(), "-x");
+        let args = local_tmux_args_for(session, Some("'/l.sh'"), &env, true, true);
+        let new = args.iter().position(|a| a == "new-session").unwrap();
+        let kept = args.iter().position(|a| a == "remain-on-exit").unwrap();
+        let first_option = args.iter().skip(new).position(|a| a == "status").unwrap() + new;
+        assert!(new < kept && kept < first_option, "{args:?}");
+        assert!(args.iter().any(|a| a == "'/l.sh'"), "{args:?}");
     }
 
     /// The shell after an unfenced command that carried a key (the Host
@@ -1114,51 +1180,14 @@ mod tests {
     /// key's and the administrator's alike (#2389) — and nothing else.
     #[test]
     fn the_shell_after_a_carrying_host_command_drops_every_carrier() {
-        let line = trailing_shell(false, true);
+        let line = trailing_shell(true);
         for key in SECRET_ENV {
             let carrier = key.starts_with(crate::services::agent_exec::CARRIER_PREFIX);
             assert_eq!(line.contains(&format!("-u {key} ")), carrier, "{key}");
         }
         assert!(line.contains(&format!("-u {} ", crate::services::agent_api_keys::GEMINI_CARRIER)));
         assert!(!line.contains("stty"), "{line}");
-        assert_eq!(trailing_shell(false, false), "exec \"${SHELL:-/bin/bash}\" -l");
-    }
-
-    #[test]
-    fn the_unfenced_shell_after_a_fenced_command_inherits_no_secret() {
-        // The pane's `sh` holds the session environment — tokens and API keys
-        // included — and the login shell it execs after the agent is unfenced.
-        let tail = trailing_shell(true, false);
-        assert!(tail.starts_with(FENCE_INPUT_DRAIN), "{tail}");
-        assert!(tail.ends_with("\"${SHELL:-/bin/bash}\" -l"), "{tail}");
-        for key in SECRET_ENV {
-            assert!(tail.contains(&format!("-u {key} ")), "{key}: {tail}");
-        }
-        assert!(tail.contains(&format!("-u {} ", crate::services::agent_api_keys::ANTHROPIC_CARRIER)));
-        // Through the launcher form too.
-        let env = env_of(&[]);
-        let launched = local_tmux_args_for(concat!(crate::app_slug!(), "-x"), Some("'/l.sh'"), &env, true, true);
-        assert!(launched.iter().any(|a| a == &format!("'/l.sh'; {tail}")), "{launched:?}");
-        // An unfenced command's shell is the user's own, unchanged.
-        assert_eq!(trailing_shell(false, false), "exec \"${SHELL:-/bin/bash}\" -l");
-        // A fenced tail is the same whether or not the tab carries a key.
-        assert_eq!(trailing_shell(true, true), tail);
-        // `sh` really runs it: the secret is gone, the rest is kept.
-        #[cfg(unix)]
-        {
-            let probe = format!(
-                "exec env -u {} sh -c 'printf \"%s|%s\" \"${{{}-unset}}\" \"$KEEP\"'",
-                crate::services::agent_api_keys::ANTHROPIC_CARRIER,
-                crate::services::agent_api_keys::ANTHROPIC_CARRIER,
-            );
-            let out = std::process::Command::new("sh")
-                .args(["-c", &probe])
-                .env(crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test-fake")
-                .env("KEEP", "kept")
-                .output()
-                .unwrap();
-            assert_eq!(String::from_utf8_lossy(&out.stdout), "unset|kept");
-        }
+        assert_eq!(trailing_shell(false), "exec \"${SHELL:-/bin/bash}\" -l");
     }
 
     /// The root console's Host session: unfenced, `agent_exec` in front of its
@@ -1188,7 +1217,7 @@ mod tests {
                 assert!(!argv.iter().any(|a| a.contains("s3cret")), "{argv:?}");
             }
             let line = argv.iter().find(|a| a.contains("--agent-exec")).unwrap();
-            let tail = trailing_shell(false, true);
+            let tail = trailing_shell(true);
             assert!(line.ends_with(&tail), "{line}");
             for carrier in CARRIERS {
                 assert!(tail.contains(&format!("-u {carrier} ")), "{tail}");
@@ -1200,7 +1229,7 @@ mod tests {
         // `sh` really runs it: the carrier is gone, the rest is kept.
         #[cfg(unix)]
         {
-            let tail = trailing_shell(false, true).replace("\"${SHELL:-/bin/bash}\" -l", "sh -c 'printf \"%s|%s\" \"${C-unset}\" \"$KEEP\"'");
+            let tail = trailing_shell(true).replace("\"${SHELL:-/bin/bash}\" -l", "sh -c 'printf \"%s|%s\" \"${C-unset}\" \"$KEEP\"'");
             let probe = tail.replace("${C-unset}", &format!("${{{ANTHROPIC_CARRIER}-unset}}"));
             let out = std::process::Command::new("sh")
                 .args(["-c", &probe])
@@ -1217,10 +1246,10 @@ mod tests {
     fn key_carriers_hold_the_slots_after_the_mcp_tokens() {
         for (i, carrier) in crate::services::agent_api_keys::CARRIERS.iter().enumerate() {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
-            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, 8636 + i, "{carrier}");
+            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 9);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8638);
+        assert_eq!(SECRET_ENV.len(), 10);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8639);
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }
@@ -1268,7 +1297,7 @@ mod tests {
         let dash_s = launched.iter().position(|a| a == "-s").unwrap();
         assert_eq!(
             launched[dash_s + 2],
-            format!("'/state/tmux-launch/{SLUG}-x.sh'; {}", trailing_shell(true, false))
+            format!("'/state/tmux-launch/{SLUG}-x.sh'")
         );
         // The env still rides `-e`; only the command moved.
         assert!(launched.iter().any(|a| a == concat!(crate::app_upper!(), "_TAB_UID=tab-uid-1")));
@@ -1475,8 +1504,9 @@ mod tests {
             assert!(!args.iter().any(|a| a.contains("web-s3cret")), "{cmd}: {args:?}");
             assert!(args.iter().any(|a| a == web), "{cmd}: listed in update-environment");
         }
-        // After a fenced command, the unfenced login shell does not inherit it.
-        assert!(trailing_shell(true, false).contains(&format!("-u {web} ")));
+        // After a fenced command there is no login shell to inherit it at all.
+        let fenced = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "bwrap", &[], &env, true);
+        assert!(!fenced.iter().any(|a| a.contains("SHELL")), "{fenced:?}");
         // A chat's tmux client argv (the assistant path) carries no value either —
         // where this host's tmux has `-e` (below 3.2, and on Windows, the inline
         // `export`s are `launcher_line`'s documented limit).
@@ -1510,6 +1540,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 
@@ -1528,16 +1559,19 @@ mod tests {
                 let at = ends.iter().position(|a| a == "-s").unwrap() + 2;
                 // The command is the last positional: no `; exec … -l`.
                 assert_eq!(&ends[at], line.as_ref().unwrap(), "{cmd}");
-                assert!(!ends.iter().any(|a| a.contains("SHELL") || a.contains(" -l") || a.contains("exec env") || a.contains(FENCE_INPUT_DRAIN)), "{cmd}: {ends:?}");
+                assert!(!ends.iter().any(|a| a.contains("SHELL") || a.contains(" -l") || a.contains("exec env")), "{cmd}: {ends:?}");
             }
             // Through the real entry point, from the options.
             let argv = local_tmux_argv("s", &opts, false);
             assert!(!argv.iter().any(|a| a.contains("SHELL")), "{cmd}: {argv:?}");
-            // The same command in a project tab still keeps its shell.
+            // The same command in a project tab keeps its shell when unfenced,
+            // and stays as a dead pane when fenced.
             let mut project = opts.clone();
             project.assistant = None;
             let argv = local_tmux_argv("s", &project, false);
-            assert!(argv.iter().any(|a| a.contains("\"${SHELL:-/bin/bash}\" -l")), "{cmd}: {argv:?}");
+            let shell = argv.iter().any(|a| a.contains("\"${SHELL:-/bin/bash}\" -l"));
+            assert_eq!(shell, !is_fence(cmd, &opts.env), "{cmd}: {argv:?}");
+            assert_eq!(argv.iter().any(|a| a == "remain-on-exit"), is_fence(cmd, &opts.env), "{cmd}: {argv:?}");
         }
         // The launcher form of the same chat (a command too long for the argv)
         // ends too: it is the same builder with the command moved out.
@@ -1569,6 +1603,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         wrap_pty_options_local(&mut opts);
         assert_eq!(opts.cmd, "bash");
@@ -1596,6 +1631,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 
@@ -1642,8 +1678,7 @@ mod tests {
         let name = args.iter().position(|a| a == "-s").unwrap();
         assert_eq!(args[name + 1], session);
         let line = &args[name + 2];
-        assert!(line.starts_with("'claude' '--session-id' 'u1'; "), "{line}");
-        assert!(line.ends_with(&trailing_shell(true, false)), "{line}");
+        assert_eq!(line, "'claude' '--session-id' 'u1'");
         assert!(!args.iter().any(|a| a.contains("tmux")), "nested tmux: {args:?}");
         // Wrapping the prepared launch again is the bug this guards against.
         let twice = local_tmux_argv(session, &opts, true);
@@ -1656,6 +1691,51 @@ mod tests {
         let mut opts = detached_fixture(concat!(crate::app_slug!(), "-p--shell-x"), "/p");
         opts.tmux_session = None;
         assert!(spawn_detached_with(&opts, Some(concat!(crate::app_slug!(), "-test-unused"))).is_err());
+    }
+
+    /// Live check on a private socket (skipped without tmux): a fenced agent
+    /// that exits leaves its session and a dead pane, and keys sent to it run
+    /// nothing — a phone on the exited tab has no shell to type into.
+    #[cfg(unix)]
+    #[test]
+    fn a_fenced_agent_that_exits_leaves_a_dead_pane_that_takes_no_input() {
+        if !tmux_available() {
+            return;
+        }
+        let socket = format!(concat!(crate::app_slug!(), "-test-dead-{}"), std::process::id());
+        let session = concat!(crate::app_slug!(), "-p--agent-dead");
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("typed");
+        let mut opts = detached_fixture(session, &dir.path().to_string_lossy());
+        opts.cmd = "sh".into();
+        opts.args = vec!["-c".into(), "exit 3".into()];
+        opts.env.insert(crate::app_env!("AGENT_FENCE").into(), "1".into());
+        let tmux = |args: &[&str]| {
+            std::process::Command::new("tmux")
+                .args(["-L", &socket, "-f", "/dev/null"])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let spawned = spawn_detached_with(&opts, Some(&socket));
+        let target = format!("={session}:");
+        let mut dead = false;
+        for _ in 0..50 {
+            let answer = tmux(&["display-message", "-p", "-t", &target, "#{pane_dead}"]);
+            dead = pane_dead_answer(&String::from_utf8_lossy(&answer.stdout));
+            if dead {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        tmux(&["send-keys", "-t", &target, &format!("touch '{}'", marker.display()), "Enter"]);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let still_there = tmux(&["has-session", "-t", &format!("={session}")]).status.success();
+        let _ = tmux(&["kill-server"]);
+        spawned.unwrap();
+        assert!(dead, "the pane never showed as dead");
+        assert!(still_there, "the session ended with its agent");
+        assert!(!marker.exists(), "a key typed into the dead pane ran");
     }
 
     /// Live check on a private socket (skipped without tmux): the headless

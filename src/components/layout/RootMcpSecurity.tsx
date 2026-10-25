@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT } from "../../lib/i18n";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useProjectsStore } from "../../stores/projects";
@@ -117,10 +118,12 @@ export function RootMcpSecurity() {
   // and every agent write (`root-mcp-review-changed`, for the audit rows)
   // re-read the status, so a revoked or closed tab leaves the list on its own.
   useEffect(() => {
-    let alive = true;
-    const again = () => { if (alive) void refresh(); };
-    const stops = [listen("root-mcp-sessions-changed", again), listen<number>("root-mcp-review-changed", again)];
-    return () => { alive = false; for (const stop of stops) void stop.then((s) => s()).catch(() => undefined); };
+    const again = () => { void refresh(); };
+    const stops = [
+      subscribeTauri(() => listen("root-mcp-sessions-changed", again)),
+      subscribeTauri(() => listen<number>("root-mcp-review-changed", again)),
+    ];
+    return () => { for (const stop of stops) stop(); };
   }, []);
   // A root tab closed in this window is a session gone: the backend revokes
   // its token on teardown without an event of its own.

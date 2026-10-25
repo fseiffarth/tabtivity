@@ -60,21 +60,21 @@ pub async fn git_peer_set_enabled(
 }
 
 /// Turn "Local is authoritative" on or off (see `GitPeerState::local_authoritative`).
-/// Held under the reconcile lock, so an in-flight pass can't persist the old value over
-/// it. When lockstep is on, a pass runs at once in the new mode, so a host it can't
-/// reset says why right away. Returns the resulting state.
+/// Held under the project's mutation lock (`services::sync_op`), so an in-flight pass
+/// can't persist the old value over it. When lockstep is on, a pass runs at once in the
+/// new mode, so a host it can't reset says why right away. Returns the resulting state.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_set_local_authoritative(
     ctx: Ctx,
     project_id: String,
     enabled: bool,
 ) -> Result<GitPeerState, String> {
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let target = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let mut state = git_peer::load_state(&project_id);
     state.local_authoritative = enabled;
     // A mode change voids the early-out: the cached green was judged by the old rules.
@@ -107,12 +107,12 @@ pub async fn git_peer_sync_now(
     ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let target = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::detect_and_sync(
         pool,
         manifest,
@@ -141,12 +141,12 @@ pub async fn git_peer_pair_confirm(
     ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::detect_and_sync(
         pool,
         manifest,
@@ -181,12 +181,12 @@ pub async fn git_peer_restore_backup(
     peer: String,
     refname: String,
 ) -> Result<GitPeerState, String> {
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::restore_backup(
         pool,
         manifest,
@@ -223,13 +223,13 @@ pub async fn git_peer_checkout(
     target: String,
     initiating_side: Option<String>,
 ) -> Result<GitPeerState, String> {
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let side = initiating_side.unwrap_or_else(|| "local".to_string());
-    let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::checkout_lockstep(
         pool,
         manifest,
@@ -256,12 +256,12 @@ pub async fn git_peer_resolve(
     project_id: String,
     authority: String,
 ) -> Result<GitPeerState, String> {
+    let _op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::resolve(
         pool,
         manifest,

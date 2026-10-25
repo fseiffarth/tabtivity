@@ -15,9 +15,11 @@
 //!   Sonnet 5.5 cache reads): cache hits are 0.1× input except 0.05× on
 //!   Opus 5.5 and Sonnet 5.5 and 0.025× on Fable/Mythos 5.1, and the page now
 //!   lists Haiku 5.5 ($0.10/$0.50, $0.50/$2.50 for prompts over 100K) with the
-//!   cache rates this table already had.
+//!   cache rates this table already had. Re-read on 2026-10-22: unchanged.
 //! - Gemini: <https://ai.google.dev/gemini-api/docs/pricing> ("Last updated
-//!   2026-10-01 UTC"; paid tier, Standard — not batch, flex or priority).
+//!   2026-10-19 UTC", read 2026-10-22; paid tier, Standard — not batch, flex
+//!   or priority). That page no longer lists Gemini 3.5 and 3.7 Flash; their
+//!   rows keep the last listed rates, so a key still using them is priced.
 //!   Grounding with Google Search, read off the same page on 2026-10-04:
 //!   Gemini 3.x "$14 per 1,000 [search] requests", Gemini 2.5 "$35 / 1,000
 //!   grounded prompts"; Google Maps grounding the same or less ($14 per 1,000
@@ -46,9 +48,92 @@
 
 use super::agent_api_keys::Provider;
 
-/// The day the tables below were read off the vendors' pricing pages
+/// The most recent update to the tables below (individual source dates above),
 /// (shown in Manage CLIs).
-pub const PRICES_DATE: &str = "2026-10-04";
+pub const PRICES_DATE: &str = "2026-10-22";
+
+/// OpenAI standard text rates, fetched 2026-10-22:
+/// https://developers.openai.com/api/docs/pricing . USD remains an estimate;
+/// monthly enforcement uses billed tokens, independent of these rates.
+/// Cache-write surcharges and long-context surcharges are not included in
+/// this OpenAI dollar estimate. The proxy refuses requests for a priced
+/// service tier (`api_meter::openai_refusal`: Fast/priority, Ultrafast), so
+/// no tier rate is needed; hosted-tool fees are charged per call
+/// ([`price_openai`]).
+/// (model, input, cached input, output), USD per million tokens.
+const OPENAI: &[(&str, f64, f64, f64)] = &[
+    ("gpt-6-astra", 10.0, 1.0, 50.0),
+    ("gpt-6.1-sol", 2.0, 0.10, 10.0),
+    ("gpt-6-luna", 0.10, 0.01, 0.50),
+    ("gpt-5.6-sol", 4.0, 0.40, 20.0),
+    ("gpt-5.6-cyber", 12.50, 1.25, 75.0),
+    ("gpt-5.3-codex", 1.75, 0.175, 14.0),
+];
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenAiUsage {
+    /// Total input includes cached input; total output includes reasoning.
+    pub input: u64,
+    pub cached: u64,
+    pub output: u64,
+    /// Hosted-tool calls the answer's output items listed, each billed on
+    /// top of the tokens.
+    pub web_search_calls: u64,
+    pub file_search_calls: u64,
+    /// Code interpreter container sessions.
+    pub containers: u64,
+    pub image_generation_calls: u64,
+}
+
+/// OpenAI hosted-tool fees, USD per call, read off
+/// <https://developers.openai.com/api/docs/pricing> ("Tools") on 2026-10-24.
+/// Web search is the dearer preview rate ($25 per 1,000, non-reasoning
+/// models; $10 otherwise) because an output item does not say which applies.
+const OPENAI_WEB_SEARCH_USD: f64 = 25.0 / 1000.0;
+const OPENAI_FILE_SEARCH_USD: f64 = 2.5 / 1000.0;
+/// A code interpreter container session at the dearest size (64 GB, per
+/// 20-minute session); the output item does not say which size ran.
+const OPENAI_CONTAINER_USD: f64 = 1.92;
+/// One image generation call. OpenAI prices images in tokens of the image
+/// model (gpt-image-2 output $30 per million); this is an assumption above
+/// a large high-quality image (about 20,000 tokens), so it can only
+/// overcount, and a usage object that already holds those tokens is charged
+/// them twice.
+const OPENAI_IMAGE_USD: f64 = 0.60;
+
+/// What a request's hosted tools can add to its bill, for `u`'s counts.
+pub fn openai_tool_usd(u: &OpenAiUsage) -> f64 {
+    u.web_search_calls as f64 * OPENAI_WEB_SEARCH_USD
+        + u.file_search_calls as f64 * OPENAI_FILE_SEARCH_USD
+        + u.containers as f64 * OPENAI_CONTAINER_USD
+        + u.image_generation_calls as f64 * OPENAI_IMAGE_USD
+}
+
+fn openai_rates(model: &str) -> (f64, f64, f64, bool) {
+    let id = normalize(Provider::OpenAi, model);
+    OPENAI.iter().find(|(m, ..)| *m == id)
+        .map(|(_, i, c, o)| (*i, *c, *o, true))
+        .unwrap_or_else(|| OPENAI.iter().fold((0.0_f64, 0.0_f64, 0.0_f64, false), |(i, c, o, _), (_, ri, rc, ro)| {
+            (i.max(*ri), c.max(*rc), o.max(*ro), false)
+        }))
+}
+
+pub fn price_openai(model: &str, u: &OpenAiUsage) -> Charge {
+    let (input_rate, cache_rate, output_rate, known) = openai_rates(model);
+    let cache_read = u.cached.min(u.input);
+    let input = u.input.saturating_sub(cache_read);
+    let tools_usd = openai_tool_usd(u);
+    // The limit counts billed tokens: a tool's fee counts as the output
+    // tokens it would buy at this model's output rate.
+    let tool_tokens = if tools_usd > 0.0 && output_rate > 0.0 { (tools_usd / output_rate * 1e6).round() as u64 } else { 0 };
+    Charge {
+        model: model.to_string(), known, input, cache_read, output: u.output,
+        web_searches: u.web_search_calls,
+        tool_tokens,
+        usd: (input as f64 * input_rate + cache_read as f64 * cache_rate + u.output as f64 * output_rate) / 1e6 + tools_usd,
+        ..Charge::default()
+    }
+}
 
 /// Prompt size past which a long-context rate applies (Gemini Pro tiers,
 /// Anthropic Sonnet 4 / 4.5).
@@ -166,8 +251,10 @@ pub struct GeminiRates {
     pub audio_input: Option<f64>,
     /// Rates for prompts past [`LONG_CONTEXT`] tokens: input, output, cache.
     pub long: Option<(f64, f64, f64)>,
-    /// From this UTC month on (`YYYY-MM`), every rate doubles (Gemini
-    /// 3.6–3.8 Flash: "through December 31, 2026 … starting January 1, 2027").
+    /// From this UTC month on (`YYYY-MM`), every rate doubles (Gemini 4
+    /// Argon: "through November 30, 2026 … starting December 1, 2026";
+    /// 3.6–3.8 Flash and Robotics-ER 2: "through December 31, 2026 …
+    /// starting January 1, 2027").
     pub doubles_from: Option<&'static str>,
     /// Image, speech or embedding model: priced, but not a chat model, so it
     /// stays out of the unknown-model fallback. Image models are priced at
@@ -202,12 +289,14 @@ const fn gemini_media(input: f64, output: f64) -> GeminiRates {
 }
 
 const FLASH_PROMO: GeminiRates = GeminiRates { doubles_from: Some("2027-01"), ..gemini(0.75, 3.75, 0.075) };
+const ARGON_PROMO: GeminiRates = GeminiRates { doubles_from: Some("2026-12"), ..gemini(2.0, 10.0, 0.10) };
 const PRO_3_1: GeminiRates = GeminiRates { long: Some((4.0, 18.0, 0.40)), ..gemini(2.0, 12.0, 0.20) };
 
-/// Gemini API prices (page updated 2026-10-01, read 2026-10-04), by model id.
-/// Live, transcription and video models are absent: their APIs are not
-/// forwarded.
+/// Gemini API prices (page updated 2026-10-19, read 2026-10-22), by model id.
+/// Live, streaming, transcription, video and music models are absent: their
+/// APIs are not forwarded.
 const GEMINI: &[(&str, GeminiRates)] = &[
+    ("gemini-4-argon", ARGON_PROMO),
     ("gemini-3.8-flash", FLASH_PROMO),
     ("gemini-3.7-flash", FLASH_PROMO),
     ("gemini-3.6-flash", FLASH_PROMO),
@@ -216,10 +305,14 @@ const GEMINI: &[(&str, GeminiRates)] = &[
     ("gemini-3.1-flash-lite", GeminiRates { audio_input: Some(0.50), ..gemini(0.25, 1.50, 0.025) }),
     ("gemini-3.1-pro-preview", PRO_3_1),
     ("gemini-3.1-pro-preview-customtools", PRO_3_1),
+    ("gemini-robotics-er-2-preview", GeminiRates { doubles_from: Some("2027-01"), ..gemini(1.0, 5.0, 0.10) }),
     ("gemini-3-flash-preview", GeminiRates { audio_input: Some(1.0), ..gemini(0.50, 3.0, 0.05) }),
     ("gemini-2.5-pro", gemini_2_5(GeminiRates { long: Some((2.50, 15.0, 0.25)), ..gemini(1.25, 10.0, 0.125) })),
     ("gemini-2.5-flash", gemini_2_5(GeminiRates { audio_input: Some(1.0), ..gemini(0.30, 2.50, 0.03) })),
     ("gemini-2.5-flash-lite", gemini_2_5(GeminiRates { audio_input: Some(0.30), ..gemini(0.10, 0.40, 0.01) })),
+    // Text and video out ($9 / $17.50), priced at the video rate; no cache.
+    ("gemini-omni-1.1-flash", gemini_media(1.50, 17.50)),
+    ("gemini-nano-banana-2.1", gemini_media(1.50, 30.0)),
     ("gemini-3.1-flash-image", gemini_media(0.50, 60.0)),
     ("gemini-3.1-flash-lite-image", gemini_media(0.25, 30.0)),
     ("gemini-3-pro-image", gemini_media(2.0, 120.0)),
@@ -238,6 +331,15 @@ const GEMINI: &[(&str, GeminiRates)] = &[
 pub fn normalize(provider: Provider, raw: &str) -> String {
     let mut id = raw.trim().to_ascii_lowercase();
     match provider {
+        Provider::OpenAi => {
+            // Snapshot ids end in YYYY-MM-DD.
+            if id.len() > 11 {
+                let suffix = id.get(id.len() - 11..).unwrap_or("");
+                if suffix.starts_with('-') && suffix[1..].bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() }) {
+                    id.truncate(id.len() - 11);
+                }
+            }
+        }
         Provider::Anthropic => {
             if let Some(rest) = id.strip_prefix("anthropic.") {
                 id = rest.to_string();
@@ -374,6 +476,7 @@ fn gemini_fallback(month: &str) -> GeminiRates {
 /// model at the fallback), to tell the dearer of two models apart.
 pub fn output_rate(provider: Provider, model: &str) -> f64 {
     match provider {
+        Provider::OpenAi => openai_rates(model).2,
         Provider::Anthropic => anthropic_rates(model).0.output,
         // No month: the scheduled raises double a whole entry, so they do
         // not change which of two models is dearer by much.
@@ -409,6 +512,7 @@ const GEMINI_WINDOW: u64 = 1_048_576;
 /// at its provider's largest known window.
 pub fn context_window(provider: Provider, model: &str) -> u64 {
     match provider {
+        Provider::OpenAi => 1_050_000,
         Provider::Anthropic => {
             let id = normalize(Provider::Anthropic, model);
             let known = ANTHROPIC.iter().any(|(m, _)| *m == id);
@@ -471,6 +575,9 @@ pub struct Charge {
     pub cache_write: u64,
     pub cache_read: u64,
     pub web_searches: u64,
+    /// Hosted-tool fees (OpenAI) as billed-token equivalents, counted by the
+    /// limit but not shown as any kind of token.
+    pub tool_tokens: u64,
     pub usd: f64,
 }
 
@@ -479,6 +586,7 @@ impl Charge {
     /// (`keys_wire::billed_tokens`); the USD figure is an estimate beside it.
     pub fn billed(&self) -> u64 {
         crate::services::server::keys_wire::billed_tokens(self.input, self.cache_write, self.output, self.cache_read)
+            .saturating_add(self.tool_tokens)
     }
 }
 
@@ -519,6 +627,7 @@ pub fn price_anthropic(model: &str, u: &AnthropicUsage) -> Charge {
         cache_read: u.cache_read_input_tokens,
         web_searches: u.web_search_requests,
         usd: tokens * PER_TOKEN * mult + u.web_search_requests as f64 * WEB_SEARCH_USD,
+        ..Charge::default()
     }
 }
 
@@ -557,12 +666,41 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
         cache_read: cached,
         web_searches: searches,
         usd,
+        ..Charge::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_cache_is_part_of_input_and_reasoning_is_part_of_output() {
+        let charge = price_openai("gpt-6.1-sol", &OpenAiUsage { input: 1_000, cached: 800, output: 300, ..OpenAiUsage::default() });
+        assert_eq!((charge.input, charge.cache_read, charge.output, charge.billed()), (200, 800, 300, 580));
+        assert!(charge.known);
+        assert!((charge.usd - 0.00348).abs() < 1e-12);
+        assert_eq!(normalize(Provider::OpenAi, "gpt-6.1-sol-2026-10-01"), "gpt-6.1-sol");
+        assert!(!price_openai("unknown", &OpenAiUsage::default()).known);
+        let _ = normalize(Provider::OpenAi, "abcdef💡abcdef");
+    }
+
+    #[test]
+    fn openai_hosted_tool_calls_are_charged_per_call_and_count_toward_the_limit() {
+        let tokens = OpenAiUsage { input: 1_000, output: 300, ..OpenAiUsage::default() };
+        let plain = price_openai("gpt-6.1-sol", &tokens);
+        assert_eq!((plain.tool_tokens, plain.web_searches), (0, 0));
+        let tools = OpenAiUsage { web_search_calls: 2, file_search_calls: 4, containers: 1, image_generation_calls: 1, ..tokens };
+        let charge = price_openai("gpt-6.1-sol", &tools);
+        let fees = 2.0 * 0.025 + 4.0 * 0.0025 + 1.92 + 0.60;
+        assert!((charge.usd - plain.usd - fees).abs() < 1e-9);
+        assert_eq!(charge.web_searches, 2);
+        // gpt-6.1-sol output is $10 per million: a dollar of fees is 100,000 tokens.
+        assert!(charge.tool_tokens.abs_diff((fees * 100_000.0).round() as u64) <= 1);
+        assert_eq!(charge.billed(), plain.billed() + charge.tool_tokens);
+        // An unknown model pays at its dearest output rate: fewer tokens per dollar.
+        assert!(price_openai("unknown", &tools).tool_tokens < charge.tool_tokens);
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -743,6 +881,11 @@ mod tests {
     #[test]
     fn gemini_promotional_rates_end_on_schedule() {
         let u = GeminiUsage { prompt_token_count: 1_000_000, candidates_token_count: 1_000_000, ..Default::default() };
+        assert!(close(price_gemini("gemini-4-argon", &u, "2026-11").usd, 2.0 + 10.0));
+        assert!(close(price_gemini("gemini-4-argon", &u, "2026-12").usd, 4.0 + 20.0));
+        assert!(close(price_gemini("gemini-robotics-er-2-preview", &u, "2027-01").usd, 2.0 + 10.0));
+        // Argon's raise lifts the unknown-model ceiling with it.
+        assert_eq!(gemini_rates("gemini-9-ultra", "2026-12").0.output, 20.0);
         assert!(close(price_gemini("gemini-3.8-flash", &u, "2026-12").usd, 0.75 + 3.75));
         assert!(close(price_gemini("gemini-3.8-flash", &u, "2027-01").usd, 1.50 + 7.50));
         assert!(close(price_gemini("gemini-3.5-flash", &u, "2027-01").usd, 1.50 + 9.0));

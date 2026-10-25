@@ -104,6 +104,29 @@ All four bundles (AppImage, deb, exe, dmg) must be there; artifacts expire
 after GitHub's retention (90 days by default) — re-run ci-cd on the commit
 to release an older one.
 
+## Publish the key's fingerprint outside the repo (open — the maintainer's to do)
+
+The server guide (`docs/guide/server.md`, "From a release") and `scripts/fresh-vm.sh`
+trust a public key fetched from the same repository as the release, so a
+compromised repository or account could swap both. The threat-model recheck of
+2026-10-24 asked for the key's fingerprint to be published somewhere that
+repository access does not reach, so a downloader can compare. **Not done**, and
+it cannot be done from the repository: nothing here records a fingerprint, on
+purpose. To do, in your own terminal:
+
+1. Compute it from the committed key:
+
+   ```bash
+   openssl pkey -pubin -in src-tauri/release-signing.pub.pem -outform DER | sha256sum
+   ```
+
+2. Publish that value on a channel outside the repo (for example the project
+   site, a pinned post on a separate account, or a signed message), and say
+   where in `docs/guide/server.md` so the guide can point at it.
+3. Also open: `scripts/fresh-vm.sh` verifies a downloaded package against the
+   release's `SHA256SUMS` but does not verify `SHA256SUMS` against its
+   signature.
+
 ## Rotating or losing the key
 
 Every installed build trusts only the public key it was built with. A new key

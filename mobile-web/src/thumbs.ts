@@ -20,7 +20,7 @@
  */
 import { useEffect, useState, type RefObject } from "react";
 import { storageDashKey } from "../../src/lib/brand";
-import { viewerFileUrl, type ProjectFileEntry } from "./api";
+import { viewerFileUrl, type FilesSide, type ProjectFileEntry } from "./api";
 import { acceptFrameMessage, MAX_FRAME_PAGES } from "./markup/frameProtocol";
 
 /** A cover's width in pixels; the tile is ~104 CSS px wide on a 2–3× screen. */
@@ -65,6 +65,8 @@ export interface ThumbBackend {
   delete(keys: string[]): Promise<void>;
   /** Every key with its last use. */
   usage(): Promise<[string, number][]>;
+  /** Every record. Optional: without it, the keys `usage` lists are deleted. */
+  clear?(): Promise<void>;
 }
 
 /** A read: the cover, a recorded failure, nothing yet, or no cache at all. */
@@ -123,6 +125,35 @@ export class ThumbCache {
     } catch {
       return false;
     }
+  }
+
+  /** Drop every cover and failure of `projectId` (all of them without it);
+   * answers whether the storage was reached. */
+  async forget(projectId?: string): Promise<boolean> {
+    try {
+      const index = await this.usage();
+      if (projectId === undefined && this.backend.clear) {
+        await this.backend.clear();
+        index.clear();
+        return true;
+      }
+      const keys = [...index.keys()].filter((key) => projectId === undefined || projectOfKey(key) === projectId);
+      if (keys.length) await this.backend.delete(keys);
+      for (const key of keys) index.delete(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** The project a cache key belongs to, or `null` for one not made by `thumbKey`. */
+function projectOfKey(key: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null;
+  } catch {
+    return null;
   }
 }
 
@@ -238,6 +269,12 @@ export const indexedDbThumbs: ThumbBackend = {
     }
     await finished(transaction);
   },
+  async clear() {
+    const transaction = (await openDatabase()).transaction([THUMBS, USED], "readwrite");
+    transaction.objectStore(THUMBS).clear();
+    transaction.objectStore(USED).clear();
+    await finished(transaction);
+  },
   async usage() {
     const store = (await openDatabase()).transaction(USED).objectStore(USED);
     const [keys, values] = await Promise.all([promised(store.getAllKeys()), promised(store.getAll())]);
@@ -249,6 +286,18 @@ export const indexedDbThumbs: ThumbBackend = {
 let shared: ThumbCache | null = null;
 const cache = () => (shared ??= new ThumbCache(indexedDbThumbs));
 const queue = new ThumbQueue();
+
+/** Every cover and recorded failure, gone — this device was unpaired
+ * (`forgetDeviceData`). */
+export function forgetCovers(): Promise<boolean> {
+  return cache().forget();
+}
+
+/** A project's covers, gone — the host no longer knows the project to this
+ * phone, so nothing will ask for them again. */
+export function forgetProjectCovers(projectId: string): Promise<boolean> {
+  return cache().forget(projectId);
+}
 /** Keys whose bytes could not be fetched this visit (offline, a stale token):
  * not recorded as failures, since the next visit may fetch them, nor tried
  * again before it. */
@@ -358,11 +407,11 @@ async function pdfCover(blob: Blob, signal: AbortSignal): Promise<Blob | null> {
 
 /** Fetch, draw and store one cover; `null` when there is none to show. A
  * cover stopped by `signal` is not recorded at all: the next visit tries it. */
-async function makeCover(projectId: string, entry: ProjectFileEntry, source: "image" | "pdf", key: string, signal: AbortSignal): Promise<Blob | null> {
+async function makeCover(projectId: string, entry: ProjectFileEntry, source: "image" | "pdf", key: string, signal: AbortSignal, side?: FilesSide): Promise<Blob | null> {
   if (unfetched.has(key)) return null;
   let blob: Blob;
   try {
-    const url = viewerFileUrl({ files: projectId }, { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token });
+    const url = viewerFileUrl({ files: projectId, ...(side === "host" ? { on: "host" as const } : {}) }, { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token });
     const response = await fetch(url, { credentials: "same-origin", signal });
     if (!response.ok) throw new Error("fetch");
     blob = await response.blob();
@@ -412,10 +461,12 @@ function capable(): boolean {
  * while there is none, for a kind without covers, with `enabled` off (the
  * view menu's Thumbnails), and where the browser cannot.
  */
-export function useThumb(cover: RefObject<Element | null>, projectId: string, entry: ProjectFileEntry, place: string, enabled: boolean): string | null {
+export function useThumb(cover: RefObject<Element | null>, projectId: string, entry: ProjectFileEntry, place: string, enabled: boolean, side?: FilesSide): string | null {
   const [shown, setShown] = useState<{ key: string; url: string } | null>(null);
   const source = enabled ? thumbSource(entry) : null;
-  const key = thumbKey(projectId, place, entry);
+  // The remote side's covers are the same project's (forgotten with it), in
+  // a place no folder of this computer's can be named.
+  const key = thumbKey(projectId, side === "host" ? `\u0000host/${place}` : place, entry);
 
   useEffect(() => {
     const node = cover.current;
@@ -439,7 +490,7 @@ export function useThumb(cover: RefObject<Element | null>, projectId: string, en
       if (gone || !started || mine !== visit) return;
       if (cached instanceof Blob) { show(cached); return; }
       if (cached !== null) return;
-      const run = queue.run((signal) => makeCover(projectId, entry, source, key, signal));
+      const run = queue.run((signal) => makeCover(projectId, entry, source, key, signal, side));
       job = run;
       const made = await run.done;
       if (made) show(made);

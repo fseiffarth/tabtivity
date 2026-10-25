@@ -62,16 +62,17 @@ function words(text: string): string {
 }
 
 /** The lines in Claude Code's input box — its `❯` row and the rows under it
- * up to the rule closing it, the `❯ ` and continuation indent cut — or null
+ * up to the rule closing it, the `❯ ` and continuation indent cut (2.1.310
+ * draws the live box's space after the `❯` as a no-break space) — or null
  * when no box is at the bottom of the screen. */
 export function inputBoxLines(rows: readonly string[]): string[] | null {
   const from = Math.max(1, rows.length - 30);
   for (let index = rows.length - 2; index >= from; index -= 1) {
     if (!rows[index].startsWith("❯") || !RULE.test(rows[index - 1])) continue;
-    const lines = [rows[index].replace(/^❯ ?/u, "")];
+    const lines = [rows[index].replace(/^❯[ \u00a0]?/u, "")];
     for (let next = index + 1; next < rows.length; next += 1) {
       if (RULE.test(rows[next])) return lines.map((line) => line.trimEnd());
-      lines.push(rows[next].replace(/^ {2}/u, ""));
+      lines.push(rows[next].replace(/^[ \u00a0]{2}/u, ""));
     }
     return null;
   }

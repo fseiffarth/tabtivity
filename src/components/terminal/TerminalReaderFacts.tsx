@@ -4,11 +4,26 @@ import { readAgentUsage } from "../../lib/agents/agentUsage";
 import type { ReaderLive } from "../../lib/agents/readerLive";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { shortPath } from "../../lib/agents/agentReader";
-import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
+import {
+  CARRIES_CONVERSATION,
+  sameDir,
+  worktreeChoiceText,
+  worktreeMoveNote,
+  worktreeName,
+  worktreeOfPath,
+  type GitWorktree,
+} from "../../lib/agents/agentWorktrees";
+import { splitPtyId } from "../../lib/terminal/ptyId";
+import { useProjectsStore } from "../../stores/projects";
+import { agentBranchAt, agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
+import { storageKey } from "../../lib/brand";
+import { formatTokens } from "../../lib/tokenStats";
+import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
+import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
@@ -17,13 +32,27 @@ import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen"
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
-import { STATUS_AGENTS, TerminalReaderStatus } from "./TerminalReaderStatus";
+import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./TerminalReaderStatus";
+import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
+import { assistantCurrentModel, assistantModelRows, assistantOptions, type AssistantModelRow } from "../../lib/assistant";
+import { switchAssistantModel } from "../../stores/assistantScope";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
 const LIMITS_POLL_MS = 120_000;
+/** Whether the limit facts show as bars rather than percentages: a click on
+ * either one flips both, and the choice outlives the pane. */
+const LIMIT_BARS_KEY = storageKey("readerLimitBars");
+
+function readLimitBars(): boolean {
+  try {
+    return localStorage.getItem(LIMIT_BARS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const CLOCK_MS = 30_000;
 /** The phone's mode walk (`mobile-web` `Terminal.tsx` `applyMode`): how long a
  * Shift+Tab is given to redraw the mode line, and how many presses a lap may
@@ -39,12 +68,14 @@ const MODE_CYCLE_LIMIT = 6;
  * phone's chips, the permission mode (a list walked with Shift+Tab, or one
  * press where the session's modes are unknown) and the reasoning effort (a
  * list sent as Claude's `/effort`; elsewhere the `/model` picker, whose next
- * step it is), and the folder the agent works in with the worktree it is. The status facts
+ * step it is), and the folder the agent works in with the worktree it is —
+ * the branch chip moves the agent to another worktree of the project
+ * (`switchAgentWorktree`), its conversation along where its CLI allows. The status facts
  * come off the pane's live screen (`ReaderLive.status`); the limits from the
  * CLI's usage panel (`agent_usage`, which spends no quota), or — Codex, which
  * has none — from the figures its rollout stores.
  */
-export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose }: {
+export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, contextCard, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose, chipSlot }: {
   tab: TabEntry;
   ptyId: string;
   agentLabel: string;
@@ -54,6 +85,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   /** The stored session's own figures (Codex), for what the screen and the
    * usage panel leave out. */
   usage: SessionUsage | undefined;
+  /** The newest `/context` card the session's transcript holds. */
+  contextCard: string | undefined;
   /** The folder the agent works in, when the screen prints none. */
   path: string | undefined;
   /** The reasoning effort last seen (busy row, transcript), when the status
@@ -66,16 +99,30 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   /** Whether a session picker is up: the Reader then leaves it out of
    * its own answer buttons. */
   onPicking: (picking: boolean) => void;
-  statusOpen: boolean;
+  /** The panel open over the composer, if any. */
+  statusOpen: ReaderPanel | null;
   statusRequest: number;
-  onStatusRequest: () => void;
+  onStatusRequest: (panel: ReaderPanel) => void;
   onStatusClose: () => void;
+  /** Takes the row's end, where the composer portals its chip row. */
+  chipSlot?: (slot: HTMLDivElement | null) => void;
 }) {
   const t = useT();
+  const resumeCost = useAgentResumeCostStore((state) => state.byPty[ptyId]);
   const status = live.status;
   const [limits, setLimits] = useState<LimitMeters>({});
   const [readAt, setReadAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
+  const [limitBars, setLimitBars] = useState(readLimitBars);
+  const toggleLimitBars = () => {
+    const next = !limitBars;
+    setLimitBars(next);
+    try {
+      localStorage.setItem(LIMIT_BARS_KEY, next ? "1" : "0");
+    } catch {
+      // Storage unavailable: the view still flips for this pane.
+    }
+  };
 
   // An agent without a usage recipe answers unsupported once: no more asking
   // until the view is shown again or the tab's command changes. (Declared
@@ -116,6 +163,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
   const modelPickable = modelPickOffered(tab);
+  const groupModels = modelPicking && isOpenCodeTab(agentLabel) && shownStep?.title === "Select model";
+  const modelGroups = shownStep
+    ? groupModels ? groupOpenCodeModels(shownStep.options) : [{ key: "all", options: shownStep.options }]
+    : [];
   useEffect(() => { onPicking(picking); }, [picking, onPicking]);
 
   const openPicker = (command: "/model" | "/permissions" = "/model") => {
@@ -123,6 +174,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     onStatusClose();
     closeModes();
     closeEffort();
+    closeWorktrees();
     session.open(command);
   };
 
@@ -150,6 +202,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setModeOpen(false);
   };
   const openModes = () => {
+    closeAssistantModels();
+    closeWorktrees();
     if (codex) {
       if (permissionPicking) close();
       else openPicker("/permissions");
@@ -219,6 +273,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       return;
     }
     onStatusClose();
+    closeAssistantModels();
+    closeWorktrees();
     if (effortOpen) {
       closeEffort();
       return;
@@ -248,6 +304,115 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     );
   };
 
+  // --- A Tabby chat's model ----------------------------------------------
+  // Its slash commands are off (`--disable-slash-commands`), so neither
+  // `/model` nor `/effort` reaches the session: the model is the chat's launch,
+  // and a pick restarts the chat on it (`switchAssistantModel`), resumed.
+  const assistantLaunch = tab.assistant;
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  /** `null` while the choices are read. */
+  const [assistantModels, setAssistantModels] = useState<AssistantModelRow[] | null>(null);
+  const assistantCurrent = assistantLaunch ? assistantCurrentModel(assistantLaunch) : undefined;
+  const [assistantSwitching, setAssistantSwitching] = useState("");
+  const [assistantFailed, setAssistantFailed] = useState(false);
+  const closeAssistantModels = () => {
+    setAssistantOpen(false);
+    setAssistantSwitching("");
+  };
+  const openAssistantModels = () => {
+    if (!assistantLaunch) return;
+    if (assistantOpen) {
+      closeAssistantModels();
+      return;
+    }
+    onStatusClose();
+    closeModes();
+    closeEffort();
+    closeWorktrees();
+    setAssistantFailed(false);
+    setAssistantModels(null);
+    setAssistantOpen(true);
+    void assistantOptions()
+      .then((options) => {
+        const cli = options.clis.find((c) => c.id === assistantLaunch.cli);
+        return cli ? assistantModelRows(cli, options) : [];
+      })
+      .then(setAssistantModels, () => setAssistantModels([]));
+  };
+  const chooseAssistantModel = (model: string) => {
+    if (assistantSwitching) return;
+    if (model === assistantCurrent) {
+      closeAssistantModels();
+      return;
+    }
+    setAssistantFailed(false);
+    setAssistantSwitching(model);
+    void switchAssistantModel(tab.key, model).then((switched) => {
+      if (switched) {
+        closeAssistantModels();
+        return;
+      }
+      setAssistantSwitching("");
+      setAssistantFailed(true);
+    });
+  };
+
+  // --- The worktree the agent works in --------------------------------------
+  // Local projects only, and only an agent whose conversation a restart
+  // resumes: the move is a respawn in the new folder.
+  const scope = splitPtyId(ptyId)?.scope ?? "";
+  const project = useProjectsStore((state) => state.projects.find((p) => p.id === scope));
+  const projectDir = worktreeMoveDir(tab, project, !!assistantLaunch);
+  const worktreeMovable = !!projectDir;
+  const [worktreesOpen, setWorktreesOpen] = useState(false);
+  /** `null` while the worktrees are read. */
+  const [worktrees, setWorktrees] = useState<GitWorktree[] | null>(null);
+  const [worktreeSwitching, setWorktreeSwitching] = useState("");
+  const [worktreeFailed, setWorktreeFailed] = useState(false);
+  // Codex's status line names no branch: read the one checked out where the
+  // tab runs, so the chip says it instead of the generic word.
+  const statusBranch = status?.branch;
+  const [cwdBranch, setCwdBranch] = useState<string | undefined>();
+  useEffect(() => {
+    setCwdBranch(undefined);
+    if (!projectDir || statusBranch || !tab.cwd) return;
+    let live = true;
+    void agentBranchAt(projectDir, tab.cwd).then((branch) => { if (live) setCwdBranch(branch); });
+    return () => { live = false; };
+  }, [projectDir, statusBranch, tab.cwd]);
+  const closeWorktrees = () => {
+    setWorktreesOpen(false);
+    setWorktreeSwitching("");
+  };
+  const openWorktrees = () => {
+    if (worktreesOpen) {
+      closeWorktrees();
+      return;
+    }
+    onStatusClose();
+    close();
+    closeModes();
+    closeEffort();
+    closeAssistantModels();
+    setWorktreeFailed(false);
+    setWorktrees(null);
+    setWorktreesOpen(true);
+    void agentSwitchChoicesIn(projectDir).then(setWorktrees);
+  };
+  const chooseWorktree = (wt: GitWorktree) => {
+    if (worktreeSwitching) return;
+    setWorktreeFailed(false);
+    setWorktreeSwitching(wt.path);
+    void moveAgentToWorktree(scope, tab, worktrees ?? [], wt, t).then((result) => {
+      if (result !== "failed") {
+        closeWorktrees();
+        return;
+      }
+      setWorktreeSwitching("");
+      setWorktreeFailed(true);
+    });
+  };
+
   const contextLeft = status?.context ?? (usage?.contextLeft != null ? `${usage.contextLeft}%` : undefined);
   const clock = new Date(now);
   const fromPanel = !!(limits.session || limits.week);
@@ -256,14 +421,23 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const limitFact = (meter: LimitMeters["session"], key: "mobile.facts.session" | "mobile.facts.week") => {
     if (!meter) return null;
     const left = meter.resets ? resetCountdown(meter.resets, clock, readTime) : "";
+    const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
+    const percentText = t(key, { percent: Math.round(remaining) });
     return (
-      <span
-        className={meter.percent >= 90 ? "terminal-reader-fact high" : "terminal-reader-fact"}
-        title={meter.resets ? resetText(meter.resets, clock, readTime) : undefined}
+      <button
+        type="button"
+        className={`terminal-reader-fact terminal-reader-limit${meter.percent >= 90 ? " high" : ""}`}
+        onClick={toggleLimitBars}
+        aria-pressed={limitBars}
+        aria-label={limitBars ? percentText : undefined}
+        title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle")].filter(Boolean).join("\n")}
       >
-        {t(key, { percent: Math.round(100 - meter.percent) })}
+        {limitBars ? <>
+          {t(key === "mobile.facts.session" ? "mobile.facts.sessionLabel" : "mobile.facts.weekLabel")}
+          <span className="terminal-reader-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span>
+        </> : percentText}
         {left && <> · {t("mobile.facts.resetIn", { time: left })}</>}
-      </span>
+      </button>
     );
   };
   const modelLabel = status?.model ?? modelTag;
@@ -275,11 +449,17 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
 
   return (
     <div className="terminal-reader-facts-wrap">
-      {statusOpen && STATUS_AGENTS[tab.cmd] && <TerminalReaderStatus key={ptyId}
+      {statusOpen === "status" && STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderStatus key={ptyId}
         tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest}
         canRefresh={!live.working && !live.question && !picking && !modeOpen}
         model={modelLabel} effort={effortLabel} path={shownPath} contextLeft={contextLeft} usage={usage}
-        onClose={onStatusClose} onRefresh={onStatusRequest}
+        limits={shown} limitsReadAt={readTime.getTime()}
+        onClose={onStatusClose} onRefresh={() => onStatusRequest("status")}
+      />}
+      {statusOpen === "context" && CONTEXT_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <TerminalReaderContext key={ptyId}
+        tab={tab} ptyId={ptyId} agentLabel={agentLabel} visible={visible} request={statusRequest} card={contextCard}
+        canRefresh={!live.working && !live.question && !picking && !modeOpen}
+        onClose={onStatusClose} onRefresh={() => onStatusRequest("context")}
       />}
       {picking && (
         <div
@@ -295,11 +475,13 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           </div>
           {shownStep ? (
             <div className="terminal-reader-options">
-              {shownStep.options.map((option) => (
+              {modelGroups.map((group) => <div className="terminal-reader-option-group" key={group.key}>
+                {groupModels && <div className="terminal-reader-option-group-title">{openCodeModelGroupTitle(group, t)}</div>}
+                {group.options.map((option) => (
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
-                  className={picker && option.index === picker.current ? "terminal-reader-option current" : "terminal-reader-option"}
+                  className={!session.remembered && picker && option.index === picker.current ? "terminal-reader-option current" : "terminal-reader-option"}
                   disabled={busy}
                   onClick={() => choose(option.index)}
                 >
@@ -309,7 +491,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
                     {option.description && <small>{option.description}</small>}
                   </span>
                 </button>
-              ))}
+                ))}
+              </div>)}
             </div>
           ) : (
             <small className="terminal-reader-question-more">{t(permissionPicking ? "terminal.reader.permissionsWaiting" : "terminal.reader.modelWaiting")}</small>
@@ -317,6 +500,46 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           {listing
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
+          {session.remembered && <small className="terminal-reader-question-more">{t("terminal.reader.modelRemembered")} <UntestedTag id="agents.modelRows.remembered" /></small>}
+        </div>
+      )}
+      {assistantOpen && assistantLaunch && (
+        <div
+          className="terminal-reader-picker"
+          role="dialog"
+          aria-label={t("terminal.reader.modelTitle")}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAssistantModels(); } }}
+        >
+          <div className="terminal-reader-picker-head">
+            <strong>{t("terminal.reader.modelTitle")}</strong>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeAssistantModels} aria-label={t("terminal.reader.modelClose")} title={t("terminal.reader.modelClose")}>✕</button>
+          </div>
+          {assistantModels === null ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.assistantModelLoading")}</small>
+          ) : assistantModels.length === 0 ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.assistantModelNone")}</small>
+          ) : (
+            <div className="terminal-reader-options">
+              {assistantModels.map((model, index) => (
+                <button
+                  key={model.id}
+                  type="button"
+                  className={model.id === assistantCurrent ? "terminal-reader-option current" : "terminal-reader-option"}
+                  disabled={!!assistantSwitching}
+                  aria-busy={model.id === assistantSwitching}
+                  onClick={() => chooseAssistantModel(model.id)}
+                >
+                  <span className="terminal-reader-option-number">{model.id === assistantSwitching ? "…" : index + 1}</span>
+                  <span className="terminal-reader-option-label">
+                    <span>{model.label}</span>
+                    {model.description && <small>{model.description}</small>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {assistantFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.assistantModelFailed")}</small>}
+          <small className="terminal-reader-question-more">{t("terminal.reader.assistantModelNote")}</small>
         </div>
       )}
       {effortOpen && (
@@ -351,6 +574,49 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <small className="terminal-reader-question-more">{t("terminal.reader.effortNote")}</small>
         </div>
       )}
+      {worktreesOpen && (
+        <div
+          className="terminal-reader-picker"
+          role="dialog"
+          aria-label={t("terminal.reader.worktreeTitle")}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeWorktrees(); } }}
+        >
+          <div className="terminal-reader-picker-head">
+            <strong>{t("terminal.reader.worktreeTitle")}</strong>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeWorktrees} aria-label={t("terminal.reader.worktreeClose")} title={t("terminal.reader.worktreeClose")}>✕</button>
+          </div>
+          {worktrees === null ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.worktreeLoading")}</small>
+          ) : worktrees.length === 0 ? (
+            <small className="terminal-reader-question-more">{t("terminal.reader.worktreeNone")}</small>
+          ) : (
+            <div className="terminal-reader-options">
+              {worktrees.map((wt, index) => {
+                const text = worktreeChoiceText({ branch: wt.branch, name: worktreeName(wt.path), main: wt.is_main }, t);
+                return <button
+                  key={wt.path}
+                  type="button"
+                  className={sameDir(wt.path, tab.cwd) ? "terminal-reader-option current" : "terminal-reader-option"}
+                  disabled={!!worktreeSwitching}
+                  aria-busy={wt.path === worktreeSwitching}
+                  title={wt.path}
+                  onClick={() => chooseWorktree(wt)}
+                >
+                  <span className="terminal-reader-option-number">{wt.path === worktreeSwitching ? "…" : index + 1}</span>
+                  <span className="terminal-reader-option-label">
+                    <span>{text.label}</span>
+                    <small>{text.description}</small>
+                  </span>
+                </button>;
+              })}
+            </div>
+          )}
+          {worktreeFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.worktreeFailed")}</small>}
+          <small className="terminal-reader-question-more">
+            {worktreeMoveNote(CARRIES_CONVERSATION.has(tab.cmd), agentLabel, t)}
+          </small>
+        </div>
+      )}
       {modeOpen && (
         <div
           className="terminal-reader-picker"
@@ -382,12 +648,30 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         </div>
       )}
       <div className="terminal-reader-facts">
-        {STATUS_AGENTS[tab.cmd] && <button type="button" className="terminal-reader-fact-model"
-          onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); onStatusRequest(); }}
-          aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
+        {STATUS_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <button type="button" className="terminal-reader-fact-model"
+          onClick={statusOpen === "status" ? onStatusClose : () => { close(); closeModes(); closeEffort(); closeWorktrees(); onStatusRequest("status"); }}
+          aria-haspopup="dialog" aria-expanded={statusOpen === "status"} title={t("terminal.reader.status.hint", { agent: agentLabel })}>
           {t("terminal.reader.status.button")} {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
         </button>}
-        {modelPickable ? (
+        {CONTEXT_AGENTS[tab.cmd] && !(assistantLaunch && claude) && <button type="button" className="terminal-reader-fact-model"
+          onClick={statusOpen === "context" ? onStatusClose : () => { close(); closeModes(); closeEffort(); closeWorktrees(); onStatusRequest("context"); }}
+          aria-haspopup="dialog" aria-expanded={statusOpen === "context"} title={t("terminal.reader.context.hint", { agent: agentLabel })}>
+          {t("terminal.reader.context.button")} <UntestedTag id="terminal.reader.context" />
+        </button>}
+        {assistantLaunch ? (
+          <button
+            type="button"
+            className="terminal-reader-fact-model"
+            onClick={openAssistantModels}
+            disabled={!assistantOpen && (!!live.working || !!live.question || picking)}
+            aria-haspopup="dialog"
+            aria-expanded={assistantOpen}
+            title={t("terminal.reader.assistantModelHint")}
+          >
+            {modelLabel ?? assistantLaunch.model ?? t("terminal.reader.model")}
+            <UntestedTag id="assistant.modelSwitch" />
+          </button>
+        ) : modelPickable ? (
           <button
             type="button"
             className="terminal-reader-fact-model"
@@ -402,7 +686,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         ) : modelLabel && <span className="terminal-reader-fact">{modelLabel}</span>}
         {/* Outside Claude the effort is set on the model picker's next step,
             so a local-model tab, which has no picker, only shows it. */}
-        {!claude && !modelPickable ? (
+        {(!claude && !modelPickable) || assistantLaunch ? (
           effortLabel && <span className="terminal-reader-fact">{t("terminal.reader.effort", { effort: effortLabel })}</span>
         ) : (effortLabel || claude) && (
           <button
@@ -432,15 +716,44 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             {codex && <UntestedTag id="terminal.reader.permissionsPick" />}
           </button>
         )}
+        {tab.cmd === "opencode" && <UntestedTag id="agents.opencode.v2" />}
+        {tab.cmd === "copilot" && <UntestedTag id="agents.copilot.reader" />}
         <UntestedTag id="terminal.reader.facts" />
         <UntestedTag id="terminal.reader.factsMore" />
-        {shownPath && <span className="terminal-reader-fact" title={shownPath}>{shortPath(shownPath)}</span>}
+        {shownPath && <span className="terminal-reader-fact terminal-reader-fact-path" title={shownPath}>{shortPath(shownPath)}</span>}
         {worktree && <span className="terminal-reader-fact worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: worktree })}</span>}
-        {status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}
+        {worktreeMovable ? (
+          <button
+            type="button"
+            className="terminal-reader-fact-model"
+            onClick={openWorktrees}
+            disabled={!worktreesOpen && (!!live.working || !!live.question || picking)}
+            aria-haspopup="dialog"
+            aria-expanded={worktreesOpen}
+            title={t("terminal.reader.worktreeSwitchHint")}
+          >
+            ⎇ {statusBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}
+            <UntestedTag id="terminal.reader.worktreeSwitch" />
+          </button>
+        ) : status?.branch && <span className="terminal-reader-fact">⎇ {status.branch}</span>}
         {contextLeft && <span className="terminal-reader-fact">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
+        {resumeCost && (
+          <span
+            className="terminal-reader-fact high"
+            title={t("terminal.reader.resumeColdHint", { idle: formatIdleTime(resumeCost.secondsIdle) })}
+          >
+            {t("terminal.reader.resumeCold", {
+              tokens: formatTokens(resumeCost.contextTokens),
+              cost: formatCacheWriteUsd(resumeCost.cacheWriteUsd),
+            })}
+            <UntestedTag id="terminal.reader.resumeCold" />
+          </span>
+        )}
         {limitFact(shown.session, "mobile.facts.session")}
         {limitFact(shown.week, "mobile.facts.week")}
+        {(shown.session || shown.week) && <UntestedTag id="terminal.reader.limitBars" />}
       </div>
+      <div className="terminal-reader-facts-chips" ref={chipSlot} />
     </div>
   );
 }

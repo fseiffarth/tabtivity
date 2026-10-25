@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { withHpcConfirm } from "../../lib/remote/hpc/hpcGuard";
 import { createPortal } from "react-dom";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useTauriListener } from "../../hooks/useTauriListener";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import {
@@ -119,15 +121,14 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
       .catch((e) => setError(String(e)));
   }, [visible, devices.length]);
 
-  useEffect(() => {
-    const unlisten = listen<DuProgress>("disk-scan-progress", (ev) => {
-      if (ev.payload.scan_id !== scanIdRef.current) return; // another pane's scan
-      if (ev.payload.phase !== "done") setProgress(ev.payload);
-    });
-    return () => {
-      void unlisten.then((off) => off());
-    };
-  }, []);
+  useTauriListener(
+    () =>
+      listen<DuProgress>("disk-scan-progress", (ev) => {
+        if (ev.payload.scan_id !== scanIdRef.current) return; // another pane's scan
+        if (ev.payload.phase !== "done") setProgress(ev.payload);
+      }),
+    [],
+  );
 
   const startScan = useCallback(
     async (root: string, onHost: boolean, label: string) => {
@@ -352,7 +353,7 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
   const total = scan.root.size;
 
   return (
-    <div className="du-root" onMouseDown={() => setMenu(null)}>
+    <div className="du-root">
       <div className="du-toolbar">
         <button className="du-btn" onClick={backToHome} title={t("diskUsage.scansTitle")}>
           ‹ {t("diskUsage.scansLabel")}
@@ -447,19 +448,13 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
           document.body,
         )}
 
-      {menu &&
-        createPortal(
-          <div
-            className="context-menu du-context-menu"
-            style={{ left: menu.x, top: menu.y }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <button onClick={() => openExternally(menu.node)}>{t("fileBrowser.open")}</button>
-            <button onClick={() => revealInFiles(menu.node)}>{t("diskUsage.menuReveal")}</button>
-            <button onClick={() => copyPath(menu.node)}>{t("fileBrowser.copyPath")}</button>
-          </div>,
-          document.body,
-        )}
+      {menu && (
+        <ContextMenuPortal x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+          <button onClick={() => openExternally(menu.node)}>{t("fileBrowser.open")}</button>
+          <button onClick={() => revealInFiles(menu.node)}>{t("diskUsage.menuReveal")}</button>
+          <button onClick={() => copyPath(menu.node)}>{t("fileBrowser.copyPath")}</button>
+        </ContextMenuPortal>
+      )}
     </div>
   );
 }

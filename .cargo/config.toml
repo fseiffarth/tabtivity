@@ -1,0 +1,8 @@
+# Every cargo build of this workspace, not only CI's (docs/desktop_voice_plan.md,
+# step 0): ggml defaults to -march=native, which compiled AMX/AVX-512 into
+# whisper.cpp on a machine whose kernel then refused AMX — SIGILL at the first
+# transcription. OFF builds x86_64 for AVX/AVX2/FMA/F16C/BMI2, the baseline
+# `services::voice::cpu` checks before any whisper call. whisper-rs-sys's build
+# script does not watch GGML_*: after changing this, `cargo clean -p whisper-rs-sys`.
+[env]
+GGML_NATIVE = "OFF"

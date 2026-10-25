@@ -1354,6 +1354,13 @@ container) — as opposed to the git **push** axis (#21/#22).*
         was never synced has no base, is skipped by every auto pass and shows
         as "new local"; one manual pull/push adopts it.
 
+- [ ] **Auto-sync safety and recovery** — implement the phased plan in
+  [`docs/auto_sync_safety_plan.md`](../docs/auto_sync_safety_plan.md): strict probes
+  and shared mutation ownership, verified content baselines and transfer receipts,
+  durable version recovery, capability-tested installation, and fault-injection
+  qualification. Covers automatic/manual byte transfers, merge apply, and their
+  Lockstep boundary; source review only, no live verification yet.
+
 ### G.24 — Remote-connect hardening: deferred follow-ups
 
 The 2026-07-25 audit + fix pass (5 analysis agents, 5 implementation agents, one

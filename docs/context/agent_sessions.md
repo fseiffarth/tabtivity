@@ -130,6 +130,15 @@ Reader reads the same record (`opencode_store`), else the folder's newest
 since the last fresh launch. Remote and local-model OpenCode tabs are as
 before.
 
+OpenCode 2 uses the same plugin file with a default `{id, server, setup}`
+entrypoint: recent V1 calls `server`, V2 registers a prompt hook in `setup`
+and asks for the session's parent instead of tracking child creation events.
+The config registration respects a native `plugins` list. Local host V2
+launches use `--standalone` so the plugin's tab environment is not inherited
+from a shared background service. The Reader adapts `session_v2` and
+`session_message` on a read-only connection; no vendor data is migrated or
+rewritten. This port has fixture coverage but has not been checked live.
+
 ### The phone send hint
 
 An accepted Claude or Codex `SessionStart` prints a one-line
@@ -277,4 +286,7 @@ every place a log can be has to be probed:
   any project dir there means `--resume`, else the fresh `--session-id`. A
   `/clear` on the host is not followed (the launch id is what comes back), no
   mode is re-applied, and a remote Codex tab has no resume path at all beyond
-  its surviving tmux session.
+  its surviving tmux session. Its Reader/Focus chat reads the same launch id's file
+  off the host (`services::remote_transcript`, a local copy grown over the
+  pooled SFTP session; `agent_tab_transcript`'s `remoteHost`), so it shares
+  those limits; a host tab of any other CLI has no chat.

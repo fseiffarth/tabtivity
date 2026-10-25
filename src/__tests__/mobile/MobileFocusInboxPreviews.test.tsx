@@ -120,4 +120,47 @@ describe(`${BRAND.display} Mobile shows what the phone sent in its prompt's bubb
     const viewer = screen.getByRole("dialog", { name: "IMG_0042.jpg" });
     expect(viewer.querySelector("img")?.getAttribute("src")).toBe(`/api/v1/tabs/tab-7/inbox/${PHOTO}`);
   });
+
+  it("draws a markup prompt's pictures each under its own caption, uncropped", async () => {
+    const MARKED = "20261024-191900-corner-marked.png";
+    const LAYER = "20261024-191900-corner-layer.png";
+    vi.stubGlobal("fetch", sidecarFetch({
+      available: true,
+      version: "1:1",
+      truncated: false,
+      entries: [{
+        kind: "prompt",
+        text: [
+          "I marked these changes by hand on `renders/corner.png`.",
+          "The picture with my marks drawn on it:",
+          `@${NAMES.inboxDir}/${MARKED}`,
+          "My markup layer alone, the size of the picture:",
+          `@${NAMES.inboxDir}/${LAYER}`,
+          "My typed notes:",
+          "- m1: red pen mark",
+        ].join("\n"),
+        at: "2026-10-24T19:19:00Z",
+      }],
+    }, { [MARKED]: { kind: "image/png", size: 3 }, [LAYER]: { kind: "image/png", size: 3 } }));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    await settle();
+
+    const prompt = screen.getByTestId("session-transcript").querySelector(".readable-turn.user")!;
+    // Words, picture, words, picture, words — in the prompt's own order.
+    const parts = Array.from(prompt.children)
+      .filter((child) => child.matches(".transcript-md, .inbox-album"))
+      .map((child) => child.matches(".inbox-album") ? child.querySelector("img")?.getAttribute("src") : child.textContent?.trim());
+    expect(parts).toEqual([
+      expect.stringMatching(/The picture with my marks drawn on it:$/),
+      `/api/v1/tabs/tab-7/inbox/${MARKED}`,
+      "My markup layer alone, the size of the picture:",
+      `/api/v1/tabs/tab-7/inbox/${LAYER}`,
+      expect.stringContaining("m1: red pen mark"),
+    ]);
+    // Each a lone picture, shaped by itself rather than cropped into a pair.
+    expect(prompt.querySelectorAll(".outbox-post-album.tiles-1")).toHaveLength(2);
+    expect(prompt.querySelector(".outbox-post-album.tiles-2")).toBeNull();
+    expect(prompt.querySelectorAll(".inbox-album-untested").length).toBeLessThanOrEqual(1);
+  });
 });

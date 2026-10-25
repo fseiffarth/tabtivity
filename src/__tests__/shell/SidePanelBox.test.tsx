@@ -178,22 +178,6 @@ describe("SidePanel multi-root box view", () => {
     expect(p2Section.querySelector(".dialog-connect-btn")).toBeNull();
   });
 
-  it("keeps the Alerts group in a box scope", async () => {
-    // Mail, appointments and due cards are machine-wide, so standing in a box
-    // scope is not a reason for the row that is due to disappear — the panel
-    // used to drop the whole group here while the header's 🔔 still read as on.
-    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
-    useProjectsStore.setState({ projects: [proj("p1", "boxA")], activeId: null, loaded: true });
-    useTabsStore.setState({ scope: "box:boxA" });
-
-    let container!: HTMLElement;
-    await act(async () => {
-      ({ container } = render(<SidePanel open={true} />));
-    });
-
-    expect(container.querySelector(".alerts-section")).not.toBeNull();
-  });
-
   it("falls back to the single project tree when no box scope is active", async () => {
     useProjectsStore.setState({
       projects: [proj("p1")],

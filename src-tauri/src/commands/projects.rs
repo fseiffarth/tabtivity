@@ -51,6 +51,17 @@ pub(crate) fn remote_project_state_dir(id: &str) -> std::path::PathBuf {
 /// *local mirror*, the user may not have acknowledged it yet, and it is a fact about this
 /// machine rather than about any host.
 async fn clear_host_bound_state(project_id: &str, manifest: &SyncManifestState) {
+    // Under the project's mutation lock (`services::sync_op`), so a sync or lockstep
+    // pass still in flight finishes first rather than re-creating `sync.json` from
+    // its own record right after it was removed. A lock that cannot be had does not
+    // stop the detach the user asked for; it is logged.
+    let _op = match crate::services::sync_op::acquire(project_id).await {
+        Ok(op) => Some(op),
+        Err(e) => {
+            eprintln!("clear_host_bound_state: {project_id}: {e}");
+            None
+        }
+    };
     let _ = fs::remove_file(crate::services::remote_sync::manifest_path(project_id));
     let _ = fs::remove_file(crate::services::git_peer::state_path(project_id));
     manifest.lock().await.remove(project_id);
@@ -2155,46 +2166,17 @@ pub fn set_project_mobile_access(
     enabled: bool,
     devices: Option<Vec<String>>,
 ) -> Result<MobileAccessState, String> {
-    let projects = get_projects()?;
-    let project = projects
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or("project not found")?;
+    if !get_projects()?.iter().any(|p| p.id == project_id) {
+        return Err("project not found".into());
+    }
+    // No project type is refused: the switch (and its per-phone list) is the
+    // whole consent; what the phone reaches of a remote, container or VM
+    // project is the catalog's call (`mobile_control::discovery`).
     if enabled {
-        if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
-            return Err("Mobile access is available only for local projects".into());
-        }
-        let runtime_enabled = |key: &str| {
-            project
-                .extra
-                .get(key)
-                .and_then(|v| v.get("enabled"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        };
-        if runtime_enabled("sandbox") || runtime_enabled("vm") {
-            return Err("Mobile access is unavailable for container and VM projects".into());
-        }
         mobile_access_prerequisites()?;
     }
     let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
-        if enabled {
-            if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
-                return Err("Mobile access is available only for local projects".into());
-            }
-            let runtime_enabled = |key: &str| {
-                project
-                    .extra
-                    .get(key)
-                    .and_then(|v| v.get("enabled"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            };
-            if runtime_enabled("sandbox") || runtime_enabled("vm") {
-                return Err("Mobile access is unavailable for container and VM projects".into());
-            }
-        }
         apply_mobile_access(project, enabled, devices.as_deref());
         Ok(())
     })?;

@@ -24,9 +24,9 @@ import { canApply, canUndo, followRound, holdsUndo, nextCheck, startRound, stepR
 import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
 import { readMarkupOpen } from "../markupOpen";
 import { keepMarkupTab, type FileTabFile } from "../filesPlace";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
-import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
+import type { MarkupBack, MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
 import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
@@ -401,8 +401,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * while the project file has none of its own — never merged into some. */
   adoptFrom?: string;
   /** Tucks the view away behind the host tab's chat, still mounted, with the
-   * file's name for the chat's way back (`Terminal`'s `markupAway`). */
-  toChat?: (name: string) => void;
+   * file for the chat's way back (`Terminal`'s `markupAway`) — kept past the
+   * tab being left, so the way back is there when it opens again. */
+  toChat?: (back: MarkupBack) => void;
   /** The reader opens marking whatever this phone's "PDFs open in" says — the
    * files library's **Mark up** asked for it. */
   startMarking?: boolean;
@@ -825,7 +826,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     void fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
       .then((response) => (response.ok ? readBody(response, MAX_INBOX_FILE, (got, total) => {
         arm();
-        const label = sizeLabel(got);
+        const label = formatBytes(got);
         if (label === shown) return;
         shown = label;
         setDownload({ got, total: total || file.size });
@@ -2168,7 +2169,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <small>
           {marking
             ? t("mobile.markup.subtitle")
-            : `${sizes && isPdf ? `${t("mobile.outbox.pdfPage", { n: current, count: sizes.length })} · ` : ""}${sizeLabel(file.size)}`}
+            : `${sizes && isPdf ? `${t("mobile.outbox.pdfPage", { n: current, count: sizes.length })} · ` : ""}${formatBytes(file.size)}`}
           {untested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </small>
       </div>
@@ -2196,7 +2197,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <span className="markup-round-words">{roundWords}</span>
         {roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         {asking && dialog && <span className="markup-round-dialog">{t("mobile.markup.round.dialog", { line: dialog })}</span>}
-        {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat(sentName(file))}
+        {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat({ scope, file, place, folder })}
           title={t(asking ? "mobile.markup.answerInChatTitle" : "mobile.markup.toChatTitle")}>
           {t(asking ? "mobile.markup.answerInChat" : "mobile.markup.toChat")}
           {(asking ? isUntested("mobile.markup.tabDialog") : isUntested("mobile.markup.chatLink")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
@@ -2243,7 +2244,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={() => setPopover(null)}>
       {isPdf ? <>
         {!sizes && !failure && <p className="markup-loading">{download && download.total > 0
-          ? t("mobile.markup.downloading", { got: sizeLabel(download.got), size: sizeLabel(download.total) })
+          ? t("mobile.markup.downloading", { got: formatBytes(download.got), size: formatBytes(download.total) })
           : t("mobile.markup.loading")}</p>}
         {sizes && <div className="markup-pages" style={{ width: cssWidth, height: contentHeight, marginLeft: insetAt(zoom) }}>
           {sizes.map((size, i) => {

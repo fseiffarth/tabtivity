@@ -3,8 +3,13 @@
 //! folder the tab runs in, newest first, each named by its first prompt, to
 //! read in the Reader and resume in the tab.
 //!
-//! Claude and Codex, the two CLIs whose conversations Tabtivity finds by id and
-//! resumes by id. Claude files a folder's sessions as
+//! Claude, Codex and Copilot keep a file per conversation, found and resumed
+//! by id (Copilot's: a folder per session, `copilot_session`, named for its
+//! `workspace.yaml` `cwd` and held to a session a prompt went into).
+//! OpenCode and Antigravity keep theirs in SQLite stores read by folder
+//! (`opencode_store::folder_chats`, `google_chat::antigravity_chats`): a
+//! listed id is checked to be one of the folder's top-level conversations
+//! ([`is_folder_chat`]) before it is read or resumed. Claude files a folder's sessions as
 //! `<scope home>/.claude/projects/<folder slug>/<uuid>.jsonl` — the folder is
 //! the one the tab's current conversation lies in, else the slug of the tab's
 //! folder. Codex keeps every rollout under `.codex/sessions/<y>/<m>/<d>/`, each
@@ -24,6 +29,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::services::agent_session::{self, TranscriptKind};
+use crate::services::home_io::HomeDir;
 
 /// Chats one page answers.
 pub const PAGE: usize = 30;
@@ -68,6 +74,20 @@ pub struct ChatList {
     pub next: Option<usize>,
 }
 
+/// One earlier conversation as a store read by folder lists it (OpenCode's,
+/// Antigravity's): [`StoredChat`] before the tab's own is marked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderChat {
+    pub id: String,
+    /// Its first prompt, whole.
+    pub title: String,
+    /// Its last prompt, when that is another one.
+    pub last: Option<String>,
+    pub started: Option<String>,
+    /// When it was last written (epoch ms).
+    pub updated: u64,
+}
+
 /// A session file of the folder, before it is read.
 struct Candidate {
     path: PathBuf,
@@ -87,11 +107,18 @@ pub fn list_chats(
     offset: usize,
     limit: usize,
 ) -> ChatList {
+    let limit = limit.clamp(1, MAX_PAGE);
+    let dir = tab_dir.map(normal_dir);
+    if matches!(cmd, "opencode" | "agy") {
+        return folder_store_chats(cmd, project_id, dir.as_deref(), launch_id, offset, limit);
+    }
     let Some(kind) = kind_of(cmd) else {
         return ChatList::default();
     };
-    let limit = limit.clamp(1, MAX_PAGE);
-    let dir = tab_dir.map(normal_dir);
+    // Copilot's store is on the far host for a remote tab.
+    if kind == TranscriptKind::Copilot && project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return ChatList::default();
+    }
     let current = current_chat(cmd, project_id, launch_id);
     let candidates = candidates(cmd, project_id, dir.as_deref(), launch_id);
     let mut chats = Vec::new();
@@ -100,7 +127,7 @@ pub fn list_chats(
         let candidate = &candidates[at];
         at += 1;
         let id = match kind {
-            TranscriptKind::Claude => candidate.id.clone(),
+            TranscriptKind::Claude | TranscriptKind::Copilot => candidate.id.clone(),
             TranscriptKind::Codex => dir.as_deref().and_then(|dir| rollout_chat(&candidate.path, dir)),
         };
         let Some(id) = id else { continue };
@@ -141,6 +168,82 @@ pub fn chat_file(
             let regular = std::fs::symlink_metadata(&path).ok()?.is_file();
             (regular && rollout_chat(&path, dir.as_deref()?).as_deref() == Some(chat)).then_some(path)
         }
+        TranscriptKind::Copilot => {
+            let local = project_id.is_none_or(|id| crate::services::remote::remote_target_for(id).is_none());
+            if local { crate::services::copilot_session::folder_chat_file(project_id, dir.as_deref()?, chat) } else { None }
+        }
+    }
+}
+
+/// [`list_chats`] for a CLI whose store is read by folder. Remote projects'
+/// stores are on the far host: not listed.
+fn folder_store_chats(
+    cmd: &str,
+    project_id: Option<&str>,
+    dir: Option<&str>,
+    launch_id: &str,
+    offset: usize,
+    limit: usize,
+) -> ChatList {
+    let Some(dir) = dir.filter(|dir| Path::new(dir).is_absolute()) else {
+        return ChatList { supported: true, ..Default::default() };
+    };
+    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return ChatList::default();
+    }
+    let home = crate::services::agent_home::scope_home(project_id);
+    let (read, current) = if cmd == "opencode" {
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        (
+            crate::services::opencode_store::folder_chats(&db, dir, offset, limit, MAX_SCANNED),
+            crate::services::opencode_session::recorded_session(project_id, launch_id),
+        )
+    } else {
+        (
+            crate::services::google_chat::antigravity_chats(&home, dir, offset, limit, MAX_SCANNED),
+            crate::services::google_chat::recorded_tab_conversation(&home, dir, project_id, launch_id),
+        )
+    };
+    let (found, next) = read.unwrap_or_default();
+    let chats = found
+        .into_iter()
+        .map(|chat| {
+            let title = row_text(&chat.title);
+            StoredChat {
+                current: current.as_deref() == Some(chat.id.as_str()),
+                last: chat.last.map(|text| row_text(&text)).filter(|text| *text != title),
+                title,
+                started: chat.started,
+                updated: chat.updated,
+                id: chat.id,
+            }
+        })
+        .collect();
+    ChatList { supported: true, chats, next }
+}
+
+/// Whether `chat` is one of the conversations [`list_chats`] would list for
+/// the folder (a session no prompt went into included): what a read or a
+/// resume of a renderer-named id checks first.
+pub fn is_folder_chat(cmd: &str, project_id: Option<&str>, tab_dir: Option<&str>, launch_id: &str, chat: &str) -> bool {
+    let dir = tab_dir.map(normal_dir);
+    let local = || project_id.is_none_or(|id| crate::services::remote::remote_target_for(id).is_none());
+    match cmd {
+        "opencode" => {
+            crate::services::opencode_session::is_session_id(chat)
+                && local()
+                && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
+                    crate::services::opencode_store::folder_session(&crate::services::opencode_store::db_path_for(project_id), dir, chat)
+                })
+        }
+        "agy" => {
+            agent_session::is_uuid_shaped(chat)
+                && local()
+                && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
+                    crate::services::google_chat::antigravity_folder_chat(&crate::services::agent_home::scope_home(project_id), dir, chat)
+                })
+        }
+        _ => chat_file(cmd, project_id, tab_dir, launch_id, chat).is_some(),
     }
 }
 
@@ -148,6 +251,7 @@ fn kind_of(cmd: &str) -> Option<TranscriptKind> {
     match cmd {
         "claude" => Some(TranscriptKind::Claude),
         "codex" => Some(TranscriptKind::Codex),
+        "copilot" => Some(TranscriptKind::Copilot),
         _ => None,
     }
 }
@@ -155,6 +259,9 @@ fn kind_of(cmd: &str) -> Option<TranscriptKind> {
 /// The conversation the tab is in now: the id its hook recorded, else (Claude,
 /// before any) its launch id.
 fn current_chat(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Option<String> {
+    if cmd == "copilot" {
+        return crate::services::copilot_session::live_id(project_id, launch_id);
+    }
     agent_session::read_live_session_for(project_id, launch_id)
         .or_else(|| (cmd == "claude" && agent_session::is_uuid_shaped(launch_id)).then(|| launch_id.to_string()))
 }
@@ -172,6 +279,14 @@ fn candidates(cmd: &str, project_id: Option<&str>, dir: Option<&str>, launch_id:
             .iter()
             .flat_map(|folder| claude_candidates(folder))
             .collect(),
+        "copilot" => dir
+            .map(|dir| {
+                crate::services::copilot_session::folder_sessions(project_id, dir)
+                    .into_iter()
+                    .map(|(id, path, updated)| Candidate { path, id: Some(id), updated })
+                    .collect()
+            })
+            .unwrap_or_default(),
         _ if dir.is_some() => {
             let mut out = Vec::new();
             rollouts_in(&agent_session::codex_sessions_root(project_id), 0, &mut out);
@@ -200,7 +315,9 @@ fn claude_folders(project_id: Option<&str>, dir: Option<&str>, launch_id: &str) 
         let slug = crate::services::agent_history::claude_folder_name(dir);
         for root in agent_session::claude_projects_roots(project_id) {
             let folder = root.join(&slug);
-            if !folders.contains(&folder) && folder.is_dir() {
+            // By handle from the home: a linked folder is another scope's.
+            let own = || HomeDir::open_below(&root, 2).and_then(|projects| projects.open_subdir(&slug)).is_some();
+            if !folders.contains(&folder) && own() {
                 folders.push(folder);
             }
         }
@@ -209,20 +326,19 @@ fn claude_folders(project_id: Option<&str>, dir: Option<&str>, launch_id: &str) 
 }
 
 fn claude_candidates(folder: &Path) -> Vec<Candidate> {
-    let Ok(entries) = std::fs::read_dir(folder) else {
+    let Some(dir) = HomeDir::open_below(folder, 3) else {
         return Vec::new();
     };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let id = name.to_str()?.strip_suffix(".jsonl")?;
+    dir.names()
+        .into_iter()
+        .filter_map(|name| {
+            let id = name.strip_suffix(".jsonl")?;
             if !agent_session::is_uuid_shaped(id) {
                 return None;
             }
-            // `DirEntry::metadata` does not follow a link: a link is no chat.
-            let meta = entry.metadata().ok().filter(|meta| meta.is_file())?;
-            Some(Candidate { path: entry.path(), id: Some(id.to_string()), updated: modified_ms(&meta) })
+            // Opened by handle, no link, regular on the handle: a link is no chat.
+            let meta = dir.file(&name)?.open_read()?.metadata().ok()?;
+            Some(Candidate { path: folder.join(&name), id: Some(id.to_string()), updated: modified_ms(&meta) })
         })
         .collect()
 }
@@ -337,6 +453,23 @@ mod tests {
         assert_eq!(first.at, "2026-10-01T10:00:00Z");
         assert_eq!(last.as_deref(), Some("and the tests"));
         assert_eq!(agent_session::chat_prompts(&folder.join(format!("{blank}.jsonl")), TranscriptKind::Claude).0, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_claude_folder_lists_no_chat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = "11111111-1111-4111-8111-111111111111";
+        let other = tmp.path().join("other");
+        write(&other.join(format!("{id}.jsonl")), &claude_prompt("secret", "2026-10-01T10:00:00Z"));
+        let projects = tmp.path().join("home").join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::os::unix::fs::symlink(&other, projects.join("-slug")).unwrap();
+        assert!(claude_candidates(&projects.join("-slug")).is_empty());
+        let linked_leaf = projects.join("-leaf");
+        std::fs::create_dir_all(&linked_leaf).unwrap();
+        std::os::unix::fs::symlink(other.join(format!("{id}.jsonl")), linked_leaf.join(format!("{id}.jsonl"))).unwrap();
+        assert!(claude_candidates(&linked_leaf).is_empty());
     }
 
     #[test]

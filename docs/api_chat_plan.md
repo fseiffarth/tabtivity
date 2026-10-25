@@ -1,5 +1,16 @@
 # API keys for agent CLIs, and a built-in API chat — plan
 
+**OpenAI/Codex extension (2026-10-22):** Manage CLIs now accepts an OpenAI key
+with the same monthly billed-token limit as the existing providers. Local
+Codex tabs get only a proxy token and a launch-only custom Responses provider
+(`-c model_provider`, `env_key=OPENAI_API_KEY`, HTTP SSE, no WebSocket upgrade),
+including resume/fork. Saved ChatGPT auth/config is untouched. Responses and
+compaction are metered (cached input counted once, reasoning already included
+in output); interrupted answers use the existing conservative estimate.
+Only `api.openai.com` is dialled. The hosted administrator's key keeper still
+offers Claude/Gemini only. The earlier exclusion notes below describe the
+original scope; Codex is no longer excluded from the user's own keys.
+
 Status: Part A built 2026-10-04 (see "Implementation notes (Part A)" at the
 end; never live-verified); Part B not scheduled. Reviewed against the code the
 same day (see "Review notes").

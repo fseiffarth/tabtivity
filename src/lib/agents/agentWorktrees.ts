@@ -6,6 +6,7 @@
  */
 import type { TabKind } from "../../stores/tabs";
 import { NAMES } from "../brand";
+import type { TranslationKey } from "../i18n";
 
 /** Mirrors `commands::git::Worktree` (serde field names). */
 export interface GitWorktree {
@@ -64,7 +65,7 @@ export function worktreeOfPath(path: string | undefined): string | undefined {
 }
 
 /** Same directory, modulo a trailing separator and separator style. */
-function sameDir(a: string, b: string): boolean {
+export function sameDir(a: string, b: string): boolean {
   const norm = (s: string) => stripTrailingSep(s).replace(/\\/g, "/");
   return norm(a).length > 0 && norm(a) === norm(b);
 }
@@ -103,6 +104,46 @@ export function agentWorktreeChoices(list: GitWorktree[]): GitWorktree[] {
   const usable = list.filter((w) => !w.is_bare && !w.is_prunable);
   return usable.some((w) => !w.is_main) ? usable : [];
 }
+
+/**
+ * The folders an agent tab of the project at `projectDir` can be moved to
+ * (the Reader's branch chip): the project folder and its linked worktrees
+ * under `.tabtivity/worktrees/` — the folders a restored agent tab keeps
+ * (`restoredAgentCwd`), so the move survives a restart. Main first, as git
+ * lists it. Empty when there is no linked one to move between.
+ */
+export function agentSwitchChoices(list: GitWorktree[], projectDir: string): GitWorktree[] {
+  const usable = list.filter((w) => !w.is_bare && !w.is_prunable
+    && (w.is_main ? sameDir(w.path, projectDir) : isProjectWorktreeCwd(w.path, projectDir)));
+  return usable.some((w) => !w.is_main) ? usable : [];
+}
+
+/** A translator, as `useT()` returns it — the phone's and the desktop's. */
+export type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
+
+/** How one place reads in the "move the agent to a worktree" lists — the
+ * desktop Reader's ⎇ chip and the phone's: the branch (else the folder's
+ * name) over "project folder" or "worktree <name>". `name` is the folder's
+ * leaf name; the phone gets none for the project folder. */
+export function worktreeChoiceText(
+  choice: { branch?: string; name: string; main: boolean },
+  t: Translate,
+): { label: string; description: string } {
+  const description = choice.main ? t("terminal.reader.worktreeMain") : t("terminal.reader.worktree", { name: choice.name });
+  return { label: choice.branch || choice.name || description, description };
+}
+
+/** The note under that list: whether `carries` (the CLI takes the
+ * conversation along, `CARRIES_CONVERSATION`) or starts a new one there. */
+export function worktreeMoveNote(carries: boolean, agent: string, t: Translate): string {
+  return t(carries ? "terminal.reader.worktreeCarries" : "terminal.reader.worktreeFresh", { agent });
+}
+
+/** The CLIs whose conversation comes along to the new worktree; the rest
+ * start a new one there. Mirrors `services::agent_relocate::carries`. */
+export const CARRIES_CONVERSATION: ReadonlySet<string> = new Set([
+  "claude", "codex", "vibe", "opencode", "gemini", "qwen", "cursor-agent", "droid",
+]);
 
 /** The tab kinds the question applies to. */
 export function isAgentMenuKind(kind: TabKind): boolean {

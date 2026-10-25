@@ -6,9 +6,12 @@
 //! Tauri's IPC. This module is that socket's server side and the routes around
 //! it:
 //!
-//! * `GET /desktop/`, `/desktop/{*path}` — the web bundle (`web-dist/`, read
-//!   from disk: `<ENV_PREFIX>WEB_DIST`, else the dev checkout's `web-dist/`,
-//!   else `<control_dir>/web-dist`); the SPA fallback never covers `assets/`.
+//! * `GET /desktop/`, `/desktop/{*path}` — the web bundle (`web-dist/`).
+//!   A dev build serves the copy baked into the binary (`build.rs`
+//!   `WEB_ASSETS`), never the checkout's fence-writable `web-dist/` (gap 45);
+//!   every other build reads a directory — `<ENV_PREFIX>WEB_DIST`, else
+//!   `<control_dir>/web-dist` — file by file, no-follow, regular files only,
+//!   capped. The SPA fallback never covers `assets/`.
 //! * `GET /desktop/login?exp=…&sig=…` — the one way in: a sign-in link
 //!   signed by the token in `<control_dir>/web-client.token` (`0600`, the same
 //!   trust as the admin socket next to it — the state dir is masked inside
@@ -76,7 +79,7 @@ use app_core::sync::LockExt;
 
 use app_core::{Caller, ClientId, CoreCtx, EventSink};
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path as RoutePath, Query, State,
@@ -509,8 +512,8 @@ pub struct WebClientState {
     /// Where the login token lives (`<control_dir>/web-client.token`); read
     /// at every login, so a rotation takes effect without a restart.
     pub control_dir: PathBuf,
-    /// Where the web bundle is read from, if a bundle was found.
-    pub bundle: Option<PathBuf>,
+    /// Where the web bundle is served from, if a bundle was found.
+    pub bundle: Option<Bundle>,
     /// The app's port and the user-content origin's.
     pub port: u16,
     pub content_port: u16,
@@ -534,7 +537,7 @@ struct TestCallGate {
 
 impl WebClientState {
     /// `ctx` is the host's system context built over `events`.
-    pub fn new(enabled: bool, ctx: CoreCtx, events: Arc<WebEvents>, control_dir: &Path, port: u16, bundle: Option<PathBuf>) -> Self {
+    pub fn new(enabled: bool, ctx: CoreCtx, events: Arc<WebEvents>, control_dir: &Path, port: u16, bundle: Option<Bundle>) -> Self {
         if enabled {
             if let Err(error) = login_token(control_dir) {
                 eprintln!("desktop client: no login token: {error}");
@@ -719,19 +722,69 @@ pub fn content_port_for(port: u16) -> u16 {
     port.checked_add(1).unwrap_or(port.saturating_sub(1))
 }
 
-/// Where the web bundle is: `<ENV_PREFIX>WEB_DIST`, else the dev checkout's
-/// `web-dist/`, else `<control_dir>/web-dist`. `None` when none holds an
-/// `index.html`.
-pub fn bundle_dir(control_dir: &Path) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(dir) = crate::brand::env("WEB_DIST") {
-        candidates.push(PathBuf::from(dir));
+// The dev build's copy of `web-dist/`, one `include_bytes!` per file; empty in
+// every other build and when `npm run web:bundle` had not run (`build.rs`).
+include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+
+/// Where the web bundle is served from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Bundle {
+    /// Baked into this (dev) binary.
+    Embedded,
+    /// A directory the host's owner or installer put there.
+    Dir(PathBuf),
+}
+
+impl Bundle {
+    pub fn label(&self) -> String {
+        match self {
+            Bundle::Embedded => "the bundle built into this binary".into(),
+            Bundle::Dir(dir) => dir.display().to_string(),
+        }
     }
-    if let Some(root) = crate::services::dev_build::SOURCE_ROOT {
-        candidates.push(Path::new(root).join("web-dist"));
+}
+
+/// Where the web bundle is: `<ENV_PREFIX>WEB_DIST` when it holds an
+/// `index.html`; then, in a dev build, the copy embedded in the binary — and
+/// nothing else, so the checkout's `web-dist/` (rewritten by any
+/// `npm run build`, an agent's included) is never read at run time; in any
+/// other build `<control_dir>/web-dist`. `None` when none applies.
+pub fn bundle_source(control_dir: &Path) -> Option<Bundle> {
+    let dev = crate::services::dev_build::SOURCE_ROOT.is_some();
+    pick_bundle(crate::brand::env("WEB_DIST").map(PathBuf::from), dev, !WEB_ASSETS.is_empty(), control_dir)
+}
+
+fn pick_bundle(env_dir: Option<PathBuf>, dev: bool, embedded: bool, control_dir: &Path) -> Option<Bundle> {
+    let has_index = |dir: &Path| crate::services::home_io::open_regular(&dir.join("index.html")).is_some();
+    if let Some(dir) = env_dir.filter(|dir| has_index(dir)) {
+        return Some(Bundle::Dir(dir));
     }
-    candidates.push(control_dir.join("web-dist"));
-    candidates.into_iter().find(|dir| dir.join("index.html").is_file())
+    if dev {
+        return embedded.then_some(Bundle::Embedded);
+    }
+    let dir = control_dir.join("web-dist");
+    has_index(&dir).then_some(Bundle::Dir(dir))
+}
+
+/// The largest bundle file served from a directory (the biggest built one is
+/// ~1.3 MB).
+const MAX_BUNDLE_FILE: u64 = 32 * 1024 * 1024;
+
+/// `rel` under `dir`, whole: opened without following a link at the file, not
+/// blocking on a FIFO, and only when the opened inode is a regular file no
+/// larger than `cap`. The directory itself is trusted (installed by the owner
+/// or the package, or under the masked state dir); `rel` has passed
+/// [`safe_relative`].
+fn read_bundle_file(dir: &Path, rel: &str, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = crate::services::home_io::open_regular(&dir.join(rel))?;
+    let mut bytes = Vec::new();
+    file.take(cap + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= cap).then_some(bytes)
+}
+
+fn embedded_file(table: &'static [(&'static str, &'static [u8])], rel: &str) -> Option<&'static [u8]> {
+    table.iter().find(|(name, _)| *name == rel).map(|(_, bytes)| *bytes)
 }
 
 // ── Guards ───────────────────────────────────────────────────────────────
@@ -949,17 +1002,13 @@ async fn asset(State(state): State<WebClientState>, headers: HeaderMap, RoutePat
 
 /// A bundle file, or the shell for an app route (never for a missing asset).
 fn serve_bundle(state: &WebClientState, requested: &str) -> Response<Body> {
-    let Some(dir) = state.bundle.as_deref() else { return no_bundle_page() };
+    let Some(bundle) = state.bundle.as_ref() else { return no_bundle_page() };
     let Some(rel) = safe_relative(requested) else { return not_found() };
-    let candidate = dir.join(&rel);
-    let (name, path) = if candidate.is_file() {
-        (rel.clone(), candidate)
-    } else if requested.starts_with("assets/") {
-        return not_found();
-    } else {
-        ("index.html".to_string(), dir.join("index.html"))
+    let found = match bundle {
+        Bundle::Embedded => resolve_bundle_file(&rel, requested, |name| embedded_file(WEB_ASSETS, name).map(Bytes::from_static)),
+        Bundle::Dir(dir) => resolve_bundle_file(&rel, requested, |name| read_bundle_file(dir, name, MAX_BUNDLE_FILE).map(Bytes::from)),
     };
-    let Ok(bytes) = std::fs::read(&path) else { return not_found() };
+    let Some((name, bytes)) = found else { return not_found() };
     let mime = mime_guess::from_path(&name).first_or_octet_stream().to_string();
     let mut builder = Response::builder()
         .status(StatusCode::OK)
@@ -978,6 +1027,18 @@ fn serve_bundle(state: &WebClientState, requested: &str) -> Response<Body> {
     builder
         .body(Body::from(bytes))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// The file `rel` names, else the shell for an app route — never for a missing
+/// asset. `read` is the bundle's own reader.
+fn resolve_bundle_file(rel: &str, requested: &str, read: impl Fn(&str) -> Option<Bytes>) -> Option<(String, Bytes)> {
+    if let Some(bytes) = read(rel) {
+        return Some((rel.to_string(), bytes));
+    }
+    if requested.starts_with("assets/") {
+        return None;
+    }
+    read("index.html").map(|bytes| ("index.html".to_string(), bytes))
 }
 
 /// Internal header `serve_bundle` hands the CSP middleware; stripped there.
@@ -1860,17 +1921,78 @@ mod tests {
         assert_eq!(content_port_for(8742), 8743);
     }
 
+    fn bundle_dir_with_index(root: &Path) -> PathBuf {
+        let dir = root.join("web-dist");
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html>").unwrap();
+        dir
+    }
+
     #[test]
-    fn bundle_dir_prefers_a_built_bundle() {
+    fn a_non_dev_build_reads_the_env_dir_then_the_control_dirs_bundle() {
         let dir = tempfile::tempdir().unwrap();
         let control = dir.path().join("mobile-control");
-        // Nothing built anywhere the test can see (the env override is unset
-        // in tests, and a checkout's web-dist may or may not exist): the
-        // control-dir fallback decides.
-        std::fs::create_dir_all(control.join("web-dist")).unwrap();
-        std::fs::write(control.join("web-dist/index.html"), "<!doctype html>").unwrap();
-        let found = bundle_dir(&control).unwrap();
-        assert!(found.join("index.html").is_file());
+        let from_control = bundle_dir_with_index(&control);
+        assert_eq!(pick_bundle(None, false, false, &control), Some(Bundle::Dir(from_control)));
+        let env_dir = bundle_dir_with_index(&dir.path().join("env"));
+        assert_eq!(pick_bundle(Some(env_dir.clone()), false, false, &control), Some(Bundle::Dir(env_dir)));
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(pick_bundle(None, false, false, &empty), None);
+    }
+
+    #[test]
+    fn a_dev_build_serves_its_embedded_bundle_and_never_a_disk_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        // A `web-dist/` the control dir holds (or any checkout would) is not a candidate.
+        let control = dir.path().join("mobile-control");
+        bundle_dir_with_index(&control);
+        assert_eq!(pick_bundle(None, true, true, &control), Some(Bundle::Embedded));
+        assert_eq!(pick_bundle(None, true, false, &control), None, "no embed and no disk fallback");
+        // The one disk source a dev build keeps is the owner's explicit env dir.
+        let env_dir = bundle_dir_with_index(&dir.path().join("env"));
+        assert_eq!(pick_bundle(Some(env_dir.clone()), true, true, &control), Some(Bundle::Dir(env_dir)));
+    }
+
+    #[test]
+    fn the_embedded_table_answers_by_exact_name() {
+        static TABLE: &[(&str, &[u8])] = &[("index.html", b"<html>"), ("assets/a.js", b"a()")];
+        assert_eq!(embedded_file(TABLE, "assets/a.js"), Some(&b"a()"[..]));
+        assert_eq!(embedded_file(TABLE, "assets/b.js"), None);
+        assert_eq!(embedded_file(TABLE, "../index.html"), None);
+        let read = |name: &str| embedded_file(TABLE, name).map(Bytes::from_static);
+        assert_eq!(resolve_bundle_file("assets/a.js", "assets/a.js", read).unwrap().0, "assets/a.js");
+        assert!(resolve_bundle_file("assets/b.js", "assets/b.js", read).is_none(), "a missing asset is never the shell");
+        assert_eq!(resolve_bundle_file("settings", "settings", read).unwrap().0, "index.html");
+    }
+
+    #[test]
+    fn a_directory_bundle_serves_regular_files_up_to_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = bundle_dir_with_index(dir.path());
+        std::fs::write(bundle.join("assets/a.js"), b"12345678").unwrap();
+        assert_eq!(read_bundle_file(&bundle, "assets/a.js", 8).as_deref(), Some(&b"12345678"[..]));
+        assert_eq!(read_bundle_file(&bundle, "assets/a.js", 7), None, "over the cap");
+        assert_eq!(read_bundle_file(&bundle, "assets/none.js", 8), None);
+        assert_eq!(read_bundle_file(&bundle, "assets", 8), None, "a directory is not a file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_bundle_refuses_a_link_and_a_fifo_at_an_asset() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = bundle_dir_with_index(dir.path());
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, "private").unwrap();
+        std::os::unix::fs::symlink(&secret, bundle.join("assets/link.js")).unwrap();
+        assert_eq!(read_bundle_file(&bundle, "assets/link.js", MAX_BUNDLE_FILE), None);
+        let read = |name: &str| read_bundle_file(&bundle, name, MAX_BUNDLE_FILE).map(Bytes::from);
+        assert!(resolve_bundle_file("assets/link.js", "assets/link.js", read).is_none());
+        // A planted FIFO would block a plain read forever.
+        crate::services::home_io::mkfifo(&bundle.join("assets/pipe.js"));
+        let target = bundle.clone();
+        let read = crate::services::home_io::within_deadline(move || read_bundle_file(&target, "assets/pipe.js", MAX_BUNDLE_FILE));
+        assert_eq!(read, None);
     }
 
     /// The router end to end, with a real listener: sign in, open the

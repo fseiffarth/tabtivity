@@ -21,12 +21,14 @@ import {
   compactAgentMenuEntries,
   isFileTabKind,
   itemLabel,
+  onOwnLogin,
   type StaticMenuItem,
 } from "./newTabItems";
 import { AddTabMenuList } from "./AddTabMenuList";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useAddTabMenuData } from "./useAddTabMenuData";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
+import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
 import { useAgentWorktreePicker } from "./agentWorktrees";
 import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
@@ -78,7 +80,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
   // only), so the root console's "+" carries it too. A popout's projects store
   // is inert and empty, which keeps it out of every popout's copy.
   const hasProjects = useProjectsStore((s) => s.projects.length > 0);
-  const showProjects3d = scope === "root" && hasProjects;
+  const showProjects3d = scope === ROOT_SCOPE && hasProjects;
 
   // All the probe/registry/settings plumbing behind the entries is the shared
   // hook — one implementation with TabBar's "+" menu, so the two cannot drift.
@@ -96,6 +98,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
   } = useAddTabMenuData(scope);
   // This menu only exists while open, so the GPU gate probes for its lifetime.
   const localModelGpu = useLocalModelPlacement(localModel, true);
+  const keyableAgents = useKeyableAgents(true);
 
   // "+ agent" on a project with linked worktrees asks which one first (#23).
   // The popout cannot tell a remote project from a local one (it is inert to
@@ -203,6 +206,15 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
               compactAgentBins,
             ),
           },
+          // The popout cannot tell a remote project from a local one (its
+          // projects store is inert), so its rows carry no remote caution.
+          ...apiKeyMenuGroups({
+            keyable: keyableAgents,
+            installedBuiltins: enabledAgents,
+            remoteScope: false,
+            pick: pickStatic,
+            t,
+          }),
           // The root console's Host session (`docs/context/agent_authority.md`):
           // an agent with the user's full rights, for work that is not any
           // project's — repairing the machine. Root scope only, never a default.
@@ -215,7 +227,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
                   dot: <WarningIcon />,
                   color: "var(--danger)",
                   onPick: () => {
-                    const spec = buildStaticTabSpec(item, projectCwd, "", t);
+                    const spec = buildStaticTabSpec(onOwnLogin(item), projectCwd, "", t);
                     pickFixed({
                       ...spec,
                       label: t("newTabMenu.hostSessionLabel", { label: item.label }),

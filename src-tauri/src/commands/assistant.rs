@@ -64,6 +64,10 @@ pub struct CliOption {
     /// A chat can start now: installed and signed in, or installed with
     /// Ollama reachable and a model pulled.
     pub ready: bool,
+    /// Codex: the models its chat can be switched to
+    /// (`assistant::codex_offered_models`). Empty for every other CLI (Claude's
+    /// aliases are the renderer's list, a local CLI takes `local_models`).
+    pub models: Vec<String>,
 }
 
 /// The search backend's state. Never the key.
@@ -144,6 +148,11 @@ fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready
                     .is_some_and(|l| l.signed_in || l.api_key || l.uses_admin_key)
             });
             let ready = installed && signed_in.unwrap_or(ollama_ready);
+            let models = if cli == AssistantCli::Codex && installed {
+                assistant::codex_offered_models(&crate::services::agent_home::scope_home(Some(storage::ASSISTANT_SCOPE)))
+            } else {
+                Vec::new()
+            };
             CliOption {
                 id: cli.id().to_string(),
                 label: cli.label().to_string(),
@@ -151,6 +160,7 @@ fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready
                 installed,
                 signed_in,
                 ready,
+                models,
             }
         })
         .collect()
@@ -183,6 +193,21 @@ pub async fn assistant_options() -> Result<AssistantOptions, String> {
     })
     .await
     .map_err(|_| "assistant_failed".to_string())
+}
+
+// ── assistant_claude_models ─────────────────────────────────────────────────
+
+/// `assistant_claude_models()` → the screens (a string per row) Claude's own
+/// `/model` picker drew in a short-lived probe of the assistant's home as its
+/// highlight walked down (`services::assistant_model_probe`), for the renderer
+/// to read the way it reads the picker in any other Claude tab. Cached for
+/// hours; the first call takes several seconds.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn assistant_claude_models() -> Result<Vec<Vec<String>>, String> {
+    gate(enabled_now())?;
+    app_core::rt::spawn_blocking(crate::services::assistant_model_probe::claude_model_screens)
+        .await
+        .map_err(|_| "assistant_failed".to_string())?
 }
 
 // ── assistant_new_chat ──────────────────────────────────────────────────────
@@ -233,6 +258,7 @@ fn new_chat_at(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn assistant_new_chat(ctx: Ctx, cli: String, model: Option<String>) -> Result<NewChat, String> {
     gate(enabled_now())?;
+    crate::services::ai_switch::check()?;
     let chat = app_core::rt::spawn_blocking(move || {
         new_chat_at(
             &storage::state_dir(),
@@ -577,6 +603,8 @@ mod tests {
             uses_admin_key: false,
             api_key: false,
             api_budget_reached: false,
+            api_key_saved: false,
+            wellknown_homes: Vec::new(),
         };
         let options = cli_options(&[login("claude", true), login("codex", false)], true);
         let ids: Vec<&str> = options.iter().map(|o| o.id.as_str()).collect();

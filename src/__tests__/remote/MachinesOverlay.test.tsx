@@ -5,8 +5,8 @@
  *
  *  - closed, it renders nothing; open, it is a labelled dialog whose machines
  *    are tiles in one grid, each with its target, its state in words, its
- *    actions and its details (no ▸ fold, no drag grip — those stay the
- *    dropdown's);
+ *    actions and its details (no ▸ fold, but the drag grip: tiles reorder
+ *    across the grid);
  *  - the header button's click opens it and puts the hover dropdown away; the
  *    dropdown's ⤢ door does the same;
  *  - Escape and a press on the backdrop close it, a press inside does not;
@@ -92,7 +92,7 @@ describe("Machines overlay", () => {
     expect(first.getByRole("button", { name: /disconnect/i })).toBeTruthy();
     expect(first.getByRole("button", { name: /system monitor/i })).toBeTruthy();
     expect(tiles[0].querySelector(".machines-row-expand-btn")).toBeNull();
-    expect(tiles[0].querySelector(".machines-row-grip")).toBeNull();
+    expect(tiles[0].querySelector(".machines-row-grip")).not.toBeNull();
     // The actions sit at the tile's foot, after the details — not in the head.
     expect(tiles[0].querySelector(".vpn-indicator-head .machines-row-actions")).toBeNull();
     expect(tiles[0].lastElementChild?.classList.contains("machines-row-actions")).toBe(true);
@@ -221,5 +221,47 @@ describe("Machines overlay", () => {
     expect(useRemoteMachinesStore.getState().projectId).toBe("p1");
     expect(useRemoteMachinesStore.getState().pendingDrop?.id).toBe("m1");
     expect(useMachinesOverlayStore.getState().open).toBe(true);
+  });
+});
+
+describe("reordering tiles in the overlay", () => {
+  const rect = (left: number, top: number) =>
+    ({ left, top, right: left + 100, bottom: top + 100, width: 100, height: 100, x: left, y: top }) as DOMRect;
+  const ptr = (el: Element, type: string, x: number, y: number) =>
+    act(() => {
+      el.dispatchEvent(new MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true }));
+    });
+
+  it("drags a tile across the grid into another slot and persists the new order", async () => {
+    const reorder = vi.fn(async () => {});
+    useGlobalMachinesStore.setState({ reorder });
+    useMachinesOverlayStore.setState({ open: true });
+    const { container } = render(<MachinesOverlayHost />);
+    await act(async () => {});
+    const tiles = [...container.querySelectorAll(".machines-tile")] as HTMLElement[];
+    // Two tiles side by side: m1 at x 0–100, m2 at x 200–300.
+    tiles[0].getBoundingClientRect = () => rect(0, 0);
+    tiles[1].getBoundingClientRect = () => rect(200, 0);
+    const grip = tiles[0].querySelector(".machines-row-grip") as HTMLElement;
+    grip.setPointerCapture = () => {};
+
+    ptr(grip, "pointerdown", 50, 50);
+    ptr(grip, "pointermove", 250, 50);
+    // The dragged tile follows the pointer; the other steps into the freed slot.
+    expect(tiles[0].style.transform).toBe("translate(200px, 0px)");
+    expect(tiles[1].style.transform).toBe("translate(-200px, 0px)");
+    ptr(grip, "pointerup", 250, 50);
+    expect(reorder).toHaveBeenCalledWith(["m2", "m1"]);
+  });
+
+  it("nudges a tile with the arrow keys from its grip", async () => {
+    const reorder = vi.fn(async () => {});
+    useGlobalMachinesStore.setState({ reorder });
+    useMachinesOverlayStore.setState({ open: true });
+    const { container } = render(<MachinesOverlayHost />);
+    await act(async () => {});
+    const grip = container.querySelector(".machines-tile .machines-row-grip") as HTMLElement;
+    fireEvent.keyDown(grip, { key: "ArrowRight" });
+    expect(reorder).toHaveBeenCalledWith(["m2", "m1"]);
   });
 });

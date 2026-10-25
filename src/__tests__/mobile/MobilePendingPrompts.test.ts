@@ -11,6 +11,16 @@ describe("a sent prompt's record", () => {
     expect(recordsPrompt({ text: "", cut: true }, "fix the parser")).toBe(false);
   });
 
+  it("takes a part the CLI recorded as a paste for the words sent there", () => {
+    const sent = "there are problems\n[14:20] a very long log line\n[14:21] FAIL";
+    expect(recordsPrompt({ text: "there are problems\n[Pasted text #1]\n[14:21] FAIL" }, sent)).toBe(true);
+    expect(recordsPrompt({ text: "[Pasted text #1 +2 lines]" }, sent)).toBe(true);
+    expect(recordsPrompt({ text: "there are problems [Pasted text #1] FAIL" }, sent)).toBe(true);
+    expect(recordsPrompt({ text: "there are problems [Pasted text #1] [14:2", cut: true }, sent)).toBe(true);
+    expect(recordsPrompt({ text: "other words [Pasted text #1] FAIL" }, sent)).toBe(false);
+    expect(recordsPrompt({ text: "there are problems [Pasted text #1] OK" }, sent)).toBe(false);
+  });
+
   it("takes a long prompt's cut record for its arrival: one bubble, not two", () => {
     const before: TranscriptEntry[] = [{ kind: "answer", text: "Done.", at: "2026-10-14T10:00:00Z" }];
     const long = `${"a long prompt ".repeat(500)}and its end`;

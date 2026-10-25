@@ -318,6 +318,30 @@ impl ProjectDir {
         .map_err(|error| std::io::Error::other(error.to_string()))
     }
 
+    /// Removes the empty folder `name` here — a reparse point itself, never
+    /// its target; a folder with anything in it refuses the disposition.
+    pub(in crate::services::mobile_control) fn remove_empty_dir(&self, name: &str) -> std::io::Result<()> {
+        let file = self.nt_create(
+            name,
+            DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+            Default::default(),
+        )?;
+        let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: a live handle opened with DELETE access and a properly sized,
+        // live disposition record.
+        unsafe {
+            SetFileInformationByHandle(
+                HANDLE(file.as_raw_handle()),
+                FileDispositionInfo,
+                (&info as *const FILE_DISPOSITION_INFO).cast(),
+                size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        }
+        .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
     pub(super) fn child_dir(&self, name: &str) -> Option<Self> {
         self.lookup_dir(name).ok().flatten()
     }

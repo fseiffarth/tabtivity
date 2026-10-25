@@ -2,6 +2,7 @@ import type { TabRow, TabWorktree } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ageLabel } from "../terminal/fileLabels";
+import { lastPromptAt } from "../agentPrompts";
 
 /** The desktop tab strip's PLAN and GOAL pills (`TabAgentModeMarks`): the
  *  session's own status line reads plan mode, or a `/goal` is running. The
@@ -52,6 +53,25 @@ export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at
     : [tab.done_at, tab.working_at].find((at) => at !== undefined && at >= start);
   if (end === undefined || end < start) return undefined;
   return { ms: end - start, running, end };
+}
+
+/** When the tab's last turn ended, as its card says it ("finished 3 h ago"):
+ *  the turn's own end where the desktop gave a start, else `done_at`. A list
+ *  sorted by finish time orders by this, so the order and the time on the
+ *  cards cannot disagree — a tab with no `done_at` but a working stamp shows
+ *  a time and is placed by it. Undefined while the turn runs or is unknown. */
+export function finishedAt(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">): number | undefined {
+  const turn = turnDuration(tab);
+  return turn && !turn.running ? turn.end : tab.done_at;
+}
+
+/** What a list sorted by "last worked" orders a tab by: its finish time, and
+ *  where the desktop has none (it keeps these in memory, so a restarted
+ *  desktop has none for any tab) the time of its last prompt — the one reading
+ *  the card still prints, so the order and the card's clock agree. A running
+ *  tab keeps none: it is placed by its tier, not by a time. */
+export function lastWorkedAt(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents" | "prompts">): number | undefined {
+  return finishedAt(tab) ?? (tab.agent_status === "working" ? undefined : lastPromptAt(tab));
 }
 
 /** "42s", "4m", "1h 12m" — a turn's length, as the card says it. */

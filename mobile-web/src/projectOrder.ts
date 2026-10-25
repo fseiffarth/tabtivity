@@ -69,7 +69,6 @@ export function mergeProjectOrder(stored: readonly string[], listed: readonly st
 export function scopeCaption(row: { kind?: ScopeKind; status: string; pending_reviews?: number }): string {
   const lang = useI18nStore.getState().lang;
   if (row.kind === "box") return `⬡ ${translate(lang, "mobile.home.scopeBox")}`;
-  if (row.kind === "assistant") return `✦ ${translate(lang, "mobile.home.scopeAssistant")}`;
   if (row.kind !== "root") {
     // The catalog's status is a protocol word; the two it sends are worded
     // here, and anything newer reads as itself rather than as nothing.

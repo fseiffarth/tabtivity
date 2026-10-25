@@ -27,6 +27,23 @@ describe("looksLikeDecisionPrompt", () => {
     expect(looksLikeDecisionPrompt(screen)).toBe(true);
   });
 
+  it("detects Claude Code 2.1.304's cold-resume dialog, which a restored tab can sit on", () => {
+    // `--resume` of a long-idle conversation on Pro/Max asks before it spends a
+    // share of the 5-hour limit (title, body and rows from the 2.1.306 bundle).
+    const screen = [
+      "Resume this conversation?",
+      "This conversation has been inactive for 3d 4h and is 183k tokens long. Resuming it will use about 12% of your 5-hour usage limit.",
+      "Your unsent message will still be there after you answer.",
+      "",
+      "❯ 1. Resume",
+      "  2. Start a new conversation",
+      "     Claude can look this one up if you refer to it later",
+      "",
+      "Enter to confirm · Esc to resume",
+    ].join("\n");
+    expect(looksLikeDecisionPrompt(screen)).toBe(true);
+  });
+
   it("detects a yes/no numbered menu without the pointer glyph", () => {
     const screen = ["Allow this command?", "1. Yes  2. No"].join("\n");
     expect(looksLikeDecisionPrompt(screen)).toBe(true);

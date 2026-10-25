@@ -59,10 +59,10 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import {
   highlight,
   languageForPath,
-  escapeHtml,
   lineCommentMarker,
   type Lang,
 } from "../../lib/viewers/highlight";
+import { escapeHtml } from "../../lib/textSafety";
 import { useOllamaStatus } from "../../lib/ollamaStatus";
 import {
   printDocument,
@@ -119,7 +119,9 @@ import {
   fileSideLocation,
   placeForFocused,
 } from "../../lib/terminal/pythonRun";
+import { argsFromLines, argsToLines } from "../../lib/terminal/runArgsFormat";
 import { RunHostPicker } from "../tabs/TabLocalityBadges";
+import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import {
   isSlurmScript,
@@ -155,6 +157,7 @@ import {
   resolveLocalMirror,
   type AutocompleteMode,
   type GrammarIssue,
+  type ProjectEntry,
 } from "../../types";
 import { useSyncStore } from "../../stores/remote/sync";
 import { ContextFilePicker } from "./ContextFilePicker";
@@ -1781,10 +1784,6 @@ export function applyLineComment(
   };
 }
 
-/** The one HTML escaper (`lib/viewers/highlight`, §9.2), under the name this
- *  file's overlay builders and their importers (odt, notebook) already use. */
-export const escapeHtmlText = escapeHtml;
-
 /** How wide a tab renders in the editor and every overlay layer — `tab-size: 4`
  *  in `viewers.css`. Column arithmetic here has to agree with what the reader
  *  sees, so the two are one number and this comment is the link between them. */
@@ -2086,7 +2085,7 @@ export function decorateIndentGuides(source: string, unit: IndentUnit): string |
   const out = source.split("\n").map((line) => {
     let w = 0;
     while (w < line.length && (line[w] === " " || line[w] === "\t")) w++;
-    if (w === 0) return escapeHtmlText(line);
+    if (w === 0) return escapeHtml(line);
     any = true;
     let html = "";
     let col = 0;
@@ -2096,8 +2095,8 @@ export function decorateIndentGuides(source: string, unit: IndentUnit): string |
       if (chunk === "") return;
       html +=
         chunkCol % unit.width === 0
-          ? `<span class="file-viewer-indent-guide">${escapeHtmlText(chunk)}</span>`
-          : escapeHtmlText(chunk);
+          ? `<span class="file-viewer-indent-guide">${escapeHtml(chunk)}</span>`
+          : escapeHtml(chunk);
       chunk = "";
     };
     for (let i = 0; i < w; i++) {
@@ -2110,7 +2109,7 @@ export function decorateIndentGuides(source: string, unit: IndentUnit): string |
       col += ch === "\t" ? TAB_WIDTH - (col % TAB_WIDTH) : 1;
     }
     flush();
-    return html + escapeHtmlText(line.slice(w));
+    return html + escapeHtml(line.slice(w));
   });
   return any ? out.join("\n") : null;
 }
@@ -2175,13 +2174,13 @@ export function decorateLinkRanges(
   source: string,
   ranges: { start: number; end: number; hit?: boolean }[],
 ): string {
-  if (ranges.length === 0) return escapeHtmlText(source);
+  if (ranges.length === 0) return escapeHtml(source);
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   let out = "";
   let pos = 0;
   for (const r of sorted) {
     if (r.start < pos || r.start >= r.end) continue; // skip overlaps / empties
-    out += escapeHtmlText(source.slice(pos, r.start));
+    out += escapeHtml(source.slice(pos, r.start));
     // `data-off` carries the token's source offset so a Ctrl/⌘+click can follow
     // the link by the span it lands on rather than by `selectionStart` — a
     // modified click does not reposition a textarea's caret, so the caret is
@@ -2189,10 +2188,10 @@ export function decorateLinkRanges(
     // A `hit` range is clickable but not a link to look at (the rest of an
     // `\input{…}` around its underlined path): same hit box, no underline.
     const cls = r.hit ? "file-link-hit" : "file-link";
-    out += `<span class="${cls}" data-off="${r.start}">${escapeHtmlText(source.slice(r.start, r.end))}</span>`;
+    out += `<span class="${cls}" data-off="${r.start}">${escapeHtml(source.slice(r.start, r.end))}</span>`;
     pos = r.end;
   }
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -2210,18 +2209,18 @@ export function decorateSnippetRanges(
   source: string,
   ranges: { start: number; end: number }[],
 ): string {
-  if (ranges.length === 0) return escapeHtmlText(source);
+  if (ranges.length === 0) return escapeHtml(source);
   let out = "";
   let pos = 0;
   ranges.forEach((r, i) => {
     if (r.start < pos || r.start >= r.end) return; // skip overlaps / empties
-    out += escapeHtmlText(source.slice(pos, r.start));
-    out += `<span class="file-viewer-tex-snippet" data-si="${i}">${escapeHtmlText(
+    out += escapeHtml(source.slice(pos, r.start));
+    out += `<span class="file-viewer-tex-snippet" data-si="${i}">${escapeHtml(
       source.slice(r.start, r.end),
     )}</span>`;
     pos = r.end;
   });
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -2262,17 +2261,17 @@ export function decorateSearchRanges(
   matches: { start: number; end: number }[],
   current: number,
 ): string {
-  if (matches.length === 0) return escapeHtmlText(source);
+  if (matches.length === 0) return escapeHtml(source);
   let out = "";
   let pos = 0;
   matches.forEach((r, i) => {
     if (r.start < pos || r.start >= r.end) return; // skip overlaps / empties
-    out += escapeHtmlText(source.slice(pos, r.start));
+    out += escapeHtml(source.slice(pos, r.start));
     const cls = i === current ? "file-viewer-search-match current" : "file-viewer-search-match";
-    out += `<span class="${cls}">${escapeHtmlText(source.slice(r.start, r.end))}</span>`;
+    out += `<span class="${cls}">${escapeHtml(source.slice(r.start, r.end))}</span>`;
     pos = r.end;
   });
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -2289,18 +2288,18 @@ export function decorateOccurrenceRanges(
   source: string,
   ranges: { start: number; end: number }[],
 ): string {
-  if (ranges.length === 0) return escapeHtmlText(source);
+  if (ranges.length === 0) return escapeHtml(source);
   let out = "";
   let pos = 0;
   for (const r of ranges) {
     if (r.start < pos || r.start >= r.end) continue; // skip overlaps / empties
-    out += escapeHtmlText(source.slice(pos, r.start));
-    out += `<span class="file-viewer-occurrence-match">${escapeHtmlText(
+    out += escapeHtml(source.slice(pos, r.start));
+    out += `<span class="file-viewer-occurrence-match">${escapeHtml(
       source.slice(r.start, r.end),
     )}</span>`;
     pos = r.end;
   }
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -2406,11 +2405,11 @@ export function decorateBracketMatch(source: string, match: BracketMatch): strin
   const [a, b] =
     match.open.start < match.close.start ? [match.open, match.close] : [match.close, match.open];
   return (
-    escapeHtmlText(source.slice(0, a.start)) +
-    `<span class="file-viewer-bracket-match">${escapeHtmlText(source.slice(a.start, a.end))}</span>` +
-    escapeHtmlText(source.slice(a.end, b.start)) +
-    `<span class="file-viewer-bracket-match">${escapeHtmlText(source.slice(b.start, b.end))}</span>` +
-    escapeHtmlText(source.slice(b.end))
+    escapeHtml(source.slice(0, a.start)) +
+    `<span class="file-viewer-bracket-match">${escapeHtml(source.slice(a.start, a.end))}</span>` +
+    escapeHtml(source.slice(a.end, b.start)) +
+    `<span class="file-viewer-bracket-match">${escapeHtml(source.slice(b.start, b.end))}</span>` +
+    escapeHtml(source.slice(b.end))
   );
 }
 
@@ -2435,15 +2434,15 @@ export function decorateUnclosedBrackets(
     const start = Math.max(0, Math.min(range.start, source.length));
     const end = Math.max(start, Math.min(range.end, source.length));
     if (end <= start || start < pos) continue;
-    out += escapeHtmlText(source.slice(pos, start));
-    const hint = range.hint ? ` data-hint="${escapeHtmlText(range.hint)}"` : "";
+    out += escapeHtml(source.slice(pos, start));
+    const hint = range.hint ? ` data-hint="${escapeHtml(range.hint)}"` : "";
     out +=
       `<span class="file-viewer-unclosed-bracket"${hint}>` +
-      escapeHtmlText(source.slice(start, end)) +
+      escapeHtml(source.slice(start, end)) +
       "</span>";
     pos = end;
   }
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -2545,18 +2544,18 @@ export function decorateChangeRanges(
     }))
     .filter((r) => r.end > r.start)
     .sort((a, b) => a.start - b.start);
-  if (clamped.length === 0) return escapeHtmlText(source);
+  if (clamped.length === 0) return escapeHtml(source);
   let out = "";
   let pos = 0;
   for (const r of clamped) {
     if (r.start < pos) continue; // defensive: skip any residual overlap
-    out += escapeHtmlText(source.slice(pos, r.start));
-    out += `<span class="file-viewer-change-mark tier-${r.tier}">${escapeHtmlText(
+    out += escapeHtml(source.slice(pos, r.start));
+    out += `<span class="file-viewer-change-mark tier-${r.tier}">${escapeHtml(
       source.slice(r.start, r.end),
     )}</span>`;
     pos = r.end;
   }
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -2631,22 +2630,22 @@ export function resolveGrammarRanges(text: string, issues: GrammarIssue[]): Gram
  * HTML-escaped before output — mirrors `decorateSearchRanges`.
  */
 export function decorateGrammarRanges(source: string, ranges: GrammarRange[]): string {
-  if (ranges.length === 0) return escapeHtmlText(source);
+  if (ranges.length === 0) return escapeHtml(source);
   let out = "";
   let pos = 0;
   ranges.forEach((r, i) => {
     if (r.start < pos || r.start >= r.end) return; // skip overlaps / empties
-    out += escapeHtmlText(source.slice(pos, r.start));
+    out += escapeHtml(source.slice(pos, r.start));
     const cat =
       r.issue.category === "spelling" || r.issue.category === "style"
         ? r.issue.category
         : "grammar";
-    out += `<span class="file-viewer-grammar-mark cat-${cat}" data-gi="${i}">${escapeHtmlText(
+    out += `<span class="file-viewer-grammar-mark cat-${cat}" data-gi="${i}">${escapeHtml(
       source.slice(r.start, r.end),
     )}</span>`;
     pos = r.end;
   });
-  out += escapeHtmlText(source.slice(pos));
+  out += escapeHtml(source.slice(pos));
   return out;
 }
 
@@ -3136,7 +3135,7 @@ function CodeEditor({
     const offered = acOutcome.current;
     if (!offered) return;
     acOutcome.current = null;
-    bumpUsage(scope ?? "root", `${accepted ? METRIC.AUTOCOMPLETE_ACCEPT : METRIC.AUTOCOMPLETE_DISMISS}.${offered.mode}.${offered.model}`);
+    bumpUsage(scope ?? ROOT_SCOPE, `${accepted ? METRIC.AUTOCOMPLETE_ACCEPT : METRIC.AUTOCOMPLETE_DISMISS}.${offered.mode}.${offered.model}`);
   }, [scope]);
 
   // Resolve the project the edited file belongs to (the longest project directory
@@ -3876,6 +3875,9 @@ function CodeEditor({
       spellReported.current = false;
       return;
     }
+    // A check still in flight when the draft changes (or the feature is turned
+    // off) is superseded: its answer must not land over the newer one.
+    let stale = false;
     const id = window.setTimeout(async () => {
       try {
         const issues = await invoke<GrammarIssue[]>("spell_check", {
@@ -3883,8 +3885,9 @@ function CodeEditor({
           language: spellCheck.language ?? "",
           doc: lang === "plain" ? "" : lang,
         });
-        setSpellIssues(issues);
+        if (!stale) setSpellIssues(issues);
       } catch (e) {
+        if (stale) return;
         setSpellIssues([]);
         if (!spellReported.current) {
           spellReported.current = true;
@@ -3896,7 +3899,10 @@ function CodeEditor({
         }
       }
     }, SPELL_DEBOUNCE_MS);
-    return () => window.clearTimeout(id);
+    return () => {
+      stale = true;
+      window.clearTimeout(id);
+    };
     // Primitive deps (the config object's identity changes every render) so the
     // idle-check timer isn't reset by unrelated re-renders.
   }, [spellCheck?.enabled, spellCheck?.language, loaded, draft, lang, t]);
@@ -4470,8 +4476,8 @@ function CodeEditor({
       const tabs = useTabsStore.getState();
       const context = (signal: AbortSignal) => completionContext({
         path, root: acProjectDir, draft: snapshot,
-        openPaths: (tabs.tabsByScope[scope ?? "root"] ?? tabs.tabs)
-          .filter((tab) => (!tab.scope || tab.scope === (scope ?? "root")) &&
+        openPaths: (tabs.tabsByScope[scope ?? ROOT_SCOPE] ?? tabs.tabs)
+          .filter((tab) => (!tab.scope || tab.scope === (scope ?? ROOT_SCOPE)) &&
             ["text", "markdown", "tex", "texworkspace"].includes(tab.viewer ?? ""))
           .flatMap((tab) => tab.embedPath ? [tab.embedPath] : []),
         manual: contextFiles.map((f) => ({ name: f.rel, content: f.content })),
@@ -5482,7 +5488,7 @@ function CodeEditor({
           </button>
           {contextFiles.map((f) => (
             <span key={f.path} className="file-viewer-ac-context-chip" title={f.rel}>
-              {f.rel.split("/").pop()}
+              {basename(f.rel)}
               <button
                 type="button"
                 aria-label={t("fileViewer.removeFromContext", { file: f.rel })}
@@ -5931,9 +5937,10 @@ export function ModeToggle<T extends string>({
 
 /** Rendered-preview pane for HTML/SVG/CSS — a fully sandboxed (`sandbox=""`,
  *  no scripts) iframe so even a hostile file is inert. CSS is applied to a small
- *  sample document; HTML/SVG render their own source (HTML with a
- *  `<base href="about:srcdoc">` added, so its `#anchor` links scroll instead of
- *  navigating the frame away — see `SRCDOC_BASE_TAG`). */
+ *  sample document; HTML renders its own source, SVG as an image. Every
+ *  document carries its own CSP (`PREVIEW_CSP`), and an HTML file's `#anchor`
+ *  links are made absolute so they scroll instead of navigating the frame away
+ *  — see `withPreviewGuards`. */
 function RenderedPreview({
   kind,
   content,
@@ -7033,7 +7040,8 @@ function useBreakpoints(
  *
  *  Right-clicking Run opens a small popover to type **arguments** (`sys.argv`) —
  *  appended to the command line and reused by every subsequent Run/Debug, so a
- *  plain left-click re-runs with them (the tooltip shows what they are). */
+ *  plain left-click re-runs with them (the tooltip shows what they are) — and
+ *  to pick the project's **interpreter** (venv/conda/system) for every Run. */
 function RunDebugButtons({
   breakpointCount,
   busy,
@@ -7042,6 +7050,7 @@ function RunDebugButtons({
   setArgs,
   onRun,
   onDebug,
+  project,
 }: {
   breakpointCount: number;
   busy: boolean;
@@ -7052,6 +7061,9 @@ function RunDebugButtons({
   setArgs: (v: string) => void;
   onRun: () => void;
   onDebug: () => void;
+  /** The file's project, whose pinned interpreter the popover edits; absent in
+   *  the root scope (nothing to pin it on), and the picker is left out. */
+  project?: ProjectEntry;
 }) {
   const t = useT();
   const [argsOpen, setArgsOpen] = useState(false);
@@ -7061,16 +7073,18 @@ function RunDebugButtons({
   const [hovering, setHovering] = useState(false);
   // Local draft so typing doesn't rebuild the run command on every keystroke; it
   // is committed to the shared `args` on Run or when the popover closes.
-  const [draft, setDraft] = useState(args);
+  // Edited as a list, one option per line (`runArgsFormat`), and joined back
+  // into the one-line string on commit.
+  const [draft, setDraft] = useState(() => argsToLines(args));
   const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const open = useCallback(() => {
-    setDraft(args);
+    setDraft(argsToLines(args));
     setArgsOpen(true);
   }, [args]);
   const commit = useCallback(() => {
-    setArgs(draft.trim());
+    setArgs(argsFromLines(draft));
     setArgsOpen(false);
   }, [draft, setArgs]);
 
@@ -7140,23 +7154,25 @@ function RunDebugButtons({
       {hovering && args && !argsOpen && (
         <div className="file-viewer-run-argshint" role="tooltip">
           <span className="file-viewer-run-argshint-label">{t("fileViewer.argsHintLabel")}</span>
-          <span className="file-viewer-run-argshint-val">{args}</span>
+          <span className="file-viewer-run-argshint-val">{argsToLines(args)}</span>
         </div>
       )}
       {argsOpen && (
         <div className="file-viewer-run-args" role="dialog" aria-label={t("fileViewer.runArgumentsDialog")}>
           <label className="file-viewer-run-args-label">{t("fileViewer.argsFieldLabel")}</label>
-          <input
+          <textarea
             ref={inputRef}
-            className="file-viewer-run-args-input"
+            className="file-viewer-run-args-input file-run-args-list"
             value={draft}
             spellCheck={false}
-            placeholder="--epochs 5 data.csv"
+            wrap="off"
+            rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+            placeholder={"--epochs 5\ndata.csv"}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                setArgs(draft.trim());
+                setArgs(argsFromLines(draft));
                 setArgsOpen(false);
                 onRun();
               } else if (e.key === "Escape") {
@@ -7165,13 +7181,20 @@ function RunDebugButtons({
               }
             }}
           />
+          {project && (
+            <PythonInterpreterSelect
+              project={project}
+              labelClassName="file-viewer-run-args-label"
+              selectClassName="file-viewer-run-args-input"
+            />
+          )}
           <div className="file-viewer-run-args-row">
             <button
               type="button"
               className="file-viewer-format-btn"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                setArgs(draft.trim());
+                setArgs(argsFromLines(draft));
                 setArgsOpen(false);
                 onRun();
               }}
@@ -7489,7 +7512,7 @@ function TextView({
   // The tab runs in the project's own scope, not whichever project happens to be
   // active — a viewer keeps working after you switch projects (see FileScopeContext),
   // and its Run button must not fire a terminal into a different project's layout.
-  const scope = projectId ?? "root";
+  const scope = projectId ?? ROOT_SCOPE;
   const cwd = runCwd(projectDir, path);
   // The local root this project's files mirror to (null for a local project) —
   // the same helper the Local/Remote switch and auto-sync path-building use, so
@@ -7831,6 +7854,7 @@ function TextView({
             setArgs={setPyArgs}
             onRun={onRun}
             onDebug={onDebug}
+            project={project}
           />
         )}
         {showEditor && showSlurm && (
@@ -10342,7 +10366,7 @@ function TexView({
                     }
                   >
                     <span className="file-viewer-tex-error-loc">
-                      {err.file.split("/").pop()}:{err.line}
+                      {basename(err.file)}:{err.line}
                     </span>
                     <span className="file-viewer-tex-error-msg">{err.message}</span>
                   </button>
@@ -10425,7 +10449,7 @@ function TexView({
                   >
                     <span className="file-viewer-tex-warn-loc">
                       {w.line
-                        ? `${(w.file ?? rootName).split("/").pop()}:${w.line}`
+                        ? `${basename(w.file ?? rootName)}:${w.line}`
                         : t("fileViewer.warningNoLocation")}
                     </span>
                     <span className="file-viewer-tex-warn-msg">{w.message}</span>

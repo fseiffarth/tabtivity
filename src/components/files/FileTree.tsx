@@ -1,10 +1,11 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { confirm as dialogConfirm, open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useDragStore, type EmbedCap, type FileDragItem } from "../../stores/drag/drag";
@@ -63,6 +64,8 @@ import {
   needsMainCheck,
 } from "../../lib/terminal/pythonMainCache";
 import { runPythonFile, pythonRunPlan, placeForFocused } from "../../lib/terminal/pythonRun";
+import { argsFromLines, argsToLines } from "../../lib/terminal/runArgsFormat";
+import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import {
   shellRunnerFor,
   shellScriptRunPlan,
@@ -79,8 +82,10 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { normalizeScanPath } from "./ProjectFilesSettings";
 import { FileTreeSearch } from "./FileTreeSearch";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
+import { SyncMirrorSkips } from "./SyncMirrorSkips";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor } from "../../lib/shortcuts/shortcuts";
 import { IdeMenuItems } from "../projects/IdeMenuItems";
@@ -247,6 +252,9 @@ type DeleteConfirm = { entries: FileEntry[] } | null;
  *  clipboard, a system-clipboard image (screenshot) or a file/folder a file
  *  manager copied (`system`); `name` is the name being chosen for the pasted
  *  result in the current folder. */
+/** What `copy_path` left out of a copied folder (pipes, sockets, devices). */
+type CopyReport = { skipped: string[]; skippedCount: number };
+
 type PastePrompt = { kind: "file" | "image" | "system"; name: string; error: string | null };
 /** A file or folder on the OS clipboard (`clipboard_file_paths`). */
 type SystemClipboardFile = { path: string; name: string; isDir: boolean };
@@ -898,28 +906,11 @@ export function FileTree({
   const dragClickGuard = useRef(0);
   const [moveTargetRel, setMoveTargetRel] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<EntryContextMenu>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   // The focusable tree root. File rows preventDefault on pointerdown to arm the
   // drag, which suppresses the browser's default focus-the-ancestor — so we move
   // focus here explicitly on selection, or the tree's key handlers (Enter/Delete/
   // Escape) would only fire after a manual Tab-in (notably in the docked sidebar).
   const treeRootRef = useRef<HTMLDivElement | null>(null);
-  useClampToViewport(contextMenuRef, contextMenu, setContextMenu);
-  // Close on any click outside the menu, not just inside this tree: the tree's
-  // own `onMouseDown={() => setContextMenu(null)}` only fires for a click that
-  // bubbles through the `.file-tree` root, so a click in the terminal, another
-  // tab, or anywhere else in the window left a stale menu floating (it's
-  // portaled to document.body, so it stays visually on top regardless).
-  useEffect(() => {
-    if (!contextMenu) return;
-    const onDocMouseDown = (ev: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(ev.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [contextMenu]);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirm>(null);
   const [autoConfirm, setAutoConfirm] = useState<AutoConfirm>(null);
   const [defaultAppFor, setDefaultAppFor] = useState<FileEntry | null>(null);
@@ -932,7 +923,7 @@ export function FileTree({
   const [renamePrompt, setRenamePrompt] = useState<RenamePrompt>(null);
   // The panel's other questions — New File/Folder/Presentation — in the same
   // chrome the rename above wears, rather than in the browser's native boxes.
-  const { promptText, dialogs } = useDialogs();
+  const { promptText, confirmAction, dialogs } = useDialogs();
   // SSH-sync Phase 2: project-relative paths whose push was blocked by a stale
   // host base, awaiting the user's keep-local / take-host / skip choice. The
   // first is shown in the conflict modal; resolving advances the queue.
@@ -985,7 +976,7 @@ export function FileTree({
     draft: string;
   } | null>(null);
   const argsPopoverRef = useRef<HTMLDivElement | null>(null);
-  const argsInputRef = useRef<HTMLInputElement | null>(null);
+  const argsInputRef = useRef<HTMLTextAreaElement | null>(null);
   useClampToViewport(argsPopoverRef, argsPopover, setArgsPopover);
   useEffect(() => {
     if (!argsPopover) return;
@@ -1788,14 +1779,12 @@ export function FileTree({
       void refresh(relPath);
     }
     const absDir = relPath ? `${projectDir}/${relPath}` : projectDir;
-    let unlisten: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
 
     // `repoDir` points the backend's `.git` watch at the project's repo, so
     // add/commit/push (which only write `.git/`) re-read the markers too.
     invoke("watch_dir", { path: absDir, repoDir: projectDir }).catch(() => {});
-    listen<string>("fs-change", (event) => {
+    const unlisten = subscribeTauri(() => listen<string>("fs-change", (event) => {
       // The payload is the watched folder as asked for (`fs_watch.rs`); the one
       // backend slot is shared by every tree in every window, so an event for
       // another tree's folder is not this tree's to re-list (perf plan §3.4).
@@ -1804,15 +1793,11 @@ export function FileTree({
       // Coalesce the burst of events a single write emits into one reload.
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => refresh(relPath), 250);
-    }).then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
-    });
+    }));
 
     return () => {
-      cancelled = true;
       if (timer) clearTimeout(timer);
-      if (unlisten) unlisten();
+      unlisten();
       invoke("unwatch_dir").catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1825,6 +1810,10 @@ export function FileTree({
     loadTargetRef.current = rel;
     setError(null);
     setMissingCrumbDepth(null);
+    // The hovered row is about to unmount, so its `mouseleave` never fires: a
+    // pending dwell or an open tooltip would otherwise outlive it.
+    cancelTooltipTimer();
+    setTooltip(null);
     // Navigating into a different folder abandons the current selection (its
     // paths aren't on screen anymore). The quiet fs-watch `refresh()` deliberately
     // does NOT clear — a background re-list must not wipe an in-progress selection.
@@ -2184,6 +2173,10 @@ export function FileTree({
     cancelTooltipTimer();
     tooltipTimer.current = setTimeout(() => {
       tooltipTimer.current = null;
+      // A row unmounted during the dwell (navigated away, re-listed) measures as
+      // an all-zero rect and would pin a tooltip to the window's top-left corner
+      // that no `mouseleave` ever closes.
+      if (!row.isConnected) return;
       // Always shows the name (the row can truncate it); Created/Modified/Ignored
       // lines below are conditional on the entry actually having that data.
       setTooltip({ rect: row.getBoundingClientRect(), entry });
@@ -2700,14 +2693,12 @@ export function FileTree({
     // the backend reports the drop (or the user's abort) that ends the whole
     // gesture. NOT fired by the cancel we ourselves issue on re-entry — that
     // hands control back to the in-app drag, which is still very much alive.
-    void listen(NAMES.fileDragEndedEvent, () => {
+    // `listen` is async: the gesture can already be over when it resolves, and
+    // `subscribeTauri` unlistens then.
+    unlistenEnded = subscribeTauri(() => listen(NAMES.fileDragEndedEvent, () => {
       unbindRelease();
       onAbort();
-    }).then((un) => {
-      // `listen` is async: the gesture can already be over when it resolves.
-      if (gestureOver) un();
-      else unlistenEnded = un;
-    });
+    }));
   }
 
   function relForEntry(entry: FileEntry): string {
@@ -2768,7 +2759,7 @@ export function FileTree({
           entry,
           x: ev.clientX,
           y: ev.clientY,
-          draft: runArgsByPath[entry.path] ?? "",
+          draft: argsToLines(runArgsByPath[entry.path] ?? ""),
         }),
     };
   });
@@ -2887,15 +2878,15 @@ export function FileTree({
       });
       const dest = await openDialog({ directory: true, multiple: false });
       if (typeof dest !== "string") return;
-      const ok = await dialogConfirm(
-        t("fileTree.downloadToConfirm", {
+      const ok = await confirmAction({
+        title: t("fileTree.downloadToTitle"),
+        body: t("fileTree.downloadToConfirm", {
           name: entry.name,
           files: size.files,
           size: fmtSize(size.bytes),
           dest,
         }),
-        { title: t("fileTree.downloadToTitle") },
-      );
+      });
       if (!ok) return;
       setLoading(true);
       await invoke("remote_download_to", { projectId, relPath: rel, destDir: dest });
@@ -3445,6 +3436,10 @@ export function FileTree({
     }
   }
 
+  function copySkippedNote(count: number, names: string[]): string {
+    return t("fileTree.copySkipped", { count, names: names.join(", ") });
+  }
+
   // Paste a multi-item clipboard into the current folder in one go — no per-file
   // rename prompt; each collision is auto-resolved with " copy". The single-item
   // paste keeps its rename prompt (openPastePrompt / confirmPaste).
@@ -3454,17 +3449,23 @@ export function FileTree({
     setLoading(true);
     setError(null);
     const claimed = new Set<string>();
+    let skippedCount = 0;
+    const skippedNames: string[] = [];
     try {
       for (const cb of clipboardEntries) {
         const newName = suggestPasteName(cb.name, claimed);
         claimed.add(newName);
         const destRel = relPath ? `${relPath}/${newName}` : newName;
-        await invoke(cb.op === "cut" ? "move_path" : "copy_path", {
+        const done = await invoke<CopyReport | null | undefined>(cb.op === "cut" ? "move_path" : "copy_path", {
           srcProjectDir: cb.projectDir,
           srcRel: cb.relPath,
           destProjectDir: projectDir,
           destRel,
         });
+        if (done?.skippedCount) {
+          skippedCount += done.skippedCount;
+          skippedNames.push(...done.skipped.map((n) => `${newName}/${n}`));
+        }
         // Same-project cut relocates within this tree → retarget any open viewer
         // tab of the moved file (mirrors confirmPaste's single-item handling).
         if (cb.op === "cut" && cb.projectDir === projectDir) {
@@ -3475,6 +3476,7 @@ export function FileTree({
       }
       if (clipboardEntries.some((c) => c.op === "cut")) clearClipboard();
       await load(relPath);
+      if (skippedCount > 0) setError(copySkippedNote(skippedCount, skippedNames));
     } catch (err) {
       setError(String(err));
       setLoading(false);
@@ -3490,6 +3492,7 @@ export function FileTree({
     }
     const destRel = relPath ? `${relPath}/${newName}` : newName;
     setPasteBusy(true);
+    let skippedNote: string | null = null;
     try {
       if (pastePrompt.kind === "image") {
         await invoke("save_clipboard_image", { projectDir, relPath: destRel });
@@ -3505,12 +3508,13 @@ export function FileTree({
         });
       } else {
         if (!clipboard) return;
-        await invoke(clipboard.op === "cut" ? "move_path" : "copy_path", {
+        const done = await invoke<CopyReport | null | undefined>(clipboard.op === "cut" ? "move_path" : "copy_path", {
           srcProjectDir: clipboard.projectDir,
           srcRel: clipboard.relPath,
           destProjectDir: projectDir,
           destRel,
         });
+        if (done?.skippedCount) skippedNote = copySkippedNote(done.skippedCount, done.skipped);
         if (clipboard.op === "cut") {
           // A same-project cut relocates within this scope's tree, so retarget any
           // open viewer tab of the moved file (main + detached). A cross-project
@@ -3526,6 +3530,7 @@ export function FileTree({
       }
       setPastePrompt(null);
       await load(relPath);
+      if (skippedNote) setError(skippedNote);
     } catch (err) {
       setPastePrompt({ ...pastePrompt, error: String(err) });
     } finally {
@@ -3959,7 +3964,6 @@ export function FileTree({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onKeyDown={handleTreeKeyDown}
-      onMouseDown={() => setContextMenu(null)}
       onContextMenu={showRootContextMenu}
     >
       {/* Sticky header: the remote/refresh bar, the in-tree search box and the
@@ -4327,6 +4331,7 @@ export function FileTree({
           </button>
         </div>
       )}
+      <SyncMirrorSkips projectId={projectId ?? undefined} />
       {searching && (
         <FileTreeSearch
           projectDir={projectDir}
@@ -4602,19 +4607,23 @@ export function FileTree({
                   </>
                 )}
               </label>
-              <input
+              {/* One option per line (`runArgsFormat`); Enter runs, Shift+Enter
+                  breaks a line, and the lines are joined back on save. */}
+              <textarea
                 ref={argsInputRef}
-                className="file-run-args-input"
+                className="file-run-args-input file-run-args-list"
                 value={argsPopover.draft}
                 spellCheck={false}
-                placeholder={isPythonPath(argsPopover.entry.path) ? "--epochs 5 data.csv" : "--verbose out/"}
+                wrap="off"
+                rows={Math.min(8, Math.max(2, argsPopover.draft.split("\n").length))}
+                placeholder={isPythonPath(argsPopover.entry.path) ? "--epochs 5\ndata.csv" : "--verbose\nout/"}
                 onChange={(ev) =>
                   setArgsPopover((p) => (p ? { ...p, draft: ev.target.value } : p))
                 }
                 onKeyDown={(ev) => {
-                  if (ev.key === "Enter") {
+                  if (ev.key === "Enter" && !ev.shiftKey) {
                     ev.preventDefault();
-                    const a = argsPopover.draft.trim();
+                    const a = argsFromLines(argsPopover.draft);
                     setRunArgs(argsPopover.entry.path, a);
                     launchWithArgs(argsPopover.entry, a);
                     setArgsPopover(null);
@@ -4624,12 +4633,19 @@ export function FileTree({
                   }
                 }}
               />
+              {project && isPythonPath(argsPopover.entry.path) && (
+                <PythonInterpreterSelect
+                  project={project}
+                  labelClassName="file-run-args-label"
+                  selectClassName="file-run-args-input"
+                />
+              )}
               <div className="file-run-args-row">
                 <button
                   type="button"
                   className="file-run-args-btn"
                   onClick={() => {
-                    const a = argsPopover.draft.trim();
+                    const a = argsFromLines(argsPopover.draft);
                     setRunArgs(argsPopover.entry.path, a);
                     launchWithArgs(argsPopover.entry, a);
                     setArgsPopover(null);
@@ -4641,7 +4657,7 @@ export function FileTree({
                   type="button"
                   className="file-run-args-btn"
                   onClick={() => {
-                    const a = argsPopover.draft.trim();
+                    const a = argsFromLines(argsPopover.draft);
                     setRunArgs(argsPopover.entry.path, a);
                     setArgsPopover(null);
                   }}
@@ -4654,13 +4670,8 @@ export function FileTree({
           </div>,
           document.body,
         )}
-      {contextMenu && createPortal(
-        <div
-          ref={contextMenuRef}
-          className="context-menu file-browser-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
+      {contextMenu && (
+        <ContextMenuPortal x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
           {!contextMenu.entry && (
             <>
               {onOpenFolderTab && (
@@ -5007,8 +5018,7 @@ export function FileTree({
             );
           })()}
           <button onClick={() => setContextMenu(null)}>{t("common.cancel")}</button>
-        </div>,
-        document.body,
+        </ContextMenuPortal>
       )}
       {deleteConfirm && createPortal(
         <div className="modal-backdrop" onMouseDown={() => setDeleteConfirm(null)}>
@@ -5251,7 +5261,7 @@ export function FileTree({
                 : true) && (
                 <div>
                   <span className="file-tooltip-label">{t("fileTree.tooltipRun")} </span>
-                  {t("fileTree.tooltipRunHint")}
+                  {t(isPythonPath(tooltip.entry.path) ? "fileTree.tooltipRunHintPy" : "fileTree.tooltipRunHint")}
                 </div>
               )}
               {/* Nested under Run, not a top-level "Run args" row — and shown

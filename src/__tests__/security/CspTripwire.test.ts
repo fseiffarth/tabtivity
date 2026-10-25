@@ -82,6 +82,15 @@ describe("the app CSP is present and restrictive", () => {
     }
   });
 
+  it("forbids plugins, a <base> and form submission", () => {
+    // The web client's level: nothing renders in an <object>/<embed>, no
+    // injected <base> re-points relative URLs (the HTML preview needs none: its
+    // fragment links are absolute), and no form navigates the app window.
+    expect(directive("object-src")).toEqual(["'none'"]);
+    expect(directive("base-uri")).toEqual(["'none'"]);
+    expect(directive("form-action")).toEqual(["'none'"]);
+  });
+
   it("does not disable Tauri's asset-CSP modification", () => {
     expect(CONF.app?.security?.dangerousDisableAssetCspModification).toBeUndefined();
   });
@@ -91,8 +100,8 @@ describe("the app CSP is present and restrictive", () => {
  * The print preview renders untrusted file bytes, so it is sandboxed like every
  * other hostile-content frame — asserted here rather than left to review.
  *
- * `buildPreviewDoc` returns an HTML/SVG file's own source (HTML gains one
- * `<base>` line, nothing that disarms it), and
+ * `buildPreviewDoc` returns an HTML file's own source (behind a CSP `<meta>`
+ * that only tightens it) or an SVG wrapped as an image, and
  * `FileViewerPane`'s Print button hands that straight to `printDocument`. The
  * frame is also deliberately same-origin (the module reads `contentDocument`),
  * so `allow-scripts` is the one token that must never appear: with it, a hostile
@@ -131,5 +140,23 @@ describe("the global Tauri IPC object is not exposed", () => {
     // With it on, `window.__TAURI__` hands the full command surface to any script
     // that manages to run — turning a renderer bug straight into host exec.
     expect(CONF.app?.withGlobalTauri ?? false).toBe(false);
+  });
+});
+
+describe("the preview document carries its own CSP", () => {
+  const FORMAT_SRC = readFileSync("src/lib/viewers/format.ts", "utf8");
+
+  it("denies everything by default and forbids <base> and forms", () => {
+    const m = /PREVIEW_CSP =\s*"([^"]*)"/.exec(FORMAT_SRC);
+    expect(m).not.toBeNull();
+    const csp = m?.[1] ?? "";
+    for (const d of ["default-src 'none'", "base-uri 'none'", "form-action 'none'"]) {
+      expect(csp).toContain(d);
+    }
+    expect(csp).not.toMatch(/script-src|https?:|\*/);
+  });
+
+  it("no longer relies on a <base> tag", () => {
+    expect(FORMAT_SRC).not.toContain('<base href');
   });
 });

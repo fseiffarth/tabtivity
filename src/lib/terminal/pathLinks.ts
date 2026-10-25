@@ -161,7 +161,8 @@ export function isLinkable(entry: FileEntry, projectDir: string, disabled?: Read
 }
 
 /** Open a path link: the file's viewer tab in the tab's own scope (reusing one
- *  already open), scrolled to the line it named; a folder in a Files tab. */
+ *  already open), scrolled to the line it named; a folder in a Files tab.
+ *  `newSubwindow` (Ctrl+click) puts the file's tab in a new subwindow. */
 export function openPathLink(
   entry: FileEntry,
   at: { line?: number; column?: number },
@@ -172,6 +173,7 @@ export function openPathLink(
     cwd: string;
     disabled?: ReadonlySet<InternalViewer>;
     t: (key: TranslationKey) => string;
+    newSubwindow?: boolean;
   },
 ): void {
   if (!isLinkable(entry, ctx.projectDir, ctx.disabled)) return;
@@ -189,6 +191,7 @@ export function openPathLink(
     // The active scope opens like a file tree's double-click (the focused
     // subwindow); a root-console tab floating over a project, in its own.
     scope: ctx.scope === useTabsStore.getState().scope ? undefined : ctx.scope,
+    newSubwindow: ctx.newSubwindow,
   });
   if (at.line) useEditorJumpStore.getState().requestJump(entry.path, at.line, at.column ?? 0);
 }

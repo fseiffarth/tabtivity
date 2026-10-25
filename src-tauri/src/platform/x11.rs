@@ -80,6 +80,7 @@ struct Atoms {
     net_client_list: Atom,
     net_wm_name: Atom,
     utf8_string: Atom,
+    wm_state: Atom,
 }
 
 struct CinnamonWorkspaceState {
@@ -156,6 +157,12 @@ impl WorkspaceBackend for X11Backend {
         ensure_desktop_count(&self.conn, self.screen_num, &self.atoms, 2)?;
         self.move_window(wid, ACTIVE_DESKTOP)?;
         switch_current_desktop(&self.conn, self.screen_num, &self.atoms, ACTIVE_DESKTOP)?;
+        // A window the user minimized stays minimized: mapping an iconic
+        // window asks the WM to restore it (ICCCM 4.1.4), and raising it would
+        // too. Back on the active desktop is all a switch owes it.
+        if is_iconic(&self.conn, wid, &self.atoms) {
+            return self.conn.flush().map_err(|e| e.to_string());
+        }
         self.conn
             .send_and_check_request(&x::MapWindow { window: wid })
             .map_err(|e| e.to_string())?;
@@ -439,6 +446,7 @@ fn intern_atoms(conn: &Connection) -> Result<Atoms, String> {
         net_client_list: intern_atom(conn, b"_NET_CLIENT_LIST")?,
         net_wm_name: intern_atom(conn, b"_NET_WM_NAME")?,
         utf8_string: intern_atom(conn, b"UTF8_STRING")?,
+        wm_state: intern_atom(conn, b"WM_STATE")?,
     })
 }
 
@@ -487,6 +495,26 @@ fn get_window_desktop(conn: &Connection, wid: Window, atoms: &Atoms) -> Option<u
     conn.wait_for_reply(cookie)
         .ok()
         .and_then(|r| r.value::<u32>().first().copied())
+}
+
+/// ICCCM `WM_STATE` IconicState: the WM holds the window minimized.
+const ICONIC_STATE: u32 = 3;
+
+fn is_iconic(conn: &Connection, wid: Window, atoms: &Atoms) -> bool {
+    let cookie = conn.send_request(&x::GetProperty {
+        delete: false,
+        window: wid,
+        property: atoms.wm_state,
+        r#type: atoms.wm_state,
+        long_offset: 0,
+        long_length: 1,
+    });
+    // Any client can write WM_STATE; xcb's `value` panics on a format mismatch.
+    conn.wait_for_reply(cookie)
+        .ok()
+        .filter(|r| r.format() == 32)
+        .and_then(|r| r.value::<u32>().first().copied())
+        == Some(ICONIC_STATE)
 }
 
 fn set_window_desktop_property(
@@ -614,6 +642,54 @@ pub fn find_window_for_title(target: &str, attempts: usize) -> Option<u64> {
         thread::sleep(Duration::from_millis(100));
     }
     None
+}
+
+/// Every client window with its `WM_CLASS` and title, for
+/// [`super::named_windows`]. Unlike the scans above this one runs under
+/// Wayland too: there it sees the XWayland clients, which is where the IDEs
+/// that run on XWayland (JetBrains, VS Code by default) put their windows.
+pub fn named_client_windows() -> Vec<super::NamedWindow> {
+    let Ok((conn, screen_num)) = xcb::Connection::connect(None) else {
+        return Vec::new();
+    };
+    let Ok(atoms) = intern_atoms(&conn) else {
+        return Vec::new();
+    };
+    list_client_windows(&conn, screen_num, &atoms)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|wid| super::NamedWindow {
+            id: wid.resource_id() as u64,
+            class: get_wm_class(&conn, wid).unwrap_or_default(),
+            title: get_window_title(&conn, wid, &atoms).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Ask the window manager to raise and focus `window_id` (switching to its
+/// desktop) with an EWMH `_NET_ACTIVE_WINDOW` request. Source indication 2
+/// (pager) marks it as on the user's behalf, which Mutter, Muffin and KWin
+/// honour past their focus-stealing prevention. Under Wayland it reaches
+/// XWayland windows only.
+pub fn activate_window(window_id: u64) -> Result<(), String> {
+    let wid = window_from_u64(window_id)
+        .ok_or_else(|| format!("invalid x11 window id {window_id}"))?;
+    let (conn, screen_num) =
+        xcb::Connection::connect(None).map_err(|e| format!("xcb connect: {e}"))?;
+    let net_active_window = intern_atom(&conn, b"_NET_ACTIVE_WINDOW")?;
+    let root = root_window(&conn, screen_num);
+    let event = x::ClientMessageEvent::new(
+        wid,
+        net_active_window,
+        x::ClientMessageData::Data32([2, x::CURRENT_TIME, 0, 0, 0]),
+    );
+    conn.send_and_check_request(&x::SendEvent {
+        propagate: false,
+        destination: x::SendEventDest::Window(root),
+        event_mask: x::EventMask::SUBSTRUCTURE_REDIRECT | x::EventMask::SUBSTRUCTURE_NOTIFY,
+        event: &event,
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// The topmost (front-most) mapped client window under the X11 pointer, by its

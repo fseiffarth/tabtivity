@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { findGroupOfTab, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { getDetachedWindowContext } from "../../stores/detachedContext";
 
 /**
  * The scope the tabs a view opens belong to, when that is NOT the active scope.
@@ -43,4 +44,32 @@ export function openTabInScope(
   const entry = useTabsStore.getState().addTabToScope(scope, tab);
   useTabsStore.getState().setActive(entry.key);
   return entry;
+}
+
+/**
+ * Open `tab` in a new subwindow split off to the right of `scope`'s focused one
+ * (a Ctrl+click on a file link). A tab `matches` picks that the scope already
+ * has is moved there instead of duplicated — or just focused when it already
+ * fills a subwindow of its own. In a popout the split is the popout's own.
+ */
+export function openTabInNewSubwindow(
+  scope: string,
+  tab: Omit<TabEntry, "key">,
+  matches?: (t: TabEntry) => boolean,
+): void {
+  const store = useTabsStore.getState();
+  const detached = getDetachedWindowContext();
+  if (detached) {
+    store.splitWithNewTab(tab, detached.targetGroupId(), "right");
+    return;
+  }
+  const layout = store.layoutByScope[scope] ?? null;
+  const prior = matches ? (store.tabsByScope[scope] ?? []).find(matches) : undefined;
+  const key = prior?.key ?? store.addTabToScope(scope, tab).key;
+  const target = useTabsStore.getState().focusedGroupByScope[scope];
+  const own = prior && layout ? findGroupOfTab(layout, prior.key) : null;
+  if (target && !(own && own.group.tabKeys.length === 1)) {
+    useTabsStore.getState().splitWithTabInScope(scope, key, target, "right");
+  }
+  useTabsStore.getState().setActive(key);
 }

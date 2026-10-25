@@ -40,7 +40,7 @@ export const TAB_COLOR_IDS = Object.keys(TAB_COLORS) as TabColor[];
  *  names a colour in this palette. Everything else reads as "no colour", never
  *  as a CSS value to render. */
 export function isTabColor(value: unknown): value is TabColor {
-  return typeof value === "string" && value in TAB_COLORS;
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(TAB_COLORS, value);
 }
 
 /** The CSS a stored colour renders as, or `undefined` for an uncoloured tab —

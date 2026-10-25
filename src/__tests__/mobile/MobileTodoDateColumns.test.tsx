@@ -3,7 +3,8 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../../../mobile-web/src/api";
 import { Todo } from "../../../mobile-web/src/screens/Todo";
-import { COLUMN_FOLLOWS_DATE, localDate, moveAccepted } from "../../../mobile-web/src/todoDates";
+import { COLUMN_FOLLOWS_DATE, moveAccepted } from "../../../mobile-web/src/todoDates";
+import { todayStr } from "../../lib/calendar/calendarTime";
 import type { TodoCard, TodoColumn } from "../../../mobile-web/src/api";
 import { storageKey } from "../../lib/brand";
 import { translate } from "../../lib/i18n";
@@ -35,9 +36,9 @@ function card(over: Partial<TodoCard> = {}): TodoCard {
   };
 }
 
-const TODAY = localDate();
-const YESTERDAY = localDate(new Date(Date.now() - 86_400_000));
-const TOMORROW = localDate(new Date(Date.now() + 86_400_000));
+const TODAY = todayStr();
+const YESTERDAY = todayStr(new Date(Date.now() - 86_400_000));
+const TOMORROW = todayStr(new Date(Date.now() + 86_400_000));
 
 describe("mobile board date-governed columns", () => {
   it("keeps a late card in Overdue and refuses the other two", () => {

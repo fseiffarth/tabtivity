@@ -2,13 +2,13 @@ import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import type { ProjectEntry, VmEgress, VmSpec, VmStatus } from "../../types";
 import { Toggle } from "../common/Toggle";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 import { usePoll } from "../../lib/usePoll";
 
 /**
@@ -30,6 +30,7 @@ export function VmSettingsDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
   const modalRef = useModalFocus(onClose);
   const spec = project.vm;
   const [memory, setMemory] = useState(String(spec?.memory_mb ?? 4096));
@@ -75,9 +76,9 @@ export function VmSettingsDialog({
     if (busy) return;
     // The overlay IS the working tree for a mirrorless VM project — the
     // confirm says so by name (`docs/vm_projects_plan.md`, delete/rebuild).
-    const ok = await confirm(t("pill.vmRebuildConfirm"), {
+    const ok = await confirmAction({
       title: t("pill.vmRebuildTitle"),
-      kind: "warning",
+      body: t("pill.vmRebuildConfirm"),
     });
     if (!ok) return;
     setBusy(true);
@@ -252,6 +253,7 @@ export function VmSettingsDialog({
           </button>
         </div>
       </div>
+      {dialogs}
     </div>,
     document.body,
   );

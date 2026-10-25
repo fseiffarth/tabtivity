@@ -24,6 +24,7 @@ import {
   readAntigravityPicker,
 } from "./antigravity";
 import {
+  isOpenCodeHomeFooter,
   isOpenCodeTab,
   isOpenCodePlaceholder,
   openCodeComposer,
@@ -31,7 +32,8 @@ import {
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
-import { isActionRow, isChatRow, isUnnumberedRow } from "./selectPrompt";
+import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
+import { readAgentList } from "./subagentInput";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -99,6 +101,19 @@ function isInputLine(lines: readonly StatusLineLike[], index: number): boolean {
 /** How far up from the bottom the input line may sit. The box is always the
  * bottom of a live TUI frame; anything higher is quoted output. */
 const SEARCH_WINDOW = 8;
+/** Where Claude Code's agent list under its footer begins (`● main`, one
+ * `◯ general-purpose  Screen …` row per subagent), or `lines.length` without
+ * one. It grows a row per agent, so the box above it is looked for from here:
+ * counted from the screen's bottom, four agents put the box past
+ * `SEARCH_WINDOW`, and the box and footer read as a dialog. */
+function agentListStart(lines: readonly StatusLineLike[]): number {
+  const list = readAgentList(lines.slice(-SEARCH_WINDOW * 4).map((line) => line.text));
+  if (!list) return lines.length;
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].text.trim()) end -= 1;
+  return end - list.length;
+}
+
 /** Status lines read below the input line. Claude Code draws at most a mode
  * line plus a statusline/shortcut line. */
 const MAX_STATUS_LINES = 3;
@@ -166,8 +181,10 @@ function codexUpdatedMode(
 const MODEL =
   /\b(claude[\w.-]*|(?:opus|sonnet|haiku|fable|mythos)(?:[ -][\w.]+)?|gpt-[\w.-]+|codex(?:-[\w.-]+)?|o[134](?:-mini)?|gemini[\w.-]*|qwen[\w.:-]*|llama[\w.:-]*|deepseek[\w.:-]*|mistral[\w.:-]*)\b/iu;
 
-/** A working directory as the CLIs print one: `~`, `~/…`, `/…` or `C:\…`. */
-const PATH = /(?:^|\s)(~(?:\/[^\s]*)?|\/[^\s]+|[A-Za-z]:\\[^\s]+)(?=\s|$)/u;
+/** A working directory as the CLIs print one: `~`, `~/…`, `/…` or `C:\…` — alone
+ * or after the `user@host:` a custom statusline copied from a shell prompt
+ * opens with (`me@box:~/proj (main*)`). */
+const PATH = /(?:^|\s|[\w.-]+@[\w.-]+:)(~(?:\/[^\s]*)?|\/[^\s]+|[A-Za-z]:\\[^\s]+)(?=\s|$)/u;
 
 /** `(branch)` — no spaces inside, at least one letter, so "(shift+tab to
  * cycle)" and "(3)" stay unmatched. */
@@ -226,7 +243,9 @@ function classify(segment: string, status: SessionStatus) {
       status.path = path[1];
       if (!status.branch) {
         const branch = PAREN_BRANCH.exec(segment.slice(path.index + path[0].length));
-        if (branch) status.branch = branch[1];
+        // A prompt-style statusline marks a dirty tree with `*` (`(main*)`); git
+        // refuses `*` in a ref name, so it is never part of the branch.
+        if (branch) status.branch = branch[1].replace(/\*$/u, "");
       }
       return;
     }
@@ -303,7 +322,14 @@ function openCodeFrame(
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0 || index < lines.length - SEARCH_WINDOW) return null;
   const row = openCodeStatusRow(lines[index].text);
-  if (!row) return openCodeFullFrame(lines, index);
+  if (!row) {
+    const full = openCodeFullFrame(lines, index);
+    if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
+    // The start screen's own footer sits under the box's.
+    let footer = index - 1;
+    while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+    return footer < 0 ? null : openCodeFullFrame(lines, footer);
+  }
   let start = index;
   while (start > 0) {
     const above = lines[start - 1].text;
@@ -434,19 +460,20 @@ export function sessionStatus(
   if (mini) return mini.status;
   const antigravity = antigravityFrame(lines, agentLabel);
   if (antigravity) return antigravity.status;
+  const bottom = agentListStart(lines);
   let inputIndex = -1;
-  for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
+  for (let index = bottom - 1; index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
     if (!isInputLine(lines, index)) continue;
     // A highlighted dialog row opens with the input line's `❯`; the rows under
     // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
-    if (OPTION_ROW.test(lines[index].text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return null;
+    if (OPTION_ROW.test(lines[index].text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isStrayListRow(lines, index)) return null;
     inputIndex = index;
     break;
   }
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
   let read = 0;
-  for (let index = inputIndex + 1; index < lines.length && read < MAX_STATUS_LINES; index += 1) {
+  for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
     if (!text) continue;
     read += 1;
@@ -456,7 +483,7 @@ export function sessionStatus(
   // a custom statusline that can wrap to several rows on a narrow pane — past
   // the rows read above. The phrase is only ever the footer's, so every row of
   // the frame is looked through for it.
-  for (let index = inputIndex + 1; !status.goal && index < lines.length; index += 1) {
+  for (let index = inputIndex + 1; !status.goal && index < bottom; index += 1) {
     if (lines[index].text.split(SEGMENT_SPLIT).some((segment) => GOAL_ACTIVE.test(segment.trim()))) status.goal = true;
   }
   if (!status.mode) {
@@ -519,10 +546,11 @@ export function inputFrameStart(
   // finds the box on its own.
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
-  for (let index = lines.length - 1; start < 0 && index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
+  const bottom = agentListStart(lines);
+  for (let index = bottom - 1; start < 0 && index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index)) return lines.length;
+    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index) || isStrayListRow(lines, index)) return lines.length;
     start = index;
   }
   if (start < 0) return lines.length;
@@ -537,29 +565,6 @@ export function inputFrameStart(
     else break;
   }
   return start;
-}
-
-/** Hints the CLIs print under the box: keys and glyphs no draft is made of.
- * Only asked whether a row ends a draft — never used to drop one. */
-const FOOTER_HINT = /\?\s*for shortcuts|shift\s*\+\s*tab|\besc to\b|\bctrl\s*\+|[⏎⌃⏵⏸]/iu;
-/** A row of frame strokes and nothing else. `readableScreen` has already
- * dropped these; a caller handing in raw rows still gets the edge skipped. */
-const STROKES_ONLY = /^[\s─-╿▀-▟―—]+$/u;
-
-/**
- * How many of the fields `sessionStatus` reports one row carries.
- *
- * Fields, not columns: one segment can yield *two* of them, because `classify`
- * reads a branch out of the same segment as the path it follows
- * (`~/projects/app (main)`). Counting fields to recognize a columned row
- * therefore scored an ordinary sentence naming a path two, which is why
- * [`statusColumns`] exists and this is left to the callers that want a plain
- * "does this row carry any status at all".
- */
-export function statusFieldCount(text: string): number {
-  const found: SessionStatus = {};
-  for (const segment of text.trim().split(SEGMENT_SPLIT)) classify(segment.trim(), found);
-  return Object.keys(found).length;
 }
 
 /** How many of a row's columns carry a field `sessionStatus` reports.
@@ -586,87 +591,4 @@ export function statusColumns(text: string): number {
  * sentence that opens with the same key. */
 export function columnCount(text: string): number {
   return text.trim().split(SEGMENT_SPLIT).filter((s) => s.trim() !== "").length;
-}
-
-/** Whether a row reads as a footer rather than as a draft's next line. */
-function readsAsStatus(text: string) {
-  return FOOTER_HINT.test(text) || statusFieldCount(text) > 0;
-}
-
-/**
- * The status rows an agent TUI draws under its input box, as painted text —
- * what the Focus view's status strip shows when the reader swipes for it.
- *
- * `inputFrameStart` hides the whole bottom frame, and `sessionStatus` only
- * reports the fields it recognizes, so a custom statusline (a cost, a clock, an
- * emoji per segment) had no way onto the phone at all. This hands the rows over
- * verbatim instead: nothing is classified, only *located*, with the scoping
- * `inputFrameStart` uses — the bottom window, the input line, and the option-row
- * guard, since rows under a select dialog are its answers, not a status.
- *
- * What sits between the input line and the status is skipped. The box's edges
- * are gone already (`readableScreen` drops a stroke-only row outright and keeps
- * a labelled one only as `frameText`), so the one thing that still looks like
- * text is a draft typed on the desktop that runs over several lines. Nothing
- * marks where it stops but its indent — a continuation sits under the draft's
- * first character — and that alone is not enough, because Claude Code indents
- * its footer by the same two columns. So a row ends the draft as soon as it
- * reads as a footer (a key hint, or a field `sessionStatus` would report), and
- * a blank row ends it too (Codex pads its composer). The failure left is a
- * draft line that happens to name a model or a path, which is shown in the
- * strip — the harmless direction, where hiding a status row would not be.
- *
- * Blank rows are dropped entirely: a strip has no use for gaps. No frame, `[]`.
- */
-export function statusFrameLines(
-  lines: readonly StatusLineLike[],
-  agentLabel?: string,
-): string[] {
-  const mini = openCodeFrame(lines, agentLabel);
-  if (mini) {
-    // The frame is the box and the one status row under it; the box's blanks
-    // and its placeholder are not a status.
-    return lines.slice(mini.start)
-      .map((line) => line.text.replace(/\s+$/u, ""))
-      .filter((text) => text.trim() !== "" && !isOpenCodePlaceholder(text));
-  }
-  const antigravity = antigravityFrame(lines, agentLabel);
-  if (antigravity?.start !== undefined) {
-    // The rows under the box are the `/model` dialog's, not a status: the strip
-    // shows the one row the session keeps under it either way.
-    return [lines[antigravity.footer].text.replace(/\s+$/u, "")];
-  }
-  let inputIndex = -1;
-  for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
-    const text = lines[index].text;
-    if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index) || isChatRow(lines, index)) return [];
-    inputIndex = index;
-    break;
-  }
-  if (inputIndex < 0) return [];
-
-  const input = lines[inputIndex].text;
-  const column = /^\s*[>›❯*]\s*/u.exec(input)?.[0].length ?? 0;
-  let index = inputIndex + 1;
-  if (input.slice(column).trim()) {
-    // Only a draft with text on its first line can have a second one.
-    for (; index < lines.length; index += 1) {
-      const { text, frameText } = lines[index];
-      if (!text.trim() || frameText !== undefined) break;
-      if (text.length - text.trimStart().length < column || readsAsStatus(text)) break;
-    }
-  }
-
-  const rows: string[] = [];
-  for (; index < lines.length; index += 1) {
-    const { text, frameText } = lines[index];
-    const row = text.replace(/\s+$/u, "");
-    if (!row.trim() || STROKES_ONLY.test(row)) continue;
-    // A labelled rule directly under the box is its bottom edge; one further
-    // down is the TUI's own divider, and its label is part of the status.
-    if (rows.length === 0 && frameText !== undefined && labelledRule(frameText)) continue;
-    rows.push(row);
-  }
-  return rows;
 }

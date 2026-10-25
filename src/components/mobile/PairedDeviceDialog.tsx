@@ -1,9 +1,8 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect } from "react";
 import { useT } from "../../lib/i18n";
-import { useProjectsStore } from "../../stores/projects";
 import { UntestedTag } from "../common/UntestedTag";
-import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
+import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { usePairedPhones } from "./usePairedPhones";
 
 /**
@@ -18,7 +17,6 @@ import { usePairedPhones } from "./usePairedPhones";
  */
 export function PairedDeviceDialog({ deviceId, onClose }: { deviceId: string; onClose: () => void }) {
   const t = useT();
-  const projects = useProjectsStore((s) => s.projects);
   const { phones, refresh } = usePairedPhones();
   const device = phones?.find((phone) => phone.id === deviceId);
 
@@ -30,7 +28,6 @@ export function PairedDeviceDialog({ deviceId, onClose }: { deviceId: string; on
   }, [phones, device, onClose]);
 
   if (!phones || !device) return null;
-  const eligibleIds = new Set(projects.filter(isMobileEligible).map((project) => project.id));
 
   return (
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
@@ -56,7 +53,6 @@ export function PairedDeviceDialog({ deviceId, onClose }: { deviceId: string; on
           <PairedDeviceAccess
             device={device}
             pairedIds={phones.map((phone) => phone.id)}
-            eligibleProjectIds={eligibleIds}
             onChanged={refresh}
           />
         </div>

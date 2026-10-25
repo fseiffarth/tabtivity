@@ -108,6 +108,14 @@ pub struct CreateTabRequest {
     /// the phone's create route refuses a body carrying it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub like_tab: Option<String>,
+    /// A vendor cloud session to pull into a fresh linked worktree (Claude's
+    /// `--teleport <session>`), by the id the cloud tab named in `like_tab`
+    /// printed. A worktree, because teleport checks out the session's branch:
+    /// in the project folder that would move every other tab there onto it.
+    /// Set by the sidecar alone (`POST /api/v1/tabs/{id}/teleport`), with
+    /// `like_tab` and nothing else; [`is_cloud_session_id`] bounds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teleport: Option<String>,
     /// A local-model agent (#31bl): the opaque id [`MobileLocalLaunch`]
     /// listed, in place of `agent_id`. Alone — no mode, worktree, cloud or
     /// sign-in rides with it.
@@ -120,12 +128,28 @@ pub struct CreateTabRequest {
     /// with it — and no other scope takes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant: Option<String>,
+    /// The agent starts on the provider API key the desktop keeps
+    /// (`agent_api_keys`, the desktop "+"'s "<agent> (API)" row): a flag
+    /// only — no key or provider crosses. With `agent_id`, and a worktree at
+    /// most; never with a mode, cloud, sign-in, local model or chat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub api_key: bool,
     pub idempotency_key: String,
 }
 
 /// Longest cloud-session task a phone may send (characters) — the desktop's
 /// `MAX_CLOUD_TASK` in `src/lib/agents/cloudSessions.ts`.
 pub const MAX_CLOUD_TASK: usize = 4000;
+
+/// Whether `id` may stand on a command line as a cloud session id
+/// (`session_011SU65r…`): letters, digits, `_` and `-`, never a leading `-`
+/// that would read as a flag. The desktop's `cleanCloudSession` is the same
+/// rule.
+pub fn is_cloud_session_id(id: &str) -> bool {
+    (1..=128).contains(&id.len())
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
 
 impl CreateTabRequest {
     /// The shape rules the sidecar can check without the desktop: worktree
@@ -151,7 +175,36 @@ impl CreateTabRequest {
                 return false;
             }
         }
-        if self.like_tab.is_some() && (self.sign_in.is_none() || self.agent_id.is_some()) {
+        if self.like_tab.is_some() && ((self.sign_in.is_none() && self.teleport.is_none()) || self.agent_id.is_some()) {
+            return false;
+        }
+        if let Some(session) = &self.teleport {
+            if !agent
+                || !is_cloud_session_id(session)
+                || self.like_tab.is_none()
+                || self.mode.is_some()
+                || self.worktree.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.local.is_some()
+                || self.assistant.is_some()
+                || self.api_key
+            {
+                return false;
+            }
+        }
+        if self.api_key
+            && (!agent
+                || self.agent_id.is_none()
+                || self.mode.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.like_tab.is_some()
+                || self.local.is_some()
+                || self.assistant.is_some())
+        {
             return false;
         }
         if let Some(id) = &self.local {
@@ -321,6 +374,18 @@ pub struct MobileSignInOption {
     pub api_key: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_budget_reached: Option<bool>,
+}
+
+/// One agent the phone's ＋ can start on a provider API key the desktop keeps
+/// (`agent_api_keys::keyable_clis`), switched on in Manage CLIs or not — the
+/// desktop "+"'s "<agent> (API)" row. `budget_reached` says that key's monthly
+/// budget is spent (or unset), so a new tab would be refused. Flags only: no
+/// key, provider or amount crosses.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MobileApiKeyLaunch {
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub budget_reached: bool,
 }
 
 /// Phone-editable schedule fields. Receipts and prefix commands are desktop-owned
@@ -1146,6 +1211,12 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
         tmux_session: String,
+        /// The input was a bare Esc or Ctrl+C, reported whatever the burst
+        /// window: it can end a turn that fires no `Stop` (a dismissed
+        /// question), and the desktop retires its `working` verdict on it
+        /// (`noteUserInput`'s `interrupt`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interrupt: bool,
     },
     /// The phone's composer sent `message` to this agent tab. Keystrokes reach
     /// tmux through the sidecar's own client, so the desktop never sees the
@@ -1203,6 +1274,44 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
         tmux_session: String,
+    },
+    /// The folders this agent tab can be moved to — the facts row's ⎇ branch
+    /// chip, as on the desktop Reader: the project folder and its linked
+    /// worktrees, by the ＋ sheet's opaque worktree ids. Answered with
+    /// `TabWorktrees`; `not_movable` for a tab the move does not apply to.
+    TabWorktrees {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+    },
+    /// Move this agent tab to the worktree `worktree` (an id `TabWorktrees`
+    /// listed): the desktop stops its CLI, takes the conversation along where
+    /// the CLI allows (`services::agent_relocate`) and respawns the tab there.
+    /// Answered with `WorktreeMoved`.
+    MoveWorktree {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        worktree: String,
+    },
+    /// The models this Tabby chat can be switched to — the model chip's sheet,
+    /// as on the desktop Reader (`assistantModelChoices`): Claude's aliases,
+    /// Codex's catalog or the installed Ollama models, for the CLI the chat
+    /// runs. Answered with `AssistantModels`; `not_assistant_chat` for any
+    /// other tab (their `/model` is the CLI's own).
+    AssistantModels {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+    },
+    /// Switch this Tabby chat to `model` (a name `AssistantModels` listed): the
+    /// desktop's `switchAssistantModel` — the same chat, its CLI restarted on
+    /// the new model and the conversation resumed. Answered with `Seen`.
+    SwitchAssistantModel {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        model: String,
     },
     /// What one agent tab is doing, and what its CLI says about its own quota.
     /// Addressed by the same `project_id` + `tmux_session` pair the schedule and
@@ -1354,6 +1463,10 @@ impl DesktopRequest {
             | Self::HoldPrompt { request_id, .. }
             | Self::EditHeldPrompt { request_id, .. }
             | Self::UndoClear { request_id, .. }
+            | Self::TabWorktrees { request_id, .. }
+            | Self::MoveWorktree { request_id, .. }
+            | Self::AssistantModels { request_id, .. }
+            | Self::SwitchAssistantModel { request_id, .. }
             | Self::AgentStatus { request_id, .. }
             | Self::AgentTranscript { request_id, .. }
             | Self::DesktopImages { request_id, .. }
@@ -1380,6 +1493,15 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 35,
             Self::MailReply { .. } => 65,
             Self::AgentStatus { .. } => 25,
+            // Waits for the old CLI to exit (`switchAgentWorktree`, up to
+            // 3 s) before the move and the respawn.
+            Self::MoveWorktree { .. } => 20,
+            // Waits for the old CLI to exit (`switchAssistantModel`, up to
+            // 3 s) before the respawn on the new model.
+            Self::SwitchAssistantModel { .. } => 20,
+            // A Claude chat's first list is read by a probe that starts a CLI
+            // (`assistant_model_probe`: up to 15 s for it, 8 s for its picker).
+            Self::AssistantModels { .. } => 32,
             // Rides on the project list, which answers without the desktop:
             // a wedged window must not hold that list up for long.
             Self::GitStates { .. } => 3,
@@ -1398,6 +1520,8 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } => 20,
+            Self::MoveWorktree { .. } | Self::SwitchAssistantModel { .. } => 15,
+            Self::AssistantModels { .. } => 28,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
         })
@@ -1430,6 +1554,8 @@ impl DesktopRequest {
             | Self::EditHeldPrompt { .. }
             | Self::MarkupAnswer { .. }
             | Self::MarkupDismiss { .. }
+            | Self::MoveWorktree { .. }
+            | Self::SwitchAssistantModel { .. }
             | Self::LocalModelMutate { .. } => true,
             Self::Catalog { .. }
             | Self::Activity { .. }
@@ -1447,6 +1573,8 @@ impl DesktopRequest {
             | Self::TabInput { .. }
             | Self::TabPrompt { .. }
             | Self::UndoClear { .. }
+            | Self::TabWorktrees { .. }
+            | Self::AssistantModels { .. }
             | Self::AgentStatus { .. }
             | Self::AgentTranscript { .. }
             | Self::DesktopImages { .. }
@@ -1692,6 +1820,16 @@ pub fn git_dot(state: &str) -> Option<&'static str> {
     }
 }
 
+/// One row of a Tabby chat's model sheet ([`DesktopResponse::AssistantModels`]):
+/// `id` is what a switch names, the words are only shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantModelRow {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// What the desktop answers a [`DesktopRequest`] with.
 ///
 /// **This enum and everything it carries are deliberately NOT
@@ -1776,6 +1914,8 @@ pub enum DesktopResponse {
         sign_in: Vec<MobileSignInOption>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         local: Option<MobileLocalLaunch>,
+        #[serde(default)]
+        api_key: Vec<MobileApiKeyLaunch>,
     },
     Todo {
         board: TodoBoardSnapshot,
@@ -1837,6 +1977,38 @@ pub enum DesktopResponse {
     },
     DesktopImages {
         images: Vec<crate::services::desktop_images::DesktopImage>,
+    },
+    /// Answers [`DesktopRequest::TabWorktrees`]: the folders the tab can move
+    /// to (empty when the project has no linked worktree), the id of the one
+    /// it runs in, and whether its CLI takes the conversation along
+    /// (`agent_relocate::carries`) or starts a new one there.
+    TabWorktrees {
+        #[serde(default)]
+        worktrees: Vec<MobileWorktree>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
+        #[serde(default)]
+        carries: bool,
+    },
+    /// Answers [`DesktopRequest::MoveWorktree`]: `carried` (the conversation
+    /// goes on there) or `fresh` (the CLI started a new one there). A move
+    /// that failed — the tab came back in its old folder — is the error
+    /// `move_failed`.
+    WorktreeMoved {
+        moved: String,
+    },
+    /// Answers [`DesktopRequest::AssistantModels`]: the model names the chat's
+    /// CLI can run (each one the desktop's own list names, a safe CLI
+    /// argument) and the one it runs now. A switch is acknowledged with `Seen`.
+    AssistantModels {
+        #[serde(default)]
+        models: Vec<String>,
+        /// The same models as the sheet lists them: Claude's own picker
+        /// wording where it was read (`assistant_model_probe`), else the name.
+        #[serde(default)]
+        rows: Vec<AssistantModelRow>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
     },
     /// A desktop image copied into the project inbox: the same three fields
     /// the phone's own upload gets back.
@@ -1962,6 +2134,14 @@ pub enum TerminalControl {
     /// it (`TerminalEvent::Features`): an older one closes the socket on a
     /// control it does not know.
     Visibility { visible: bool },
+    /// The queued bubbles' Send now for an agent of CLI `family` (the
+    /// phone's `agentFamily`): Esc into the pane, but only while the CLI's
+    /// screen says the message still waits in its queue
+    /// (`pty_bridge::queue_hint`) — once the turn has taken it in, an Esc
+    /// would stop the turn that is to answer it. Checked beside the pane, not
+    /// on the phone's late copy of it. Answered with `TerminalEvent::SendNow`.
+    /// Sent only to a bridge that announced it (`Features::send_now`).
+    SendNow { family: String },
 }
 
 /// Server → client control frames. The phone needs four things it cannot infer
@@ -1987,10 +2167,38 @@ pub enum TerminalEvent {
     Pong,
     Window { cols: u16, rows: u16 },
     Replay,
+    /// Why the bridge is closing, and whether the phone should come back
+    /// (`pty_bridge::closing_retries`). Retried: `idle_timeout`,
+    /// `session_expired`, `catalog_unavailable`. Final: `replaced` (another
+    /// viewer took over), `access_revoked` (the catalog no longer grants the
+    /// tab), `host_offline` (a remote-host tab whose host the desktop no
+    /// longer holds an ssh master for — also the upgrade's `409`, beside the
+    /// routes' `409 tab_on_host` for what would act on this machine;
+    /// `docs/mobile_remote_host_tabs_plan.md`), `session_gone` (a host tab's
+    /// attach found no session on the host: `pty_bridge::attach_end_reason`),
+    /// and the frame refusals
+    /// (`input_frame_too_large`, `invalid_terminal_control`,
+    /// `invalid_terminal_size`, `resize_failed`).
     Closing { reason: String, retry: bool },
     Ack { seq: u64 },
-    /// `visibility`: this bridge accepts `TerminalControl::Visibility`.
-    Features { visibility: bool },
+    /// `visibility`: this bridge accepts `TerminalControl::Visibility`;
+    /// `send_now`: `TerminalControl::SendNow`.
+    Features {
+        visibility: bool,
+        #[serde(default)]
+        send_now: bool,
+    },
+    /// The answer to `TerminalControl::SendNow`: whether the Esc went in.
+    /// `false` when the queue hint was not on the screen (not typed in yet,
+    /// or already taken up by the turn), for a CLI with no hint to read, or
+    /// while the AI switch is off.
+    SendNow { sent: bool },
+    /// The AI switch is off (`services::ai_switch`): the input frame the
+    /// next `Ack` covers was dropped, not written to the agent.
+    AiOff,
+    /// The AI switch as it is now, on an agent tab's socket: sent at open
+    /// while it is off, and at every change after.
+    AiSwitch { off: bool },
 }
 
 impl TerminalEvent {
@@ -2257,6 +2465,83 @@ mod tests {
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize prompt report");
         assert!(matches!(restored, DesktopRequest::TabPrompt { .. }));
+    }
+
+    #[test]
+    fn a_tabby_model_switch_names_the_tab_pair_and_a_model_name_only() {
+        let switch = DesktopRequest::SwitchAssistantModel {
+            request_id: "request-switch".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            model: "opus".into(),
+        };
+        assert_eq!(switch.request_id(), "request-switch");
+        assert!(switch.is_mutation());
+        assert!(switch.desktop_timeout() < switch.response_timeout());
+        let json = serde_json::to_value(&switch).expect("serialize switch");
+        assert_eq!(json["type"], "switch_assistant_model");
+        let mut hostile = json.clone();
+        hostile["argv"] = "--evil".into();
+        assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+        let list = DesktopRequest::AssistantModels {
+            request_id: "request-models".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+        };
+        assert!(!list.is_mutation());
+        assert_eq!(serde_json::to_value(&list).expect("serialize list")["type"], "assistant_models");
+        let listed: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "assistant_models",
+            "models": ["opus", "sonnet"],
+            "current": "opus",
+        }))
+        .expect("deserialize models");
+        assert!(matches!(listed, DesktopResponse::AssistantModels { ref models, ref rows, current: Some(_) } if models.len() == 2 && rows.is_empty()));
+        let worded: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "assistant_models",
+            "models": ["default"],
+            "rows": [{ "id": "default", "label": "Default (recommended)", "description": "Sonnet 5.5" }],
+        }))
+        .expect("deserialize rows");
+        assert!(matches!(worded, DesktopResponse::AssistantModels { ref rows, current: None, .. }
+            if rows[0].label == "Default (recommended)" && rows[0].description.as_deref() == Some("Sonnet 5.5")));
+    }
+
+    #[test]
+    fn worktree_moves_name_the_tab_pair_and_an_opaque_worktree_only() {
+        let request = DesktopRequest::MoveWorktree {
+            request_id: "request-move".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            worktree: "w-1".into(),
+        };
+        assert_eq!(request.request_id(), "request-move");
+        assert!(request.is_mutation());
+        assert!(request.desktop_timeout() < request.response_timeout());
+        let json = serde_json::to_value(&request).expect("serialize move");
+        assert_eq!(json["type"], "move_worktree");
+        let mut hostile = json.clone();
+        hostile["path"] = "/must/not/cross".into();
+        assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+        let list = DesktopRequest::TabWorktrees {
+            request_id: "request-list".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+        };
+        assert!(!list.is_mutation());
+        assert_eq!(serde_json::to_value(&list).expect("serialize list")["type"], "tab_worktrees");
+
+        let listed: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "tab_worktrees",
+            "worktrees": [{ "id": "w-0", "label": "", "branch": "main", "main": true }],
+            "current": "w-0",
+            "carries": true,
+        }))
+        .expect("parse list answer");
+        assert!(matches!(listed, DesktopResponse::TabWorktrees { ref worktrees, current: Some(_), carries: true } if worktrees.len() == 1));
+        let moved: DesktopResponse = serde_json::from_value(serde_json::json!({ "status": "worktree_moved", "moved": "fresh" }))
+            .expect("parse move answer");
+        assert!(matches!(moved, DesktopResponse::WorktreeMoved { ref moved } if moved == "fresh"));
     }
 
     #[test]
@@ -2809,6 +3094,15 @@ mod tests {
             control(r#"{"type":"visibility","visible":false}"#),
             Ok(TerminalControl::Visibility { visible: false })
         ));
+        assert!(matches!(
+            control(r#"{"type":"send_now","family":"claude"}"#),
+            Ok(TerminalControl::SendNow { family }) if family == "claude"
+        ));
+        // A bridge's features from before `send_now` still read.
+        assert_eq!(
+            serde_json::from_str::<TerminalEvent>(r#"{"type":"features","visibility":true}"#).expect("older features"),
+            TerminalEvent::Features { visibility: true, send_now: false }
+        );
         // Anything the protocol does not name is refused, never guessed at.
         // The one gap is serde's, and documented here so nobody relies on the
         // `deny_unknown_fields` on the enum for it: an internally tagged enum
@@ -2826,6 +3120,8 @@ mod tests {
             r#"{"type":"exec","cmd":"id"}"#,
             r#"{"type":"visibility"}"#,
             r#"{"type":"visibility","visible":"no"}"#,
+            r#"{"type":"send_now"}"#,
+            r#"{"type":"send_now","family":"claude","keys":"\u001b"}"#,
             r#"{}"#,
             "[]",
             "",
@@ -2843,7 +3139,12 @@ mod tests {
                 reason: "replaced".into(),
                 retry: false,
             },
-            TerminalEvent::Features { visibility: true },
+            TerminalEvent::Closing {
+                reason: "host_offline".into(),
+                retry: false,
+            },
+            TerminalEvent::Features { visibility: true, send_now: true },
+            TerminalEvent::SendNow { sent: false },
         ] {
             let restored: TerminalEvent =
                 serde_json::from_str(&event.to_frame()).expect("server frame round trip");
@@ -2887,6 +3188,27 @@ mod tests {
         assert!(!ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "sign_in": "default", "worktree": "w1", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "agent", "like_tab": "t", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "like_tab": "t", "sign_in": "default", "idempotency_key": key})));
+        // A teleport: a cloud tab's session id beside `like_tab`, and nothing else.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "like_tab": "t", "teleport": "session_011SU65r", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "like_tab": "t", "teleport": "session_011SU65r", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "teleport": "session_011SU65r", "idempotency_key": key})));
+        for bad in ["", "-rf", "session_1; rm -rf ~", "a b", "s\u{1b}x", &"x".repeat(129)] {
+            assert!(!ok(json!({"project_id": "p", "kind": "agent", "like_tab": "t", "teleport": bad, "idempotency_key": key})), "{bad}");
+        }
+        for extra in [
+            json!({"agent_id": "a"}),
+            json!({"mode": "plan"}),
+            json!({"worktree": "w1"}),
+            json!({"cloud": "open"}),
+            json!({"sign_in": "default"}),
+            json!({"local": "l1"}),
+            json!({"assistant": "c1"}),
+            json!({"api_key": true}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "like_tab": "t", "teleport": "session_1", "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
         // A local-model agent: agent kind, a bounded id, and nothing else.
         assert!(ok(json!({"project_id": "p", "kind": "agent", "local": "l1", "idempotency_key": key})));
         assert!(!ok(json!({"project_id": "p", "kind": "shell", "local": "l1", "idempotency_key": key})));
@@ -2901,6 +3223,23 @@ mod tests {
             json!({"assistant": "c1"}),
         ] {
             let mut body = json!({"project_id": "p", "kind": "agent", "local": "l1", "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
+        // An API-key agent: a named agent, in a worktree at most.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": true, "idempotency_key": key})));
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "worktree": "w1", "api_key": true, "idempotency_key": key})));
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": false, "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "api_key": true, "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "api_key": true, "idempotency_key": key})));
+        for extra in [
+            json!({"mode": "plan"}),
+            json!({"cloud": "open"}),
+            json!({"sign_in": "default"}),
+            json!({"local": "l1"}),
+            json!({"assistant": "c1"}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": true, "idempotency_key": key});
             body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             assert!(!ok(body), "{extra}");
         }
@@ -2929,10 +3268,10 @@ mod tests {
     fn launch_options_round_trip_and_default() {
         let response: DesktopResponse = serde_json::from_value(json!({"status": "launch_options"}))
             .expect("empty launch options");
-        let DesktopResponse::LaunchOptions { worktrees, cloud, sign_in, local } = response else {
+        let DesktopResponse::LaunchOptions { worktrees, cloud, sign_in, local, api_key } = response else {
             panic!("launch options");
         };
-        assert!(worktrees.is_empty() && cloud.is_empty() && sign_in.is_empty() && local.is_none());
+        assert!(worktrees.is_empty() && cloud.is_empty() && sign_in.is_empty() && local.is_none() && api_key.is_empty());
         let request = DesktopRequest::LaunchOptions {
             request_id: "r".into(),
             project_id: "p".into(),
@@ -2967,6 +3306,23 @@ mod tests {
                 {"agent_id": "a2", "signed_in": false},
                 {"agent_id": "a3", "signed_in": true, "api_key": true, "api_budget_reached": true}
             ])
+        );
+    }
+
+    #[test]
+    fn an_api_key_row_carries_its_budget_flag_and_nothing_more() {
+        let response: DesktopResponse = serde_json::from_value(json!({
+            "status": "launch_options",
+            "api_key": [{"agent_id": "a1"}, {"agent_id": "a2", "budget_reached": true}]
+        }))
+        .expect("launch options");
+        let DesktopResponse::LaunchOptions { api_key, .. } = response else {
+            panic!("launch options");
+        };
+        assert!(!api_key[0].budget_reached && api_key[1].budget_reached);
+        assert_eq!(
+            serde_json::to_value(&api_key).expect("serialize"),
+            json!([{"agent_id": "a1"}, {"agent_id": "a2", "budget_reached": true}])
         );
     }
 }

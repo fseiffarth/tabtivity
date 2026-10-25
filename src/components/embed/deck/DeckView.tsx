@@ -1050,7 +1050,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
   const pickImage = useCallback(async (): Promise<string | null> => {
     const chosen = await open({
       multiple: false,
-      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg"] }],
+      filters: [{ name: t("deckIcon.image"), extensions: ["png", "jpg", "jpeg"] }],
       ...(projectRoot ? { defaultPath: projectRoot } : {}),
     });
     if (typeof chosen !== "string") return null;

@@ -6,6 +6,7 @@
 // tab switch, so "hide done" was being asked for again a dozen times a session.
 
 import { storageKey } from "../../src/lib/brand";
+import { readJson, writeJson } from "../../src/lib/persist";
 
 const PREFIX = storageKey("mobile.");
 
@@ -26,10 +27,12 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * has each Submit handed to a new subagent of the tab's agent
  * (`markupForSubagent`), off unset. `markupDirect` is **Apply marks
  * directly** (`markupInstruction.ts`), read with an on fallback.
- * `projectHintReorder`, `projectHintSwipe` and `homeHintReorder` are the
+ * `projectHintReorder`, `projectHintSwipe`, `projectHintHold` and `homeHintReorder` are the
  * gesture hints under the project screen's and Home's lists, set once one is
- * dismissed or its gesture has been used: a hint read every visit is noise. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "homeHintReorder";
+ * dismissed or its gesture has been used: a hint read every visit is noise.
+ * `limitBars` shows the facts row's usage limits as bars rather than
+ * percentages, off unset. */
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -78,8 +81,10 @@ export function writeFlag(name: MobileFlag, value: boolean, storage?: FlagStorag
  * asking dial, a digit 0–4. `markupOpen` is the mode
  * a markable PDF opens in (`markupOpen.ts`). `newTabAgent` is the agent a
  * tap on the project screen's ＋ starts (`newTabDefault.ts`), an id the
- * desktop's catalog lists; unset, the desktop's default agent is used. */
-export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent";
+ * desktop's catalog lists, or `api:<id>` / `local:<id>` for the sheet's API and
+ * local-model rows, whose `newTabLabel` is the name it was starred under; unset,
+ * the desktop's default agent is used. */
+export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent" | "newTabLabel";
 
 export function readChoice<T extends string>(name: MobileChoice, accept: (value: unknown) => value is T, fallback: T, storage?: FlagStorage): T {
   try {
@@ -122,22 +127,12 @@ const ORDER_CAP = 200;
  * array of strings (a hand-edited value, a half-written entry) is read as that
  * same empty list rather than being trusted into the sort. */
 export function readOrder(name: MobileIdList, storage?: FlagStorage): string[] {
-  try {
-    const stored = (storage ?? localStorage).getItem(`${PREFIX}${name}`);
-    if (!stored) return [];
-    const parsed: unknown = JSON.parse(stored);
-    return Array.isArray(parsed) && parsed.every((id): id is string => typeof id === "string") ? parsed : [];
-  } catch {
-    return [];
-  }
+  return readJson(`${PREFIX}${name}`, (parsed) =>
+    Array.isArray(parsed) && parsed.every((id): id is string => typeof id === "string") ? parsed : [], [], storage);
 }
 
 export function writeOrder(name: MobileIdList, ids: readonly string[], storage?: FlagStorage): void {
-  try {
-    (storage ?? localStorage).setItem(`${PREFIX}${name}`, JSON.stringify(ids.slice(0, ORDER_CAP)));
-  } catch {
-    // See readFlag.
-  }
+  writeJson(`${PREFIX}${name}`, ids.slice(0, ORDER_CAP), storage);
 }
 
 /** Which output view a terminal opens in: whatever the reader last chose for

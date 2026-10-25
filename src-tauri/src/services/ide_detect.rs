@@ -1,6 +1,9 @@
 //! Which IDE a project belongs to, read off the footprint the IDE left in its
-//! tree — `.idea/` (JetBrains), `.vs/` + `*.sln` (Visual Studio), `.vscode/` /
-//! `*.code-workspace` (VS Code) — and which installed program opens it.
+//! tree — `.idea/` (JetBrains, Android Studio), `.vs/` + `*.sln` (Visual
+//! Studio), `.vscode/` / `*.code-workspace` (VS Code), `.cursor/`,
+//! `.windsurf/`, `.zed/`, `*.xcodeproj` / `*.xcworkspace` (Xcode, macOS only),
+//! `.project` (Eclipse), `*.sublime-project`, `*.Rproj` (RStudio),
+//! `.spyproject/` (Spyder) — and which installed program opens it.
 //!
 //! Two halves, both `AppHandle`-free and pure over their inputs:
 //!
@@ -31,12 +34,23 @@ pub enum IdeId {
     PyCharm,
     CLion,
     WebStorm,
+    PhpStorm,
+    RubyMine,
     Rider,
     RustRover,
     GoLand,
+    AndroidStudio,
     Idea,
     VisualStudio,
     VsCode,
+    Cursor,
+    Windsurf,
+    Zed,
+    Xcode,
+    Eclipse,
+    SublimeText,
+    RStudio,
+    Spyder,
 }
 
 impl Serialize for IdeId {
@@ -50,16 +64,27 @@ pub const FAMILY_VISUAL_STUDIO: &str = "visual_studio";
 pub const FAMILY_VSCODE: &str = "vscode";
 
 impl IdeId {
-    pub const ALL: [IdeId; 9] = [
+    pub const ALL: [IdeId; 20] = [
         IdeId::PyCharm,
         IdeId::CLion,
         IdeId::WebStorm,
+        IdeId::PhpStorm,
+        IdeId::RubyMine,
         IdeId::Rider,
         IdeId::RustRover,
         IdeId::GoLand,
+        IdeId::AndroidStudio,
         IdeId::Idea,
         IdeId::VisualStudio,
         IdeId::VsCode,
+        IdeId::Cursor,
+        IdeId::Windsurf,
+        IdeId::Zed,
+        IdeId::Xcode,
+        IdeId::Eclipse,
+        IdeId::SublimeText,
+        IdeId::RStudio,
+        IdeId::Spyder,
     ];
 
     pub fn id(self) -> &'static str {
@@ -67,12 +92,23 @@ impl IdeId {
             IdeId::PyCharm => "pycharm",
             IdeId::CLion => "clion",
             IdeId::WebStorm => "webstorm",
+            IdeId::PhpStorm => "phpstorm",
+            IdeId::RubyMine => "rubymine",
             IdeId::Rider => "rider",
             IdeId::RustRover => "rustrover",
             IdeId::GoLand => "goland",
+            IdeId::AndroidStudio => "android_studio",
             IdeId::Idea => "idea",
             IdeId::VisualStudio => "visual_studio",
             IdeId::VsCode => "vscode",
+            IdeId::Cursor => "cursor",
+            IdeId::Windsurf => "windsurf",
+            IdeId::Zed => "zed",
+            IdeId::Xcode => "xcode",
+            IdeId::Eclipse => "eclipse",
+            IdeId::SublimeText => "sublime_text",
+            IdeId::RStudio => "rstudio",
+            IdeId::Spyder => "spyder",
         }
     }
 
@@ -86,20 +122,54 @@ impl IdeId {
             IdeId::PyCharm => "PyCharm",
             IdeId::CLion => "CLion",
             IdeId::WebStorm => "WebStorm",
+            IdeId::PhpStorm => "PhpStorm",
+            IdeId::RubyMine => "RubyMine",
             IdeId::Rider => "Rider",
             IdeId::RustRover => "RustRover",
             IdeId::GoLand => "GoLand",
+            IdeId::AndroidStudio => "Android Studio",
             IdeId::Idea => "IntelliJ IDEA",
             IdeId::VisualStudio => "Visual Studio",
             IdeId::VsCode => "Visual Studio Code",
+            IdeId::Cursor => "Cursor",
+            IdeId::Windsurf => "Windsurf",
+            IdeId::Zed => "Zed",
+            IdeId::Xcode => "Xcode",
+            IdeId::Eclipse => "Eclipse",
+            IdeId::SublimeText => "Sublime Text",
+            IdeId::RStudio => "RStudio",
+            IdeId::Spyder => "Spyder",
         }
     }
 
+    /// JetBrains (Android Studio is IntelliJ-based), Visual Studio, VS Code
+    /// and its forks; every other IDE is a family of its own, named by its id.
     pub fn family(self) -> &'static str {
         match self {
+            IdeId::PyCharm
+            | IdeId::CLion
+            | IdeId::WebStorm
+            | IdeId::PhpStorm
+            | IdeId::RubyMine
+            | IdeId::Rider
+            | IdeId::RustRover
+            | IdeId::GoLand
+            | IdeId::AndroidStudio
+            | IdeId::Idea => FAMILY_JETBRAINS,
             IdeId::VisualStudio => FAMILY_VISUAL_STUDIO,
-            IdeId::VsCode => FAMILY_VSCODE,
-            _ => FAMILY_JETBRAINS,
+            IdeId::VsCode | IdeId::Cursor | IdeId::Windsurf => FAMILY_VSCODE,
+            _ => self.id(),
+        }
+    }
+
+    /// Arguments placed before the target. Sublime Text opens a
+    /// `.sublime-project` as a project only behind `--project` (bare, it edits
+    /// the file); Spyder opens a folder as a project only behind `-p`.
+    fn args_for(self, target: &Path) -> &'static [&'static str] {
+        match self {
+            IdeId::SublimeText if has_ext(target, "sublime-project") => &["--project"],
+            IdeId::Spyder => &["-p"],
+            _ => &[],
         }
     }
 
@@ -117,12 +187,25 @@ impl IdeId {
             IdeId::PyCharm => &["pycharm", "pycharm-professional", "pycharm-community", "charm"],
             IdeId::CLion => &["clion"],
             IdeId::WebStorm => &["webstorm"],
+            IdeId::PhpStorm => &["phpstorm"],
+            IdeId::RubyMine => &["rubymine"],
             IdeId::Rider => &["rider"],
             IdeId::RustRover => &["rustrover"],
             IdeId::GoLand => &["goland"],
+            IdeId::AndroidStudio => &["studio", "android-studio"],
             IdeId::Idea => &["idea", "intellij-idea-ultimate", "intellij-idea-community"],
             IdeId::VisualStudio => &["devenv"],
             IdeId::VsCode => &["code", "code-insiders", "codium", "code-oss", "cursor"],
+            IdeId::Cursor => &["cursor"],
+            IdeId::Windsurf => &["windsurf"],
+            // `zeditor` / `zedit` are the Linux distro packages' names for it.
+            IdeId::Zed => &["zed", "zeditor", "zedit", "zed-editor"],
+            // Xcode's own command-line opener.
+            IdeId::Xcode => &["xed"],
+            IdeId::Eclipse => &["eclipse"],
+            IdeId::SublimeText => &["subl", "sublime_text", "sublime-text"],
+            IdeId::RStudio => &["rstudio"],
+            IdeId::Spyder => &["spyder", "spyder3"],
         }
     }
 
@@ -135,12 +218,25 @@ impl IdeId {
             IdeId::PyCharm => &["pycharm"],
             IdeId::CLion => &["clion"],
             IdeId::WebStorm => &["webstorm"],
+            IdeId::PhpStorm => &["phpstorm"],
+            IdeId::RubyMine => &["rubymine"],
             IdeId::Rider => &["jetbrains rider", "jetbrains-rider", "com.jetbrains.rider", "rider.sh"],
             IdeId::RustRover => &["rustrover"],
             IdeId::GoLand => &["goland"],
+            IdeId::AndroidStudio => &["android studio", "android-studio", "com.google.androidstudio"],
             IdeId::Idea => &["intellij", "jetbrains-idea", "idea.sh"],
             IdeId::VisualStudio => &["devenv"],
             IdeId::VsCode => &["visual studio code", "com.visualstudio.code", "code - oss", "vscodium", "cursor"],
+            IdeId::Cursor => &["cursor"],
+            IdeId::Windsurf => &["windsurf"],
+            // The flatpak id; the bare word would claim "Optimized …" entries.
+            IdeId::Zed => &["dev.zed.zed"],
+            // `Xcode.app`, not the many `xcode-*` helper tools.
+            IdeId::Xcode => &[],
+            IdeId::Eclipse => &["eclipse"],
+            IdeId::SublimeText => &["sublime text", "com.sublimetext"],
+            IdeId::RStudio => &["rstudio"],
+            IdeId::Spyder => &["spyder"],
         }
     }
 
@@ -155,21 +251,132 @@ impl IdeId {
             // `Rider.app` on macOS: the bundle name is the bare word, which no
             // substring pattern can claim without also claiming "Glider".
             IdeId::Rider => &["rider"],
+            IdeId::AndroidStudio => &["studio", "studio64"],
+            IdeId::Zed => &["zed", "zeditor", "zedit", "zed-editor"],
+            IdeId::Xcode => &["xcode"],
+            IdeId::SublimeText => &["subl", "sublime_text"],
             _ => &[],
         }
     }
 
     /// Which other IDE may open this one's project when it is not installed:
     /// any JetBrains project opens in IDEA (Ultimate carries every language
-    /// plugin), a Visual Studio solution opens in Rider, and failing that in VS
-    /// Code (on the folder — see [`IdeId::opens_solutions`]).
+    /// plugin, and imports Eclipse projects too), a Visual Studio solution opens
+    /// in Rider, and failing that in VS Code (on the folder — see
+    /// [`IdeId::opens_solutions`]); a VS Code fork's project opens in VS Code.
+    /// The rest have no stand-in.
     fn fallbacks(self) -> &'static [IdeId] {
         match self {
-            IdeId::Idea | IdeId::VsCode => &[],
+            IdeId::PyCharm
+            | IdeId::CLion
+            | IdeId::WebStorm
+            | IdeId::PhpStorm
+            | IdeId::RubyMine
+            | IdeId::Rider
+            | IdeId::RustRover
+            | IdeId::GoLand
+            | IdeId::AndroidStudio
+            | IdeId::Eclipse => &[IdeId::Idea],
             IdeId::VisualStudio => &[IdeId::Rider, IdeId::VsCode],
-            _ => &[IdeId::Idea],
+            IdeId::Cursor | IdeId::Windsurf => &[IdeId::VsCode],
+            _ => &[],
         }
     }
+
+    /// Lower-case names this IDE's top-level windows carry: an X11 `WM_CLASS`
+    /// segment (`jetbrains-pycharm`, `code`) or, on Windows, the executable's
+    /// file stem (`pycharm64`, `code`). A name also claims its `-suffix`
+    /// editions (`jetbrains-pycharm-ce`, `jetbrains-idea-ce`).
+    fn window_classes(self) -> &'static [&'static str] {
+        match self {
+            IdeId::PyCharm => &["jetbrains-pycharm", "pycharm64"],
+            IdeId::CLion => &["jetbrains-clion", "clion64"],
+            IdeId::WebStorm => &["jetbrains-webstorm", "webstorm64"],
+            IdeId::PhpStorm => &["jetbrains-phpstorm", "phpstorm64"],
+            IdeId::RubyMine => &["jetbrains-rubymine", "rubymine64"],
+            IdeId::Rider => &["jetbrains-rider", "rider64"],
+            IdeId::RustRover => &["jetbrains-rustrover", "rustrover64"],
+            IdeId::GoLand => &["jetbrains-goland", "goland64"],
+            IdeId::AndroidStudio => &["jetbrains-studio", "studio64"],
+            IdeId::Idea => &["jetbrains-idea", "idea64"],
+            IdeId::VisualStudio => &["devenv"],
+            // The `code` launcher may be any of these (`path_candidates`).
+            IdeId::VsCode => &["code", "code - insiders", "vscodium", "codium", "cursor"],
+            IdeId::Cursor => &["cursor"],
+            IdeId::Windsurf => &["windsurf"],
+            IdeId::Zed => &["dev.zed.zed", "zed"],
+            IdeId::Xcode => &["xcode"],
+            IdeId::Eclipse => &["eclipse"],
+            IdeId::SublimeText => &["sublime_text"],
+            IdeId::RStudio => &["rstudio"],
+            IdeId::Spyder => &["spyder"],
+        }
+    }
+}
+
+// ── Open windows ───────────────────────────────────────────────────────────
+
+/// The names an IDE window may title the project with: the folder's, a
+/// JetBrains project's own (`.idea/.name`), and a `.code-workspace` target's
+/// stem. The `.name` file is only ever compared against window titles.
+pub fn project_window_names(dir: &Path, target: &Path) -> Vec<String> {
+    use std::io::Read;
+    let mut names = Vec::new();
+    let mut push = |name: &str| {
+        let name = name.trim();
+        if !name.is_empty() && !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    };
+    if let Some(name) = dir.file_name() {
+        push(&name.to_string_lossy());
+    }
+    if let Some(file) = super::home_io::open_regular(&dir.join(".idea").join(".name")) {
+        let mut bytes = Vec::new();
+        let _ = file.take(256).read_to_end(&mut bytes);
+        push(&String::from_utf8_lossy(&bytes));
+    }
+    if has_ext(target, "code-workspace") {
+        if let Some(stem) = target.file_stem() {
+            push(&stem.to_string_lossy());
+        }
+    }
+    names
+}
+
+/// Whether a top-level window is `ide`'s window on a project called one of
+/// `names`. `class` is the X11 `WM_CLASS` (NUL-separated instance and class)
+/// or a Windows executable's file name. Pure, so the title shapes are tested
+/// with literals.
+pub fn window_shows_project(ide: IdeId, class: &str, title: &str, names: &[String]) -> bool {
+    window_is_ide(ide, class) && title_names_project(title, names)
+}
+
+fn window_is_ide(ide: IdeId, class: &str) -> bool {
+    class
+        .to_lowercase()
+        .split('\0')
+        .map(|seg| seg.trim().trim_end_matches(".exe"))
+        .filter(|seg| !seg.is_empty())
+        .any(|seg| {
+            ide.window_classes()
+                .iter()
+                .any(|c| seg == *c || seg.strip_prefix(c).is_some_and(|rest| rest.starts_with('-')))
+        })
+}
+
+/// JetBrains titles a project window `name – file` (older builds
+/// `name [~/path] – file`), VS Code `file - name - Visual Studio Code` (a
+/// workspace `name (Workspace)`, an unsaved file `● file`): the project's name
+/// is one whole dash-separated part of the title.
+fn title_names_project(title: &str, names: &[String]) -> bool {
+    let title = title.replace(" – ", " - ").replace(" — ", " - ");
+    title.split(" - ").any(|part| {
+        let part = part.trim().trim_start_matches('●').trim();
+        let part = part.split(" [").next().unwrap_or(part);
+        let part = part.trim_end_matches(" (Workspace)").trim();
+        names.iter().any(|n| n == part)
+    })
 }
 
 /// One IDE a directory carries a marker for.
@@ -191,12 +398,31 @@ struct TopLevel {
     idea: bool,
     vs: bool,
     vscode: bool,
+    cursor: bool,
+    windsurf: bool,
+    zed: bool,
+    spyder: bool,
+    /// `.project` plus one of the files Eclipse writes beside it — a bare
+    /// `.project` is too generic a name to claim on its own.
+    eclipse_project: bool,
+    eclipse_companion: bool,
+    /// A top-level module with `src/main/AndroidManifest.xml` (`app/`).
+    android: bool,
     cmake: bool,
     cargo: bool,
     go_mod: bool,
+    python: bool,
+    package_json: bool,
+    composer: bool,
+    gemfile: bool,
     solutions: Vec<PathBuf>,
     workspaces: Vec<PathBuf>,
     imls: Vec<PathBuf>,
+    /// `*.xcworkspace` / `*.xcodeproj` bundles (directories).
+    xcode_workspaces: Vec<PathBuf>,
+    xcode_projects: Vec<PathBuf>,
+    sublime_projects: Vec<PathBuf>,
+    rprojs: Vec<PathBuf>,
 }
 
 fn scan_top_level(dir: &Path) -> TopLevel {
@@ -212,33 +438,71 @@ fn scan_top_level(dir: &Path) -> TopLevel {
             ".idea" if is_dir => top.idea = true,
             ".vs" if is_dir => top.vs = true,
             ".vscode" if is_dir => top.vscode = true,
+            ".cursor" if is_dir => top.cursor = true,
+            ".windsurf" if is_dir => top.windsurf = true,
+            ".zed" if is_dir => top.zed = true,
+            ".spyproject" if is_dir => top.spyder = true,
+            ".project" if !is_dir => top.eclipse_project = true,
+            ".classpath" | ".cproject" | ".pydevproject" if !is_dir => top.eclipse_companion = true,
+            ".settings" if is_dir => top.eclipse_companion = true,
+            "composer.json" if !is_dir => top.composer = true,
+            "Gemfile" if !is_dir => top.gemfile = true,
             "CMakeLists.txt" if !is_dir => top.cmake = true,
             "Cargo.toml" if !is_dir => top.cargo = true,
             "go.mod" if !is_dir => top.go_mod = true,
+            "pyproject.toml" | "setup.py" | "setup.cfg" | "requirements.txt" | "Pipfile"
+            | "environment.yml"
+                if !is_dir =>
+            {
+                top.python = true
+            }
+            "package.json" if !is_dir => top.package_json = true,
             _ => {}
-        }
-        if is_dir {
-            continue;
         }
         let ext = path
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
+        if is_dir {
+            match ext.as_str() {
+                "xcworkspace" => top.xcode_workspaces.push(path),
+                "xcodeproj" => top.xcode_projects.push(path),
+                _ if !name.starts_with('.')
+                    && path.join("src").join("main").join("AndroidManifest.xml").is_file() =>
+                {
+                    top.android = true
+                }
+                _ => {}
+            }
+            continue;
+        }
         match ext.as_str() {
             "sln" | "slnx" => top.solutions.push(path),
             "code-workspace" => top.workspaces.push(path),
             "iml" => top.imls.push(path),
+            "sublime-project" => top.sublime_projects.push(path),
+            "rproj" => top.rprojs.push(path),
             _ => {}
         }
     }
     top.solutions.sort();
     top.workspaces.sort();
+    top.xcode_workspaces.sort();
+    top.xcode_projects.sort();
+    top.sublime_projects.sort();
+    top.rprojs.sort();
     top
 }
 
+/// The most `.iml` files read for one project, and the most of each.
+const MAX_IMLS: usize = 32;
+const IML_CAP: u64 = 64 * 1024;
+
 /// The `type="…"` of the first `<module …>` tag in an `.iml`, upper-cased.
+/// The file is project content, read on every panel render: never through a
+/// link, never blocking on a FIFO, never past [`IML_CAP`].
 fn iml_module_type(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+    let text = super::home_io::read_record_capped(path, IML_CAP)?;
     let module = text.find("<module")?;
     let rest = &text[module..];
     let end = rest.find('>').unwrap_or(rest.len());
@@ -249,7 +513,7 @@ fn iml_module_type(path: &Path) -> Option<String> {
     Some(value[..close].trim().to_ascii_uppercase())
 }
 
-/// Which JetBrains product a `.idea/` belongs to. The `.iml` module type is
+/// Which JetBrains product (or Android Studio) a `.idea/` belongs to. The `.iml` module type is
 /// the IDE's own word and wins; the build files are a hint for layouts that
 /// carry no `.iml` (recent PyCharm/IDEA versions), and IDEA is the default.
 fn jetbrains_product(dir: &Path, top: &TopLevel) -> IdeId {
@@ -273,28 +537,42 @@ fn jetbrains_product(dir: &Path, top: &TopLevel) -> IdeId {
         );
     }
     imls.sort();
+    imls.truncate(MAX_IMLS);
     for iml in &imls {
         match iml_module_type(iml).as_deref() {
             Some("PYTHON_MODULE") => return IdeId::PyCharm,
             Some("CPP_MODULE") => return IdeId::CLion,
+            // PhpStorm writes the same module type WebStorm does.
+            Some("WEB_MODULE") if top.composer => return IdeId::PhpStorm,
             Some("WEB_MODULE") => return IdeId::WebStorm,
             Some("GO_MODULE") => return IdeId::GoLand,
+            Some("RUBY_MODULE") => return IdeId::RubyMine,
             _ => {}
         }
     }
-    if top.cmake {
+    if top.android {
+        IdeId::AndroidStudio
+    } else if top.cmake {
         IdeId::CLion
     } else if top.cargo {
         IdeId::RustRover
     } else if top.go_mod {
         IdeId::GoLand
+    } else if top.python {
+        IdeId::PyCharm
+    } else if top.composer {
+        IdeId::PhpStorm
+    } else if top.gemfile {
+        IdeId::RubyMine
+    } else if top.package_json {
+        IdeId::WebStorm
     } else {
         IdeId::Idea
     }
 }
 
 /// The IDEs `dir` carries markers for, in a fixed order (JetBrains, Visual
-/// Studio, VS Code). Empty when nothing is recognised or `dir` is unreadable.
+/// Studio, VS Code and its forks, then the rest). Empty when nothing is recognised or `dir` is unreadable.
 pub fn detect(dir: &Path) -> Vec<Detected> {
     let top = scan_top_level(dir);
     let single = |files: &[PathBuf]| -> Option<PathBuf> {
@@ -347,7 +625,70 @@ pub fn detect(dir: &Path) -> Vec<Detected> {
             target: single(&top.workspaces).unwrap_or_else(|| dir.to_path_buf()),
         });
     }
+    let folder = |found: &mut Vec<Detected>, ide: IdeId, marker: &str| {
+        found.push(Detected {
+            ide,
+            marker: PathBuf::from(marker),
+            target: dir.to_path_buf(),
+        })
+    };
+    // The file a marker list names first, relative to `dir`, as the marker.
+    let first_name = |files: &[PathBuf]| -> PathBuf {
+        files[0].file_name().map(PathBuf::from).unwrap_or_default()
+    };
+    if top.cursor {
+        folder(&mut found, IdeId::Cursor, ".cursor");
+    }
+    if top.windsurf {
+        folder(&mut found, IdeId::Windsurf, ".windsurf");
+    }
+    if top.zed {
+        folder(&mut found, IdeId::Zed, ".zed");
+    }
+    // Xcode exists only on macOS; elsewhere the bundle would be a row nothing
+    // can ever open.
+    if cfg!(target_os = "macos")
+        && (!top.xcode_workspaces.is_empty() || !top.xcode_projects.is_empty())
+    {
+        // A workspace wraps its projects, so it is what opens when there is one.
+        let (bundles, target) = if top.xcode_workspaces.is_empty() {
+            (&top.xcode_projects, single(&top.xcode_projects))
+        } else {
+            (&top.xcode_workspaces, single(&top.xcode_workspaces))
+        };
+        let marker = first_name(bundles);
+        let target = target.unwrap_or_else(|| dir.to_path_buf());
+        found.push(Detected {
+            ide: IdeId::Xcode,
+            marker,
+            target,
+        });
+    }
+    if top.eclipse_project && top.eclipse_companion {
+        folder(&mut found, IdeId::Eclipse, ".project");
+    }
+    if !top.sublime_projects.is_empty() {
+        found.push(Detected {
+            ide: IdeId::SublimeText,
+            marker: first_name(&top.sublime_projects),
+            target: single(&top.sublime_projects).unwrap_or_else(|| dir.to_path_buf()),
+        });
+    }
+    if !top.rprojs.is_empty() {
+        found.push(Detected {
+            ide: IdeId::RStudio,
+            marker: first_name(&top.rprojs),
+            target: single(&top.rprojs).unwrap_or_else(|| dir.to_path_buf()),
+        });
+    }
+    if top.spyder {
+        folder(&mut found, IdeId::Spyder, ".spyproject");
+    }
     found
+}
+
+fn has_ext(path: &Path, ext: &str) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
 // ── Launcher resolution ────────────────────────────────────────────────────
@@ -378,6 +719,11 @@ pub struct Launcher {
 }
 
 impl Launcher {
+    /// The arguments that go before [`Launcher::target_for`]'s target.
+    pub fn args_for(&self, target: &Path) -> Vec<String> {
+        self.ide.args_for(target).iter().map(|a| a.to_string()).collect()
+    }
+
     /// What to hand this launcher for a detection: its own target when the
     /// launcher *is* the detected IDE (or both take solutions), else the
     /// directory — VS Code standing in for Visual Studio must not be handed a
@@ -659,19 +1005,188 @@ mod tests {
 
     #[test]
     fn idea_without_an_iml_reads_the_build_files_then_defaults_to_idea() {
-        let cases: [(&[&str], IdeId); 4] = [
+        let cases: [(&[&str], IdeId); 11] = [
             (&["CMakeLists.txt"], IdeId::CLion),
             (&["Cargo.toml"], IdeId::RustRover),
             (&["go.mod"], IdeId::GoLand),
+            (&["pyproject.toml"], IdeId::PyCharm),
+            (&["requirements.txt"], IdeId::PyCharm),
+            (&["package.json"], IdeId::WebStorm),
+            (&["composer.json", "package.json"], IdeId::PhpStorm),
+            (&["Gemfile"], IdeId::RubyMine),
+            (&["app/src/main/AndroidManifest.xml", "CMakeLists.txt"], IdeId::AndroidStudio),
+            // A Python backend with a web front end is still a PyCharm project.
+            (&["package.json", "setup.py"], IdeId::PyCharm),
             (&["pom.xml"], IdeId::Idea),
         ];
         for (files, ide) in cases {
             let p = project();
             fs::create_dir(p.path().join(".idea")).unwrap();
             for f in files {
-                touch(p.path(), f, "");
+                let rel: PathBuf = f.split('/').collect();
+                touch(p.path(), &rel.to_string_lossy(), "");
             }
             assert_eq!(ids(&detect(p.path())), vec![ide], "{files:?}");
+        }
+    }
+
+    #[test]
+    fn iml_types_for_php_and_ruby() {
+        let p = project();
+        touch(p.path(), ".idea/app.iml", "<module type=\"WEB_MODULE\" />");
+        touch(p.path(), "composer.json", "{}");
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::PhpStorm]);
+
+        let p = project();
+        touch(p.path(), ".idea/app.iml", "<module type=\"RUBY_MODULE\" />");
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::RubyMine]);
+    }
+
+    #[test]
+    fn an_oversize_iml_is_not_read() {
+        let p = project();
+        let body = format!("{}<module type=\"PYTHON_MODULE\" />", " ".repeat(70 * 1024));
+        touch(p.path(), ".idea/app.iml", &body);
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::Idea]);
+    }
+
+    #[test]
+    fn only_the_first_imls_are_read() {
+        let p = project();
+        fs::create_dir(p.path().join(".idea")).unwrap();
+        for i in 0..MAX_IMLS {
+            touch(p.path(), &format!(".idea/a{i:02}.iml"), "<module />");
+        }
+        touch(p.path(), ".idea/z.iml", "<module type=\"PYTHON_MODULE\" />");
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::Idea]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_iml_that_is_a_device_link_or_a_fifo_is_not_opened() {
+        let p = project();
+        fs::create_dir(p.path().join(".idea")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", p.path().join(".idea/a.iml")).unwrap();
+        super::super::home_io::mkfifo(&p.path().join(".idea/b.iml"));
+        let dir = p.path().to_path_buf();
+        let found = super::super::home_io::within_deadline(move || ids(&detect(&dir)));
+        assert_eq!(found, vec![IdeId::Idea]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_idea_name_that_is_a_device_link_or_a_fifo_is_not_opened() {
+        let p = project();
+        fs::create_dir(p.path().join(".idea")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", p.path().join(".idea/.name")).unwrap();
+        let dir = p.path().to_path_buf();
+        let names = super::super::home_io::within_deadline(move || project_window_names(&dir, &dir));
+        assert_eq!(names.len(), 1);
+        fs::remove_file(p.path().join(".idea/.name")).unwrap();
+        super::super::home_io::mkfifo(&p.path().join(".idea/.name"));
+        let dir = p.path().to_path_buf();
+        let names = super::super::home_io::within_deadline(move || project_window_names(&dir, &dir));
+        assert_eq!(names.len(), 1);
+    }
+
+    #[test]
+    fn folder_markers_of_the_other_editors() {
+        let cases = [
+            (".cursor", IdeId::Cursor),
+            (".windsurf", IdeId::Windsurf),
+            (".zed", IdeId::Zed),
+            (".spyproject", IdeId::Spyder),
+        ];
+        for (marker, ide) in cases {
+            let p = project();
+            fs::create_dir(p.path().join(marker)).unwrap();
+            let found = detect(p.path());
+            assert_eq!(ids(&found), vec![ide], "{marker}");
+            assert_eq!(found[0].marker, PathBuf::from(marker));
+            assert_eq!(found[0].target, p.path());
+        }
+    }
+
+    #[test]
+    fn eclipse_needs_a_companion_file_beside_dot_project() {
+        let p = project();
+        touch(p.path(), ".project", "<projectDescription/>");
+        assert!(detect(p.path()).is_empty(), "a bare .project is too generic");
+        touch(p.path(), ".classpath", "");
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::Eclipse]);
+
+        let p = project();
+        touch(p.path(), ".project", "");
+        fs::create_dir(p.path().join(".settings")).unwrap();
+        assert_eq!(ids(&detect(p.path())), vec![IdeId::Eclipse]);
+    }
+
+    #[test]
+    fn sublime_and_rstudio_open_their_one_project_file() {
+        let p = project();
+        touch(p.path(), "app.sublime-project", "{}");
+        touch(p.path(), "analysis.Rproj", "");
+        let found = detect(p.path());
+        assert_eq!(ids(&found), vec![IdeId::SublimeText, IdeId::RStudio]);
+        assert_eq!(found[0].target, p.path().join("app.sublime-project"));
+        assert_eq!(found[0].marker, PathBuf::from("app.sublime-project"));
+        assert_eq!(found[1].target, p.path().join("analysis.Rproj"));
+
+        touch(p.path(), "other.sublime-project", "{}");
+        assert_eq!(detect(p.path())[0].target, p.path(), "two projects → the folder");
+    }
+
+    #[test]
+    fn xcode_bundles_count_only_on_macos() {
+        let p = project();
+        fs::create_dir(p.path().join("App.xcodeproj")).unwrap();
+        fs::create_dir(p.path().join("App.xcworkspace")).unwrap();
+        let found = detect(p.path());
+        if cfg!(target_os = "macos") {
+            assert_eq!(ids(&found), vec![IdeId::Xcode]);
+            assert_eq!(found[0].target, p.path().join("App.xcworkspace"), "the workspace wins");
+        } else {
+            assert!(found.is_empty());
+        }
+    }
+
+    #[test]
+    fn launch_args_per_ide() {
+        let p = project();
+        let sublime = |target: &Path| {
+            Launcher {
+                ide: IdeId::SublimeText,
+                exec: "subl".into(),
+                display_name: "Sublime Text".into(),
+                source: LauncherSource::Path,
+            }
+            .args_for(target)
+        };
+        assert_eq!(sublime(&p.path().join("a.sublime-project")), vec!["--project"]);
+        assert!(sublime(p.path()).is_empty(), "a folder opens bare");
+        let spyder = Launcher {
+            ide: IdeId::Spyder,
+            exec: "spyder".into(),
+            display_name: "Spyder".into(),
+            source: LauncherSource::Path,
+        };
+        assert_eq!(spyder.args_for(p.path()), vec!["-p"]);
+        let code = Launcher {
+            ide: IdeId::VsCode,
+            exec: "code".into(),
+            display_name: "Visual Studio Code".into(),
+            source: LauncherSource::Path,
+        };
+        assert!(code.args_for(p.path()).is_empty());
+    }
+
+    #[test]
+    fn vscode_forks_fall_back_to_vscode_and_ids_round_trip() {
+        let code = |name: &str| (name == "code").then(|| PathBuf::from("/usr/bin/code"));
+        let got = resolve_launcher(IdeId::Windsurf, &HashMap::new(), &[], &closed_world(&code)).unwrap();
+        assert_eq!(got.ide, IdeId::VsCode);
+        for ide in IdeId::ALL {
+            assert_eq!(IdeId::parse(ide.id()), Some(ide));
         }
     }
 
@@ -789,6 +1304,18 @@ mod tests {
         assert_eq!(pick_installed(IdeId::VisualStudio, &installed).unwrap().name, "Visual Studio 2022");
         assert!(pick_installed(IdeId::CLion, &installed).is_none());
         assert!(pick_installed(IdeId::GoLand, &installed).is_none());
+        assert!(pick_installed(IdeId::Zed, &installed).is_none());
+
+        let installed = vec![
+            app("Xcode", "/Applications/Xcode.app/Contents/MacOS/Xcode"),
+            app("Zed", "/usr/bin/zeditor"),
+            app("Android Studio", "/opt/android-studio/bin/studio.sh"),
+            app("Sublime Text", "/opt/sublime_text/sublime_text --class=sublime-text"),
+        ];
+        assert_eq!(pick_installed(IdeId::Xcode, &installed).unwrap().name, "Xcode");
+        assert!(pick_installed(IdeId::VsCode, &installed).is_none());
+        assert_eq!(pick_installed(IdeId::AndroidStudio, &installed).unwrap().name, "Android Studio");
+        assert_eq!(pick_installed(IdeId::SublimeText, &installed).unwrap().name, "Sublime Text");
     }
 
     #[test]
@@ -895,5 +1422,55 @@ mod tests {
             assert_eq!(serde_json::to_value(ide).unwrap(), ide.id());
         }
         assert_eq!(IdeId::parse("emacs"), None);
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn an_open_ide_window_is_found_by_class_and_project_title() {
+        let proj = names(&["my-app"]);
+        for (ide, class, title) in [
+            (IdeId::PyCharm, "jetbrains-pycharm\0jetbrains-pycharm\0", "my-app – main.py"),
+            (IdeId::PyCharm, "jetbrains-pycharm-ce\0jetbrains-pycharm-ce\0", "my-app [~/src/my-app] – main.py"),
+            (IdeId::PyCharm, "pycharm64.exe", "my-app – main.py"),
+            (IdeId::VsCode, "code\0Code\0", "● main.py - my-app - Visual Studio Code"),
+            (IdeId::VsCode, "code\0Code\0", "my-app - Visual Studio Code"),
+            (IdeId::VsCode, "Code.exe", "my-app (Workspace) - Visual Studio Code"),
+            (IdeId::VsCode, "vscodium\0VSCodium\0", "main.py — my-app — VSCodium"),
+        ] {
+            assert!(window_shows_project(ide, class, title, &proj), "{class:?} {title:?}");
+        }
+    }
+
+    #[test]
+    fn other_projects_and_other_apps_are_not_raised() {
+        let proj = names(&["app"]);
+        for (ide, class, title) in [
+            // Another project, its name merely containing this one's.
+            (IdeId::PyCharm, "jetbrains-pycharm\0jetbrains-pycharm\0", "my-app – main.py"),
+            (IdeId::VsCode, "code\0Code\0", "main.py - webapp - Visual Studio Code"),
+            // The right title in another program.
+            (IdeId::PyCharm, "jetbrains-idea\0jetbrains-idea\0", "app – main.py"),
+            (IdeId::VsCode, "xcode", "app - Xcode"),
+            (IdeId::VsCode, "firefox\0firefox\0", "app - Visual Studio Code - Mozilla Firefox"),
+        ] {
+            assert!(!window_shows_project(ide, class, title, &proj), "{class:?} {title:?}");
+        }
+        assert!(!window_shows_project(IdeId::VsCode, "code\0Code\0", "", &[]));
+    }
+
+    #[test]
+    fn window_names_add_the_jetbrains_name_and_the_workspace_stem() {
+        let p = project();
+        let dir = p.path().join("proj");
+        touch(&dir, ".idea/.name", "Pretty Name\n");
+        touch(&dir, "team.code-workspace", "{}");
+        assert_eq!(
+            project_window_names(&dir, &dir.join("team.code-workspace")),
+            names(&["proj", "Pretty Name", "team"])
+        );
+        assert_eq!(project_window_names(&dir, &dir), names(&["proj", "Pretty Name"]));
     }
 }

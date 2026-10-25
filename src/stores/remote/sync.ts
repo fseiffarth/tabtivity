@@ -153,6 +153,23 @@ export interface SyncPushResult {
   skipped_excluded: number;
   /** Git-tracked files omitted because enabled lockstep carries them as commits. */
   skipped_tracked: number;
+  /** The project's current notice of mirror files left out of pushes. */
+  skipped_unsafe?: SyncMirrorSkips;
+}
+
+/** A mirror file a push left alone: a link (or behind one), a FIFO/device/folder
+ *  where a file was, or one over the 64 MiB cap. */
+export interface SyncMirrorSkip {
+  rel: string;
+  kind: "link" | "special" | "tooLarge";
+  /** Size in bytes, for `tooLarge`. */
+  size: number | null;
+}
+
+/** The newest few skips and the real count (the backend's `MirrorSkips`). */
+export interface SyncMirrorSkips {
+  total: number;
+  items: SyncMirrorSkip[];
 }
 
 /** A host file a pull left on the host because it is over the 64 MiB cap. */
@@ -190,6 +207,8 @@ interface SyncStore {
   byProject: Record<string, Record<string, SyncEntryStatus>>;
   /** projectId → in-flight transfer progress, or null when idle. */
   progressByProject: Record<string, SyncProgressState | null>;
+  /** projectId → mirror files the pushes (manual and background) left alone. */
+  skippedUnsafeByProject: Record<string, SyncMirrorSkips>;
 
   /** Re-stat the host for the project's selected files and refresh the cache. */
   refreshStatus: (projectId: string) => Promise<void>;
@@ -398,6 +417,32 @@ export function amberPaths(
 }
 
 /**
+ * Splits diverged files by which side holds the newer copy, for the orange
+ * view's "take the newer one for all". The backend's per-side direction wins
+ * (only the host moved from its recorded base → host; only the mirror → local),
+ * so clock skew cannot flip it; a file both sides changed falls back to the
+ * mtime comparison. A file with a side missing (a deletion), one with equal
+ * mtimes, and one not in the map are left out — nothing says which copy is newer.
+ */
+export function splitByNewerSide(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): { host: string[]; local: string[] } {
+  const host: string[] = [];
+  const local: string[] = [];
+  for (const rel of relPaths) {
+    const e = byPath?.[rel];
+    if (!e || e.hostMtime == null || e.localMtime == null) continue;
+    if (e.hostDiverged !== e.localDiverged) {
+      (e.hostDiverged ? host : local).push(rel);
+    } else if (e.hostMtime !== e.localMtime) {
+      (e.hostMtime > e.localMtime ? host : local).push(rel);
+    }
+  }
+  return { host, local };
+}
+
+/**
  * All NEW local-only paths (state `localnew`) — files the mirror holds that
  * were never synced, so the host has no copy. Deliberately a separate list
  * from `amberPaths`: an amber row has content on BOTH sides (merge / pick a
@@ -448,6 +493,7 @@ export function isPathExcluded(
 export const useSyncStore = create<SyncStore>((set, get) => ({
   byProject: {},
   progressByProject: {},
+  skippedUnsafeByProject: {},
 
   refreshStatus: async (projectId) => {
     try {
@@ -488,6 +534,10 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       relPath,
       force,
     });
+    if (result?.skipped_unsafe) {
+      const skips = result.skipped_unsafe;
+      set((s) => ({ skippedUnsafeByProject: { ...s.skippedUnsafeByProject, [projectId]: skips } }));
+    }
     await get().refreshStatus(projectId);
     return result;
   },
@@ -579,6 +629,8 @@ interface AutoSyncEvent {
   pulled: number;
   pushed: number;
   skipped_amber: number;
+  /** The project's whole current notice; absent from an older backend. */
+  skipped_unsafe?: SyncMirrorSkips;
 }
 
 let progressUnlisten: Promise<() => void> | null = null;
@@ -610,6 +662,13 @@ export function listenSyncProgress(): Promise<() => void> {
       }));
     }),
     listen<AutoSyncEvent>("auto-sync", (ev) => {
+      const skips = ev.payload.skipped_unsafe;
+      if (skips) {
+        const projectId = ev.payload.project_id;
+        useSyncStore.setState((s) => ({
+          skippedUnsafeByProject: { ...s.skippedUnsafeByProject, [projectId]: skips },
+        }));
+      }
       void useSyncStore.getState().refreshStatus(ev.payload.project_id);
     }),
   ]).then((unlisteners) => () => unlisteners.forEach((u) => u()));

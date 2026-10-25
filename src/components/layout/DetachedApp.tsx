@@ -4,24 +4,16 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { detachedWindowVisible } from "../../lib/window/detachedVisibility";
 import { answerRetireRequests } from "../../lib/window/unsavedWork";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { subscribeTauri } from "../../hooks/useTauriListener";
+import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
+import { useCrossWindowAppearance } from "../../hooks/useCrossWindowAppearance";
 import {
   useSettingsStore,
-  applyTheme,
-  applyAccent,
-  applyCorners,
-  applyCursor,
-  applyThemeVars,
   applyZoom,
   clampZoom,
   listenSettingsChanged,
   stepZoom,
-  THEME_CHANGED_EVENT,
-  LANGUAGE_CHANGED_EVENT,
-  APPEARANCE_CHANGED_EVENT,
-  type AppearancePayload,
 } from "../../stores/settings";
-import { applyLanguage, useT } from "../../lib/i18n";
+import { useT } from "../../lib/i18n";
 import {
   DETACHED_BOUNDS,
   DETACHED_CLOSE,
@@ -156,14 +148,7 @@ export function DetachedApp({ param }: Props) {
   // energy-saver preference never arrived, and — worse — its next write spread
   // that stale copy back over settings.json, silently undoing everything changed
   // in the main window meanwhile.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenSettingsChanged()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenSettingsChanged, []);
 
   // Track THIS window's focus (a popout is its own JS context, so the main
   // window's tracker cannot see it): blur pauses every animation wholesale via
@@ -259,12 +244,10 @@ export function DetachedApp({ param }: Props) {
       timer = setTimeout(check, 250);
     };
     check();
-    const unlisteners: Array<() => void> = [];
-    const bind = (p: Promise<() => void>) => {
-      p.then((fn) => (disposed ? fn() : unlisteners.push(fn))).catch(() => {});
-    };
-    bind(win.onResized(schedule));
-    bind(win.onFocusChanged(({ payload }) => payload && schedule()));
+    const unlisteners = [
+      subscribeTauri(() => win.onResized(schedule)),
+      subscribeTauri(() => win.onFocusChanged(({ payload }) => payload && schedule())),
+    ];
     return () => {
       disposed = true;
       if (timer) clearTimeout(timer);
@@ -316,97 +299,28 @@ export function DetachedApp({ param }: Props) {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [param.scope, param.groupId]);
 
-  // This window is its own JS runtime with its own `document` and its own copy
-  // of the settings store — a theme change made in the main window's Settings
-  // dialog only ever touches ITS document, so without this a popout keeps
-  // whatever theme it had at open time. Re-apply live via the cross-window
-  // broadcast (see THEME_CHANGED_EVENT in stores/settings).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<string>(THEME_CHANGED_EVENT, (e) => {
-      applyTheme(e.payload);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
-
-  // Same story for the appearance overrides (custom accent, corner style, the
-  // cursor pack):
-  // they are inline vars on each window's own root element, so a change in the
-  // main window's Settings needs the broadcast to reach this document too. The
-  // initial values arrive with the settings load above.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<AppearancePayload>(APPEARANCE_CHANGED_EVENT, (e) => {
-      applyAccent(e.payload.accent);
-      // After the accent, as everywhere else: an explicit token override wins
-      // over the value applyAccent derives from the accent.
-      applyThemeVars(e.payload.themeVars);
-      applyCorners(e.payload.corners);
-      // Last: the cursor art is drawn from the palette the three above set.
-      applyCursor(e.payload.cursor);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
-
-  // Same story for the UI language: this popout holds its own i18n store, so a
-  // language switch in the main window's Settings only re-renders that window
-  // without the cross-window broadcast. Re-apply live (see LANGUAGE_CHANGED_EVENT).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<string>(LANGUAGE_CHANGED_EVENT, (e) => {
-      applyLanguage(e.payload);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  // Theme, accent/corners/cursor and language follow the main window's
+  // Settings live (this popout is its own runtime; see the hook).
+  useCrossWindowAppearance();
 
   // #42: when a PDF tab is popped out into THIS window, a SyncTeX forward search
   // from a TeX editor in the main (or another) window reaches us only over a
   // cross-window broadcast. Register the listener so the PDF here reveals/flashes
   // the target box. (The main shell registers the mirror image.)
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenPdfReveal()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenPdfReveal, []);
 
   // #42: SyncTeX reverse search may resolve to a source editor hosted in THIS
   // detached window while the PDF the user clicked lives elsewhere (or the jump
   // is applied in the main window). Register the cross-window jump listener so
   // our editor scrolls. (The main shell registers the mirror image.)
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenEditorJump()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenEditorJump, []);
 
   // #42: a reverse-search center switch aimed at a TeX workspace popped out into
   // THIS window. The main window cannot switch our center itself — this heap's
   // workspace renders its ViewerState from a one-time seed, so a main-side
   // `setViewerState` write never reaches it; it broadcasts, and the registry
   // this listener consults holds the mounted workspace's own goTo.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenTexCenter()
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  useTauriListener(listenTexCenter, []);
 
   // WebKitGTK doesn't reliably fire DOM 'resize' / ResizeObserver for OS-level
   // window size changes. Panes (terminals especially) refit off the DOM 'resize'
@@ -459,8 +373,6 @@ export function DetachedApp({ param }: Props) {
     // Until the read lands, a flush is refused rather than guessed at.
     let size: { w: number; h: number } | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let unMoved: (() => void) | undefined;
-    let unResized: (() => void) | undefined;
     let cancelled = false;
     win
       .innerSize()
@@ -491,25 +403,23 @@ export function DetachedApp({ param }: Props) {
       if (timer) clearTimeout(timer);
       timer = setTimeout(flush, 300);
     };
-    win
-      .onMoved(({ payload }) => {
+    const unMoved = subscribeTauri(() =>
+      win.onMoved(({ payload }) => {
         pos = { x: payload.x, y: payload.y };
         schedule();
-      })
-      .then((fn) => { if (cancelled) fn(); else unMoved = fn; })
-      .catch(() => {});
-    win
-      .onResized(({ payload }) => {
+      }),
+    );
+    const unResized = subscribeTauri(() =>
+      win.onResized(({ payload }) => {
         size = { w: payload.width, h: payload.height };
         schedule();
-      })
-      .then((fn) => { if (cancelled) fn(); else unResized = fn; })
-      .catch(() => {});
+      }),
+    );
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      unMoved?.();
-      unResized?.();
+      unMoved();
+      unResized();
     };
   }, [param.scope, param.groupId]);
 
@@ -543,14 +453,7 @@ export function DetachedApp({ param }: Props) {
   // autosave would save, and say whether any unsaved work is left — which
   // keeps the window alive (minimized) instead. Attaching the listener also
   // announces this popout as able to answer (`detached_retire_ready`).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    answerRetireRequests(label)
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, [label]);
+  useTauriListener(() => answerRetireRequests(label), [label]);
 
   // Seed + edit listeners. The main window owns the source of truth and ships
   // the group's tabs + subtree; subsequent main-side edits re-seed.
@@ -561,12 +464,11 @@ export function DetachedApp({ param }: Props) {
   // (window stuck on "Loading subwindow…"). We also retry the request until the
   // first seed arrives, so a momentarily-not-yet-ready host can't strand us.
   useEffect(() => {
-    let unlistenSeed: (() => void) | undefined;
     let cancelled = false;
     let seeded = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    listen<DetachedSeed>(detachedSeedEvent(label), (ev) => {
+    const unlistenSeed = subscribeTauri(() => listen<DetachedSeed>(detachedSeedEvent(label), (ev) => {
       seeded = true;
       if (timer) clearTimeout(timer);
       // Restore this popout's own zoom on the FIRST seed only (later re-seeds must
@@ -639,13 +541,8 @@ export function DetachedApp({ param }: Props) {
       if (ev.payload.landedKey) {
         useTabLandStore.getState().markLanded(ev.payload.landedKey);
       }
-    })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
-        unlistenSeed = fn;
+    }).then((fn) => {
+        if (cancelled) return fn;
         // Listener is live — now it's safe to ask, and to keep asking until the
         // first seed lands. If none ever does (the host has no record of this
         // group), nothing can render here, so close the window after a grace
@@ -674,13 +571,13 @@ export function DetachedApp({ param }: Props) {
           timer = setTimeout(request, 250);
         };
         request();
-      })
-      .catch(() => {});
+        return fn;
+      }));
 
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      unlistenSeed?.();
+      unlistenSeed();
     };
   }, [label, param.scope, param.groupId]);
 
@@ -713,16 +610,13 @@ export function DetachedApp({ param }: Props) {
   // window's strip does. The classifier lives there (it is the window that sees
   // every PTY's output); this store has no history to classify from, so the
   // verdict is mirrored over and adopted verbatim.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<DetachedStatusPayload>(detachedStatusEvent(label), (ev) => {
-      applyDetachedStatus(ev.payload.scope, ev.payload.status);
-    })
-      .then((fn) => { if (cancelled) fn(); else unlisten = fn; })
-      .catch(() => {});
-    return () => { cancelled = true; unlisten?.(); };
-  }, [label]);
+  useTauriListener(
+    () =>
+      listen<DetachedStatusPayload>(detachedStatusEvent(label), (ev) => {
+        applyDetachedStatus(ev.payload.scope, ev.payload.status);
+      }),
+    [label],
+  );
 
   // Closing the LAST tab closes the whole popout window — an empty detached
   // window has nothing to render (it would strand on "Loading subwindow…").
@@ -841,25 +735,14 @@ export function DetachedApp({ param }: Props) {
   // the window stays open — the safe default for a gesture that may have been a
   // misclick. Each answer emits its own event and then destroys this window
   // (`destroy()` bypasses this handler, so nothing is emitted twice).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    const win = getCurrentWindow();
-    win
-      .onCloseRequested((event) => {
+  useTauriListener(
+    () =>
+      getCurrentWindow().onCloseRequested((event) => {
         event.preventDefault();
         setCloseChoice({ resolveDefault: true });
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
+      }),
+    [],
+  );
 
   if (!group || allGroups(group).length === 0) {
     return <div className="detached-loading">{t("detached.loadingSubwindow")}</div>;

@@ -68,6 +68,9 @@ pub enum FilesError {
     NotFound,
     /// A file that is not text and is larger than the phone is handed.
     TooLarge,
+    /// The remote side (`host_files`): the desktop holds no connection to
+    /// the project's host the phone could ride.
+    HostOffline,
     Io(String),
 }
 
@@ -78,6 +81,7 @@ impl FilesError {
             FilesError::Unavailable => "project_unavailable",
             FilesError::NotFound => "file_not_found",
             FilesError::TooLarge => "file_too_large",
+            FilesError::HostOffline => "host_offline",
             FilesError::Io(_) => "read_failed",
         }
     }
@@ -125,7 +129,7 @@ pub fn hidden(name: &str) -> bool {
 
 /// A leaf the browser lists and resolves. The same test both ways, so nothing
 /// is listed that could not be opened again.
-fn valid_segment(name: &str) -> bool {
+pub(super) fn valid_segment(name: &str) -> bool {
     plain_segment(name) && !hidden(name)
 }
 
@@ -143,7 +147,7 @@ fn plain_segment(name: &str) -> bool {
         && !(cfg!(windows) && name.contains(['\\', ':']))
 }
 
-fn valid_rel(rel: &str) -> bool {
+pub(super) fn valid_rel(rel: &str) -> bool {
     rel.len() <= MAX_REL && (rel.is_empty() || rel.split('/').all(valid_segment))
 }
 
@@ -217,6 +221,12 @@ fn unseal_with(salt: &str, host_key: &[u8], raw_id: &str, token: &str) -> Option
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
+    // A project folder reached through a link planted inside another registered
+    // root is not the user's root (the rule `commands::fs` applies to every
+    // registry): refused, not followed to where the link now points.
+    if crate::commands::fs::is_planted_root(root) {
+        return Err(FilesError::Unavailable);
+    }
     let canonical = root.canonicalize().map_err(|_| FilesError::Unavailable)?;
     if !canonical.is_dir() {
         return Err(FilesError::Unavailable);
@@ -336,6 +346,23 @@ impl ProjectDir {
         self.openat(name, flags, 0o666)
     }
 
+    /// A new symbolic link `name` here pointing at `target`, written as it is
+    /// (`symlinkat` never follows a link at the name, and refuses an existing
+    /// one with `AlreadyExists`). Unix only: the Windows twin has none.
+    pub(crate) fn create_symlink(&self, name: &str, target: &Path) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        let c_name = segment_cstr(name)?;
+        let c_target = std::ffi::CString::new(target.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        // SAFETY: two NUL-terminated strings and a live directory descriptor.
+        if unsafe { libc::symlinkat(c_target.as_ptr(), self.0.as_raw_fd(), c_name.as_ptr()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
     /// The held folder's own handle, for its metadata.
     pub(crate) fn into_file(self) -> fs::File {
         self.0
@@ -392,6 +419,19 @@ impl ProjectDir {
         let c_name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
         if unsafe { libc::unlinkat(self.0.as_raw_fd(), c_name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    /// Removes the empty folder `name` in this one (`AT_REMOVEDIR` refuses a
+    /// link at the name and a folder with anything in it).
+    pub(super) fn remove_empty_dir(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c_name = segment_cstr(name)?;
+        // SAFETY: a live directory descriptor and a NUL-terminated name.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), c_name.as_ptr(), libc::AT_REMOVEDIR) } == 0 {
             Ok(())
         } else {
             Err(std::io::Error::last_os_error())
@@ -526,7 +566,7 @@ pub(crate) fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
     windows::path_identity(path).map(|(volume, id)| (volume, u128::from_le_bytes(id)))
 }
 
-fn child(rel: &str, name: &str) -> String {
+pub(super) fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
 }
 
@@ -731,7 +771,7 @@ pub struct Found {
 /// How well a leaf matches the query's words, lower is better, or `None`
 /// when some word is not in it: the whole name (or the name before its
 /// extension), then a name starting with the first word, then anywhere.
-fn rank(name: &str, words: &[String]) -> Option<u8> {
+pub(super) fn rank(name: &str, words: &[String]) -> Option<u8> {
     let lower = name.to_lowercase();
     if !words.iter().all(|word| lower.contains(word.as_str())) {
         return None;

@@ -11,6 +11,7 @@
 // never surface in the session it was not meant for.
 
 import { storageKey } from "../../src/lib/brand";
+import { readJson, writeJson } from "../../src/lib/persist";
 
 const KEY = storageKey("mobile.drafts");
 
@@ -47,9 +48,10 @@ interface StoredDraft {
  * gets sent to an agent, so a bad value must mean "nothing was kept", never
  * "something odd is now in the field".
  */
-function load(storage: DraftStorage): Record<string, StoredDraft> {
-  try {
-    const parsed: unknown = JSON.parse(storage.getItem(KEY) ?? "null");
+function load(storage?: DraftStorage): Record<string, StoredDraft> {
+  // Storage can be unavailable in a private browser; the composer simply
+  // opens empty, which is what it did before this existed.
+  return readJson(KEY, (parsed) => {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const kept: Record<string, StoredDraft> = {};
     for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
@@ -59,36 +61,37 @@ function load(storage: DraftStorage): Record<string, StoredDraft> {
       kept[id] = { text, at };
     }
     return kept;
-  } catch {
-    // Storage can be unavailable in a private browser; the composer simply
-    // opens empty, which is what it did before this existed.
-    return {};
-  }
+  }, {}, storage);
 }
 
 /** The draft left in this tab's composer, or `""` when there is none. */
 export function readDraft(tabId: string, storage?: DraftStorage): string {
-  return load(storage ?? localStorage)[tabId]?.text ?? "";
+  return load(storage)[tabId]?.text ?? "";
+}
+
+/** Every tab's draft, by tab id — for the tab lists, which lift a tab holding
+ * one and show what it holds (`draftPreview`). */
+export function readDrafts(storage?: DraftStorage): Record<string, string> {
+  return Object.fromEntries(Object.entries(load(storage)).map(([id, draft]) => [id, draft.text]));
 }
 
 /**
  * Keep this tab's draft — or forget it, which is what an empty field means: a
  * sent message and a cleared one both leave the composer empty, and in both
- * cases there is nothing left to come back to.
+ * cases there is nothing left to come back to. A blocked or full store costs
+ * the draft, not the message the reader is in the middle of typing.
  */
 export function writeDraft(tabId: string, text: string, storage?: DraftStorage, now: number = Date.now()): void {
-  const store = storage ?? localStorage;
-  try {
-    const drafts = load(store);
-    if (text) drafts[tabId] = { text: text.slice(0, MAX_LENGTH), at: now };
-    else delete drafts[tabId];
-    const kept = Object.entries(drafts)
-      .sort(([, a], [, b]) => b.at - a.at)
-      .slice(0, MAX_DRAFTS);
-    if (kept.length === 0) store.removeItem(KEY);
-    else store.setItem(KEY, JSON.stringify(Object.fromEntries(kept)));
-  } catch {
-    // See load(): a blocked or full store costs the draft, not the message the
-    // reader is in the middle of typing.
-  }
+  const drafts = load(storage);
+  if (text) drafts[tabId] = { text: text.slice(0, MAX_LENGTH), at: now };
+  else delete drafts[tabId];
+  const kept = Object.entries(drafts)
+    .sort(([, a], [, b]) => b.at - a.at)
+    .slice(0, MAX_DRAFTS);
+  writeJson(KEY, kept.length === 0 ? undefined : Object.fromEntries(kept), storage);
+}
+
+/** Every draft, gone — this device was unpaired (`forgetDeviceData`). */
+export function forgetDrafts(storage?: DraftStorage): void {
+  writeJson(KEY, undefined, storage);
 }

@@ -204,6 +204,11 @@ export interface Settings {
      * bridge. Every writer of this block must carry it (a settings patch is
      * shallow: a block that omits it drops it). */
     assistant_access?: boolean;
+    /** The paired phones that may use the chat assistant, as a project's or
+     * box's list (device ids). Absent is every phone, also those paired later;
+     * an empty list, none. Narrows `assistant_access`, never opens it. Carried
+     * by every writer of this block, like `assistant_access`. */
+    assistant_devices?: string[];
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -215,6 +220,16 @@ export interface Settings {
    * Machines, CPU/RAM/GPU) expanded into the bar? Unset means collapsed to a
    * single summary lamp; anything non-nominal shows itself regardless. */
   header_status_expanded?: boolean;
+  /** Top-bar placement overrides by item id (`lib/headerPins`): `true` keeps the
+   * item in the bar while the chevron is collapsed, `false` folds it behind the
+   * chevron. An id that is absent follows the built-in default. */
+  header_pins?: Record<string, boolean>;
+  /** The header's Mobile setup guide has been opened once; from then on the
+   * dimmed phone icon folds like any readout (`lib/headerPins`). */
+  mobile_setup_seen?: boolean;
+  /** Top-bar item ids in the order the user dragged them (`lib/headerPins`).
+   * An id that is absent keeps its built-in place after the listed ones. */
+  header_order?: string[];
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */
@@ -542,6 +557,10 @@ export interface Settings {
    *  machine — the opposite of what the local-model feature is for. Judged on
    *  the literal that was typed, never on what it resolves to. */
   ollama_allow_remote_host?: boolean;
+  /** The uid of the account that runs the loopback Ollama, when it is not
+   *  this account, root or a system account (those pass already). Set it in
+   *  settings.json; a listener owned by anyone else is refused. Linux only. */
+  ollama_listener_uid?: number;
   /** Where Ollama saves the models it downloads — its `OLLAMA_MODELS`
    *  directory. Unset/empty means Ollama's own default (`~/.ollama/models`, or a
    *  system-service dir when one holds models). It reaches only a server Tabtivity
@@ -625,6 +644,15 @@ export interface Settings {
   show_gpu_usage?: boolean;
   /** Header clock: show seconds. Off by default (hh:mm only). */
   show_clock_seconds?: boolean;
+  /** Settings → Voice (`lib/voice/desktopVoice`): the whisper model to
+   *  dictate with (unset: `small`), the speech language (`auto` / unset: the
+   *  UI language; `detect`: whisper guesses), headset mode (talking over the
+   *  voice interrupts it) and the hands-free pause in ms. Renderer-side only;
+   *  the backend round-trips them through its catch-all. */
+  voice_model?: string;
+  voice_lang?: string;
+  voice_headset?: boolean;
+  voice_pause_ms?: number;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
@@ -640,6 +668,9 @@ export interface Settings {
   /** Accepted once: agents on a platform with no fence (Windows) run with the
    *  user's full rights. Backend-enforced (`agent_fence::platform_accepted`). */
   agent_fence_platform_accepted?: boolean;
+  /** The AI switch (edge rail ⏻, `lib/aiSwitch.ts`): `true` stops every new
+   *  AI use machine-wide. Backend-enforced (`services::ai_switch`). */
+  ai_off?: boolean;
   /** A fenced root-console agent sees every project, box folder and remote
    *  mirror read-only (default off: a widening). The mail `attach` argument
    *  needs it; recorded per root tab at spawn. */
@@ -829,6 +860,9 @@ export interface Settings {
   /** Minimum subwindow (split pane) height in px a divider drag may shrink to.
    *  Unset falls back to DEFAULT_MIN_SUBWINDOW_PX. */
   min_subwindow_height?: number;
+  /** When true, closing a subwindow's last tab closes the subwindow too. Default
+   *  OFF: the emptied subwindow stays, ready for a new tab. */
+  close_subwindow_on_last_tab?: boolean;
   /** When true, in-app editors debounce-save edits automatically (#47). Default OFF. */
   autosave?: boolean;
   /** When true (the default), the text/TeX editors tint recently typed runs with a

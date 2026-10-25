@@ -13,7 +13,7 @@
  * whenever earlier output is left out.
  */
 
-import { translate, useI18nStore } from "../../../src/lib/i18n";
+import { translateNow } from "../../../src/lib/i18n";
 
 export interface ReadableSpan {
   text: string;
@@ -413,7 +413,7 @@ function capLine(line: ReadableLine): ReadableLine {
   if (line.text.length <= MAX_LINE) return line;
   const spans = line.spans.slice();
   trimSpansRight(spans, line.text.length - MAX_LINE);
-  const marker = `… ${translate(useI18nStore.getState().lang, "mobile.focus.lineTruncated")}`;
+  const marker = `… ${translateNow("mobile.focus.lineTruncated")}`;
   spans.push({ text: marker, className: "d" });
   return { ...line, text: `${line.text.slice(0, MAX_LINE)}${marker}`, spans };
 }
@@ -584,21 +584,6 @@ export function joinProseWraps(lines: readonly ReadableLine[]): ReadableLine[] {
     };
   }
   return out;
-}
-
-/** `dedentLines` for rows that are already plain text — the status strip's
- * (`statusFrameLines`). A fullscreen TUI centres its box, so those rows can
- * arrive 70 columns in on a wide pane; the strip is a phone-width readout of
- * them, not a scale model of the desktop window. Rows that start at the margin
- * lose nothing. */
-export function dedentRows(rows: readonly string[]): string[] {
-  let indent = Number.POSITIVE_INFINITY;
-  for (const row of rows) {
-    if (!row.trim()) continue;
-    indent = Math.min(indent, row.length - row.trimStart().length);
-  }
-  if (!Number.isFinite(indent) || indent <= 0) return [...rows];
-  return rows.map((row) => (row.trim() ? row.slice(indent) : row));
 }
 
 /** The plain text of what the reading view is showing, for Copy. */

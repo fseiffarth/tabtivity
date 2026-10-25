@@ -14,6 +14,22 @@ export interface AgentUsageReport {
   cached: boolean;
 }
 
+/** The phone may see quota figures, but never host paths. A diagnostic or a
+ * contribution row can name a local file beside an otherwise useful panel:
+ * omit that whole line, marking the omission, rather than withholding every
+ * meter. Keep unknown, path-free output readable too. */
+export function mobileUsageText(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const localPath = /(^|[\s("'`=:])(?:~[/\\]|\/(?:home|Users|tmp|var|etc|opt|usr|root|mnt|media|private|srv|run|Volumes)\/|\/(?:[^\s/]+\/)+|[A-Za-z]:[/\\]|\\\\)/u;
+  let readable = false;
+  const lines = raw.split(/\r?\n/u).map((line) => {
+    if (localPath.test(line)) return "…";
+    if (line.trim()) readable = true;
+    return line;
+  });
+  return readable ? lines.join("\n") : undefined;
+}
+
 /**
  * Ask one agent CLI what it says about its own usage.
  *

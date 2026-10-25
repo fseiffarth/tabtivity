@@ -40,7 +40,9 @@ Droid and several others install with their own script and need no Node.js.
 Gemini, Copilot, Qwen, Cline, Auggie, Continue, CodeBuddy, Crush, Amp and
 Pi install with `npm install -g` and need Node.js 24 or newer.
 
-When npm is missing or Node is too old, Manage CLIs shows a Node.js helper:
+When npm is missing, Manage CLIs shows a Node.js helper at the top. When
+Node is older than that, the same helper shows only in the card of a CLI whose
+install npm refused for it (`EBADENGINE`); an older Node is fine otherwise:
 
 - Linux/macOS: installs nvm and the current Node LTS for your user (no
   administrator rights): `curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash`, then `nvm install --lts`.
@@ -57,7 +59,7 @@ Click **Run in terminal**, wait for it to finish, then **Re-check**.
 | Google Gemini | `gemini` | `npm install -g @google/gemini-cli` | same |
 | Google Antigravity | `agy` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | `irm https://antigravity.google/cli/install.ps1 \| iex` |
 | Mistral (Vibe) | `vibe` | `curl -LsSf https://mistral.ai/vibe/install.sh \| bash` | Install Vibe in the Ollama Models panel (installs uv, then `uv tool install mistral-vibe`) |
-| OpenCode | `opencode` | `curl -fsSL https://opencode.ai/install \| bash` | `npm install -g opencode-ai` |
+| OpenCode | `opencode` | `curl -fsSL https://opencode.ai/v2/install \| bash` (OpenCode 2) | `npm install -g @opencode/cli` (removes the OpenCode 1 package `opencode-ai` first) |
 | Copilot | `copilot` | `npm install -g @github/copilot` | same |
 | Aider | `aider` | `curl -LsSf https://aider.chat/install.sh \| sh` | `irm https://aider.chat/install.ps1 \| iex` |
 
@@ -92,9 +94,9 @@ Sign in again in the Host session, or copy your settings back from that file.
 Copilot's case is described under the sandbox below.
 
 **API keys instead of a subscription.** If you pay per token, Settings → Agent
-sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini) in
-your system keyring (on a hosted server: your sealed server store), and a
-**runs on** choice per CLI (Claude, Gemini) — **its own login**, **my API key**
+sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini,
+OpenAI) in your system keyring (on a hosted server: your sealed server store), and a
+**runs on** choice per CLI (Claude, Gemini, Codex, OpenCode) — **its own login**, **my API key**
 or, on a server whose administrator offers you one, **the administrator's API
 key** — decides what that CLI's new local tabs use, one at a time. Every CLI
 starts on its own login — a key moves that CLI's billing off your
@@ -110,12 +112,33 @@ a key or base URL you exported yourself wins; a project container's agent tab
 of a CLI on a key does not start (no key goes into a container). Changing what a
 CLI runs on reaches new tabs only; removing a key stops running tabs at their next request. A tab
 that outlives a Tabtivity crash in tmux loses its token — restart the CLI in it.
-If a tab reports an invalid key, fix or remove it there — signing in
-again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
-are not offered: no environment variable points them at Tabtivity's proxy (use
-`codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
-instead; Codex's and OpenCode's login files are shared like any other, Vibe's
-`.env` is per project).
+
+**Login and API key side by side.** Once a key with its monthly limit is
+saved, the tab bar's **+** menu gets an **API key** section with
+"Claude (API)" (and Gemini, Codex or OpenCode when their key is saved): that row opens a
+tab on the key, while the plain **Claude** row in Agents always opens one on
+Claude's own login (your subscription) — so a Max-plan tab and an API tab can
+run next to each other. The pick stays with the tab across a restart and a
+resume. **runs on** then only decides for tabs opened without the menu: from
+the phone, by a scheduled agent, from the mail/calendar dock. A row whose
+budget is spent is greyed out.
+Saving a key asks the provider about it first: a key it refuses — or a
+Claude subscription token (`sk-ant-oat…`) in place of a Console API key
+(`sk-ant-api…`) — is not saved; offline, the key is saved untested. If a tab
+reports "… rejected the API key saved in Tabtivity", fix or remove it there —
+signing in again does not help while the key is in use. An Anthropic key that
+is not tied to one workspace has to name one on every request: saving it lists
+its workspaces and uses the only one, or asks you to pick (or to paste the
+`wrkspc_…` ID from the Console's Workspaces page); the row then shows it. A
+tab that reports such a key "is not scoped to a workspace" ran on a key saved
+before that — remove it and save it again. OpenCode (1.x and 2) on a key uses
+every provider with a saved key — Anthropic, Gemini, OpenAI — through Tabtivity,
+also when `opencode auth login` stored a key or a Claude login of its own; pick
+one of their models in `/models`, while a provider without a saved key stays on
+OpenCode's own login and the local models stay listed. A provider your own
+`OPENCODE_CONFIG_CONTENT` already points somewhere keeps that. Mistral Vibe is
+not offered: nothing points it at Tabtivity's proxy (use Vibe's own `.env`,
+which is per project).
 
 **Monthly limit.** Every key needs a monthly limit in **billed tokens**, typed
 in millions (5 is proposed); Save stays greyed out without one. Input, cache
@@ -158,9 +181,17 @@ API keys section says so.
 - The **Default** chip picks the agent Tabtivity uses when it must choose one
   itself (e.g. filling scaffold files).
 - Root console: agents are off there until you turn on their **Root** chip.
-- A project with linked git worktrees asks **Where should … start?**: the
-  main worktree or a worktree's branch. The agent's session belongs to the
-  folder it starts in, so pick the branch it should work on.
+- In a project with linked git worktrees, a new agent starts in the worktree
+  selected in the Git view (none selected: the project folder), and its tab
+  is named after the branch.
+- To move a running agent to another worktree, click the **⎇ branch** chip in
+  its Chat view's facts row and pick the project folder or a worktree. The
+  agent's CLI restarts there. Claude, Codex, Mistral Vibe, OpenCode, Gemini,
+  Qwen, Cursor and Droid carry on with the same conversation. Antigravity,
+  Copilot and Grok start a new one, and the list says so before you pick. The
+  tab stays in the new folder after a restart. Local projects only, and not
+  while the agent is working or asking a question. The phone's chat has the
+  same chip (with desktop Tabtivity open).
 - Choose where a tab runs (this computer, the project's host or a worker) from
   its tab's location chip on a remote project; see `remote-projects`.
 
@@ -202,6 +233,27 @@ and remembered: picking Chat (or Terminal) in a Claude tab switches every
 open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
+
+## Switch all AI off
+
+The power button (⏻) in the side panel header switches all of Tabtivity's AI
+off, everywhere: desktop, popout windows and the phone. A second click turns
+it back on. The choice survives a restart.
+
+While AI is off:
+
+- Agents that are already running keep running. They just get no new input:
+  what you type into an agent tab (or send from the phone) is dropped, and
+  the tab says so. Ctrl+C, Esc and the arrow keys still reach the agent, so
+  you can always stop it.
+- A new or restored agent tab, or a Tabby chat, does not start. It waits with
+  a note and starts by itself once AI is on again.
+- Scheduled prompts, auto-continue and the morning warm-up do not fire. One
+  that falls due goes in once AI is back on if that is soon enough (a
+  scheduled prompt within the hour); later than that, it counts as missed.
+- Editor autocomplete (Ollama, Copilot), mail AI and loading a local model
+  are paused.
+- Typing an agent CLI's name into a shell tab prints that AI is off.
 
 ## Resume after a restart
 

@@ -18,6 +18,7 @@
  */
 
 import { overlaySpecAt } from "./tex/beamer";
+import { escapeHtml } from "../textSafety";
 
 export type Lang =
   | "js"
@@ -53,33 +54,6 @@ export type Lang =
   | "markup"
   | "markdown"
   | "plain";
-
-const HTML_SPECIAL = /[&<>"']/;
-const HTML_SPECIAL_ALL = /[&<>"']/g;
-
-function escapeHtmlChar(c: string): string {
-  switch (c) {
-    case "&": return "&amp;";
-    case "<": return "&lt;";
-    case ">": return "&gt;";
-    case '"': return "&quot;";
-    case "'": return "&#39;";
-    default: return c;
-  }
-}
-
-/**
- * HTML-escape `s` (`& < > " '`). One pass, and no pass at all for the common
- * case of nothing to escape: the scanners below call this once per token — and,
- * for a run of prose, once per character — on every keystroke of the whole
- * document, and the old five chained `replace` calls were most of what
- * highlighting a large `.tex` file cost.
- */
-export function escapeHtml(s: string): string {
-  if (s.length === 1) return escapeHtmlChar(s);
-  if (!HTML_SPECIAL.test(s)) return s;
-  return s.replace(HTML_SPECIAL_ALL, escapeHtmlChar);
-}
 
 function span(cls: string, text: string): string {
   return `<span class="tok-${cls}">${escapeHtml(text)}</span>`;

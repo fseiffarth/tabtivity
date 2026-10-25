@@ -2,6 +2,7 @@ import type { TranslationKey } from "../i18n";
 import type { SessionTranscript } from "../../../mobile-web/src/api";
 import type { TabEntry } from "../../stores/tabs";
 import { storageKey } from "../brand";
+import { projectIdOfScope } from "../terminal/ptyId";
 
 /**
  * The desktop agent pane's Reader: the phone's Focus Reader — the agent's
@@ -16,7 +17,17 @@ export type { SessionTranscript };
 
 /** The agents whose transcript the backend reads; any other family answers
  * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
-const READER_AGENTS = new Set(["claude", "codex", "opencode"]);
+const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot"]);
+
+/** The agents whose session is found by the tab's folder (and launch moment)
+ * rather than by a launch id Tabtivity mints: they read with no `sessionId`. */
+const FOLDER_AGENTS = new Set(["opencode", "agy"]);
+
+/** Whether a Reader of `agent` can list the files its conversation changed:
+ * Antigravity's transcript carries no tool results to diff. */
+export function changesOffered(agent: string): boolean {
+  return agent !== "agy";
+}
 
 /** A local-model tab's driver (`list_local_drivers` id): the one it was
  * started with, or the one its saved launch line names. Empty for any other
@@ -35,27 +46,38 @@ export function readerAgent(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" |
   return localTabDriver(tab) === "opencode" ? "opencode" : "";
 }
 
+/** The agents whose transcript is read for a tab that runs on a remote
+ * project's host: the others' stores cannot be named without the session
+ * hook, which records on the host (`services::remote_transcript`). */
+const HOST_READER_AGENTS = new Set(["claude"]);
+
 /** Whether `tab` can be shown as a Reader: an agent tab whose CLI keeps a
- * transcript Tabtivity reads — a local-model tab only when OpenCode drives it. */
+ * transcript Tabtivity reads — a local-model tab only when OpenCode drives it,
+ * a tab on a remote host (`onHost`) only when Claude runs in it. */
 export function readerOffered(
   tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch"> | undefined,
+  onHost = false,
 ): boolean {
-  return !!tab && (tab.kind === "agent" || tab.kind === "local_agent") && READER_AGENTS.has(readerAgent(tab));
+  if (!tab || (tab.kind !== "agent" && tab.kind !== "local_agent")) return false;
+  const agent = readerAgent(tab);
+  return (onHost ? HOST_READER_AGENTS : READER_AGENTS).has(agent);
 }
 
 /** How many turns a read asks for first, and how many more each "earlier". */
 export const READER_STEP = 60;
 
 /** The `agent_tab_transcript` arguments for `tab` in `scope` — the phone
- * bridge's resolution: OpenCode's session is the newest one of the folder the
- * tab runs in, begun since it launched unless it was restored with
+ * bridge's resolution: OpenCode's and Antigravity's session is the newest one
+ * of the folder the tab runs in, begun since it launched unless it was restored with
  * `--continue`. Null for a tab with no session id yet (the agent's hook has
  * not recorded one): there is no transcript to name — except a local-model
  * OpenCode tab, which never gets one and is read by folder from the scope's
  * local-model home (`localModel`). `subagent` is the handle on one of its
  * `agent` entries, whose own conversation is read instead. `chat` is an
  * earlier conversation of the tab's folder picked in the Resume menu
- * (`lib/agents/agentChats`), read in place of the tab's own. */
+ * (`lib/agents/agentChats`), read in place of the tab's own. `remoteHost` is
+ * the host a remote project's tab runs on (`hostTabId`), whose conversation
+ * the backend copies from there (`services::remote_transcript`). */
 export function readerRequest(
   scope: string,
   tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch" | "sessionId" | "launchedAt" | "args" | "cwd">,
@@ -64,12 +86,13 @@ export function readerRequest(
   limit: number,
   subagent?: string,
   chat?: string,
+  remoteHost?: string | null,
 ): Record<string, unknown> | null {
   const localModel = tab.kind === "local_agent";
-  if (!tab.sessionId && !localModel) return null;
+  if (!tab.sessionId && !localModel && !FOLDER_AGENTS.has(readerAgent(tab))) return null;
   return {
     agent: readerAgent(tab),
-    projectId: scope === "root" ? null : scope,
+    projectId: projectIdOfScope(scope),
     tabDir: tab.cwd || cwd || null,
     since: tab.launchedAt && !tab.args?.includes("--continue") ? tab.launchedAt : null,
     sessionId: tab.sessionId ?? "",
@@ -78,6 +101,7 @@ export function readerRequest(
     limit,
     localModel,
     chat: chat ?? null,
+    remoteHost: remoteHost ?? null,
   };
 }
 
@@ -162,48 +186,5 @@ export function rememberReader(agent: string, on: boolean): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(choices));
   } catch {
     // A convenience only: without storage every tab opens on its terminal.
-  }
-}
-
-const CHANGES_KEY = storageKey("agentReader.changes");
-const CHANGES_WIDTH_KEY = storageKey("agentReader.changesWidth");
-/** The Changes panel's width before the user drags it. */
-export const CHANGES_DEFAULT_WIDTH = 520;
-export const CHANGES_MIN_WIDTH = 260;
-
-/** Every CLI's remembered choice for the Reader's Changes panel (the diffs
- * beside the chat): shown or not, closed unless picked. */
-export function rememberedChanges(): Record<string, boolean> {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(CHANGES_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, boolean>) : {};
-  } catch {
-    return {};
-  }
-}
-
-export function rememberChanges(agent: string, on: boolean): void {
-  try {
-    localStorage.setItem(CHANGES_KEY, JSON.stringify({ ...rememberedChanges(), [agent]: on }));
-  } catch {
-    // A convenience only: without storage the panel starts closed.
-  }
-}
-
-/** The Changes panel's width as last dragged, in px. */
-export function rememberedChangesWidth(): number {
-  try {
-    const width = Number(localStorage.getItem(CHANGES_WIDTH_KEY));
-    return Number.isFinite(width) && width >= CHANGES_MIN_WIDTH ? width : CHANGES_DEFAULT_WIDTH;
-  } catch {
-    return CHANGES_DEFAULT_WIDTH;
-  }
-}
-
-export function rememberChangesWidth(width: number): void {
-  try {
-    localStorage.setItem(CHANGES_WIDTH_KEY, String(Math.round(width)));
-  } catch {
-    // A convenience only.
   }
 }

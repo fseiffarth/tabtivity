@@ -8,10 +8,12 @@ import { PasswordInput } from "../common/PasswordInput";
 import type { UntestedId } from "../../lib/untested";
 import { unlockKeyring } from "../../lib/keyring";
 import { diffDefaultApps, patchDefaultApps } from "../../lib/defaultApps";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
+import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
+import { ollamaVersionStatus } from "../../lib/agents/localDrivers";
+import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollamaUpdateActions";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
 import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
@@ -75,6 +77,7 @@ import { AGENT_TAB_ACTIONS, chordLabel, modifierLabel, resolveChord } from "../.
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
+import { runWithProgress } from "../../lib/runWithProgress";
 
 interface OllamaModelInfo {
   name: string;
@@ -735,9 +738,25 @@ function CodexHookNotice() {
   const t = useT();
   // null = still probing.
   const [state, setState] = useState<CodexHookState | null>(null);
+  const [trusting, setTrusting] = useState(false);
+  const [trustFailed, setTrustFailed] = useState(false);
   const recheck = () =>
     invoke<CodexHookState>("codex_hook_status").then(setState).catch(() => setState(null));
   useEffect(() => void recheck(), []);
+  // Codex keeps the trust verdict per config file and every scope's agent home
+  // has its own, so `/hooks` in one tab fixes one home. This writes the verdict
+  // Codex would into all of them, for the app's own hooks only.
+  const trustAll = () => {
+    setTrusting(true);
+    setTrustFailed(false);
+    invoke<CodexHookState>("codex_hook_trust")
+      .then((next) => {
+        setState(next);
+        setTrustFailed(codexHookNeedsTrust(next));
+      })
+      .catch(() => setTrustFailed(true))
+      .finally(() => setTrusting(false));
+  };
 
   // Healthy, absent, or still probing → nothing to say.
   if (!codexHookNeedsTrust(state)) return null;
@@ -759,13 +778,18 @@ function CodexHookNotice() {
       </div>
       <p className="settings-help">{off ? t("agents.codexHookCauseDisabled") : t("agents.codexHookCauseUntrusted")}</p>
       <div className="agents-actions">
-        <button type="button" className="settings-btn sm primary" onClick={openCodexHooksTab}>
+        <button type="button" className="settings-btn sm primary" onClick={trustAll} disabled={trusting}>
+          {trusting ? t("agents.codexHookTrusting") : t("agents.codexHookTrust")}
+        </button>
+        <UntestedTag id="agents.codexHookTrust" />
+        <button type="button" className="settings-btn sm" onClick={openCodexHooksTab}>
           {t("agents.openInCodex")}
         </button>
         <button type="button" className="settings-btn sm" onClick={() => void recheck()}>
           {t("common.recheck")}
         </button>
       </div>
+      {trustFailed && <p className="settings-help">{t("agents.codexHookTrustFailed")}</p>}
       <AgentsFold label={t("agents.howToFix")}>
         <p className="settings-help">{t("agents.codexHookFallback")}</p>
         <p className="settings-help">
@@ -809,9 +833,18 @@ interface AgentLogin {
   signed_in: boolean;
   account: string | null;
   importable: boolean;
-  /** A tab's login the keeper refused: another account, or a file that
-   *  names a command where a credential belongs. */
-  blocked: { account: string | null; stored: string | null; command: string | null } | null;
+  /** A tab's login the keeper refused: another account, a file that names a
+   *  command where a credential belongs, or an entry or field a login file
+   *  may not bring (`config`: OpenCode's `wellknown` entries and the like). */
+  blocked: {
+    account: string | null;
+    stored: string | null;
+    command: string | null;
+    config?: string | null;
+  } | null;
+  /** OpenCode only: scopes whose own database took a `wellknown` source (it
+   *  loads that origin's remote configuration at every start). */
+  wellknown_homes?: { key: string; label: string | null; origins: string[] }[];
   shared: boolean;
   /** The API proxy serves this CLI: a server's administrator can offer a key. */
   admin_key_capable?: boolean;
@@ -868,6 +901,17 @@ export function AgentLoginsRows({
         onChange?.();
       });
   };
+  const signOutScope = (key: string) => {
+    setError(null);
+    setBusy(`scope:${key}`);
+    invoke("agent_login_scope_sign_out", { scope: key })
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => {
+        setBusy(null);
+        refresh();
+        onChange?.();
+      });
+  };
   return (
     <div className="agents-block">
       <div className="settings-subheader">
@@ -894,46 +938,74 @@ export function AgentLoginsRows({
           : own;
         const ok = l.uses_admin_key ? !!l.admin_key_offered : l.signed_in || (!!l.api_key && !l.api_budget_reached);
         return (
-          <div key={l.id} className="agents-row">
-            <div className="agents-row-main">
-              <span className="agents-row-name">{label}</span>
-              <AgentsStatus
-                tone={ok ? "ok" : "off"}
-                title={!l.signed_in && !l.api_key && !l.uses_admin_key ? t("settings.agentLoginNotSignedIn") : undefined}
-              >
-                {state}
-              </AgentsStatus>
-              {l.blocked && (
-                <span className="agents-row-note is-warn">
-                  {l.blocked.command
-                    ? t("settings.agentLoginBlockedCommand", { field: l.blocked.command })
-                    : t("settings.agentLoginBlocked", { account: l.blocked.account ?? "", stored: l.blocked.stored ?? "" })}
-                </span>
-              )}
-            </div>
-            <div className="agents-actions">
-              {l.importable && (
-                <button
-                  type="button"
-                  className="settings-btn sm"
-                  disabled={busy === l.id}
-                  onClick={() => run(l.id, "agent_login_import")}
+          <Fragment key={l.id}>
+            <div className="agents-row">
+              <div className="agents-row-main">
+                <span className="agents-row-name">{label}</span>
+                <AgentsStatus
+                  tone={ok ? "ok" : "off"}
+                  title={!l.signed_in && !l.api_key && !l.uses_admin_key ? t("settings.agentLoginNotSignedIn") : undefined}
                 >
-                  {t("settings.agentLoginImport")}
-                </button>
-              )}
-              {l.signed_in && (
-                <button
-                  type="button"
-                  className="settings-btn sm danger"
-                  disabled={busy === l.id}
-                  onClick={() => run(l.id, "agent_login_sign_out")}
-                >
-                  {t("settings.agentLoginSignOut")}
-                </button>
-              )}
+                  {state}
+                </AgentsStatus>
+                {l.blocked && (
+                  <span className="agents-row-note is-warn">
+                    {l.blocked.config
+                      ? t("settings.agentLoginBlockedConfig", { field: l.blocked.config })
+                      : l.blocked.command
+                        ? t("settings.agentLoginBlockedCommand", { field: l.blocked.command })
+                        : t("settings.agentLoginBlocked", { account: l.blocked.account ?? "", stored: l.blocked.stored ?? "" })}
+                    {l.blocked.config && <UntestedTag id="settings.agentLoginWellknown" />}
+                  </span>
+                )}
+              </div>
+              <div className="agents-actions">
+                {l.importable && (
+                  <button
+                    type="button"
+                    className="settings-btn sm"
+                    disabled={busy === l.id}
+                    onClick={() => run(l.id, "agent_login_import")}
+                  >
+                    {t("settings.agentLoginImport")}
+                  </button>
+                )}
+                {l.signed_in && (
+                  <button
+                    type="button"
+                    className="settings-btn sm danger"
+                    disabled={busy === l.id}
+                    onClick={() => run(l.id, "agent_login_sign_out")}
+                  >
+                    {t("settings.agentLoginSignOut")}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+            {(l.wellknown_homes ?? []).map((h) => (
+              <div key={`wellknown:${h.key}`} className="agents-row">
+                <div className="agents-row-main">
+                  <span className="agents-row-note is-warn">
+                    {t("settings.agentLoginWellknown", {
+                      scope: h.label ?? (h.key === "host" ? t("settings.agentLoginWellknownHost") : h.key),
+                      origins: h.origins.join(", "),
+                    })}{" "}
+                    <UntestedTag id="settings.agentLoginWellknown" />
+                  </span>
+                </div>
+                <div className="agents-actions">
+                  <button
+                    type="button"
+                    className="settings-btn sm danger"
+                    disabled={busy === `scope:${h.key}`}
+                    onClick={() => signOutScope(h.key)}
+                  >
+                    {t("settings.agentLoginWellknownSignOut")}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </Fragment>
         );
       })}
       {error && <p className="settings-help">{error}</p>}
@@ -964,6 +1036,19 @@ interface AgentApiKeyStatus {
     budget?: "open" | "reached" | "noLimit";
     /** Models priced at the provider's highest rate (not in the table). */
     unknownModels?: string[];
+    /** This month by model, most billed first: input and output apart. */
+    models?: {
+      model: string;
+      input: number;
+      output: number;
+      cacheWrite: number;
+      cacheRead: number;
+      requests: number;
+      billed: number;
+      usd: number;
+    }[];
+    /** The workspace a saved Anthropic key that is not scoped to one names. */
+    workspace?: string | null;
   }[];
   clis: {
     id: string;
@@ -985,6 +1070,11 @@ interface AgentApiKeyStatus {
   /** When the price table was read off the vendors' pages. */
   pricesDate?: string;
 }
+
+/** `agent_api_key_set`'s answer: saved, or an Anthropic key that is not
+ *  scoped to a workspace — saved only once one of `workspaces` is picked (an
+ *  id typed in when the key could list none). */
+type ApiKeySave = { kind: "saved" } | { kind: "pickWorkspace"; workspaces: { id: string; name: string }[] };
 
 /** The monthly limit a new key's row proposes, in million billed tokens. */
 export const DEFAULT_API_LIMIT_MTOK = 5;
@@ -1012,6 +1102,7 @@ const tokenCount = (n: number) =>
 const API_KEY_PROVIDERS: Record<string, string> = {
   anthropic: "Anthropic",
   gemini: "Google Gemini",
+  openai: "OpenAI",
 };
 
 /** What a CLI's agents run on: its own login, the user's own API key, or a
@@ -1019,11 +1110,13 @@ const API_KEY_PROVIDERS: Record<string, string> = {
 type Credential = "login" | "key" | "admin";
 
 /** The CLIs that can take a stored key through the API proxy (the backend's
- *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
+ *  `CLI_ROUTES`: only CLIs the spawn alone can point at the proxy), each
  *  with its own pill — literal ids, which is what `scripts/untested.mjs` reads. */
 const API_KEY_CLIS: { cli: string; untested: UntestedId }[] = [
   { cli: "claude", untested: "settings.agentApiKeys.claude" },
   { cli: "gemini", untested: "settings.agentApiKeys.gemini" },
+  { cli: "codex", untested: "settings.agentApiKeys.codex" },
+  { cli: "opencode", untested: "settings.agentApiKeys.opencode" },
 ];
 
 /** Provider API keys for the agent CLIs: one key per provider, kept in the OS
@@ -1038,6 +1131,11 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
   const [limitDrafts, setLimitDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A key waiting for its workspace: held here (never in the page) only
+  // until the user picks one or cancels.
+  const pendingKey = useRef<Record<string, string>>({});
+  const [picking, setPicking] = useState<{ provider: string; workspaces: { id: string; name: string }[] } | null>(null);
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
   const refresh = () => {
     invoke<AgentApiKeyStatus>("agent_api_keys_status")
       .then(setStatus)
@@ -1077,7 +1175,28 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
     setDrafts((d) => ({ ...d, [id]: "" }));
     act(id, async () => {
       await writeLimit(id, limit);
-      await invoke("agent_api_key_set", { provider: id, key });
+      const answer = await invoke<ApiKeySave | null>("agent_api_key_set", { provider: id, key });
+      if (answer?.kind === "pickWorkspace") {
+        pendingKey.current[id] = key;
+        setWorkspaceDraft(answer.workspaces[0]?.id ?? "");
+        setPicking({ provider: id, workspaces: answer.workspaces });
+      }
+    });
+  };
+  const endPicking = (id: string) => {
+    delete pendingKey.current[id];
+    setPicking(null);
+    setWorkspaceDraft("");
+  };
+  // Saved with the picked workspace; refused (one the key cannot use), the
+  // picker stays for another choice.
+  const saveWorkspace = (id: string) => {
+    const key = pendingKey.current[id];
+    const workspace = workspaceDraft.trim();
+    if (!key || !workspace) return;
+    act(id, async () => {
+      await invoke("agent_api_key_set", { provider: id, key, workspace });
+      endPicking(id);
     });
   };
   const setLimit = (id: string) => {
@@ -1119,6 +1238,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         <p className="settings-help">{t("settings.agentApiKeysHelp")}</p>
         <p className="settings-help">{t("settings.agentApiKeysWarning")}</p>
         <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
+        <p className="settings-help">{t("settings.agentApiKeysCodexHelp")}</p>
       </AgentsFold>
       {status.ledgerRestarted && (
         <p className="settings-help pill-fence-live-note">
@@ -1144,6 +1264,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
               : t("settings.agentApiSpent", {
                   spent,
                   limit: tokenCount(p.limitTokens),
+                  left: tokenCount(Math.max(0, p.limitTokens - (p.billed ?? 0))),
                   usd: usd(p.spentUsd ?? 0),
                 });
         const state = !status.readable
@@ -1182,6 +1303,9 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 <AgentsStatus tone={!status.readable ? "warn" : p.saved ? "ok" : "off"}>{state}</AgentsStatus>
                 {budget && status.readable && (
                   <span className={`agents-row-note${blocked ? " is-warn" : ""}`}>{budget}</span>
+                )}
+                {p.saved && p.workspace && (
+                  <span className="agents-row-note">{t("settings.agentApiWorkspace", { id: p.workspace })}</span>
                 )}
               </div>
               <div className="agents-key-form">
@@ -1236,11 +1360,76 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 )}
               </div>
             </div>
+            {picking?.provider === p.id && !p.saved && (
+              <div className="agents-row agents-key-row">
+                <p className="settings-help">
+                  {t(picking.workspaces.length > 0 ? "settings.agentApiWorkspacePick" : "settings.agentApiWorkspaceType")}{" "}
+                  <UntestedTag id="settings.agentApiKeys.workspace" />
+                </p>
+                <div className="agents-key-form">
+                  {picking.workspaces.length > 0 ? (
+                    <Dropdown
+                      title={t("settings.agentApiWorkspaceLabel")}
+                      ariaLabel={t("settings.agentApiWorkspaceLabel")}
+                      value={workspaceDraft}
+                      disabled={busy === p.id}
+                      options={picking.workspaces.map((w) => ({
+                        value: w.id,
+                        label: w.name === w.id ? w.id : `${w.name} (${w.id})`,
+                      }))}
+                      onChange={setWorkspaceDraft}
+                    />
+                  ) : (
+                    <input
+                      className="agents-input"
+                      value={workspaceDraft}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="wrkspc_…"
+                      aria-label={t("settings.agentApiWorkspaceLabel")}
+                      disabled={busy === p.id}
+                      onChange={(e) => setWorkspaceDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveWorkspace(p.id);
+                      }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="settings-btn sm primary"
+                    disabled={busy === p.id || !workspaceDraft.trim()}
+                    onClick={() => saveWorkspace(p.id)}
+                  >
+                    {t("settings.agentApiKeySave")}
+                  </button>
+                  <button type="button" className="settings-btn sm" disabled={busy === p.id} onClick={() => endPicking(p.id)}>
+                    {t("settings.agentApiWorkspaceCancel")}
+                  </button>
+                </div>
+              </div>
+            )}
             {p.saved && p.limitTokens == null && p.legacyLimitUsd != null && (
               <p className="settings-help pill-fence-live-note">
                 {t("settings.agentApiOldUsdLimit", { usd: usd(p.legacyLimitUsd) })}
               </p>
             )}
+            {status.readable &&
+              (p.models ?? []).map((m) => (
+                <p key={m.model} className="settings-help">
+                  {[
+                    t("settings.agentApiModelUsage", {
+                      model: m.model,
+                      input: tokenCount(m.input),
+                      output: tokenCount(m.output),
+                    }),
+                    m.cacheRead > 0 && t("settings.agentApiModelCacheRead", { tokens: tokenCount(m.cacheRead) }),
+                    m.cacheWrite > 0 && t("settings.agentApiModelCacheWrite", { tokens: tokenCount(m.cacheWrite) }),
+                    `≈ ${usd(m.usd)}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              ))}
             {p.saved && (p.unknownModels?.length ?? 0) > 0 && (
               <p className="settings-help">
                 {t("settings.agentApiUnknownModels", { provider: name, models: (p.unknownModels ?? []).join(", ") })}
@@ -1266,7 +1455,8 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         const row = status.clis.find((c) => c.id === cli);
         if (!row) return null;
         const name = labels.get(cli) ?? cli;
-        const hasKey = row.providers.some((p) => saved.has(p));
+        const keyed = row.providers.filter((p) => saved.has(p));
+        const hasKey = keyed.length > 0;
         // One credential per CLI (#2389): its own login, the user's own API
         // key, or a hosted server administrator's key — never two at once.
         const current: Credential = row.usesAdmin ? "admin" : enabled.includes(cli) ? "key" : "login";
@@ -1277,7 +1467,9 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 {
                   value: "key",
                   label: t("settings.agentCredOwnKey", {
-                    providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                    // Only the providers a key is saved for: the others
+                    // stay on the CLI's own login (OpenCode).
+                    providers: (hasKey ? keyed : row.providers).map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
                   }),
                 },
               ]
@@ -1597,26 +1789,41 @@ function AgentFenceCard() {
   );
 }
 
+/** npm's words for "this package wants a newer Node" — a warning it installs
+ *  through anyway (the CLI then fails at start) or the error it stops on. */
+const NODE_ENGINE_FAILURE = /EBADENGINE|Unsupported engine|engine "node" is incompatible/i;
+
+/** The host's Node.js as `node_runtime_status` reports it; null while probing
+ *  (or when the probe failed, which shows nothing). */
+function useNodeRuntimeStatus() {
+  const [status, setStatus] = useState<NodeRuntimeStatus | null>(null);
+  const recheck = () =>
+    void invoke<NodeRuntimeStatus>("node_runtime_status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  useEffect(() => recheck(), []);
+  return { status, recheck };
+}
+
 /**
  * "Install Node/npm first" helper for the Manage Agents panel. Most agent CLIs
  * install through `npm`, so when `npm` isn't on the host's PATH — or the Node
  * that is there is older than the current LTS the CLIs require — this points
- * the user at the one-click, no-admin Node install for their OS (and stays
- * hidden once a current Node is detected). Follows Tabtivity's
- * install-via-terminal-tab policy.
+ * the user at the one-click, no-admin Node install for their OS. Follows
+ * Tabtivity's install-via-terminal-tab policy. The panel owns the probe
+ * ({@link useNodeRuntimeStatus}) because the two cases sit in different places:
+ * a missing npm blocks every install and goes above the CLIs, while an old Node
+ * is fine for most of them and shows only in the card of an install npm
+ * refused for it ({@link NODE_ENGINE_FAILURE}).
  */
-function NodeRuntimeNotice() {
+function NodeRuntimeNotice({
+  status,
+  onRecheck,
+}: {
+  status: NodeRuntimeStatus;
+  onRecheck: () => void;
+}) {
   const t = useT();
-  // null = still probing.
-  const [status, setStatus] = useState<NodeRuntimeStatus | null>(null);
-  const recheck = () =>
-    invoke<NodeRuntimeStatus>("node_runtime_status")
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  useEffect(() => void recheck(), []);
-
-  // While probing, or once a current npm is present, there is nothing to nudge about.
-  if (!status || (status.npm && !status.too_old)) return null;
   const tooOld = status.npm && status.too_old;
 
   const { command, shellKey, shellKind } = NODE_INSTALL[HOST_OS];
@@ -1626,7 +1833,12 @@ function NodeRuntimeNotice() {
         <span className="agents-notice-title">Node.js / npm</span>
         <AgentsStatus tone="warn">
           {tooOld
-            ? t("agents.nodeTooOld", { version: status.version ?? "", min: status.min_major })
+            ? t("agents.nodeTooOld", {
+                // "v22.22.1" would read "V22.22.1" under the status text's
+                // capitalised first letter.
+                version: (status.version ?? "").replace(/^v/, ""),
+                min: status.min_major,
+              })
             : t("agents.nodeNotDetected")}
         </AgentsStatus>
         {tooOld && <UntestedTag id="settingsSubPanels.1" />}
@@ -1651,7 +1863,7 @@ function NodeRuntimeNotice() {
         >
           {t("agents.runInTerminal")}
         </button>
-        <button type="button" className="settings-btn sm" onClick={() => void recheck()}>
+        <button type="button" className="settings-btn sm" onClick={onRecheck}>
           {t("common.recheck")}
         </button>
       </div>
@@ -2143,12 +2355,10 @@ export function AgentsPanel({
   // Per-agent live install log, keyed by agent id.
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  // Per-agent target selection and outcome for explicit installs on a global
+  // Per-agent target selection and failure for explicit installs on a global
   // remote machine. This is independent of local `installed`: each machine has
   // its own CLI state.
   const [remoteTargets, setRemoteTargets] = useState<Record<string, string>>({});
-  const [remoteInstalling, setRemoteInstalling] = useState<string | null>(null);
-  const [remoteResults, setRemoteResults] = useState<Record<string, string>>({});
   const [remoteErrors, setRemoteErrors] = useState<Record<string, string>>({});
   // Per-agent installed version + drift verdict, keyed by agent id.
   const [versions, setVersions] = useState<Record<string, AgentVersionReport>>({});
@@ -2159,6 +2369,7 @@ export function AgentsPanel({
   const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
   // Filter over the *not installed* half only (see the two sections below).
   const [search, setSearch] = useState("");
+  const node = useNodeRuntimeStatus();
   // The shared sign-in each installed card reports (`agent_logins`, read only;
   // the Accounts & keys group owns the import and sign-out). Re-read when that
   // group changes one.
@@ -2222,30 +2433,28 @@ export function AgentsPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [logs, installing]);
 
+  const appendAgentLog = (id: string, p: { id: string; line: string }) => {
+    if (p.id !== id) return;
+    setLogs((l) => ({ ...l, [id]: l[id] ? `${l[id]}\n${p.line}` : p.line }));
+  };
+
   const installAgent = async (id: string) => {
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
-    // Stream the installer's output, filtering to this agent's events.
-    const unlisten = await listen<{ id: string; line: string }>(
-      "agent-install-progress",
-      (e) => {
-        if (e.payload.id !== id) return;
-        setLogs((l) => ({
-          ...l,
-          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
-        }));
-      },
-    );
     try {
-      await invoke<string>("install_agent", { id });
+      // Stream the installer's output, filtering to this agent's events.
+      await runWithProgress<{ id: string; line: string }, string>(
+        "agent-install-progress",
+        (p) => appendAgentLog(id, p),
+        () => invoke<string>("install_agent", { id }),
+      );
       refresh();
       notifyAgentRegistryChanged();
       loadVersions(true);
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
-      unlisten();
       setInstalling(null);
     }
   };
@@ -2284,18 +2493,12 @@ export function AgentsPanel({
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
-    const unlisten = await listen<{ id: string; line: string }>(
-      "agent-install-progress",
-      (e) => {
-        if (e.payload.id !== id) return;
-        setLogs((l) => ({
-          ...l,
-          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
-        }));
-      },
-    );
     try {
-      await invoke<string>("update_agent", { id });
+      await runWithProgress<{ id: string; line: string }, string>(
+        "agent-install-progress",
+        (p) => appendAgentLog(id, p),
+        () => invoke<string>("update_agent", { id }),
+      );
       setUpdates(({ [id]: _drop, ...rest }) => rest);
       setLogs(({ [id]: _drop, ...rest }) => rest);
       refresh();
@@ -2304,7 +2507,6 @@ export function AgentsPanel({
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
-      unlisten();
       setInstalling(null);
     }
   };
@@ -2354,46 +2556,18 @@ export function AgentsPanel({
       .catch(() => {});
   };
 
-  const installAgentRemote = async (agent: AgentInfo) => {
-    const machineId = remoteTargets[agent.id];
+  // Install a CLI on a remote machine, watched: the backend hands back an
+  // `ssh -t` command line for the registry-owned install script, and
+  // `runInstallInTab` types it into a root-terminal tab and brings the root
+  // console up above this panel — so an npm install that takes minutes, an nvm
+  // PATH that isn't there, or a prompt (sudo, a host key) is seen and
+  // answerable, where a headless run reported one string only once it was over.
+  // No spinner: the tab is the progress, and this call is over once it opens.
+  // `machineId` comes from the card foot's one-click picker; the fold's
+  // button passes none and uses the machine chosen in its own picker.
+  const installAgentRemoteInTerminal = async (agent: AgentInfo, machineId = remoteTargets[agent.id]) => {
     const machine = remoteMachines.find((m) => m.id === machineId);
     if (!machine) return;
-    const key = `${agent.id}:${machine.id}`;
-    setRemoteInstalling(key);
-    setRemoteResults(({ [agent.id]: _drop, ...rest }) => rest);
-    setRemoteErrors(({ [agent.id]: _drop, ...rest }) => rest);
-    try {
-      await invoke<string>("install_agent_remote", {
-        agentId: agent.id,
-        machineId: machine.id,
-      });
-      setRemoteResults((prev) => ({
-        ...prev,
-        [agent.id]: t("agents.remoteInstalled", {
-          label: agent.label,
-          machine: machine.label || machine.host,
-        }),
-      }));
-    } catch (err) {
-      setRemoteErrors((prev) => ({ ...prev, [agent.id]: String(err) }));
-    } finally {
-      setRemoteInstalling(null);
-    }
-  };
-
-  // The same install, watched. `install_agent_remote` reports one string when it
-  // is over and nothing while it runs — which hides exactly what goes wrong on
-  // someone else's machine: an npm install that takes minutes, an nvm PATH that
-  // isn't there, or a prompt (sudo, a host key) nobody can answer headlessly. The
-  // backend hands back an `ssh -t` command line for the *same* registry-owned
-  // script, and `runInstallInTab` types it into a root-terminal tab, where the
-  // output is readable and the prompts are answerable. No `remoteInstalling`
-  // spinner: the tab is the progress, and this call is over the moment it opens.
-  const installAgentRemoteInTerminal = async (agent: AgentInfo) => {
-    const machineId = remoteTargets[agent.id];
-    const machine = remoteMachines.find((m) => m.id === machineId);
-    if (!machine) return;
-    setRemoteResults(({ [agent.id]: _drop, ...rest }) => rest);
     setRemoteErrors(({ [agent.id]: _drop, ...rest }) => rest);
     try {
       const command = await invoke<string>("install_agent_remote_command", {
@@ -2627,8 +2801,30 @@ export function AgentsPanel({
     const parts = a.installed ? versionParts(a) : null;
     const signIn = a.installed ? loginFacts(a) : null;
     const busy = installing !== null || removing !== null;
-    const remoteBusy = remoteInstalling !== null && remoteInstalling.startsWith(`${a.id}:`);
     const hasOptions = (a.id === "claude") || (a.id === "codex" && a.installed);
+    // Install on a remote machine, one click from the foot: picking a machine
+    // opens the watched install tab at once (the fold below is the same install
+    // with the machine picked first). Only when a remote machine exists, so a local-only setup sees
+    // no dead control on every card.
+    const remotePicker = !adminInstalls && remoteMachines.length > 0 && (
+      <>
+        <Dropdown
+          className="agent-remote-foot-picker"
+          title={t("agents.installOnRemoteFootTitle", { label: a.label })}
+          value=""
+          placeholder={t("agents.installOnRemoteFoot")}
+          options={remoteMachines.map((machine) => ({
+            value: machine.id,
+            label: machine.label || machine.host,
+          }))}
+          onChange={(v) => {
+            setRemoteTargets((prev) => ({ ...prev, [a.id]: v }));
+            void installAgentRemoteInTerminal(a, v);
+          }}
+        />
+        <UntestedTag id="settingsSubPanels.remoteFoot" />
+      </>
+    );
     return (
     <SettingsCard key={a.id} className={`agents-card${a.installed ? "" : " is-available"}${hidden ? " is-hidden" : ""}`}>
       <div className="agents-card-head">
@@ -2699,15 +2895,18 @@ export function AgentsPanel({
           {installedExtras(a)}
         </div>
       )}
-      {remoteResults[a.id] && <div className="agent-remote-result">{remoteResults[a.id]}</div>}
       {remoteErrors[a.id] && <div className="project-dialog-error">{remoteErrors[a.id]}</div>}
-      {remoteBusy && <div className="agents-note">{t("agents.installingRemote")}</div>}
       {logs[a.id] && (
         <pre className="ollama-install-log" ref={installing === a.id ? logRef : undefined}>
           {logs[a.id]}
         </pre>
       )}
       {errors[a.id] && <div className="project-dialog-error">{errors[a.id]}</div>}
+      {node.status?.npm &&
+        node.status.too_old &&
+        NODE_ENGINE_FAILURE.test(`${logs[a.id] ?? ""}\n${errors[a.id] ?? ""}`) && (
+          <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
+        )}
       {adminInstalls && (
         <p className="settings-help">
           {t(a.installed ? "agents.askAdminInstalled" : "agents.askAdminMissing", { label: a.label })}{" "}
@@ -2732,6 +2931,7 @@ export function AgentsPanel({
             </button>
             <UntestedTag id="settingsSubPanels.agentUpdates" />
             <UntestedTag id="settingsSubPanels.3" />
+            {remotePicker}
             {!adminInstalls && (
               <>
                 <span className="agents-spacer" />
@@ -2772,6 +2972,7 @@ export function AgentsPanel({
               {installing === a.id ? t("agents.installing") : t("agents.installLabel", { label: a.label })}
             </button>
             {installing === a.id && <span className="agents-note">{t("agents.runningInstaller")}</span>}
+            {remotePicker}
           </div>
         )}
         {!a.installed && !adminInstalls && a.install_cmd === "" && (
@@ -2910,7 +3111,7 @@ export function AgentsPanel({
                     ? t("agents.noRemoteMachines")
                     : t("agents.chooseRemoteMachine")
               }
-              disabled={!remoteMachinesLoaded || remoteMachines.length === 0 || remoteInstalling !== null}
+              disabled={!remoteMachinesLoaded || remoteMachines.length === 0}
               options={remoteMachines.map((machine) => ({
                 value: machine.id,
                 label: machine.label || machine.host,
@@ -2920,19 +3121,11 @@ export function AgentsPanel({
             <button
               type="button"
               className="settings-btn sm"
-              disabled={!remoteTargets[a.id] || remoteInstalling !== null}
-              onClick={() => void installAgentRemote(a)}
-            >
-              {remoteBusy ? t("agents.installingRemote") : t("agents.installOnRemote")}
-            </button>
-            <button
-              type="button"
-              className="settings-btn sm"
               title={t("agents.installOnRemoteTerminalTitle")}
-              disabled={!remoteTargets[a.id] || remoteInstalling !== null}
+              disabled={!remoteTargets[a.id]}
               onClick={() => void installAgentRemoteInTerminal(a)}
             >
-              {t("agents.installOnRemoteTerminal")}
+              {t("agents.installOnRemote")}
             </button>
           </div>
         </div>
@@ -2957,7 +3150,9 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
-      <NodeRuntimeNotice />
+      {node.status && !node.status.npm && (
+        <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
+      )}
       {agents === null ? (
         <p className="settings-help">{t("agents.checkingInstalled")}</p>
       ) : (
@@ -3106,6 +3301,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const vibeInstallLogRef = useRef<HTMLPreElement>(null);
   const [models, setModels] = useState<OllamaModelInfo[]>([]);
   const [serverRunning, setServerRunning] = useState<boolean | null>(null);
+  // The update check shared with the header dropdown (`lib/agents/
+  // ollamaUpdateActions`): its verdicts live in the activity store, so a check
+  // run there shows here and the other way round.
+  const updateVerdicts = useOllamaActivityStore((s) => s.updates);
+  const checkingUpdates = useOllamaActivityStore((s) => s.checkingUpdates);
+  const checkResult = useOllamaActivityStore((s) => s.checkResult);
+  const ollamaVersion = useOllamaActivityStore((s) => s.version);
   // Where Ollama downloads models (`settings.ollama_models_path`) and how the
   // chosen path would reach the running server. The plan is re-read whenever the
   // path changes — an empty path asks only for the default + systemd facts.
@@ -3117,7 +3319,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // Models currently being loaded into memory, keyed by name. Driven by the
   // global `ollama-load-progress` events so a load started from the brain menu
   // shows here too; Ollama streams no load percentage, so it's indeterminate.
-  const [loadingMem, setLoadingMem] = useState<Record<string, boolean>>({});
+  // Live downloads and the session's paused pulls come from the same shared
+  // store (`initLocalModelEvents` below), so a pull started or paused from the
+  // 🧠 menu offers its Pause / Resume here too.
+  const loads = useOllamaActivityStore((s) => s.loads);
   // Per-tag registry facts (size, parameters, quantization, cloud), fetched
   // lazily and cached. The parameter count and size are what the search card
   // omits for a model with no size badge, so it is fetched from the manifest.
@@ -3127,16 +3332,14 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // Live download progress per model ref, keyed by the exact ref passed to
   // `pull_ollama_model`. `pct` is null during non-download phases (manifest,
   // verify, write) where Ollama reports no byte totals.
-  const [pullProgress, setPullProgress] = useState<
-    Record<string, { pct: number | null; status: string }>
-  >({});
+  const pullProgress = useOllamaActivityStore((s) => s.downloads);
   // Model refs whose download was interrupted by a previous Tabtivity exit/crash,
   // persisted by the backend. Each can be resumed ("Continue") since Ollama
   // picks up a partially-fetched model where it left off.
   const [interrupted, setInterrupted] = useState<string[]>([]);
   // Model refs the user paused mid-download this session. A paused pull keeps its
   // partial blobs (so it can be resumed) and offers Resume / Delete.
-  const [paused, setPaused] = useState<Set<string>>(new Set());
+  const paused = useOllamaActivityStore((s) => s.paused);
   // Orphaned partial layers in Ollama's blob cache with no recoverable model
   // name — surfaced only so the user can delete them to reclaim space.
   const [orphans, setOrphans] = useState<{ digest: string; size: number; path: string }[]>([]);
@@ -3227,60 +3430,31 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Track live download progress emitted by `pull_ollama_model`.
+  // The installed Ollama version — a local read, no network (the registry half
+  // only runs when the user presses "Check for updates").
   useEffect(() => {
-    const un = listen<{ model: string; status: string; completed: number; total: number }>(
-      "ollama-pull-progress",
-      (e) => {
-        const { model, status, completed, total } = e.payload;
-        // A paused pull stops streaming here — move it out of the live-progress
-        // map and into the paused set so its row offers Resume / Delete.
-        if (status === "paused") {
-          setPullProgress((p) => {
-            const { [model]: _drop, ...rest } = p;
-            return rest;
-          });
-          setPaused((p) => new Set(p).add(model));
-          return;
-        }
-        setPullProgress((p) => ({
-          ...p,
-          [model]: {
-            pct: total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : null,
-            status,
-          },
-        }));
-      },
-    );
-    return () => {
-      void un.then((f) => f());
-    };
-  }, []);
+    if (!installed) return;
+    ollamaVersionStatus(false)
+      .then((v) => useOllamaActivityStore.getState().mergeInstalledVersion(v))
+      .catch(() => {});
+  }, [installed]);
 
-  // Track in-flight loads-into-memory (from any surface). On success, re-read the
-  // model list so the row flips to its resident state.
+  // Live download progress and loads-into-memory, from any surface, in the shared
+  // activity store. A paused pull stops streaming there and moves into `paused`,
+  // so its row offers Resume / Delete.
+  useEffect(() => initLocalModelEvents(), []);
+
+  // A load that just finished: re-read the model list so the row flips to its
+  // resident state. A model leaving `loads` is a success (an error stays in it).
+  const prevLoads = useRef(loads);
   useEffect(() => {
-    const un = listen<{ model: string; status: string }>("ollama-load-progress", (e) => {
-      const { model, status } = e.payload;
-      setLoadingMem((p) => {
-        if (status === "loading") return { ...p, [model]: true };
-        const { [model]: _drop, ...rest } = p;
-        return rest;
-      });
-      if (status === "success") void refresh();
-    });
-    return () => {
-      void un.then((f) => f());
-    };
-  }, []);
+    const finished = Object.keys(prevLoads.current).some((m) => prevLoads.current[m] === "loading" && !(m in loads));
+    prevLoads.current = loads;
+    if (finished) void refresh();
+  }, [loads]);
 
   // Drop a model's progress once its pull settles (success or error).
-  const clearPullProgress = (model: string) =>
-    setPullProgress((p) => {
-      if (!(model in p)) return p;
-      const { [model]: _drop, ...rest } = p;
-      return rest;
-    });
+  const clearPullProgress = (model: string) => useOllamaActivityStore.getState().dropDownload(model);
 
   // Live button label for an in-flight pull: a percentage when Ollama is
   // streaming byte totals, otherwise the caller's fallback (e.g. "Pulling…").
@@ -3349,21 +3523,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
 
   // Resume a paused download — re-pull, which Ollama continues from the partials.
   const resumePull = (model: string) => {
-    setPaused((p) => {
-      const n = new Set(p);
-      n.delete(model);
-      return n;
-    });
+    useOllamaActivityStore.getState().clearPaused(model);
     void withBusy(`${model}:pull`, () => invoke("pull_ollama_model", { model }));
   };
 
   // Delete a paused download: drop its partial blobs and clear its pending record.
   const deletePausedPull = (model: string) => {
-    setPaused((p) => {
-      const n = new Set(p);
-      n.delete(model);
-      return n;
-    });
+    useOllamaActivityStore.getState().clearPaused(model);
     setInterrupted((p) => p.filter((m) => m !== model));
     void invoke("delete_ollama_pull", { model })
       .then(() => refresh())
@@ -3373,16 +3539,16 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const installVibe = async () => {
     setVibeInstalling(true);
     setVibeInstallLog("");
-    const unlisten = await listen<{ line: string }>("vibe-install-progress", (e) => {
-      setVibeInstallLog((prev) => (prev ? `${prev}\n${e.payload.line}` : e.payload.line));
-    });
     try {
-      await invoke<string>("install_vibe");
+      await runWithProgress<{ line: string }, string>(
+        "vibe-install-progress",
+        (p) => setVibeInstallLog((prev) => (prev ? `${prev}\n${p.line}` : p.line)),
+        () => invoke<string>("install_vibe"),
+      );
       setVibeInstalled(true);
     } catch (e) {
       setError(String(e));
     } finally {
-      unlisten();
       setVibeInstalling(false);
     }
   };
@@ -3397,12 +3563,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     setInstalling(true);
     setError(null);
     setInstallLog("");
-    // Stream the installer's output line-by-line so the user sees live progress.
-    const unlisten = await listen<{ line: string }>("ollama-install-progress", (e) => {
-      setInstallLog((prev) => (prev ? `${prev}\n${e.payload.line}` : e.payload.line));
-    });
     try {
-      await invoke<string>("install_ollama");
+      // Stream the installer's output line-by-line so the user sees live progress.
+      await runWithProgress<{ line: string }, string>(
+        "ollama-install-progress",
+        (p) => setInstallLog((prev) => (prev ? `${prev}\n${p.line}` : p.line)),
+        () => invoke<string>("install_ollama"),
+      );
       setInstalled(true);
       // Start the server and load the model catalog so the user can immediately
       // pick what to install next.
@@ -3411,7 +3578,6 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     } catch (e) {
       setError(String(e));
     } finally {
-      unlisten();
       setInstalling(false);
     }
   };
@@ -4009,6 +4175,54 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             </button>
           )}
         </div>
+        {installed && serverRunning === true && (
+          <div className="ollama-runtime-row">
+            <span className="ollama-runtime-name">
+              {ollamaVersion?.current
+                ? ollamaVersion.latest && !ollamaVersion.update_available
+                  ? t("localModel.ollamaVersionCurrent", { current: ollamaVersion.current })
+                  : t("localModel.ollamaVersion", { current: ollamaVersion.current })
+                : "Ollama"}
+            </span>
+            <span className="lm-status-actions">
+              {!checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
+                <span className="lm-status-note">
+                  {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
+                </span>
+              )}
+              {ollamaVersion?.update_available && (
+                <button
+                  type="button"
+                  className="ollama-action-btn primary"
+                  title={`${t("localModel.ollamaUpdateSentence", {
+                    latest: ollamaVersion.latest,
+                    current: ollamaVersion.current,
+                  })} — ${t("localModel.ollamaUpgradeTitle", { latest: ollamaVersion.latest })}`}
+                  onClick={() =>
+                    upgradeOllamaInTab(
+                      t,
+                      ollamaVersion,
+                      models.filter((m) => m.running).map((m) => m.name),
+                    )
+                  }
+                >
+                  {t("localModel.ov.upgradeTo", { latest: ollamaVersion.latest })}
+                </button>
+              )}
+              {models.length > 0 && (
+                <button
+                  type="button"
+                  className="ollama-action-btn"
+                  disabled={checkingUpdates}
+                  title={t("localModel.checkUpdatesTitle")}
+                  onClick={() => runOllamaUpdateCheck(t)}
+                >
+                  {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
+                </button>
+              )}
+            </span>
+          </div>
+        )}
         <div className="ollama-runtime-row">
           <span className="ollama-runtime-name">{t("ollama.vibeTitle")}</span>
           <span className={`ollama-runtime-state${vibeInstalled ? " ok" : ""}`}>
@@ -4027,11 +4241,11 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       {(() => {
         // Interrupted entries not currently being (re)pulled — these get a
         // "Continue" action; live pulls show their streaming progress bar.
-        const resumable = interrupted.filter((m) => !(m in pullProgress) && !paused.has(m));
+        const resumable = interrupted.filter((m) => !(m in pullProgress) && !paused.includes(m));
         if (
           Object.keys(pullProgress).length === 0 &&
           resumable.length === 0 &&
-          paused.size === 0 &&
+          paused.length === 0 &&
           orphans.length === 0
         )
           return null;
@@ -4066,7 +4280,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   </div>
                 </div>
               ))}
-              {[...paused].map((model) => (
+              {paused.map((model) => (
                 <div className="ollama-model-row" key={`paused:${model}`}>
                   <div className="ollama-model-header">
                     <span className="ollama-model-name">{model}</span>
@@ -4157,7 +4371,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       ) : (
         <div className="settings-list">
           {models.map((m) => {
-            const loadingNow = busy[`${m.name}:load`] || loadingMem[m.name];
+            const loadingNow = busy[`${m.name}:load`] || loads[m.name] === "loading";
             const meta = [fmtBytes(m.size), m.parameter_size, m.quantization, m.family]
               .filter(Boolean)
               .join(" · ");
@@ -4205,7 +4419,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-actions-end">
                     <button
                       type="button"
-                      className="ollama-ghost-btn"
+                      className={`ollama-ghost-btn${updateVerdicts[m.name]?.update_available ? " primary" : ""}`}
                       disabled={busy[`${m.name}:pull`]}
                       title={t("ollama.updateTitle")}
                       onClick={() =>

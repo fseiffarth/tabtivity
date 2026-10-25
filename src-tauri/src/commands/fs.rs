@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::schema::boxes::BoxesList;
 use crate::schema::projects::{ProjectEntry, ProjectsList};
+use crate::services::tree_copy::{copy_tree, CopyReport};
 use crate::storage;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
@@ -1089,13 +1090,15 @@ pub fn create_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 /// to their respective project roots (which may be the same project, enabling an
 /// in-project copy/paste, or two box-co-accessible projects). The destination
 /// must not already exist, and a directory may not be copied into itself.
+/// Links below the copied folder are recreated as links and never followed;
+/// what could not be copied (pipes, sockets, devices) comes back in the report.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_path(
     src_project_dir: String,
     src_rel: String,
     dest_project_dir: String,
     dest_rel: String,
-) -> Result<(), String> {
+) -> Result<CopyReport, String> {
     app_core::rt::try_blocking("fs", move || copy_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
         .await
 }
@@ -1105,12 +1108,12 @@ pub fn copy_path_blocking(
     src_rel: String,
     dest_project_dir: String,
     dest_rel: String,
-) -> Result<(), String> {
+) -> Result<CopyReport, String> {
     let (src, dest) = resolve_transfer(&src_project_dir, &src_rel, &dest_project_dir, &dest_rel)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    copy_recursive(&src, &dest).map_err(|e| e.to_string())
+    copy_tree(&src, &dest).map_err(|e| e.to_string())
 }
 
 /// Move (cut/paste) a file or directory tree into another location. Same
@@ -1149,7 +1152,16 @@ pub fn move_path_blocking(
         }
         Err(_) => {}
     }
-    copy_recursive(&src, &dest).map_err(|e| e.to_string())?;
+    let report = copy_tree(&src, &dest).map_err(|e| e.to_string())?;
+    if report.skipped_count > 0 {
+        // The original holds what the copy left out: removing it would lose that.
+        crate::services::tree_copy::discard(&dest);
+        return Err(format!(
+            "could not move across drives: {} item(s) cannot be copied ({}); the original was left in place",
+            report.skipped_count,
+            report.summary()
+        ));
+    }
     let remove = if src.is_dir() {
         fs::remove_dir_all(&src)
     } else {
@@ -1252,7 +1264,10 @@ pub fn import_external_file_blocking(
             fs::remove_file(&dest).map_err(|e| e.to_string())?;
         }
     }
-    copy_recursive(&src, &dest).map_err(|e| e.to_string())?;
+    let report = copy_tree(&src, &dest).map_err(|e| e.to_string())?;
+    if report.skipped_count > 0 {
+        eprintln!("import: {} item(s) not copied from the dropped folder: {}", report.skipped_count, report.summary());
+    }
 
     Ok(dest
         .strip_prefix(&root)
@@ -1415,22 +1430,6 @@ fn resolve_transfer(
         return Err("cannot copy a folder into itself".to_string());
     }
     Ok((src, dest))
-}
-
-/// Recursively copy `src` to `dest`. Directories are recreated and their
-/// contents copied entry by entry; symlinks are not followed (copied as their
-/// target's contents via the recursive descent on the resolved metadata).
-fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    if src.is_dir() {
-        fs::create_dir_all(dest)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
-        }
-    } else {
-        fs::copy(src, dest)?;
-    }
-    Ok(())
 }
 
 // ── MIME detection (magic bytes) ──────────────────────────────────────────
@@ -2035,6 +2034,80 @@ fn compute_user_roots(
     roots
 }
 
+/// `roots` without any reached through a link planted inside another root,
+/// any of `roots` or of `registered` (every registered project, mirror and box
+/// folder: a scope's own set is narrower than what an agent can plant a link
+/// in). The user-roots rule of [`compute_user_roots`]: a root is **dropped**,
+/// never rewritten to its real path, since the fence binds a root at its own
+/// path and the viewers compare against what is listed. A root spelled with
+/// `..` is dropped too (the link checks read the spelling). A link above every
+/// root is the system's and is followed, and a resolution covering one of
+/// `keep_clear` (home, state dir) is no fence for the others.
+pub(crate) fn drop_planted_roots(roots: Vec<PathBuf>, registered: &[PathBuf], keep_clear: &[PathBuf]) -> Vec<PathBuf> {
+    let all: Vec<PathBuf> = roots.iter().chain(registered).cloned().collect();
+    let fences = root_fences(&all, keep_clear);
+    roots
+        .into_iter()
+        .filter(|r| !r.components().any(|c| matches!(c, std::path::Component::ParentDir)) && !through_planted_link(r, &fences))
+        .collect()
+}
+
+/// Where a planted link would sit: inside any of `roots`, as spelled or
+/// resolved (a resolution that covers a `keep_clear` folder is no fence: it
+/// would count every system link as planted).
+fn root_fences(roots: &[PathBuf], keep_clear: &[PathBuf]) -> Vec<PathBuf> {
+    let resolve = |r: &Path| canonical_or_new(r).unwrap_or_else(|_| r.to_path_buf());
+    let keep_clear: Vec<PathBuf> = keep_clear.iter().filter(|k| k.is_absolute()).map(|k| resolve(k)).collect();
+    let covers_kept = |c: &Path| keep_clear.iter().any(|k| k.starts_with(c));
+    let mut fences: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        fences.push(root.clone());
+        let canonical = resolve(root);
+        if !covers_kept(&canonical) {
+            fences.push(canonical);
+        }
+    }
+    fences
+}
+
+/// Every registered project folder, mirror override and box folder (absolute
+/// ones only: a relative entry would resolve against the process's cwd).
+pub(crate) fn registered_roots(projects: &ProjectsList, boxes: &BoxesList) -> Vec<PathBuf> {
+    let mut registered: Vec<PathBuf> = projects.iter().filter_map(project_dir).collect();
+    registered.extend(projects.iter().filter_map(mirror_override_dir));
+    registered.extend(boxes.iter().filter_map(|b| b.folder.as_deref()).map(str::trim).filter(|f| !f.is_empty()).map(PathBuf::from));
+    registered.retain(|r| r.is_absolute());
+    registered
+}
+
+/// Whether `root` (a project's folder, as the phone's file browser is handed
+/// it) is reached through a link planted inside any registered project, mirror
+/// or box folder: such a root is refused, never followed.
+pub(crate) fn is_planted_root(root: &Path) -> bool {
+    let projects = PROJECTS.get("projects.json");
+    let boxes = BOXES.get("boxes.json");
+    is_planted_root_in(root, &projects, &boxes, &keep_clear_roots())
+}
+
+fn is_planted_root_in(root: &Path, projects: &ProjectsList, boxes: &BoxesList, keep_clear: &[PathBuf]) -> bool {
+    through_planted_link(root, &root_fences(&registered_roots(projects, boxes), keep_clear))
+}
+
+/// The folders [`drop_planted_roots`] keeps clear of the fences: home and the
+/// state dir.
+pub(crate) fn keep_clear_roots() -> Vec<PathBuf> {
+    vec![crate::paths::home_dir(), storage::state_dir()]
+}
+
+/// [`drop_planted_roots`] against `projects`/`boxes`, then each survivor
+/// canonicalized where it can be (the literal path stays for a folder that
+/// does not exist yet).
+fn pin_roots(roots: Vec<PathBuf>, projects: &ProjectsList, boxes: &BoxesList) -> Vec<PathBuf> {
+    let mut roots = drop_planted_roots(roots, &registered_roots(projects, boxes), &keep_clear_roots());
+    roots.iter_mut().for_each(|r| *r = r.canonicalize().unwrap_or_else(|_| r.clone()));
+    roots
+}
+
 /// Whether a symlink on `root`'s spelling (`root` itself or an ancestor) sits
 /// strictly inside one of `fences`, by its spelled or its resolved location.
 fn through_planted_link(root: &Path, fences: &[PathBuf]) -> bool {
@@ -2149,10 +2222,7 @@ fn compute_allowed_roots(
         };
         roots.extend(in_box().filter_map(project_dir));
         roots.extend(in_box().filter_map(mirror_override_dir));
-        roots
-            .iter_mut()
-            .for_each(|r| *r = r.canonicalize().unwrap_or_else(|_| r.clone()));
-        return roots;
+        return pin_roots(roots, projects, boxes);
     }
     if scope_id.is_none() {
         roots.push(root_work.to_path_buf());
@@ -2164,10 +2234,7 @@ fn compute_allowed_roots(
     };
     let Some(anchor) = anchor else {
         // No current project: the root scope still reads its own folder.
-        roots
-            .iter_mut()
-            .for_each(|r| *r = r.canonicalize().unwrap_or_else(|_| r.clone()));
-        return roots;
+        return pin_roots(roots, projects, boxes);
     };
 
     // Start with the anchor project, then fold in every member of any box the
@@ -2195,11 +2262,9 @@ fn compute_allowed_roots(
     // from the entry, no state-dir touch.
     roots.extend(in_scope().filter_map(mirror_override_dir));
     // Canonicalize where possible so symlinked roots compare correctly; fall
-    // back to the literal path when the dir does not exist (yet).
-    roots
-        .iter_mut()
-        .for_each(|r| *r = r.canonicalize().unwrap_or_else(|_| r.clone()));
-    roots
+    // back to the literal path when the dir does not exist (yet). A root
+    // reached through a link planted inside another root is dropped first.
+    pin_roots(roots, projects, boxes)
 }
 
 /// A project entry's working directory: the canonical `directory` field when
@@ -3212,6 +3277,27 @@ mod tests {
         assert!(tmp.path().join("src/main.rs").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn copy_path_keeps_a_planted_link_a_link_and_reports_a_pipe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_string_lossy().to_string();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("src/planted")).unwrap();
+        let fifo = std::ffi::CString::new(tmp.path().join("src/pipe").to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+        let report = copy_path_blocking(dir.clone(), "src".into(), dir.clone(), "src2".into()).unwrap();
+
+        assert_eq!(report.skipped, vec!["pipe".to_string()]);
+        let copied = tmp.path().join("src2/planted");
+        assert!(std::fs::symlink_metadata(&copied).unwrap().file_type().is_symlink());
+        assert!(!tmp.path().join("src2/pipe").exists());
+    }
+
     #[test]
     fn copy_path_refuses_existing_destination() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3968,6 +4054,68 @@ mod tests {
         assert!(held(at("code-y/f")));
         assert!(!held(at("home/u/f")), "a root covering the home folder is dropped");
         assert!(held(at("work/c/other")), "the base root itself still holds");
+    }
+
+    /// A box folder holding a project that is really a link an agent planted:
+    /// the project's root is dropped (not rewritten to the link's target), the
+    /// box's own folder and an ordinary member stay, and a link above every
+    /// root, or spelled outside them, is followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_registered_root_through_a_planted_link_is_dropped_everywhere() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let at = |rel: &str| base.join(rel);
+        let secret = at("secret");
+        fs::create_dir_all(&secret).unwrap();
+        fs::create_dir_all(at("box/real")).unwrap();
+        fs::create_dir_all(at("elsewhere/mine")).unwrap();
+        symlink(&secret, at("box/planted")).unwrap();
+        symlink(at("elsewhere/mine"), at("user-link")).unwrap();
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let projects = vec![
+            entry("real", "inactive", &dir("box/real")),
+            entry("planted", "current", &dir("box/planted")),
+            entry("viawards", "inactive", &dir("box/planted/inner")),
+            entry("mine", "inactive", &dir("user-link")),
+        ];
+        let boxes = vec![mk_box("b", &["real", "planted", "viawards", "mine"], Some(&dir("box")))];
+
+        let roots = compute_allowed_roots(&projects, &boxes, Some("box:b"), Path::new(ROOT_WORK));
+
+        assert!(roots.contains(&at("box")), "{roots:?}");
+        assert!(roots.contains(&at("box/real")), "{roots:?}");
+        assert!(roots.contains(&at("elsewhere/mine")), "a link spelled outside every root is the user's: {roots:?}");
+        assert!(!roots.iter().any(|r| r.starts_with(&secret) || r.ends_with("planted")), "dropped: {roots:?}");
+        // The project scope sees the same rule through its box.
+        let scoped = compute_allowed_roots(&projects, &boxes, Some("planted"), Path::new(ROOT_WORK));
+        assert!(!scoped.iter().any(|r| r.starts_with(&secret)), "{scoped:?}");
+        assert!(scoped.contains(&at("box/real")), "{scoped:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_phones_project_root_is_refused_through_a_planted_link() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let at = |rel: &str| base.join(rel);
+        fs::create_dir_all(at("work")).unwrap();
+        fs::create_dir_all(at("secret")).unwrap();
+        symlink(at("secret"), at("work/planted")).unwrap();
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let projects = vec![entry("w", "current", &dir("work")), entry("p", "inactive", &dir("work/planted"))];
+
+        assert!(is_planted_root_in(&at("work/planted"), &projects, &Vec::new(), &[]));
+        assert!(!is_planted_root_in(&at("work"), &projects, &Vec::new(), &[]));
+        assert!(!is_planted_root_in(&at("secret"), &projects, &Vec::new(), &[]));
+    }
+
+    #[test]
+    fn drop_planted_roots_drops_a_root_spelled_with_dotdot() {
+        let roots = vec![PathBuf::from("/w/a"), PathBuf::from("/w/a/../b")];
+        assert_eq!(drop_planted_roots(roots, &[], &[]), vec![PathBuf::from("/w/a")]);
     }
 
     #[test]

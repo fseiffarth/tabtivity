@@ -2,6 +2,7 @@ import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useTauriListener } from "../../hooks/useTauriListener";
 import { useProjectsStore } from "../../stores/projects";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import {
@@ -300,20 +301,16 @@ export function RemoteUsageWarningDialog() {
   /** Per-row in-flight state for the explicit reads (the sweep has `rechecking`). */
   const [reading, setReading] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void listen<UsageReportEvent>("remote-usage-report", (event) => {
-      setReport(
-        projectHostKey(event.payload.projectId, event.payload.hostId),
-        event.payload.report,
-      );
-    }).then((u) => (cancelled ? u() : (unlisten = u)));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [setReport]);
+  useTauriListener(
+    () =>
+      listen<UsageReportEvent>("remote-usage-report", (event) => {
+        setReport(
+          projectHostKey(event.payload.projectId, event.payload.hostId),
+          event.payload.report,
+        );
+      }),
+    [setReport],
+  );
 
   // Every global machine first, in the Machines menu's own order — this dialog
   // opens from that menu, so its list must be that list. Then the active

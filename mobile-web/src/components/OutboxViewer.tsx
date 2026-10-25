@@ -3,7 +3,7 @@ import { useT } from "../../../src/lib/i18n";
 import { openOutside, refreshProjectFile, sentName, viewerFileUrl, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { layerKey } from "../markup/store";
 import { shareAs, useOutboxShare } from "../outboxShare";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 import { isUntested } from "../../../src/lib/untested";
 import { MarkupView } from "./MarkupView";
 import type { AgentSignal } from "../markup/submitState";
@@ -37,7 +37,7 @@ export type MarkupTarget = {
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
   /** Tucks the markup view away behind the chat, kept mounted; the chat's
    * bar brings it back (`MarkupView` `toChat`). */
-  toChat?: (name: string) => void;
+  toChat?: (back: MarkupBack) => void;
   /** The question line of a dialog the tab's CLI waits on (a permission
    * prompt, its own question picker), for the pill — shown, answered in the
    * chat (`dialogLine`). */
@@ -391,7 +391,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
       <div className="outbox-viewer-title">
         <h2>{sentName(file)}</h2>
         <small>
-          {stepping && `${t("mobile.outbox.position", { index: index + 1, count: steps.length })} · `}{sizeLabel(file.size)}
+          {stepping && `${t("mobile.outbox.position", { index: index + 1, count: steps.length })} · `}{formatBytes(file.size)}
           {((stepping && isUntested("mobile.outbox.step")) || (isImage && isUntested("mobile.outbox.zoom"))
             || (isText && file.size > INLINE_LIMIT && isUntested("mobile.outbox.wholeText")))
             && <span className="untested">{t("mobile.outbox.untested")}</span>}

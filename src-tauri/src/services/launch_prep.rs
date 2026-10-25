@@ -108,14 +108,12 @@ fn settings_agent_remote_control() -> bool {
 /// carrier, and `agent_exec` in front of the CLI maps it (the Host session is
 /// tmux-wrapped like any agent tab); on Windows under the CLI's own name.
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
-    let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
-    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     // A hosted server's administrator's key (the Host session), checked
     // against the keeper's offer: a withdrawn key fails the spawn.
     let admin = crate::services::server::agent_keys::admin_for_spawn(&opts.cmd)?;
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, admin, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -140,6 +138,14 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
         || crate::services::tmux_local::tmux_supports_session_env()
     {
         return Ok(());
+    }
+    // OpenCode's inline config points it at the proxy whether or not the
+    // token arrives: started without one, every request would be refused.
+    if crate::services::agent_api_keys::opencode_routed(&opts.env) {
+        return Err("OpenCode API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
+    }
+    if opts.env.contains_key(crate::services::agent_api_keys::OPENAI_CARRIER) {
+        return Err("Codex API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
     }
     let dropped = drop_carriers(&mut opts.env);
     if dropped.is_empty() {
@@ -186,10 +192,11 @@ fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<Str
 
 /// Whether this `claude` spawn runs here, as a session, on an Anthropic key
 /// through the API proxy: the user's stored one (`agent_api_keys::keyed`:
-/// Claude switched on in Manage CLIs → API keys, the proxy running, a key
-/// saved) or a hosted server administrator's that this user chose for Claude
-/// (#2389) — in a local, non-container, non-local-model tab. Reads the
-/// keychain (once, then the proxy's cache) only when Claude is switched on.
+/// the tab's API pick or Claude switched on in Manage CLIs → API keys, the
+/// proxy running, a key saved) or a hosted server administrator's that this
+/// user chose for Claude (#2389) — in a local, non-container, non-local-model
+/// tab. Reads the keychain (once, then the proxy's cache) only when the key
+/// applies to this tab.
 fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
     if remote_agent_run || opts.sandbox || crate::services::agent_api_keys::is_local_model(opts) {
         return false;
@@ -199,7 +206,7 @@ fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
     let admin = crate::services::server::is_server()
         && crate::services::agent_api_keys::cli_of(&opts.cmd) == Some("claude")
         && crate::services::server::agent_keys::chosen_in(&storage::state_dir()).contains("claude");
-    admin || crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
+    admin || crate::services::agent_api_keys::keyed(&opts.cmd, opts.api_key, &settings)
 }
 
 /// Whether Claude agent tabs of `project_id` should spawn with
@@ -426,7 +433,7 @@ fn assemble_assistant_launch(
     home: &std::path::Path,
     provider: Option<&str>,
 ) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
-    assemble_assistant_launch_with(opts, plan, home, provider, &crate::services::agent_session::resolve_agent_session)
+    assemble_assistant_launch_with(opts, plan, home, provider, &crate::services::agent_session::resolve_agent_session_bounded)
 }
 
 /// [`assemble_assistant_launch`] with the session resolver given, so a test
@@ -475,7 +482,22 @@ fn assemble_assistant_launch_with(
 }
 
 fn cwd_within(cwd: &str, allowed: &std::path::Path) -> bool {
-    std::path::Path::new(cwd).starts_with(allowed)
+    let path = std::path::Path::new(cwd);
+    // `..` and `.` make the lexical compare lie (`<root>/../elsewhere`).
+    if crate::services::sandbox::has_dot_segment(cwd) {
+        return false;
+    }
+    if !path.starts_with(allowed) {
+        return false;
+    }
+    // A link inside the project (agent-writable) can lead anywhere: where both
+    // exist, the resolved paths must agree too.
+    // A cwd not made yet is judged by its deepest folder that exists.
+    let real = path.ancestors().find_map(|a| a.canonicalize().ok());
+    match (real, allowed.canonicalize()) {
+        (Some(real), Ok(root)) => real.starts_with(root),
+        _ => true,
+    }
 }
 
 /// Select the scope's root independently of a tab's working subdirectory.
@@ -528,13 +550,27 @@ pub struct PreparedLaunch {
     pub resting: bool,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
+    /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
+    /// input is refused (`commands::terminal::pty_write`).
+    pub ai: bool,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
     fenced_scope: Option<String>,
     host_agent_tab: Option<crate::services::agent_fence::HostAgentTab>,
+    /// A local agent's sandbox, home and CLI, for the hover card
+    /// (`services::agent_features`); its API keys are read off the final env.
+    features: Option<LocalAgentFeatures>,
     spawned_tab_id: String,
     generation: SpawnGeneration,
+}
+
+/// What [`prepare`] learns of a local agent spawn for `agent_features`.
+struct LocalAgentFeatures {
+    cli: String,
+    cwd: String,
+    home: std::path::PathBuf,
+    sandbox: crate::services::agent_features::Sandbox,
 }
 
 /// A spawn's sequence number ([`agent_fence::begin_spawn`]), taken before any
@@ -579,6 +615,7 @@ impl Drop for SpawnGeneration {
 ///
 /// [`agent_fence::on_tab_gone`]: crate::services::agent_fence::on_tab_gone
 pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
+    crate::services::agent_features::forget(tab_id, seq);
     if !crate::services::agent_fence::on_tab_gone(tab_id, seq) {
         return false;
     }
@@ -634,6 +671,17 @@ impl PreparedLaunch {
         if !current {
             return;
         }
+        match self.features.take() {
+            Some(f) => crate::services::agent_features::record(&self.spawned_tab_id, crate::services::agent_features::Spawn {
+                seq: self.generation.seq,
+                cli: f.cli,
+                cwd: f.cwd,
+                home: Some(f.home),
+                sandbox: Some(f.sandbox),
+                api_keys: crate::services::agent_features::api_keys_in(&self.opts.env),
+            }),
+            None => crate::services::agent_features::forget_tab(&self.spawned_tab_id),
+        }
         // A local model's tab: its conversations are not cleared while it runs.
         if let Some(home) = self.opts.env.get("VIBE_HOME") {
             crate::services::agent_fence::note_vibe_home(
@@ -659,6 +707,25 @@ pub async fn prepare(
     session_name: Option<String>,
     pool: Option<&crate::services::remote::RemotePoolState>,
 ) -> Result<PreparedLaunch, String> {
+    // The AI switch: no agent starts while it is off — the window's tabs and
+    // the sidecar's headless spawns alike. Read off the caller's options,
+    // before any wrap renames the program. A tab whose agent still runs in
+    // its local tmux session (a restart) only reattaches, so it is let through:
+    // a running agent must stay reachable, if only to stop it. Its input is
+    // gated like any agent's (`ai`).
+    let ai = is_ai_spawn(&opts);
+    if ai && crate::services::ai_switch::is_off() {
+        let (project, host, session, local_only) =
+            (opts.project_id.clone(), opts.remote_host_id.clone(), opts.tmux_session.clone(), opts.local_only);
+        let rejoins = app_core::rt::spawn_blocking(move || {
+            session.is_some_and(|s| reattaches_session(project.as_deref(), host.as_deref(), &s, local_only))
+        })
+        .await
+        .unwrap_or(false);
+        if !rejoins {
+            return Err(crate::services::ai_switch::AI_OFF.to_string());
+        }
+    }
     // Resolve empty cwd to Tabtivity's root workspace directory (an assistant
     // chat's cwd is its own folder, set by the gate below).
     if opts.cwd.is_empty() && opts.assistant.is_none() {
@@ -812,7 +879,17 @@ pub async fn prepare(
     // twice.)
     // (A chat's session is resolved once its argv is built, below.)
     if !assistant {
-        opts = crate::services::agent_session::resolve_agent_session(opts);
+        // OpenCode's session plugin is listed per release (a directory for 2,
+        // the file for 1.x): probe first, so the resolve lists the one this
+        // binary loads even right after an upgrade. The check below reuses it.
+        if opts.cmd == "opencode" {
+            crate::commands::agents::opencode_is_v2().await;
+        }
+        let resolving = opts.clone();
+        opts = match tokio::task::spawn_blocking(move || crate::services::agent_session::resolve_agent_session_bounded(resolving)).await {
+            Ok(resolved) => resolved,
+            Err(e) => return Err(format!("Agent session: {e}")),
+        };
     }
 
     // Resolve the fourth authority axis while cmd/cwd still describe the agent
@@ -938,6 +1015,14 @@ pub async fn prepare(
         };
         resume_claim = assemble_assistant_launch(&mut opts, plan, &home.dir, provider.as_deref())?;
         assistant_home = Some(home);
+    }
+
+    // The first v2 launch needs its new flags too; do not defer this probe to
+    // the next tab. Remote/container binaries have their own release.
+    if opts.cmd == "opencode" && !remote_agent_run && !opts.sandbox
+        && crate::commands::agents::opencode_is_v2().await
+    {
+        crate::services::opencode_session::v2_launch_args(&mut opts.args);
     }
 
     // The agent's hooks report its turn state under its tab uid; bind that uid
@@ -1148,6 +1233,9 @@ pub async fn prepare(
             tmux_session: opts.tmux_session.clone(),
         });
     let spawned_tab_id = opts.id.clone();
+    let mut features: Option<LocalAgentFeatures> = None;
+    // The CLI before the fence wrap renames the program.
+    let agent_cli = std::path::Path::new(&opts.cmd).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     // What the root tab's MCP session records as its projects grant: the
     // paths the fence argv bound when fenced, everything when the agent runs
     // unfenced (it already reads everything).
@@ -1186,6 +1274,10 @@ pub async fn prepare(
                 // `Fenced` there); the home is still prepared for symmetry.
                 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 let _ = &home;
+                features = Some(LocalAgentFeatures {
+                    cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
+                    sandbox: crate::services::agent_features::Sandbox::Fenced,
+                });
                 root_projects = match crate::services::agent_fence::take_root_projects_granted(&opts.id) {
                     Some(paths) => crate::services::root_mcp::ProjectsGrant::Paths(paths),
                     None => crate::services::root_mcp::ProjectsGrant::Hidden,
@@ -1198,6 +1290,10 @@ pub async fn prepare(
                 reason: crate::services::agent_fence::HOST_SESSION_REASON,
             } if local_agent => {
                 let home = home_off_thread("Host session home", crate::services::agent_home::prepare_host_home).await?;
+                features = Some(LocalAgentFeatures {
+                    cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
+                    sandbox: crate::services::agent_features::Sandbox::HostSession,
+                });
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -1215,6 +1311,10 @@ pub async fn prepare(
                     Some(home) => home,
                     None => prepare_agent_home(&scope_id, roots, opts.local_model).await?,
                 };
+                features = Some(LocalAgentFeatures {
+                    cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
+                    sandbox: crate::services::agent_features::Sandbox::Unfenced,
+                });
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -1282,14 +1382,75 @@ pub async fn prepare(
         resume_claim,
         fenced_scope,
         host_agent_tab,
+        features,
         spawned_tab_id,
         generation,
         drop_dir,
+        ai,
     })
+}
+
+/// Whether a launch runs an AI, for the AI switch: an agent by the fence's
+/// own reading, or a chat assistant — but not a CLI's sign-in
+/// (`lib/agents/signInLaunch.ts`: `<cli> login …` / `<cli> auth login …`),
+/// which talks to no model.
+pub fn is_ai_spawn(opts: &PtyOptions) -> bool {
+    opts.assistant.is_some()
+        || (crate::services::agent_fence::is_agent(opts) && !is_sign_in_argv(&opts.args))
+}
+
+fn is_sign_in_argv(args: &[String]) -> bool {
+    match args {
+        [first, ..] if first == "login" => true,
+        [first, second, ..] => first == "auth" && second == "login",
+        _ => false,
+    }
+}
+
+/// Whether a spawn wrapped in the tab's tmux `session` (`new-session -A`)
+/// would only reattach it — the session still runs, here or on the tab's
+/// remote host — and so start no program. Blocking: the remote answer is one
+/// `tmux has-session` over the shared master (`BatchMode`, never a prompt);
+/// an unreachable host reads as "would start".
+fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, local_only: bool) -> bool {
+    use crate::services::remote;
+    let target = project.filter(|_| !local_only).and_then(|id| {
+        remote::remote_target_for_host(id, host.unwrap_or(remote::PRIMARY_HOST))
+    });
+    match target {
+        None => crate::services::tmux_local::app_session_alive(session),
+        Some(target) => {
+            let probe = format!(
+                "tmux has-session -t {}",
+                crate::services::ssh_exec::shell_quote(&format!("={session}"))
+            );
+            crate::services::ssh_exec::run_remote_shell(&target.spec, &probe)
+                .is_ok_and(|out| out.status.success())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_sign_in_is_not_an_ai_spawn() {
+        let opts = |cmd: &str, args: &[&str]| PtyOptions {
+            login: None, assistant: None,
+            id: "p:t".into(), cmd: cmd.into(), args: args.iter().map(|a| a.to_string()).collect(),
+            env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false,
+            agent: true, project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None,
+            host_bound_uid: None, local_model: false, schedule_target_id: None, host_session: false, api_key: None,
+        };
+        assert!(is_ai_spawn(&opts("claude", &[])));
+        assert!(is_ai_spawn(&opts("claude", &["--resume", "x"])));
+        assert!(is_ai_spawn(&opts("codex", &["exec", "login"])));
+        assert!(!is_ai_spawn(&opts("claude", &["auth", "login", "--claudeai"])));
+        assert!(!is_ai_spawn(&opts("codex", &["login", "--device-auth"])));
+        let mut shell = opts("bash", &[]);
+        shell.agent = false;
+        assert!(!is_ai_spawn(&shell));
+    }
+
     #[test]
     fn scope_root_is_not_the_tab_cwd() {
         assert_eq!(super::scope_root_for("local", None, "mirror", None, false), "local");
@@ -1314,11 +1475,11 @@ mod tests {
             id: tab.into(), cmd: "claude".into(), args: Vec::new(), env: HashMap::new(), cwd: "/p".into(),
             cols: 80, rows: 24, local_only: false, sandbox: false, agent: true, project_id: None,
             remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
-            local_model: false, schedule_target_id: None, host_session: false,
+            local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, drop_dir: None, mcp_spawn_guard: None,
-            resume_claim: None, fenced_scope, host_agent_tab: None, spawned_tab_id: tab.into(), generation,
+            opts, named: false, interrupted: false, resting: false, drop_dir: None, ai: true, mcp_spawn_guard: None,
+            resume_claim: None, fenced_scope, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
 
@@ -1601,6 +1762,32 @@ mod tests {
     }
 
     #[test]
+    fn cwd_within_refuses_dot_components() {
+        assert!(!cwd_within("/home/u/proj/../other", Path::new("/home/u/proj")));
+        assert!(!cwd_within("/home/u/proj/./sub", Path::new("/home/u/proj")));
+        assert!(!cwd_within("/home/u/proj/..", Path::new("/home/u/proj")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cwd_within_compares_resolved_paths_for_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let s = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+        assert!(cwd_within(&s(root.join("sub")), &root));
+        assert!(!cwd_within(&s(root.join("link")), &root));
+        assert!(!cwd_within(&s(root.join("link").join("x")), &root));
+        // The root itself reached through a link is still inside.
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        assert!(cwd_within(&s(alias.join("sub")), &alias));
+    }
+
+    #[test]
     fn claude_name_rides_the_argv_once() {
         let mut args = vec!["--session-id".to_string(), "u".to_string()];
         assert!(append_claude_name(&mut args, Some(" Proj (feature) ")));
@@ -1727,6 +1914,7 @@ mod tests {
             local_model: false,
             schedule_target_id: Some("sched".into()),
             host_session: false,
+            api_key: None,
         }
     }
 

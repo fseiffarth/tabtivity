@@ -153,6 +153,14 @@ pub fn fence_read_only_paths() -> Vec<String> {
 fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
     match bin {
         "claude" => &[("DISABLE_AUTOUPDATER", "1")],
+        // Skips both the update check and the V1 → V2 "upgrade major" offer
+        // (1.19, 2.1): run in the fence, its installer writes into the agent
+        // home, which a restart never runs ahead of the install home.
+        "opencode" => &[("OPENCODE_DISABLE_AUTOUPDATE", "1")],
+        // It downloads each release into `~/.cache/copilot/pkg`, which is a
+        // tmpfs in the fence: "restart to update" then restarted on the old
+        // version, every time.
+        "copilot" => &[("COPILOT_AUTO_UPDATE", "false")],
         _ => &[],
     }
 }
@@ -234,6 +242,22 @@ mod tests {
         assert!(bin_dirs_for(true, state).contains(&root.join("npm")));
         assert!(!bin_dirs_for(false, state).contains(&root.join("npm")));
         assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
+    }
+
+    #[test]
+    fn a_fenced_spawn_switches_off_the_self_updaters_but_keeps_the_users_value() {
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("/s/agents/install/.opencode/bin/opencode", &mut env);
+        assert_eq!(env.get("OPENCODE_DISABLE_AUTOUPDATE").map(String::as_str), Some("1"));
+        let mut env = std::collections::HashMap::from([("DISABLE_AUTOUPDATER".to_string(), "0".to_string())]);
+        apply_fence_env("claude.exe", &mut env);
+        assert_eq!(env.get("DISABLE_AUTOUPDATER").map(String::as_str), Some("0"));
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("/s/agents/install/npm/bin/copilot", &mut env);
+        assert_eq!(env.get("COPILOT_AUTO_UPDATE").map(String::as_str), Some("false"));
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("codex", &mut env);
+        assert!(env.is_empty());
     }
 
     #[test]

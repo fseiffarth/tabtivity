@@ -569,10 +569,8 @@
    fires and the in-panel pin can't be reached. This rail sits in that dead-zone
    and opens the panel on click (delivered even where mousemove isn't).
    Always mounted: the panel opens beside it, never over it. */
-/* The closed panel's edge rail: one tab per view the panel can open on. Also the
-   only marker of WHICH edge the unpinned panel lives on, so the tabs carry an
-   accent-tinted body and a vertical label rather than a bare chevron — a 16px
-   grey sliver read as a window artifact.
+/* The panel's edge rail: one icon button per available view, with a continuous
+   surface and an accent marker for the active view.
 
    It is a BAR, not a floating cluster: `.app-body` reserves --side-rail-w of
    padding on the panel's edge for as long as an unpinned panel exists, and the
@@ -620,7 +618,8 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
+  gap: 0;
+  border-block: 1px solid var(--side-panel-border);
 }
 
 /* The chevron is the rail's own tab: it opens the panel on its remembered view,
@@ -644,15 +643,26 @@
   top: 0;
   left: 0;
   right: 0;
-  border-top: none;
+  border-bottom: 1px solid var(--side-panel-border);
 }
 
-/* Edge to edge across the bar: no side padding, no side borders, no corner
-   radius. A tab inset from the bar's own edges left two hairlines of panel
-   ground running the height of the rail and read as a button floating in a
-   trough rather than as the bar's own row — and the inset strip was dead to
-   the click that the whole width should take. Only the top and bottom borders
-   survive, which with the 3px gap are what separate one tab from the next. */
+/* The AI switch, pinned to the bottom of the bar opposite the side switch. It
+   wakes to full strength in the danger colour while AI is off, so the rail says
+   so at a glance. */
+.side-panel-reveal-rail .srh-ai {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--side-panel-border);
+}
+.side-panel-reveal-rail .srh-ai.off {
+  opacity: 1;
+  color: var(--danger);
+}
+
+/* Flush rows form one continuous strip. Single separators keep the icons
+   distinct without gaps or doubled borders; the full width stays clickable. */
 .side-panel-reveal-handle {
   min-height: 44px;
   display: flex;
@@ -661,23 +671,29 @@
   justify-content: center;
   gap: 5px;
   padding: 10px 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-color));
-  border-left: none;
-  border-right: none;
+  border: none;
   border-radius: 0;
-  background-color: color-mix(in srgb, var(--accent) 16%, var(--bg-panel));
+  background-color: color-mix(in srgb, var(--accent) 6%, var(--bg-side-panel));
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
-  opacity: 0.8;
-  transition: opacity var(--transition), color var(--transition), background-color var(--transition);
+  transition: color var(--transition), background-color var(--transition);
+}
+
+.side-panel-reveal-rail .srr-group > .side-panel-reveal-handle + .side-panel-reveal-handle {
+  border-top: 1px solid var(--side-panel-border);
+}
+
+.side-panel-reveal-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .side-panel-reveal-handle:hover {
   opacity: 1;
   color: var(--text-primary);
-  background-color: color-mix(in srgb, var(--accent) 30%, var(--bg-panel));
+  background-color: color-mix(in srgb, var(--accent) 18%, var(--bg-side-panel));
 }
 
 /* The tab of the view on show: VS Code's active indicator — a static accent bar

@@ -288,7 +288,8 @@ pub fn compute_fence_roots(
     }
     if let Some(box_id) = crate::commands::boxes::box_id_of_scope(scope_id) {
         return crate::commands::boxes::compute_box_allowed_roots(boxes, projects, box_id)
-            .map(dedupe_paths);
+            .map(dedupe_paths)
+            .map(|roots| drop_planted(roots, boxes, projects));
     }
 
     let project = projects.iter().find(|p| p.id == scope_id)?;
@@ -298,7 +299,7 @@ pub fn compute_fence_roots(
     } else {
         entry_directory(project)?
     };
-    let mut roots = vec![own];
+    let mut roots = vec![own.clone()];
     for b in boxes
         .iter()
         .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
@@ -309,7 +310,20 @@ pub fn compute_fence_roots(
             roots.extend(box_roots);
         }
     }
-    Some(dedupe_paths(roots))
+    let roots = drop_planted(dedupe_paths(roots), boxes, projects);
+    // Callers take the first root to be the project's own: without it, no roots.
+    roots.first().is_some_and(|first| *first == own).then_some(roots)
+}
+
+/// `roots` without any reached through a link planted inside a registered
+/// root: the fence binds a root at its own path, so such a root would bind
+/// wherever the link was pointed. Dropped, never rewritten to its real path.
+fn drop_planted(roots: Vec<PathBuf>, boxes: &BoxesList, projects: &ProjectsList) -> Vec<PathBuf> {
+    crate::commands::fs::drop_planted_roots(
+        roots,
+        &crate::commands::fs::registered_roots(projects, boxes),
+        &crate::commands::fs::keep_clear_roots(),
+    )
 }
 
 /// The roots a fenced `local_only` tab of project `id` works in, from lists —
@@ -571,7 +585,7 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
             roots.extend(crate::commands::boxes::box_allowed_roots(&b.id)?);
         }
     }
-    Some(dedupe_paths(roots))
+    Some(drop_planted(dedupe_paths(roots), &boxes, &projects))
 }
 
 fn settings() -> crate::schema::Settings {
@@ -1166,32 +1180,42 @@ fn guard_git_control(args: &mut Vec<String>, guard: crate::services::git_guard::
     args.splice(separator..separator, binds);
 }
 
-/// `(audit arch, nr mask, [add_key, request_key, keyctl])` for the native
+/// `(audit arch, nr mask, [add_key, request_key, keyctl], ioctl)` for the native
 /// architecture and the 32-bit one its kernel also runs: a 32-bit binary
 /// reaches the same keyring through the compat table. x32 is x86-64's `arch`
 /// with bit 30 set in `nr` and shares its numbers, hence the mask.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
-    (0xC000_003E, 0xBFFF_FFFF, [248, 249, 250]),
-    (0x4000_0003, u32::MAX, [286, 287, 288]),
+const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3], u32)] = &[
+    (0xC000_003E, 0xBFFF_FFFF, [248, 249, 250], 16),
+    (0x4000_0003, u32::MAX, [286, 287, 288], 54),
 ];
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
-    (0xC000_00B7, u32::MAX, [217, 218, 219]),
-    (0x4000_0028, u32::MAX, [309, 310, 311]),
+const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3], u32)] = &[
+    (0xC000_00B7, u32::MAX, [217, 218, 219], 29),
+    (0x4000_0028, u32::MAX, [309, 310, 311], 54),
 ];
 #[cfg(all(target_os = "linux", target_arch = "riscv64"))]
-const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[(0xC000_00F3, u32::MAX, [217, 218, 219])];
+const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3], u32)] = &[(0xC000_00F3, u32::MAX, [217, 218, 219], 29)];
 #[cfg(all(
     target_os = "linux",
     not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))
 ))]
-const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
+const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3], u32)] = &[];
 
 /// The seccomp program every fenced agent runs under (bwrap `--seccomp`): the
 /// kernel keyring syscalls `add_key`, `request_key` and `keyctl` fail with
-/// `EPERM`; everything else is allowed. `None` on an architecture without a
-/// table, which the fence refuses rather than launching without it.
+/// `EPERM`, and so does `ioctl` with `TIOCSTI` (push a byte into a terminal's
+/// input queue) or `TIOCLINUX` (paste the console selection); everything else
+/// is allowed. `None` on an architecture without a table, which the fence
+/// refuses rather than launching without it.
+///
+/// The two terminal requests are the same on every architecture in the table
+/// (the generic `asm-generic/ioctls.h` numbers). A fenced process shares its
+/// controlling terminal with whatever started it (the pane after the agent
+/// exits, the user's shell), and `TIOCSTI` types into it; kernels from 6.2 can
+/// switch it off with `dev.tty.legacy_tiocsti` but most distributions leave it
+/// on. `ioctl`'s request is an `unsigned int`: only the low half of the
+/// argument is compared.
 ///
 /// Only Tabtivity needs the keyring. Its saved secrets (`remote_credentials`) are
 /// cached there in front of the Secret Service, in the login session keyring
@@ -1200,8 +1224,8 @@ const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
 /// fenced agent could read every saved SSH, VPN and mail password and the mail
 /// store key. No agent gets a keyring of its own either.
 ///
-/// Classic BPF over `seccomp_data` (`nr` at offset 0, `arch` at 4). An
-/// architecture outside the table gets `EPERM` for every syscall.
+/// Classic BPF over `seccomp_data` (`nr` at offset 0, `arch` at 4, `args[1]`
+/// at 24). An architecture outside the table gets `EPERM` for every syscall.
 #[cfg(target_os = "linux")]
 pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
     const LD_W_ABS: u16 = 0x20;
@@ -1220,21 +1244,38 @@ pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
         out[4..].copy_from_slice(&k.to_ne_bytes());
         out
     }
+    // `TIOCSTI` and `TIOCLINUX` (`asm-generic/ioctls.h`).
+    const DENIED_IOCTLS: [u32; 2] = [0x5412, 0x541C];
+    // The low half of `args[1]`, the `ioctl` request (every architecture in the
+    // table is little-endian).
+    const ARG1_LOW: u32 = 24;
     if KEYRING_SYSCALLS.is_empty() {
         return None;
     }
     let mut prog = vec![op(LD_W_ABS, 0, 0, 4)];
-    for (arch, mask, nrs) in KEYRING_SYSCALLS {
+    for (arch, mask, keyring, ioctl) in KEYRING_SYSCALLS {
         let mut body = vec![op(LD_W_ABS, 0, 0, 0)];
         if *mask != u32::MAX {
             body.push(op(ALU_AND_K, 0, 0, *mask));
         }
-        // Each match jumps over the checks after it and the allow, onto the deny.
-        for (i, nr) in nrs.iter().enumerate() {
-            body.push(op(JMP_JEQ_K, (nrs.len() - i) as u8, 0, *nr));
+        // Layout from here: the keyring checks, the `ioctl` check, an allow,
+        // then the request checks, an allow and the deny every match jumps to.
+        let first = body.len();
+        let ioctl_at = first + keyring.len();
+        let deny_at = ioctl_at + 1 + 1 + 1 + DENIED_IOCTLS.len() + 1;
+        let jump = |at: usize, to: usize| (to - at - 1) as u8;
+        for (i, nr) in keyring.iter().enumerate() {
+            body.push(op(JMP_JEQ_K, jump(first + i, deny_at), 0, *nr));
+        }
+        body.push(op(JMP_JEQ_K, 1, 0, *ioctl));
+        body.push(op(RET_K, 0, 0, ALLOW));
+        body.push(op(LD_W_ABS, 0, 0, ARG1_LOW));
+        for (i, request) in DENIED_IOCTLS.iter().enumerate() {
+            body.push(op(JMP_JEQ_K, jump(ioctl_at + 3 + i, deny_at), 0, *request));
         }
         body.push(op(RET_K, 0, 0, ALLOW));
         body.push(op(RET_K, 0, 0, EPERM));
+        debug_assert_eq!(body.len(), deny_at + 1);
         // Another architecture skips this block with `arch` still loaded.
         prog.push(op(JMP_JEQ_K, 0, body.len() as u8, *arch));
         prog.extend(body);
@@ -1442,8 +1483,6 @@ pub fn wrap_pty_options_bwrap(
     // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
-    let subcommand = runs_subcommand(&opts.args);
-    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env, &opts.cwd)?;
     let support_mounts = mounts.clone();
     // The user's toolchain allowlist, except in the assistant's fence.
@@ -1464,6 +1503,15 @@ pub fn wrap_pty_options_bwrap(
         &paths::home_dir(),
         &visible,
     ));
+    // Inject before the fence copies argv: Codex needs provider overrides.
+    // A hosted server's administrator's key, for a CLI this user runs on it
+    // (plan §5.4): checked against the keeper's offer here (a withdrawn key
+    // fails the spawn), delivered below as a proxy grant like the user's own
+    // key (#2389); a no-op everywhere else.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
     let mut args = bwrap_args(
         &paths::home_dir_string(),
         Some(&scope_home.to_string_lossy()),
@@ -1486,11 +1534,6 @@ pub fn wrap_pty_options_bwrap(
     // A hosted server's shared hubs: all hidden but this scope's own
     // project's, read-only (plan §6.3); a no-op everywhere else.
     crate::services::server::share::apply_fence(&mut args, roots);
-    // A hosted server's administrator's key, for a CLI this user runs on it
-    // (plan §5.4): checked against the keeper's offer here (a withdrawn key
-    // fails the spawn), delivered below as a proxy grant like the user's own
-    // key (#2389); a no-op everywhere else.
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     let filter = write_keyring_filter()?;
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
@@ -1508,9 +1551,6 @@ pub fn wrap_pty_options_bwrap(
     // bwrap keeps the environment and the launcher `exec`s, so it reaches the
     // CLI. Hence the launcher last: the step is needed whenever the
     // environment carries something.
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     let step = launcher_step(
         crate::services::fence_scope::helper_for(&bwrap),
         crate::services::agent_exec::has_carriers(&opts.env),
@@ -1839,9 +1879,6 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
-    // Before `opts.args` becomes sandbox-exec's below.
-    let subcommand = runs_subcommand(&opts.args);
-    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1856,13 +1893,17 @@ pub fn wrap_pty_options_sandbox_exec(
     // Last before the argv: the local model's control paths still hold the
     // inodes set up above (gap 30).
     verify_control_pins(&control_pins)?;
+    let agent_cmd = opts.cmd.clone();
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),
         resolved.to_string_lossy().into_owned(),
     ];
     args.extend(opts.args.iter().cloned());
-    let agent_cmd = opts.cmd.clone();
     opts.cmd = "/usr/bin/sandbox-exec".to_string();
     opts.args = args;
     opts.env
@@ -1874,17 +1915,11 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
-    // A hosted server's administrator's key (plan §5.4) — a server is
-    // Linux, so this is a no-op; kept for the one spawn path.
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     // A proxy token and base URL for a CLI the user switched on for a key
     // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
     // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
     // sandbox-exec passes the environment through. The step runs outside the
     // Seatbelt profile, which need not grant Tabtivity's binary.
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
@@ -1974,6 +2009,7 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
         local_model: false,
         schedule_target_id: None,
         host_session: false,
+        api_key: None,
     };
     crate::services::sandbox::enforce_spawn_authority(&mut opts);
     let remote_run =
@@ -2591,11 +2627,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn the_keyring_table_matches_the_native_syscall_numbers() {
-        let (_, _, native) = KEYRING_SYSCALLS[0];
+        let (_, _, native, ioctl) = KEYRING_SYSCALLS[0];
         assert_eq!(
             native.map(i64::from),
             [libc::SYS_add_key, libc::SYS_request_key, libc::SYS_keyctl].map(i64::from)
         );
+        assert_eq!([ioctl].map(i64::from), [libc::SYS_ioctl].map(i64::from));
+        assert_eq!([libc::TIOCSTI as u32, libc::TIOCLINUX as u32], [0x5412, 0x541C]);
     }
 
     /// Loads the real program into a child and calls the keyring from there:
@@ -2629,7 +2667,17 @@ mod tests {
                     libc::syscall(libc::SYS_add_key, c"user".as_ptr(), c"probe".as_ptr(), c"x".as_ptr(), 1usize, session),
                     libc::syscall(libc::SYS_request_key, c"user".as_ptr(), c"probe".as_ptr(), 0usize, 0 as libc::c_long),
                 ];
-                if calls.iter().all(|r| denied(*r)) {
+                // Read before the `ioctl`s below overwrite `errno`.
+                let keyring_denied = calls.iter().all(|r| denied(*r));
+                // An invalid descriptor, so that no terminal can be touched even
+                // if a request got through: the filter answers before the kernel
+                // looks at the descriptor, which is what tells them apart.
+                let tty = |request: libc::c_ulong| libc::ioctl(-1, request, 0 as libc::c_long);
+                let sti = denied(tty(libc::TIOCSTI).into());
+                let linux = denied(tty(libc::TIOCLINUX).into());
+                let other = tty(libc::TIOCGWINSZ);
+                let other_allowed = other == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF);
+                if keyring_denied && sti && linux && other_allowed {
                     Ok(())
                 } else {
                     Err(std::io::Error::from_raw_os_error(libc::EBADMSG))
@@ -2967,6 +3015,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 
@@ -3181,6 +3230,40 @@ mod tests {
             decide(&custom, roots, false, true, true, true),
             FenceDecision::Fenced { .. }
         ));
+    }
+
+    /// A member that is really a link an agent planted inside the box folder
+    /// is no root: bubblewrap binds a root at its own path, so it would bind
+    /// wherever the link now points. Dropped, not rewritten; the project's own
+    /// root being the planted one leaves it no roots at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_root_through_a_planted_link_is_not_bound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let at = |rel: &str| base.join(rel);
+        std::fs::create_dir_all(at("box/real")).unwrap();
+        std::fs::create_dir_all(at("secret")).unwrap();
+        std::os::unix::fs::symlink(at("secret"), at("box/planted")).unwrap();
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let projects = vec![project("real", &dir("box/real")), project("planted", &dir("box/planted"))];
+        let boxes = vec![ProjectBox {
+            id: "b".into(),
+            name: "B".into(),
+            member_ids: vec!["real".into(), "planted".into()],
+            folder: Some(dir("box")),
+            ..ProjectBox::default()
+        }];
+
+        let real = compute_fence_roots(&boxes, &projects, "real", false).unwrap();
+        assert_eq!(real, vec![at("box/real"), at("box")]);
+        let boxed = compute_fence_roots(&boxes, &projects, "box:b", false).unwrap();
+        assert_eq!(boxed, vec![at("box"), at("box/real")]);
+        assert!(compute_fence_roots(&boxes, &projects, "planted", false).is_none(), "its own root is the planted one");
+        // A link spelled outside every root is the user's own and is followed.
+        std::os::unix::fs::symlink(at("box/real"), at("user-link")).unwrap();
+        let outside = vec![project("u", &dir("user-link"))];
+        assert_eq!(compute_fence_roots(&Vec::new(), &outside, "u", false).unwrap(), vec![at("user-link")]);
     }
 
     #[test]

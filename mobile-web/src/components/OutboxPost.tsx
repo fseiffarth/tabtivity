@@ -4,7 +4,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
 import type { OutboxPost as Post } from "../terminal/outboxPosts";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 
 /** Picture tiles an album shows before the last one reads "+N". */
 const ALBUM_TILES = 4;
@@ -64,7 +64,7 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
       const card = <>
         <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>
         <strong>{sentName(file)}</strong>
-        <small>{sizeLabel(file.size)}</small>
+        <small>{formatBytes(file.size)}</small>
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
       return !file.kind.startsWith("text/") && file.kind !== "application/pdf"

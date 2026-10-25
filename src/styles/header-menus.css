@@ -224,6 +224,34 @@
   color: var(--text-primary);
 }
 
+/* Shared replacement for native title hints, above menus and dialogs. */
+.app-tooltip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  width: max-content;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.app-tooltip > .untested-tag {
+  margin-left: 7px;
+  pointer-events: none;
+}
+
 /* ── Ollama settings panel ───────────────────────────────────────────── */
 .ollama-status-dot {
   width: 8px;
@@ -269,10 +297,17 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.agent-remote-result {
-  margin-top: 6px;
-  color: var(--success);
+/* The card foot's one-click "Install on remote…" picker: the trigger sits in
+   the row of small outlined buttons, so it takes their height. */
+.agent-remote-foot-picker .dropdown-trigger {
+  min-height: 0;
+  padding: 3px 8px;
   font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.agent-remote-foot-picker .dropdown-menu {
+  max-width: 260px;
 }
 /* An installed agent's head, right side: its Ctrl+N chord, ↑/↓ (the + menu's
    order, hence the chords') and the Enabled toggle. */
@@ -953,6 +988,16 @@
 .local-model-check-row > .tab-new-menu-item:disabled:hover {
   background: none;
   border-color: transparent;
+}
+/* The shared underline is pinned 3px to the *item's* bottom edge — under the
+   label of a padded 34px row. This button's box was stripped to the bare text
+   above, so that same 3px lands inside the glyphs. Push it just below them
+   (the row's own padding is the room), and drop the 9px inset: here the label
+   IS the button, so the underline matches the text, not a padded box. */
+.local-model-check-row > .tab-new-menu-item::after {
+  bottom: -4px;
+  left: 0;
+  right: 0;
 }
 /* The installed Ollama version, beside "Check for updates" rather than inside
    it, and directly after it rather than pushed to the row's right edge — the
@@ -1860,15 +1905,15 @@
   /* Unlike the other .global-apps-menu-btn siblings, this one reads as a
      quiet status readout (lamp + label), not a button — so its inherited
      button box (background/border) is stripped back to plain text/icon.
-     Height stays the shared 32px .global-apps-menu-btn box (the 🔔 beside
-     it keeps it too; only the six icon launchers fill the 40px bar).
+     Height is the bar's 40px, the same box as the icon launchers beside it:
+     every top-bar icon shares one size, pinned or folded behind the chevron.
      The dropdowns line up regardless — they hang off the header's bottom edge
      (`.global-apps-menu .tab-new-menu`), not off each button. */
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
-  height: 32px;
+  height: 40px;
   padding: 2px 4px;
   border: none;
   border-radius: var(--radius-sm);
@@ -1903,31 +1948,64 @@
    Its members are ordinary header anchors, so the chain has to keep stretching
    all the way down: every hover menu inside positions itself at `top: 100%`,
    which only means "the bottom edge of the top bar" while each wrapper spans
-   the full 40px row. Two extra links (this and `.status-cluster-item`) would
+   the full 40px row. Two extra links (this and `.header-slot`) would
    otherwise collapse to their content height and hang the menus mid-header. */
 .header-status-cluster {
   display: flex;
   align-items: center;
   align-self: stretch;
-  gap: 8px;
+  gap: 6px;
 }
-.status-cluster-item {
+.header-slot {
   display: flex;
   align-items: center;
   align-self: stretch;
 }
-/* A member whose own feature is switched off renders nothing at all; without
+/* An item whose own feature is switched off renders nothing at all; without
    this its wrapper would still spend a gap. */
-.status-cluster-item:empty {
+.header-slot:empty {
   display: none;
 }
-/* Folded — not unmounted. The widget keeps polling, which is what lets it
-   escalate itself back into the bar; see the component header. */
-.status-cluster-item[data-folded="true"] {
+/* Folded — not unmounted. The widget keeps polling, which is what keeps the
+   summary lamp honest; see `StatusCluster`. */
+.header-slot[data-folded="true"] {
   display: none;
+}
+/* Dragging an icon to reorder it (HeaderSlot): the icon dims and a bar marks the
+   slot it would land in front of (or after, at the end of its group). The bar
+   is a pseudo-element so no layout moves while the pointer travels. */
+.header-slot[data-dragging] {
+  opacity: 0.45;
+  cursor: var(--cur-grabbing, grabbing);
+}
+.header-slot[data-drop] {
+  position: relative;
+}
+.header-slot[data-drop]::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.header-slot[data-drop="before"]::before { left: -4px; }
+.header-slot[data-drop="after"]::before { right: -4px; }
+
+/* Divides the pinned icons from the ones unfolded from behind the chevron. */
+.header-fold-separator {
+  align-self: center;
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin-inline: 2px;
+  background: var(--border-subtle);
 }
 
 .status-cluster-toggle {
+  height: 40px;
   gap: 4px;
   min-width: 0;
   padding-inline: 5px;
@@ -1953,7 +2031,7 @@
    bar already carries three `.project-switcher-separator` lines and a fourth
    and fifth would read as noise rather than as structure. */
 .header-right-gap {
-  width: 8px;
+  width: 2px;
   flex: none;
 }
 
@@ -1962,7 +2040,7 @@
   .header-right { gap: 3px; padding-inline: 6px; }
   .project-switcher { gap: 2px; padding-right: 3px; }
   .project-search-wrap { width: 128px; }
-  .header-right-gap { width: 4px; }
+  .header-right-gap { width: 2px; }
 }
 
 @media (max-width: 900px) {
@@ -1996,8 +2074,8 @@
 /* VPN and Machines carry a drawn glyph after their lamps instead of a word;
    it dims and lights like the label it replaced. */
 .header-status-glyph {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex: none;
   color: var(--text-secondary);
   transition: color var(--transition);
@@ -2019,13 +2097,13 @@
 .mobile-indicator-btn,
 .vpn-indicator-btn {
   justify-content: center;
-  width: 25px;
+  width: 40px;
   padding-inline: 3px;
 }
 .mobile-indicator-icon,
 .dev-build-icon {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex: none;
   color: var(--text-secondary);
 }
@@ -2505,6 +2583,20 @@
   flex: 1;
   min-width: 0;
 }
+/* The machine name is a button (opens its System Monitor): drop the button
+   chrome so it still reads as the row's label, underline on hover. */
+.machines-name-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-name-btn:hover,
+.machines-name-btn:focus-visible {
+  text-decoration: underline;
+}
 .machines-row-actions {
   display: flex;
   align-items: center;
@@ -2822,4 +2914,10 @@
 .remote-connect-remember input {
   width: auto;
   margin: 0;
+}
+
+/* The live mic (`VoiceIndicator`): red while a Chat tab holds it; a click
+   stops it. */
+.voice-indicator {
+  color: var(--danger, #d9534f);
 }

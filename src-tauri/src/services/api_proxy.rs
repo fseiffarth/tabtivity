@@ -113,6 +113,7 @@ pub fn upstream_host(provider: Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "api.anthropic.com",
         Provider::Gemini => "generativelanguage.googleapis.com",
+        Provider::OpenAi => "api.openai.com",
     }
 }
 
@@ -301,8 +302,24 @@ fn revoke_all() {
 // ---------------------------------------------------------------------------
 // Keys (cached in memory; the keychain read is off the request path)
 
+/// The largest Anthropic 400 answer read whole to see whether it asks for a
+/// workspace ([`Refusal::NoWorkspace`]); a longer one is passed on as is.
+const MAX_PEEKED_ERROR: u64 = 64 * 1024;
+
+/// The request header naming the workspace an Anthropic key that is not
+/// scoped to one runs in.
+const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
+
+/// A user's own key and the workspace its requests name
+/// (`agent_api_keys::get_workspace`), if any.
+#[derive(Clone)]
+pub struct StoredKey {
+    pub key: String,
+    pub workspace: Option<String>,
+}
+
 enum Cached {
-    Key(String),
+    Key(StoredKey),
     Missing(Instant),
 }
 
@@ -319,13 +336,19 @@ static KEY_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// prompting), remembered. A miss is remembered for [`MISSING_KEY_RETRY`] so a
 /// locked keyring is not asked once per request.
 pub fn key_for(provider: Provider) -> Option<String> {
+    stored_for(provider).map(|stored| stored.key)
+}
+
+/// [`key_for`] with the workspace stored beside the key (read with it).
+pub fn stored_for(provider: Provider) -> Option<StoredKey> {
     match keys().lock_ok().get(&provider) {
         Some(Cached::Key(k)) => return Some(k.clone()),
         Some(Cached::Missing(at)) if at.elapsed() < MISSING_KEY_RETRY => return None,
         _ => {}
     }
     let generation = KEY_GENERATION.load(Ordering::Acquire);
-    let read = super::agent_api_keys::get_key(provider);
+    let read = super::agent_api_keys::get_key(provider)
+        .map(|key| StoredKey { key, workspace: super::agent_api_keys::get_workspace(provider) });
     let mut cache = keys().lock_ok();
     if KEY_GENERATION.load(Ordering::Acquire) == generation {
         cache.insert(
@@ -452,19 +475,28 @@ enum KeySource {
     /// user's own key for the rest.
     #[cfg(test)]
     FixedAdmin { own: Option<&'static str>, admin: Option<(&'static str, Option<String>)> },
+    /// A user's key stored with the workspace it names.
+    #[cfg(test)]
+    FixedInWorkspace(&'static str, &'static str),
 }
 
 impl KeySource {
-    async fn key(&self, provider: Provider) -> Option<String> {
+    async fn key(&self, provider: Provider) -> Option<StoredKey> {
+        #[cfg(test)]
+        let own = |k: &Option<&str>| k.map(|key| StoredKey { key: key.to_string(), workspace: None });
         match self {
-            KeySource::Keychain => app_core::rt::spawn_blocking(move || key_for(provider))
+            KeySource::Keychain => app_core::rt::spawn_blocking(move || stored_for(provider))
                 .await
                 .ok()
                 .flatten(),
             #[cfg(test)]
-            KeySource::Fixed(k) => k.map(str::to_string),
+            KeySource::Fixed(k) => own(k),
             #[cfg(test)]
-            KeySource::FixedAdmin { own, .. } => own.map(str::to_string),
+            KeySource::FixedAdmin { own: k, .. } => own(k),
+            #[cfg(test)]
+            KeySource::FixedInWorkspace(key, workspace) => {
+                Some(StoredKey { key: key.to_string(), workspace: Some(workspace.to_string()) })
+            }
         }
     }
 
@@ -476,7 +508,7 @@ impl KeySource {
                 .await
                 .unwrap_or(Err(Refusal::AdminUnavailable)),
             #[cfg(test)]
-            KeySource::Fixed(_) => Err(Refusal::AdminWithdrawn),
+            KeySource::Fixed(_) | KeySource::FixedInWorkspace(..) => Err(Refusal::AdminWithdrawn),
             #[cfg(test)]
             KeySource::FixedAdmin { admin, .. } => admin
                 .clone()
@@ -596,6 +628,193 @@ fn client(https_only: bool) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("API proxy: {e}"))
 }
 
+/// How long [`check_key`] waits for the provider before saving untested.
+const KEY_CHECK_WAIT: Duration = Duration::from_secs(10);
+
+/// What [`check_key`] found out about a key the provider did not refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyCheck {
+    /// Save it, with the workspace its requests name (`Some` only for an
+    /// Anthropic key that is not scoped to one).
+    Save { workspace: Option<String> },
+    /// An Anthropic key that is not scoped to a workspace, and none was
+    /// chosen: every request has to name one (`anthropic-workspace-id`). The
+    /// workspaces the key listed, for the user to pick from — empty when it
+    /// could list none, and the user types the id instead.
+    PickWorkspace(Vec<Workspace>),
+}
+
+/// An Anthropic workspace a key can name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+}
+
+/// Ask the provider about `key` before Manage CLIs saves it: `Err` only when
+/// it definitely refused it — a Claude subscription token by its prefix, a
+/// refused model listing (free, the key in the provider's own header), or a
+/// chosen workspace the key cannot use. An unreachable provider (offline)
+/// lets the key be saved untested. An Anthropic key that is not scoped to a
+/// workspace (Anthropic answers its listing with a 400 naming the
+/// `anthropic-workspace-id` header) is saved with `workspace` once that one
+/// answers, or with the only workspace it lists; otherwise the user picks.
+pub async fn check_key(provider: Provider, key: &str, workspace: Option<&str>) -> Result<KeyCheck, String> {
+    check_key_at(&Upstream::Provider.base(provider), provider, key, workspace, true).await
+}
+
+async fn check_key_at(
+    base: &str,
+    provider: Provider,
+    key: &str,
+    workspace: Option<&str>,
+    https_only: bool,
+) -> Result<KeyCheck, String> {
+    if provider == Provider::Anthropic && key.starts_with("sk-ant-oat") {
+        return Err("this is a Claude subscription token, not an API key — create an API key in the Anthropic Console (it starts with sk-ant-api)".into());
+    }
+    let workspace = workspace.filter(|_| provider == Provider::Anthropic);
+    if workspace.is_some_and(|w| !super::agent_api_keys::workspace_shape_ok(w)) {
+        return Err("not a workspace id (it starts with wrkspc_)".into());
+    }
+    let untested = KeyCheck::Save { workspace: workspace.map(str::to_string) };
+    let Ok(client) = client(https_only) else {
+        return Ok(untested);
+    };
+    let path = match provider {
+        Provider::Anthropic | Provider::OpenAi => "/v1/models",
+        Provider::Gemini => "/v1beta/models",
+    };
+    let Some((status, body)) = ask_with_key(&client, base, path, provider, key, workspace).await? else {
+        return Ok(untested);
+    };
+    // Gemini answers a bad key with a 400 naming the reason.
+    let rejected = status == StatusCode::UNAUTHORIZED
+        || (provider == Provider::Gemini && status == StatusCode::BAD_REQUEST && body.contains("API_KEY_INVALID"));
+    if rejected {
+        let who = match provider {
+            Provider::Anthropic => "Anthropic",
+            Provider::Gemini => "Google",
+            Provider::OpenAi => "OpenAI",
+        };
+        return Err(format!("{who} rejected this API key (wrong, revoked, or not an API key) — it was not saved"));
+    }
+    if provider != Provider::Anthropic {
+        return Ok(untested);
+    }
+    if let Some(id) = workspace {
+        return match status {
+            StatusCode::NOT_FOUND | StatusCode::FORBIDDEN => Err(format!(
+                "this key cannot use workspace {id}: it does not exist, or the key's account is not a member of it — it was not saved"
+            )),
+            StatusCode::BAD_REQUEST => Err(format!("Anthropic refused workspace {id} for this key — it was not saved")),
+            _ => Ok(untested),
+        };
+    }
+    if !(status == StatusCode::BAD_REQUEST && body.contains("anthropic-workspace-id")) {
+        return Ok(untested);
+    }
+    let listed = list_workspaces(&client, base, key).await;
+    if let [only] = listed.as_slice() {
+        if let Ok(Some((status, _))) = ask_with_key(&client, base, path, provider, key, Some(&only.id)).await {
+            if status.is_success() {
+                return Ok(KeyCheck::Save { workspace: Some(only.id.clone()) });
+            }
+        }
+    }
+    Ok(KeyCheck::PickWorkspace(listed))
+}
+
+/// The model ids `provider`'s stored key may call, as the provider's own
+/// listing answers it (free, the key in the provider's own header and its
+/// workspace beside it): `None` with no key, no answer in
+/// [`KEY_CHECK_WAIT`], a refusal or a body that is no listing
+/// (`opencode_models::listed_ids`).
+pub async fn key_models(provider: Provider) -> Option<Vec<String>> {
+    let stored = app_core::rt::spawn_blocking(move || stored_for(provider)).await.ok().flatten()?;
+    key_models_at(&Upstream::Provider.base(provider), provider, &stored, true).await
+}
+
+async fn key_models_at(base: &str, provider: Provider, stored: &StoredKey, https_only: bool) -> Option<Vec<String>> {
+    let client = client(https_only).ok()?;
+    // One page: every provider lists far fewer models than these bounds.
+    let path = match provider {
+        Provider::Anthropic => "/v1/models?limit=1000",
+        Provider::OpenAi => "/v1/models",
+        Provider::Gemini => "/v1beta/models?pageSize=1000",
+    };
+    let (status, body) =
+        ask_with_key(&client, base, path, provider, &stored.key, stored.workspace.as_deref()).await.ok().flatten()?;
+    if !status.is_success() {
+        return None;
+    }
+    super::opencode_models::listed_ids(provider, &body)
+}
+
+/// A GET of `path` with `key` in the provider's own header (and, for
+/// Anthropic, the version and `workspace`): its status and body, `None` when
+/// the provider did not answer in [`KEY_CHECK_WAIT`].
+async fn ask_with_key(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    provider: Provider,
+    key: &str,
+    workspace: Option<&str>,
+) -> Result<Option<(StatusCode, String)>, String> {
+    let value = if provider == Provider::OpenAi { format!("Bearer {key}") } else { key.to_string() };
+    let Ok(mut value) = HeaderValue::from_str(&value) else {
+        return Err("not a usable API key".into());
+    };
+    value.set_sensitive(true);
+    let mut request = client.get(format!("{base}{path}")).header(auth_header(provider), value);
+    if provider == Provider::Anthropic {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    if let Some(id) = workspace {
+        request = request.header(WORKSPACE_HEADER, id);
+    }
+    let answer = async {
+        let response = request.send().await.ok()?;
+        let status = response.status();
+        Some((status, response.text().await.unwrap_or_default()))
+    };
+    Ok(tokio::time::timeout(KEY_CHECK_WAIT, answer).await.ok().flatten())
+}
+
+/// The workspaces an Anthropic key that is not scoped to one can name, Default
+/// included and archived ones left out — empty when it may not list them.
+async fn list_workspaces(client: &reqwest::Client, base: &str, key: &str) -> Vec<Workspace> {
+    #[derive(serde::Deserialize)]
+    struct Listed {
+        id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        archived_at: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Page {
+        data: Vec<Listed>,
+    }
+    let path = "/v1/organizations/workspaces?include_default=true&limit=100";
+    let Ok(Some((status, body))) = ask_with_key(client, base, path, Provider::Anthropic, key, None).await else {
+        return Vec::new();
+    };
+    if !status.is_success() {
+        return Vec::new();
+    }
+    serde_json::from_str::<Page>(&body)
+        .map(|page| {
+            page.data
+                .into_iter()
+                .filter(|w| w.archived_at.is_none() && super::agent_api_keys::workspace_shape_ok(&w.id))
+                .map(|w| Workspace { name: if w.name.is_empty() { w.id.clone() } else { w.name }, id: w.id })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Where the port of the last run is remembered (not a secret): binding it
 /// again keeps a tmux-held agent that outlived a crash talking to this proxy
 /// (which refuses its dead token with a readable error) rather than to
@@ -639,6 +858,12 @@ pub fn start() {
     let Ok(addr) = listener.local_addr() else { return };
     let port = addr.port();
     if preferred != Some(port) {
+        // The remembered port was taken (or never existed): a keyed agent
+        // that outlived a crash still names it, and would hand its
+        // conversation to whoever holds it (gap 50b). Said, never silent.
+        if let Some(taken) = preferred.filter(|p| *p != 0) {
+            super::api_proxy_port::on_fallback(taken, port);
+        }
         let _ = std::fs::write(port_file(), port.to_string());
     }
     PORT.store(port, Ordering::Release);
@@ -846,9 +1071,23 @@ enum Refusal {
     TooLarge,
     BodyTimeout,
     BadBody,
+    /// A metered OpenAI request whose body is not one JSON object the meter
+    /// can read (gap 48).
+    Unmeterable,
+    /// A metered OpenAI request with `background: true`: billed after it
+    /// returns, past the monthly limit (gap 48).
+    Background,
+    /// A metered OpenAI request for a priced `service_tier` (gap 48).
+    ServiceTier,
     /// The token is good, but no key is saved (removed, or the keyring is
     /// locked).
     NoKey,
+    /// The provider answered the user's own key with a 401: the stored key is
+    /// wrong, revoked, or not an API key at all (a subscription token).
+    KeyRejected,
+    /// Anthropic wants the user's own key to name a workspace (a key that is
+    /// not scoped to one, saved before a workspace was asked for).
+    NoWorkspace,
     /// The provider's host could not be reached.
     Upstream,
     /// Too many request bodies held at once ([`MAX_BUFFERED`]).
@@ -872,12 +1111,12 @@ enum Refusal {
 impl Refusal {
     fn status(self) -> StatusCode {
         match self {
-            Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => StatusCode::UNAUTHORIZED,
+            Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => StatusCode::UNAUTHORIZED,
             Refusal::Forbidden => StatusCode::FORBIDDEN,
             Refusal::NotFound => StatusCode::NOT_FOUND,
             Refusal::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Refusal::BodyTimeout => StatusCode::REQUEST_TIMEOUT,
-            Refusal::BadBody => StatusCode::BAD_REQUEST,
+            Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
             Refusal::Busy | Refusal::AdminUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
@@ -887,6 +1126,7 @@ impl Refusal {
     fn message(self, provider: Option<Provider>) -> &'static str {
         match self {
             Refusal::BudgetReached => match provider {
+                Some(Provider::OpenAi) => concat!(crate::app_name!(), " monthly API budget for OpenAI reached — raise it in Manage CLIs → API keys, or wait for next month"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
                     " monthly API budget for Google Gemini reached — raise it in Manage CLIs → API keys, or wait for next month"
@@ -897,6 +1137,7 @@ impl Refusal {
                 ),
             },
             Refusal::WouldPass => match provider {
+                Some(Provider::OpenAi) => concat!(crate::app_name!(), " monthly API budget for OpenAI: this request could cost more than is left of it (requests still in flight count until they end) — wait for them, raise it in Manage CLIs → API keys, or wait for next month"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
                     " monthly API budget for Google Gemini: this request could cost more than is left of it",
@@ -911,6 +1152,7 @@ impl Refusal {
                 ),
             },
             Refusal::NoBudget => match provider {
+                Some(Provider::OpenAi) => concat!(crate::app_name!(), " has no monthly API budget set for OpenAI — set one in Manage CLIs → API keys"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
                     " has no monthly API budget set for Google Gemini — set one in Manage CLIs → API keys"
@@ -929,9 +1171,39 @@ impl Refusal {
             Refusal::TooLarge => concat!(crate::app_name!(), " API proxy: request body too large"),
             Refusal::BodyTimeout => concat!(crate::app_name!(), " API proxy: request body took too long"),
             Refusal::BadBody => concat!(crate::app_name!(), " API proxy: request body could not be read"),
+            Refusal::Unmeterable => concat!(
+                crate::app_name!(),
+                " API proxy: the request body is not one JSON object whose model, max_output_tokens, max_tool_calls,",
+                " background and service_tier fields the monthly API budget can read (none repeated or of the wrong type)"
+            ),
+            Refusal::Background => concat!(
+                crate::app_name!(),
+                " API proxy: background responses are refused — they are billed after the request returns, which the",
+                " monthly API budget cannot meter; send the request without \"background\": true"
+            ),
+            Refusal::ServiceTier => concat!(
+                crate::app_name!(),
+                " API proxy: this service_tier (Fast/priority, Ultrafast or unknown) bills at a rate the monthly API",
+                " budget does not track; use \"auto\", \"default\" or \"flex\", or leave service_tier out (in Codex,",
+                " turn Fast mode off)"
+            ),
             Refusal::NoKey => concat!(
                 crate::app_name!(),
                 " has no API key saved for this provider (or its key store is locked): add one in Manage CLIs → API keys"
+            ),
+            // Never naming the header: Claude turns an error that mentions
+            // it into "Not logged in · Please run /login".
+            Refusal::KeyRejected => match provider {
+                Some(Provider::OpenAi) => concat!("OpenAI rejected the API key saved in ", crate::app_name!(), " (wrong, revoked, or not an API key) — replace it in Manage CLIs → API keys"),
+                Some(Provider::Gemini) => concat!("Google rejected the Gemini API key saved in ", crate::app_name!(), " (wrong, revoked, or not an API key) — replace it in Manage CLIs → API keys"),
+                _ => concat!(
+                    "Anthropic rejected the API key saved in ", crate::app_name!(),
+                    " (wrong, revoked, or a subscription token instead of a Console API key) — replace it in Manage CLIs → API keys"
+                ),
+            },
+            Refusal::NoWorkspace => concat!(
+                "the Anthropic API key saved in ", crate::app_name!(),
+                " is not scoped to a workspace, and none is chosen for it — remove it in Manage CLIs → API keys and save it again to pick one"
             ),
             Refusal::Upstream => concat!(crate::app_name!(), " API proxy: the provider's API could not be reached"),
             Refusal::Busy => concat!(crate::app_name!(), " API proxy: too many large requests at once; try again"),
@@ -955,12 +1227,18 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
     let status = refusal.status();
     let message = refusal.message(provider);
     let body = match provider {
+        Some(Provider::OpenAi) => serde_json::json!({
+            "error": { "message": message, "type": if status == StatusCode::TOO_MANY_REQUESTS { "insufficient_quota" } else { "invalid_request_error" },
+                "code": if status == StatusCode::TOO_MANY_REQUESTS { "insufficient_quota" } else { "api_proxy_error" }, "param": null }
+        }),
         Some(Provider::Gemini) => serde_json::json!({
             "error": { "code": status.as_u16(), "message": message, "status": match refusal {
-                Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
+                Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
                 Refusal::Forbidden => "PERMISSION_DENIED",
                 Refusal::NotFound => "NOT_FOUND",
-                Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
+                Refusal::TooLarge | Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier => {
+                    "INVALID_ARGUMENT"
+                }
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "UNAVAILABLE",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
@@ -970,11 +1248,16 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
         _ => serde_json::json!({
             "type": "error",
             "error": { "type": match refusal {
-                Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "authentication_error",
+                Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "authentication_error",
                 Refusal::Forbidden => "permission_error",
                 Refusal::NotFound => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
-                Refusal::BodyTimeout | Refusal::BadBody => "invalid_request_error",
+                Refusal::BodyTimeout
+                | Refusal::BadBody
+                | Refusal::NoWorkspace
+                | Refusal::Unmeterable
+                | Refusal::Background
+                | Refusal::ServiceTier => "invalid_request_error",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "api_error",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
@@ -1020,6 +1303,13 @@ fn path_allowed(provider: Provider, method: &Method, path: &str) -> bool {
     let post = *method == Method::POST;
     let get = *method == Method::GET;
     match provider {
+        // Responses inference and compaction; no files, batches or stored
+        // responses can be read through a tab's token.
+        Provider::OpenAi => match segs.as_slice() {
+            ["v1", "responses"] | ["v1", "responses", "compact"] => post,
+            ["v1", "models"] => get,
+            _ => false,
+        },
         // Claude Code: `POST /v1/messages?beta=true`, optional token counting,
         // model discovery when switched on (code.claude.com gateway guide).
         Provider::Anthropic => match segs.as_slice() {
@@ -1087,6 +1377,7 @@ fn query_allowed(provider: Provider, name: &str) -> bool {
     match provider {
         Provider::Anthropic => matches!(name, "beta" | "limit" | "after_id" | "before_id"),
         Provider::Gemini => matches!(name, "alt" | "pageSize" | "pageToken"),
+        Provider::OpenAi => false,
     }
 }
 
@@ -1132,6 +1423,10 @@ const DROP_REQUEST: &[&str] = &[
     "x-forwarded-host",
     "x-forwarded-proto",
     "x-real-ip",
+    // Which organization or project OpenAI bills is the saved key's own;
+    // a header could point the request at another one the key can reach.
+    "openai-organization",
+    "openai-project",
     // Google honours these in place of the method, which would step around
     // the per-path method allowlist.
     "x-http-method-override",
@@ -1172,6 +1467,7 @@ fn auth_header(provider: Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "x-api-key",
         Provider::Gemini => "x-goog-api-key",
+        Provider::OpenAi => "authorization",
     }
 }
 
@@ -1210,17 +1506,18 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     // The key and where it goes: the user's own to the provider; an
     // administrator's to the provider, or (brokered) this user's broker
     // token to the server's key broker.
-    let (key, broker) = match grant.admin {
+    let (key, broker, workspace) = match grant.admin {
         None => match state.keys.key(provider).await {
-            Some(key) => (zeroize::Zeroizing::new(key), None),
+            Some(stored) => (zeroize::Zeroizing::new(stored.key), None, stored.workspace),
             None => return refuse(Some(provider), Refusal::NoKey),
         },
         Some(cli) => match state.keys.admin(cli).await {
-            Ok(found) => found,
+            Ok((key, broker)) => (key, broker, None),
             Err(refusal) => return refuse(Some(provider), refusal),
         },
     };
-    let Ok(mut key_value) = HeaderValue::from_str(&key) else {
+    let credential = zeroize::Zeroizing::new(if provider == Provider::OpenAi { format!("Bearer {}", key.as_str()) } else { key.to_string() });
+    let Ok(mut key_value) = HeaderValue::from_str(&credential) else {
         return refuse(Some(provider), Refusal::NoKey);
     };
     key_value.set_sensitive(true);
@@ -1248,6 +1545,17 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     // was read.
     let mut reservation = None;
     if let Some(meter) = meter.as_mut() {
+        // OpenAI spend the meter cannot see is refused, not forwarded
+        // (gap 48): a background response, a priced tier, a body it cannot
+        // read.
+        if provider == Provider::OpenAi {
+            match super::api_meter::openai_refusal(&body) {
+                Some(super::api_meter::OpenAiRefusal::Unparsable) => return refuse(Some(provider), Refusal::Unmeterable),
+                Some(super::api_meter::OpenAiRefusal::Background) => return refuse(Some(provider), Refusal::Background),
+                Some(super::api_meter::OpenAiRefusal::ServiceTier) => return refuse(Some(provider), Refusal::ServiceTier),
+                None => {}
+            }
+        }
         meter.request(&body);
         let worst = meter.worst_case_billed(&super::api_usage::month_of(chrono::Utc::now()));
         match state.budget.reserve(provider, worst) {
@@ -1259,6 +1567,11 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let url = format!("{base}{rest}{}", forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
+    // A key that is not scoped to a workspace runs in the one chosen when it
+    // was saved, whatever the CLI named.
+    if let Some(value) = workspace.as_deref().and_then(|w| HeaderValue::from_str(w).ok()) {
+        headers.insert(WORKSPACE_HEADER, value);
+    }
     // Plain bytes, said outright: a request with no `accept-encoding` lets a
     // server pick any coding, and the meter reads usage from plain bytes (a
     // compressed answer would still be charged — as an estimate).
@@ -1291,6 +1604,42 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         // A rotated key or a renewed broker token: the next request asks the
         // keeper anew.
         forget_admin_key(cli);
+    }
+    if grant.admin.is_none() && upstream.status() == StatusCode::UNAUTHORIZED {
+        // The user's own key was refused. Said in the proxy's words: the
+        // provider's (Anthropic's "invalid x-api-key") reads in Claude as
+        // "Not logged in". An error answer costs nothing; the next request
+        // reads the keychain again, in case the key was replaced there.
+        if let Some(mut metered) = metered.0.take() {
+            metered.meter.answer(StatusCode::UNAUTHORIZED.as_u16(), None);
+            metered.settle(true);
+        }
+        forget_key(provider);
+        return refuse(Some(provider), Refusal::KeyRejected);
+    }
+    if grant.admin.is_none()
+        && workspace.is_none()
+        && provider == Provider::Anthropic
+        && upstream.status() == StatusCode::BAD_REQUEST
+        && upstream.content_length().is_some_and(|n| n <= MAX_PEEKED_ERROR)
+    {
+        // Anthropic's answer to a key that has to name a workspace: said in
+        // the proxy's words, with where to choose one. Any other 400 goes
+        // back as it came. An error answer costs nothing.
+        let status = upstream.status();
+        let headers = copy_headers(upstream.headers(), DROP_RESPONSE);
+        let body = tokio::time::timeout(BODY_WAIT, upstream.bytes()).await.ok().and_then(Result::ok).unwrap_or_default();
+        if let Some(mut metered) = metered.0.take() {
+            metered.meter.answer(status.as_u16(), None);
+            metered.settle(true);
+        }
+        if String::from_utf8_lossy(&body).contains(WORKSPACE_HEADER) {
+            return refuse(Some(provider), Refusal::NoWorkspace);
+        }
+        let mut response = Response::new(Body::from(body));
+        *response.status_mut() = status;
+        *response.headers_mut() = headers;
+        return response;
     }
     relay(upstream, Tap::new(grant, busy, metered.0.take()))
 }
@@ -1500,7 +1849,7 @@ mod tests {
         assert_eq!(split_route("/anthropic/v1/messages"), Some((Provider::Anthropic, "/v1/messages")));
         assert_eq!(split_route("/gemini/v1beta/models"), Some((Provider::Gemini, "/v1beta/models")));
         assert_eq!(split_route("/anthropic"), Some((Provider::Anthropic, "")));
-        assert_eq!(split_route("/openai/v1/chat/completions"), None);
+        assert_eq!(split_route("/openai/v1/responses"), Some((Provider::OpenAi, "/v1/responses")));
         assert_eq!(split_route("/"), None);
     }
 
@@ -2146,6 +2495,162 @@ mod tests {
         assert_ne!(bind_listener(None).unwrap().local_addr().unwrap().port(), 0);
     }
 
+    const OPENAI_SSE: &str = concat!(
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stub\",\"object\":\"response\",\"status\":\"in_progress\",\"output\":[],\"usage\":null}}\n\n",
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_stub\",\"output_index\":0,\"content_index\":0,\"delta\":\"STUB-REPLY-OK\"}\n\n",
+        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_stub\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"STUB-REPLY-OK\",\"annotations\":[]}]}}\n\n",
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stub\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"gpt-6.1-sol\",\"output\":[],\"usage\":{\"total_tokens\":1300,\"input_tokens\":1000,\"input_tokens_details\":{\"cached_tokens\":800},\"output_tokens\":300,\"output_tokens_details\":{\"reasoning_tokens\":200}}}}\n\n",
+    );
+
+    async fn openai_stub(seen: Arc<Seen>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(move |req: Request| {
+            let seen = seen.clone();
+            async move {
+                let (parts, body) = req.into_parts();
+                let body = axum::body::to_bytes(body, MAX_BODY).await.unwrap();
+                seen.hits.fetch_add(1, Ordering::SeqCst);
+                seen.requests.lock_ok().push((parts.method.to_string(), parts.uri.to_string(), parts.headers, body.to_vec()));
+                let mut response = Response::new(Body::from(OPENAI_SSE));
+                response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+                response
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn openai_swaps_bearer_auth_meters_responses_and_enforces_the_budget() {
+        let seen = Arc::new(Seen::default());
+        let upstream = openai_stub(seen.clone()).await;
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::OpenAi, "e2e:openai", None)).unwrap();
+        let url = format!("{}/v1/responses", base_url_on(port, Provider::OpenAi));
+        let client = plain_client();
+        let response = client.post(&url).bearer_auth(&token).body(r#"{"model":"gpt-6.1-sol","stream":true}"#).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.unwrap(), OPENAI_SSE);
+        let models = charged(&book, Provider::OpenAi).await;
+        assert_eq!(models["gpt-6.1-sol"].billed, 580);
+        {
+            let requests = seen.requests.lock_ok();
+            let (method, path, headers, _) = &requests[0];
+            assert_eq!((method.as_str(), path.as_str()), ("POST", "/v1/responses"));
+            assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+            assert!(!headers.values().any(|v| v.as_bytes().windows(token.len()).any(|w| w == token.as_bytes())));
+        }
+        book.record(Provider::OpenAi, &spent_charge(20_000_000), chrono::Utc::now());
+        let response = client.post(&url).bearer_auth(&token).body("{}").send().await.unwrap();
+        assert_eq!(response.status(), 429);
+        let json: serde_json::Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["code"], "insufficient_quota");
+        assert!(json["error"]["message"].as_str().unwrap().contains("OpenAI"));
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 1);
+        for path in ["/v1/files", "/v1/chat/completions", "/v1/responses/resp_other", "/v1/batches"] {
+            assert!(!path_allowed(Provider::OpenAi, &Method::POST, path), "{path}");
+        }
+        assert!(path_allowed(Provider::OpenAi, &Method::POST, "/v1/responses/compact"));
+        on_tab_gone("e2e:openai");
+        assert_eq!(client.post(&url).bearer_auth(&token).body("{}").send().await.unwrap().status(), 401);
+    }
+
+    #[tokio::test]
+    async fn openai_requests_the_meter_cannot_see_are_refused_in_openais_error_shape_and_never_sent() {
+        let seen = Arc::new(Seen::default());
+        let upstream = openai_stub(seen.clone()).await;
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::OpenAi, "e2e:openai-unmetered", None)).unwrap();
+        let url = format!("{}/v1/responses", base_url_on(port, Provider::OpenAi));
+        let client = plain_client();
+        let refused = [
+            (r#"{"model":"gpt-6.1-sol","background":true}"#, "background responses are refused"),
+            (r#"{"model":"gpt-6.1-sol","service_tier":"priority"}"#, "service_tier"),
+            (r#"{"model":"gpt-6.1-sol","service_tier":"ultrafast"}"#, "service_tier"),
+            ("this is not json", "not one JSON object"),
+            (r#"{"background":true,"background":false}"#, "not one JSON object"),
+            ("[]", "not one JSON object"),
+        ];
+        for (body, says) in refused {
+            let response = client.post(&url).bearer_auth(&token).body(body).send().await.unwrap();
+            assert_eq!(response.status(), 400, "{body}");
+            assert_eq!(response.headers()["x-should-retry"], "false");
+            let json: serde_json::Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+            assert_eq!(json["error"]["type"], "invalid_request_error", "{body}");
+            let message = json["error"]["message"].as_str().unwrap();
+            assert!(message.contains(says), "{body}: {message}");
+        }
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 0, "nothing reached OpenAI");
+        assert_eq!(book.reserved(Provider::OpenAi), 0, "a refusal holds nothing");
+        // Compaction is metered the same way.
+        let compact = format!("{}/v1/responses/compact", base_url_on(port, Provider::OpenAi));
+        let response = client.post(&compact).bearer_auth(&token).body(r#"{"background":true}"#).send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        // Requests the meter can read go through, with the organization and
+        // project headers dropped.
+        for body in [
+            r#"{"model":"gpt-6.1-sol","stream":true,"background":false}"#,
+            r#"{"model":"gpt-6.1-sol","stream":true,"service_tier":"flex"}"#,
+            r#"{"model":"gpt-6.1-sol","stream":true,"service_tier":"auto"}"#,
+        ] {
+            let response = client
+                .post(&url)
+                .bearer_auth(&token)
+                .header("OpenAI-Organization", "org_elsewhere")
+                .header("openai-project", "proj_elsewhere")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200, "{body}");
+            let _ = response.bytes().await.unwrap();
+        }
+        let requests = seen.requests.lock_ok();
+        assert_eq!(requests.len(), 3);
+        for (_, _, headers, _) in requests.iter() {
+            assert!(headers.get("openai-organization").is_none() && headers.get("openai-project").is_none());
+            assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+        }
+        drop(requests);
+        on_tab_gone("e2e:openai-unmetered");
+    }
+
+    /// Isolated real-CLI check, with a scratch home and a loopback fake
+    /// provider only. C2_PROBE_CODEX names the installed executable.
+    #[tokio::test]
+    #[ignore]
+    async fn codex_cli_talks_to_the_proxy() {
+        let codex = std::env::var_os("C2_PROBE_CODEX").expect("C2_PROBE_CODEX executable");
+        let seen = Arc::new(Seen::default());
+        let upstream = openai_stub(seen.clone()).await;
+        let port = proxy(upstream, Some(FAKE_KEY), MAX_BODY).await;
+        let token = issue_grant(grant(Provider::OpenAi, "e2e:codex-cli", None)).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".codex")).unwrap();
+        let mut command = tokio::process::Command::new(codex);
+        command.env_clear().env("HOME", home.path()).env("CODEX_HOME", home.path().join(".codex"))
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("OPENAI_API_KEY", &token)
+            .args(super::super::agent_api_keys::codex_proxy_args(&base_url_on(port, Provider::OpenAi)))
+            .args(["exec", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "Reply hi without tools."])
+            .current_dir(home.path()).kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(45), command.output()).await.unwrap().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("STUB-REPLY-OK"));
+        let requests = seen.requests.lock_ok();
+        assert!(requests.iter().any(|(m, path, _, _)| m == "POST" && path == "/v1/responses"));
+        for (_, _, headers, _) in requests.iter() {
+            assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+        }
+        assert!(!home.path().join(".codex").join("auth.json").exists(), "no login file was written");
+        on_tab_gone("e2e:codex-cli");
+    }
+
     /// A0-style check of the real Claude CLI against this proxy and a stub
     /// provider: no network, a fake key, a scratch `HOME`. Run by hand:
     /// `C2_PROBE_CLAUDE=<path to the claude binary> cargo test -- --ignored
@@ -2354,6 +2859,226 @@ mod tests {
         ended("e2e:metered").await;
         assert_eq!(book.snapshot(chrono::Utc::now()).providers["anthropic"].models["claude-stub"].requests, 1);
         on_tab_gone("e2e:metered");
+    }
+
+    #[tokio::test]
+    async fn a_refused_own_key_is_answered_in_the_proxys_words_and_costs_nothing() {
+        // Anthropic's answer to a bad key. Passed on, its "x-api-key" made
+        // Claude show "Not logged in · Please run /login".
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(|| async {
+            let body = r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+            let mut r = Response::new(Body::from(body));
+            *r.status_mut() = StatusCode::UNAUTHORIZED;
+            r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            r
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(format!("http://{addr}"), Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:key-rejected", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let r = plain_client().post(&url).header("x-api-key", token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 401);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let text = r.text().await.unwrap();
+        assert!(!text.to_lowercase().contains("x-api-key"), "{text}");
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["error"]["type"], "authentication_error");
+        assert!(json["error"]["message"].as_str().unwrap().contains("Anthropic rejected the API key"));
+        assert_eq!(book.snapshot(chrono::Utc::now()).billed(Provider::Anthropic), 0);
+        on_tab_gone("e2e:key-rejected");
+    }
+
+    /// A provider that answers every request with `status` and `body`, and
+    /// records the credential header it was sent.
+    async fn answering(status: StatusCode, body: &'static str, seen: Arc<Seen>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(move |req: Request| {
+            let seen = seen.clone();
+            async move {
+                seen.requests.lock_ok().push((req.method().to_string(), req.uri().to_string(), req.headers().clone(), Vec::new()));
+                let mut r = Response::new(Body::from(body));
+                *r.status_mut() = status;
+                r
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_key_is_checked_with_the_provider_before_it_is_saved() {
+        let seen = Arc::new(Seen::default());
+        let refusing = answering(StatusCode::UNAUTHORIZED, r#"{"type":"error"}"#, seen.clone()).await;
+        let err = check_key_at(&refusing, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap_err();
+        assert!(err.contains("Anthropic rejected"), "{err}");
+        {
+            let requests = seen.requests.lock_ok();
+            let (method, uri, headers, _) = &requests[0];
+            assert_eq!((method.as_str(), uri.as_str()), ("GET", "/v1/models"));
+            assert_eq!(headers["x-api-key"], FAKE_KEY);
+        }
+        let err = check_key_at(&refusing, Provider::OpenAi, FAKE_KEY, None, false).await.unwrap_err();
+        assert!(err.contains("OpenAI rejected"), "{err}");
+        assert_eq!(seen.requests.lock_ok()[1].2["authorization"], format!("Bearer {FAKE_KEY}"));
+
+        let gemini_bad = answering(StatusCode::BAD_REQUEST, r#"{"error":{"details":[{"reason":"API_KEY_INVALID"}]}}"#, seen.clone()).await;
+        assert!(check_key_at(&gemini_bad, Provider::Gemini, FAKE_KEY, None, false).await.is_err());
+        // Another 400 is not a verdict on the key.
+        let gemini_other = answering(StatusCode::BAD_REQUEST, r#"{"error":{}}"#, seen.clone()).await;
+        assert!(check_key_at(&gemini_other, Provider::Gemini, FAKE_KEY, None, false).await.is_ok());
+
+        let accepting = answering(StatusCode::OK, r#"{"data":[]}"#, seen.clone()).await;
+        assert!(check_key_at(&accepting, Provider::Anthropic, FAKE_KEY, None, false).await.is_ok());
+        // Offline: saved untested.
+        let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
+        assert!(check_key_at(&format!("http://{gone}"), Provider::Anthropic, FAKE_KEY, None, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_keys_model_listing_is_read_in_the_providers_own_shape() {
+        let seen = Arc::new(Seen::default());
+        let stored = StoredKey { key: FAKE_KEY.to_string(), workspace: Some(WS_A.to_string()) };
+        let gemini = answering(StatusCode::OK, r#"{"models":[{"name":"models/gemini-3.5-flash"}]}"#, seen.clone()).await;
+        assert_eq!(key_models_at(&gemini, Provider::Gemini, &stored, false).await.unwrap(), ["gemini-3.5-flash"]);
+        assert_eq!(seen.requests.lock_ok()[0].1, "/v1beta/models?pageSize=1000");
+        assert_eq!(seen.requests.lock_ok()[0].2["x-goog-api-key"], FAKE_KEY);
+        let anthropic = answering(StatusCode::OK, r#"{"data":[{"id":"claude-opus-5-5"}]}"#, seen.clone()).await;
+        assert_eq!(key_models_at(&anthropic, Provider::Anthropic, &stored, false).await.unwrap(), ["claude-opus-5-5"]);
+        assert_eq!(seen.requests.lock_ok()[1].2[WORKSPACE_HEADER], WS_A);
+        let refused = answering(StatusCode::UNAUTHORIZED, r#"{"data":[{"id":"x"}]}"#, seen.clone()).await;
+        assert!(key_models_at(&refused, Provider::OpenAi, &stored, false).await.is_none());
+        let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
+        assert!(key_models_at(&format!("http://{gone}"), Provider::OpenAi, &stored, false).await.is_none());
+    }
+
+    /// Anthropic for a key that is not scoped to a workspace: a listing
+    /// without `anthropic-workspace-id` is a 400 naming the header, with one
+    /// it answers for a workspace in `members` and is a 404 for another; the
+    /// key lists `listed` (a JSON `data` array).
+    async fn unscoped_anthropic(members: &'static [&'static str], listed: &'static str, seen: Arc<Seen>) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(move |req: Request| {
+            let seen = seen.clone();
+            async move {
+                seen.requests.lock_ok().push((req.method().to_string(), req.uri().to_string(), req.headers().clone(), Vec::new()));
+                let (status, body) = if req.uri().path() == "/v1/organizations/workspaces" {
+                    (StatusCode::OK, format!(r#"{{"data":{listed},"has_more":false}}"#))
+                } else {
+                    match req.headers().get(WORKSPACE_HEADER).and_then(|v| v.to_str().ok()) {
+                        None => (StatusCode::BAD_REQUEST, r#"{"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header"}}"#.to_string()),
+                        Some(id) if members.contains(&id) => (StatusCode::OK, r#"{"data":[]}"#.to_string()),
+                        Some(_) => (StatusCode::NOT_FOUND, r#"{"type":"error","error":{"type":"not_found_error"}}"#.to_string()),
+                    }
+                };
+                let mut r = Response::new(Body::from(body));
+                *r.status_mut() = status;
+                r
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    const WS_A: &str = "wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA";
+    const WS_B: &str = "wrkspc_01BBBBBBBBBBBBBBBBBBBBBBBB";
+
+    #[tokio::test]
+    async fn an_unscoped_anthropic_key_gets_its_only_workspace() {
+        let seen = Arc::new(Seen::default());
+        let listed = r#"[{"id":"wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA","name":"Default","archived_at":null},
+            {"id":"wrkspc_01BBBBBBBBBBBBBBBBBBBBBBBB","name":"Old","archived_at":"2026-01-01T00:00:00Z"}]"#;
+        let base = unscoped_anthropic(&[WS_A], listed, seen.clone()).await;
+        let found = check_key_at(&base, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap();
+        assert_eq!(found, KeyCheck::Save { workspace: Some(WS_A.to_string()) });
+        let requests = seen.requests.lock_ok();
+        assert_eq!(requests[1].1, "/v1/organizations/workspaces?include_default=true&limit=100");
+        assert_eq!(requests[1].2["x-api-key"], FAKE_KEY);
+        assert_eq!(requests[2].2[WORKSPACE_HEADER], WS_A);
+    }
+
+    #[tokio::test]
+    async fn an_unscoped_anthropic_key_with_several_workspaces_asks_which() {
+        let seen = Arc::new(Seen::default());
+        let listed = r#"[{"id":"wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA","name":"Default"},{"id":"wrkspc_01BBBBBBBBBBBBBBBBBBBBBBBB","name":"Claude Code"}]"#;
+        let base = unscoped_anthropic(&[WS_A], listed, seen.clone()).await;
+        let found = check_key_at(&base, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap();
+        assert_eq!(
+            found,
+            KeyCheck::PickWorkspace(vec![
+                Workspace { id: WS_A.into(), name: "Default".into() },
+                Workspace { id: WS_B.into(), name: "Claude Code".into() },
+            ])
+        );
+        // The picked one is checked; one the key cannot use is refused.
+        let picked = check_key_at(&base, Provider::Anthropic, FAKE_KEY, Some(WS_A), false).await.unwrap();
+        assert_eq!(picked, KeyCheck::Save { workspace: Some(WS_A.to_string()) });
+        let err = check_key_at(&base, Provider::Anthropic, FAKE_KEY, Some(WS_B), false).await.unwrap_err();
+        assert!(err.contains(WS_B), "{err}");
+        let err = check_key_at(&base, Provider::Anthropic, FAKE_KEY, Some("wrkspc_x\r\ny: z"), false).await.unwrap_err();
+        assert!(err.contains("not a workspace id"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_unscoped_key_that_cannot_list_workspaces_asks_for_an_id() {
+        let seen = Arc::new(Seen::default());
+        let base = unscoped_anthropic(&[WS_A], "null", seen).await;
+        let found = check_key_at(&base, Provider::Anthropic, FAKE_KEY, None, false).await.unwrap();
+        assert_eq!(found, KeyCheck::PickWorkspace(Vec::new()));
+    }
+
+    #[tokio::test]
+    async fn a_stored_workspace_is_named_on_every_request() {
+        let seen = Arc::new(Seen::default());
+        let base = unscoped_anthropic(&[WS_A], "[]", seen.clone()).await;
+        let (port, _) = proxy_with(base, None, |s| s.keys = KeySource::FixedInWorkspace(FAKE_KEY, WS_A)).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:workspace", None)).unwrap();
+        let url = format!("{}/v1/models", base_url_on(port, Provider::Anthropic));
+        let r = plain_client()
+            .get(&url)
+            .header("x-api-key", token)
+            .header(WORKSPACE_HEADER, WS_B)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let headers = &seen.requests.lock_ok()[0].2;
+        assert_eq!(headers["x-api-key"], FAKE_KEY);
+        assert_eq!(headers.get_all(WORKSPACE_HEADER).iter().collect::<Vec<_>>(), vec![WS_A]);
+        on_tab_gone("e2e:workspace");
+    }
+
+    #[tokio::test]
+    async fn a_key_without_its_workspace_is_answered_in_the_proxys_words() {
+        let seen = Arc::new(Seen::default());
+        let base = unscoped_anthropic(&[WS_A], "[]", seen).await;
+        let budget = test_budget(ROOMY);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(base, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:no-workspace", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let r = plain_client().post(&url).header("x-api-key", token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 400);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let json: serde_json::Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["type"], "invalid_request_error");
+        assert!(json["error"]["message"].as_str().unwrap().contains("save it again to pick one"));
+        assert_eq!(book.snapshot(chrono::Utc::now()).billed(Provider::Anthropic), 0);
+        on_tab_gone("e2e:no-workspace");
+    }
+
+    #[tokio::test]
+    async fn a_claude_subscription_token_is_refused_without_asking_anthropic() {
+        let seen = Arc::new(Seen::default());
+        let accepting = answering(StatusCode::OK, "{}", seen.clone()).await;
+        let err = check_key_at(&accepting, Provider::Anthropic, "sk-ant-oat01-xyz", None, false).await.unwrap_err();
+        assert!(err.contains("subscription token"), "{err}");
+        assert!(seen.requests.lock_ok().is_empty());
     }
 
     #[tokio::test]

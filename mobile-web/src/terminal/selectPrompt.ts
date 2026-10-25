@@ -86,7 +86,7 @@ export interface SelectStep {
   options: SelectOption[];
 }
 
-interface SelectLineLike { text: string; afterRule?: boolean; spans?: readonly ReadableSpanLike[] }
+interface SelectLineLike { text: string; afterRule?: boolean; edge?: number; spans?: readonly ReadableSpanLike[] }
 
 /** How far up from the bottom a dialog may sit. Below it the TUI still draws
  * its footer ("Esc to cancel") and, in Codex, the input box — and at phone
@@ -208,7 +208,11 @@ const PANEL_COLUMN = /^[│┃┆┇┊┋┌┏╭╔└┗╰╚├┣┤┫�
  * (`Yes, and switch to accept edits (auto-approve file edits and common file
  * commands) for this session (shift+tab)`). */
 const MAX_LABEL = 160;
-const MAX_DESCRIPTION = 200;
+/** Room for an agent's own option note, which it writes as a sentence or
+ * two: at 200 an `AskUserQuestion` note of 213 characters lost its last
+ * words (`…the cloud run moves to`). Still a bound, so a run that swallowed
+ * ordinary output cannot fill the sheet with it. */
+const MAX_DESCRIPTION = 600;
 /** Non-blank rows a heading may occupy above the list: the heading itself and
  * the blurb both CLIs print under it. A longer block above the rows is
  * ordinary output, and the dialog then goes untitled rather than titled with
@@ -485,15 +489,28 @@ export function readSelectPrompt(
   };
   const runs: Run[] = [];
   let run: Run | undefined;
+  /** The run a single blank row just ended, and how many blanks followed it. */
+  let gapped: Run | undefined;
+  let gap = 0;
 
   for (let index = first; index < lines.length; index += 1) {
     const text = lines[index].text;
     // A run is contiguous. A blank row or any other text ends it, so a numbered
-    // list elsewhere on screen can never be glued onto the dialog's own rows.
+    // list elsewhere on screen can never be glued onto the dialog's own rows —
+    // save Codex's sign-in menu (0.164.0), which puts one blank row between
+    // its rows: the next row resumes the run only if it is numbered on from it
+    // at its column.
     if (!text.trim()) {
+      if (run) {
+        gapped = run;
+        gap = 0;
+      }
+      gap += 1;
       run = undefined;
       continue;
     }
+    const bridged = gapped && gap === 1 ? gapped : undefined;
+    gapped = undefined;
     const tail = run?.options[run.options.length - 1];
     const action = tail && CHECKBOX_LABEL.test(tail.label) ? ACTION_ROW.exec(text) : null;
     if (run && action) {
@@ -502,6 +519,8 @@ export function readSelectPrompt(
       continue;
     }
     const row = readRow(text, option);
+    if (!run && bridged && row && row.labelColumn === bridged.labelColumn
+      && row.option.number === bridged.options[bridged.options.length - 1].number + 1) run = bridged;
     const hidden = row ? null : HIDDEN_ROWS.exec(text);
     if (run && hidden) {
       run.hidden = Number(hidden[1]);
@@ -606,6 +625,11 @@ export function dialogFooterShown(lines: readonly { text: string }[]): boolean {
 const UNNUMBERED_MARK = /^\s*[❯▸▶›→]\s+(\S.*)$/u;
 /** Claude Code's footer under a dialog it answers with Enter. */
 const CONFIRM_FOOTER = /^\s*Enter to confirm\b/u;
+/** The tick Claude Code's theme picker puts on the theme in use: `❯ ✓ Dark mode`. */
+const CURRENT_TICK = /^[✓✔]\s+/u;
+/** A first-run screen that only waits for Enter: Claude Code's
+ * `Press Enter to continue…`, Codex's `Press enter to continue`. */
+const PRESS_ENTER = /^\s*Press\s+enter\s+to\s+(continue|proceed|exit)\b[.…]*\s*$/iu;
 
 /**
  * Claude Code's select dialog without numbers — the folder-trust question
@@ -638,13 +662,27 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
   let end = footer - 1;
   while (end >= first && !lines[end].text.trim()) end -= 1;
   if (end < first) return null;
-  /** Where a row's label starts, past the highlight if it carries one. */
-  const labelAt = (text: string): number => text.length - (UNNUMBERED_MARK.exec(text)?.[1] ?? text.trimStart()).length;
+  return readUnnumberedRun(lines, first, end, columns, true);
+}
+
+/** Where a row of an unnumbered list starts its label, past the highlight and
+ * the current-value tick if it carries them: Claude Code's theme picker lines
+ * `❯ ✔ Dark mode` up with `    Light mode`. */
+function unnumberedLabelAt(text: string): number {
+  return text.length - (UNNUMBERED_MARK.exec(text)?.[1] ?? text.trimStart()).replace(CURRENT_TICK, "").length;
+}
+
+/** The unnumbered dialog whose last row is `lines[end]`: the rows above it at
+ * its label column, exactly one highlighted (`readUnnumberedPrompt`). With
+ * `ruled`, a rule above the rows opens its question; a footerless list
+ * (`readStrayDialog`) is read without, since a first-run screen's logo is
+ * drawn in the block characters a rule is made of. */
+function readUnnumberedRun(lines: readonly SelectLineLike[], first: number, end: number, columns?: number, ruled = false): SelectPrompt | null {
   // The run is the rows at the bottom row's column; a line at another one —
   // the question, drawn with no blank under it — is where it starts.
-  const labelColumn = labelAt(lines[end].text);
+  const labelColumn = unnumberedLabelAt(lines[end].text);
   let start = end;
-  while (start > first && lines[start - 1].text.trim() && labelAt(lines[start - 1].text) === labelColumn) start -= 1;
+  while (start > first && lines[start - 1].text.trim() && unnumberedLabelAt(lines[start - 1].text) === labelColumn) start -= 1;
   if (end - start + 1 > MAX_OPTIONS * 2) return null;
 
   const options: SelectOption[] = [];
@@ -654,7 +692,8 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
     const text = lines[index].text;
     if (OPTION.test(text) || RADIO_OPTION.test(text)) return null;
     const marked = UNNUMBERED_MARK.exec(text);
-    const rest = marked ? marked[1] : text.trimStart();
+    // A tick before the label is the setting in force, not part of its name.
+    const rest = (marked ? marked[1] : text.trimStart()).replace(CURRENT_TICK, "");
     const last = options[options.length - 1];
     if (!marked && last && !last.description && wrapsLabel(above, text, columns)) {
       last.label = `${last.label} ${rest.trim()}`.slice(0, MAX_LABEL);
@@ -676,24 +715,113 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
   }
   if (current < 0 || options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) return null;
 
-  let ruled = -1;
-  for (let index = start - 1; index >= 0 && start - index <= DIALOG_LINES; index -= 1) {
+  let rule = -1;
+  for (let index = start - 1; ruled && index >= 0 && start - index <= DIALOG_LINES; index -= 1) {
     if (busyRow(lines[index].text)) break;
     if (lines[index].afterRule) {
-      ruled = index;
+      rule = index;
       break;
     }
   }
-  if (ruled < 0) return { options, current, title: readTitle(lines, start), start, ...readContext(lines, start) };
-  const heading = lines[ruled].text.trim();
+  if (rule < 0) return { options, current, title: readTitle(lines, start), start, ...readContext(lines, start) };
+  const heading = lines[rule].text.trim();
   return {
     options,
     current,
     title: heading && heading.length <= MAX_TITLE ? heading : undefined,
     start,
-    question: ruled,
-    context: ruled,
+    question: rule,
+    context: rule,
   };
+}
+
+/** A first-run page's own key hints: Codex's API-key page ends in `Press
+ * enter to save` / `Press esc to go back`, Claude Code's notes in `Press Enter
+ * to continue…`. No input box prints these. */
+const PRESS_HINT = /^\s*Press\s+(?:enter|esc|any key)\s+to\b/iu;
+
+/** Whether the bottom of the screen is a page that names its keys
+ * (`PRESS_HINT`): its `> Use your own OpenAI API key` heading is no input line,
+ * and what it draws is for the chat to show, not to drop as the box's frame. */
+export function pressHintShown(lines: readonly { text: string }[]): boolean {
+  let seen = 0;
+  for (let index = lines.length - 1; index >= 0 && seen < FOOTER_REACH; index -= 1) {
+    const text = lines[index].text;
+    if (!text.trim()) continue;
+    if (PRESS_HINT.test(text)) return true;
+    seen += 1;
+  }
+  return false;
+}
+
+/**
+ * A dialog a CLI draws in place of its input box with no footer that names
+ * its keys — what a first run asks before a session can start. Claude Code's
+ * theme picker (2.1.309) is a highlighted list with a preview drawn under it:
+ *
+ *      Choose the text style that looks best with your terminal
+ *      To change this later, run /theme
+ *
+ *        Auto (match terminal)
+ *      ❯ ✓ Dark mode
+ *        Light mode
+ *
+ *      ──────────────────────
+ *       function greet …
+ *
+ * and its security notes, like Codex's, end in `Press Enter to continue`.
+ * Without a footer an indented run with one `❯` is as likely a quote, so only
+ * a caller that found no input box on screen asks (`readReaderLive`, the
+ * phone's `liveQuestion`): there nothing else can be waiting. The list is the
+ * lowest highlighted run, held to `readUnnumberedPrompt`'s shape; a screen
+ * that only waits for Enter is a one-row dialog of the CLI's own word.
+ */
+export function readStrayDialog(lines: readonly SelectLineLike[], columns?: number): SelectPrompt | null {
+  const first = Math.max(0, lines.length - SEARCH_WINDOW);
+  let bottom = lines.length - 1;
+  while (bottom >= first && !lines[bottom].text.trim()) bottom -= 1;
+  if (bottom < first) return null;
+  const enter = PRESS_ENTER.exec(lines[bottom].text);
+  // Under a list, Enter picks its highlighted row (Codex's sign-in menu ends
+  // in the same words): that is a list no reader here could place. Claude
+  // Code's notes are a numbered list of their own: only a highlight counts.
+  const listed = lines.slice(first, bottom).some((line) => UNNUMBERED_MARK.test(line.text) || OPTION.exec(line.text)?.[1] !== undefined);
+  if (enter && !listed) {
+    const word = enter[1].toLowerCase();
+    return {
+      options: [{ index: 0, number: 1, label: word.charAt(0).toUpperCase() + word.slice(1), keys: ["\r"] }],
+      current: 0,
+      title: readTitle(lines, bottom),
+      start: bottom,
+      ...readContext(lines, bottom),
+    };
+  }
+  for (let index = bottom; index >= first; index -= 1) {
+    if (!UNNUMBERED_MARK.test(lines[index].text)) continue;
+    const column = unnumberedLabelAt(lines[index].text);
+    let end = index;
+    while (end + 1 < lines.length && lines[end + 1].text.trim() && unnumberedLabelAt(lines[end + 1].text) === column) end += 1;
+    return readUnnumberedRun(lines, first, end, columns);
+  }
+  return null;
+}
+
+/** Whether `lines[index]` is the highlighted row of a list `readStrayDialog`
+ * reads. Its `❯` is the input line's too, but Claude Code draws that line
+ * under a rule, with the box's lower rule under its draft; a list's
+ * highlighted row sits under a row of its own, or its run ends in a blank. */
+export function isStrayListRow(lines: readonly SelectLineLike[], index: number): boolean {
+  const text = lines[index].text;
+  if (lines[index].afterRule || !/^\s*❯\s/u.test(text)) return false;
+  const column = unnumberedLabelAt(text);
+  let end = index;
+  while (end + 1 < lines.length && lines[end + 1].text.trim() && !lines[end + 1].afterRule && unnumberedLabelAt(lines[end + 1].text) === column) end += 1;
+  const above = index > 0 ? lines[index - 1].text : "";
+  const sibling = above.trim() !== "" && unnumberedLabelAt(above) === column;
+  const closed = end > index && end + 1 < lines.length && !lines[end + 1].text.trim();
+  if (!sibling && !closed) return false;
+  const prompt = readUnnumberedRun(lines, Math.max(0, lines.length - SEARCH_WINDOW), end);
+  return prompt !== null && prompt.start + prompt.current === index;
 }
 
 const CODEX_HOOKS_HEADING = /^\s*Hooks\s*$/u;
@@ -703,7 +831,7 @@ const CODEX_HOOKS_TABLE = /^\s*Event\s{2,}Installed\s{2,}Active\b/u;
 const CODEX_HOOKS_FOOTER = /^\s*(?:t (trust all)\s*·\s*)?enter (?:review|details)\s*·\s*esc (close)\s*$/u;
 
 /**
- * Codex's hooks page (0.163.0): what `Review hooks` on its startup "Hooks need
+ * Codex's hooks page (0.163.0, 0.164.0): what `Review hooks` on its startup "Hooks need
  * review" menu opens, and `/hooks`. A table of hook events under its heading,
  * its highlight on an event row, its answers in the footer:
  *

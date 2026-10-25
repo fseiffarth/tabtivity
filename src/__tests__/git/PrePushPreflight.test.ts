@@ -50,6 +50,9 @@ const lockVersions = (work: string) => {
 function throwawayRepo() {
   const work = mkdtempSync(join(tmpdir(), `${BRAND.slug}-preflight-`));
   git(work, "init", "-q", "-b", "develop");
+  // The hook stamps its bump from git config, as in a real clone.
+  git(work, "config", "user.name", "t");
+  git(work, "config", "user.email", "t@example.invalid");
   mkdirSync(join(work, "scripts"));
   mkdirSync(join(work, "src-tauri"));
   for (const script of ["bump-version.sh", "privacy-check.sh"]) {

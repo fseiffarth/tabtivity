@@ -15,9 +15,14 @@
 //! - OpenCode: the completed `edit`, `multiedit`, `write` and `apply_patch`
 //!   tool parts of the session (`services::opencode_store`) — the diff each
 //!   puts in its metadata, or a written file's content.
+//! - Copilot: the `tool.execution_complete` events whose `fileEdits` name what
+//!   a built-in editing tool (`edit`, `create`, GPT models' `apply_patch`)
+//!   committed — the git-style diff in `result.detailedContent`, one section
+//!   per file in `fileEdits` order. A call that failed lists nothing.
 //!
-//! Desktop only: a diff is file content, which never crosses to the phone.
-//! Read for the conversation on screen — the session's, or one subagent's —
+//! A diff is file content: it reaches the phone only through
+//! `mobile_control::chat_changes`, behind the "Project files on the phone"
+//! switch, its paths made checkout-relative. Read for the conversation on screen — the session's, or one subagent's —
 //! resolved the way the Reader resolves it (`agent_transcript`).
 
 use std::fmt::Write as _;
@@ -155,6 +160,8 @@ pub fn agent_session_changes(
     let kind = match cmd {
         "claude" => Store::Claude,
         "codex" => Store::Codex,
+        "copilot" if copilot_is_remote(project_id) => return AgentChanges::unavailable("unsupported"),
+        "copilot" => Store::Copilot,
         _ => return AgentChanges::unavailable("unsupported"),
     };
     match agent_transcript::conversation_file(cmd, project_id, launch_id, subagent) {
@@ -182,9 +189,17 @@ pub fn stored_chat_changes(
     if subagent.is_some_and(|token| !agent_transcript::is_subagent_token(token)) {
         return AgentChanges::unavailable("no_subagent");
     }
+    if cmd == "opencode" {
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return AgentChanges::unavailable("no_transcript");
+        }
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        return opencode_changes(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+    }
     let kind = match cmd {
         "claude" => Store::Claude,
         "codex" => Store::Codex,
+        "copilot" => Store::Copilot,
         _ => return AgentChanges::unavailable("unsupported"),
     };
     match agent_transcript::stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent) {
@@ -313,6 +328,7 @@ fn scan_paths(path: &Path, kind: Store) -> Option<std::collections::BTreeSet<Str
         let candidate = match kind {
             Store::Claude => line.contains("\"toolUseResult\"") && line.contains("\"filePath\""),
             Store::Codex => line.contains("\"FileChange\""),
+            Store::Copilot => line.contains("\"fileEdits\""),
         };
         if !candidate {
             continue;
@@ -323,6 +339,7 @@ fn scan_paths(path: &Path, kind: Store) -> Option<std::collections::BTreeSet<Str
         match kind {
             Store::Claude => changes.extend(claude_change(&value)),
             Store::Codex => codex_changes(&value, &mut changes),
+            Store::Copilot => copilot_changes(&value, &mut changes),
         }
     }
     paths.extend(paths_of(&changes));
@@ -343,21 +360,31 @@ fn paths_of(changes: &[FileChange]) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-/// A Claude session's subagent transcripts (`agent-<id>.jsonl` in `folder`),
-/// at most [`MAX_SUBAGENT_FILES`] of them, in name order.
+/// A Claude session's subagent transcripts (`agent-<id>.jsonl` in `folder`,
+/// and in each workflow run's folder under `folder/workflows`), at most
+/// [`MAX_SUBAGENT_FILES`] of them, in name order.
 fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return Vec::new();
+    let agents = |dir: &Path| -> Vec<std::path::PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("agent-") && name.ends_with(".jsonl")
+            })
+            .map(|entry| entry.path())
+            .collect()
     };
-    let mut files: Vec<std::path::PathBuf> = entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with("agent-") && name.ends_with(".jsonl")
-        })
-        .map(|entry| entry.path())
-        .collect();
+    let mut files = agents(folder);
+    if let Ok(runs) = std::fs::read_dir(folder.join("workflows")) {
+        // Real directories only: the agent writes them, a link is not followed.
+        for run in runs.flatten().filter(|run| run.file_type().is_ok_and(|kind| kind.is_dir())) {
+            files.extend(agents(&run.path()));
+        }
+    }
     files.sort();
     files.truncate(MAX_SUBAGENT_FILES);
     files
@@ -394,6 +421,7 @@ fn opencode_changes(
 pub enum Store {
     Claude,
     Codex,
+    Copilot,
 }
 
 /// The changes in the transcript at `path`: its tail, the last `limit`
@@ -414,6 +442,7 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
         let candidate = match kind {
             Store::Claude => line.contains("\"toolUseResult\"") && line.contains("\"filePath\""),
             Store::Codex => line.contains("\"FileChange\""),
+            Store::Copilot => line.contains("\"fileEdits\""),
         };
         if !candidate {
             continue;
@@ -424,6 +453,7 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
         match kind {
             Store::Claude => changes.extend(claude_change(&value)),
             Store::Codex => codex_changes(&value, &mut changes),
+            Store::Copilot => copilot_changes(&value, &mut changes),
         }
     }
     Some(AgentChanges::read(current, changes, cut, limit))
@@ -500,20 +530,110 @@ fn codex_changes(value: &Value, out: &mut Vec<FileChange>) {
     }
 }
 
+fn copilot_is_remote(project_id: Option<&str>) -> bool {
+    project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some())
+}
+
+/// The changes a Copilot `tool.execution_complete` records, one per entry of
+/// its `fileEdits`. The diff of each is its section of `detailedContent`: the
+/// one whose `diff --git` header names the file, else the one at the same
+/// position. A section with no hunk (an empty file created) lists no diff.
+fn copilot_changes(value: &Value, out: &mut Vec<FileChange>) {
+    if value.get("type").and_then(Value::as_str) != Some("tool.execution_complete") {
+        return;
+    }
+    let Some(data) = value.get("data") else {
+        return;
+    };
+    if data.get("success").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    let Some(edits) = data.get("fileEdits").and_then(Value::as_array) else {
+        return;
+    };
+    let detailed = data.pointer("/result/detailedContent").and_then(Value::as_str).unwrap_or_default();
+    let sections = copilot_sections(detailed);
+    let at = value.get("timestamp").and_then(Value::as_str).map(str::to_string);
+    for (index, edit) in edits.iter().enumerate() {
+        let Some(path) = edit.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let kind = match edit.get("kind").and_then(Value::as_str) {
+            Some("create") => "add",
+            Some("delete") => "delete",
+            _ => "edit",
+        };
+        let named = format!("a/{}", path.trim_start_matches('/'));
+        let section = sections
+            .iter()
+            .find(|section| section.lines().next().is_some_and(|header| header.contains(&named)))
+            .or_else(|| sections.get(index));
+        let diff = section.map(|section| hunks_only(section).trim_end_matches('\n')).filter(|diff| !diff.is_empty());
+        if let Some(diff) = diff {
+            out.push(change(path, kind, format!("{diff}\n"), at.clone()));
+        }
+    }
+}
+
+/// `detailed` split at its `diff --git` lines, each section from its header on.
+fn copilot_sections(detailed: &str) -> Vec<&str> {
+    let starts: Vec<usize> = detailed
+        .match_indices("diff --git ")
+        .map(|(at, _)| at)
+        .filter(|&at| at == 0 || detailed.as_bytes()[at - 1] == b'\n')
+        .collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(n, &start)| &detailed[start..starts.get(n + 1).copied().unwrap_or(detailed.len())])
+        .collect()
+}
+
+/// V2's public tool content carries FileDiff records directly. Reuse the
+/// renderer's bounded diff format without reconstructing V1 tool envelopes.
+/// A tool without them (OpenCode 2.1.3's `edit`, `write`, …) keeps V1's
+/// `state` shape under its `name`, and is read as V1's are.
+pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileChange> {
+    if tool.pointer("/state/status").and_then(Value::as_str) != Some("completed") {
+        return Vec::new();
+    }
+    let ended = tool.pointer("/time/completed").and_then(Value::as_i64).unwrap_or(created);
+    let at = Some(crate::services::prompt_blame::epoch_ms_to_iso(ended));
+    let changes: Vec<_> = tool.pointer("/state/metadata/files").and_then(Value::as_array)
+        .into_iter().flatten().filter_map(|file| {
+            let path = file["file"].as_str()?;
+            let diff = hunks_only(file["patch"].as_str()?);
+            if diff.is_empty() { return None; }
+            let kind = match file["status"].as_str() {
+                Some("added") => "add",
+                Some("deleted") => "delete",
+                _ => "edit",
+            };
+            Some(change(path, kind, diff.to_string(), at.clone()))
+        }).collect();
+    if !changes.is_empty() { return changes; }
+    tool_state_changes(tool["name"].as_str(), &tool["state"], ended)
+}
+
 /// The changes one OpenCode tool part records, created at `created` (epoch
 /// ms) unless the part says when it ended.
 pub(crate) fn opencode_part_changes(created: i64, part: &Value) -> Vec<FileChange> {
     let Some(state) = part.get("state") else {
         return Vec::new();
     };
+    let ended = state.pointer("/time/end").and_then(Value::as_i64).unwrap_or(created);
+    tool_state_changes(part.get("tool").and_then(Value::as_str), state, ended)
+}
+
+/// The changes a completed `tool` call's `state` records, ended at `ended`.
+fn tool_state_changes(tool: Option<&str>, state: &Value, ended: i64) -> Vec<FileChange> {
     if state.get("status").and_then(Value::as_str) != Some("completed") {
         return Vec::new();
     }
-    let ended = state.pointer("/time/end").and_then(Value::as_i64).unwrap_or(created);
     let at = Some(crate::services::prompt_blame::epoch_ms_to_iso(ended));
     let input = |key: &str| state.pointer(&format!("/input/{key}")).and_then(Value::as_str);
     let meta = |key: &str| state.pointer(&format!("/metadata/{key}"));
-    match part.get("tool").and_then(Value::as_str) {
+    match tool {
         Some("edit") => {
             let (Some(path), Some(diff)) = (input("filePath"), meta("diff").and_then(Value::as_str).map(hunks_only)) else {
                 return Vec::new();
@@ -570,7 +690,7 @@ fn diff_of(value: &Value) -> Option<&str> {
 
 /// A unified diff from its first hunk on: a file header (`---`/`+++`,
 /// `Index:`, `diff --git`) is the panel's to draw.
-fn hunks_only(diff: &str) -> &str {
+pub(crate) fn hunks_only(diff: &str) -> &str {
     if diff.starts_with("@@") {
         return diff;
     }
@@ -768,6 +888,59 @@ mod tests {
 
         let running = serde_json::json!({"type": "tool", "tool": "edit", "state": {"status": "running", "input": {"filePath": "/p/a.ts"}}});
         assert!(opencode_part_changes(0, &running).is_empty());
+    }
+
+    /// A Copilot 1.0.102/1.0.103 session as `events.jsonl` records it (a BYOK
+    /// stub model driving `apply_patch`, `bash`, `task` and `edit`; paths shortened).
+    fn copilot_log() -> Vec<String> {
+        let at = |n: u32| format!("2026-10-24T06:37:25.{n:03}Z");
+        let rec = |kind: &str, n: u32, data: serde_json::Value| serde_json::json!({ "type": kind, "data": data, "id": format!("e{n}"), "timestamp": at(n) }).to_string();
+        let patch_one = "\ndiff --git a/work/a.txt b/work/a.txt\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/work/a.txt\n@@ -1,0 +1,3 @@\n+alpha\n+beta\n+\n\n\n\ndiff --git a/work/b.txt b/work/b.txt\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/work/b.txt\n@@ -1,0 +1,2 @@\n+bee\n+\n\n";
+        let patch_two = "\ndiff --git a/work/a.txt b/work/a.txt\nindex 0000000..0000000 100644\n--- a/work/a.txt\n+++ b/work/a.txt\n@@ -1,3 +1,4 @@\n alpha\n-beta\n+gamma\n+delta\n \n\n\ndiff --git a/work/b.txt b/dev/null\nindex 0000000..0000000 100644\n--- a/work/b.txt\n+++ b/dev/null\n@@ -1,2 +0,0 @@\n-bee\n-\n\n";
+        let edit = "\ndiff --git a/work/c.txt b/work/c.txt\nindex 0000000..0000000 100644\n--- a/work/c.txt\n+++ b/work/c.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+three\n \n\n";
+        vec![
+            rec("session.start", 1, serde_json::json!({ "sessionId": "c4196d1f-a396-42a7-8384-d0783bd09cc7", "copilotVersion": "1.0.103", "context": { "cwd": "/work" } })),
+            rec("session.model_change", 2, serde_json::json!({ "newModel": "gpt-5.4", "reasoningEffort": "medium" })),
+            rec("user.message", 3, serde_json::json!({ "content": "patch it", "interactionId": "i1", "turnId": "0" })),
+            rec("assistant.message", 4, serde_json::json!({ "content": "", "model": "gpt-5.4", "toolRequests": [{ "toolCallId": "call_p1", "name": "apply_patch", "arguments": "*** Begin Patch\n*** End Patch\n", "type": "custom" }] })),
+            rec("tool.execution_start", 5, serde_json::json!({ "toolCallId": "call_p1", "toolName": "apply_patch", "arguments": "*** Begin Patch\n*** End Patch\n" })),
+            rec("tool.execution_complete", 6, serde_json::json!({ "toolCallId": "call_p1", "success": true, "fileEdits": [{ "path": "/work/a.txt", "kind": "create" }, { "path": "/work/b.txt", "kind": "create" }], "result": { "content": "Added 2 file(s)", "detailedContent": patch_one } })),
+            rec("tool.execution_start", 7, serde_json::json!({ "toolCallId": "call_p2", "toolName": "apply_patch", "arguments": "" })),
+            rec("tool.execution_complete", 8, serde_json::json!({ "toolCallId": "call_p2", "success": true, "fileEdits": [{ "path": "/work/a.txt", "kind": "edit" }, { "path": "/work/b.txt", "kind": "delete" }], "result": { "content": "Modified 1 file(s)", "detailedContent": patch_two } })),
+            rec("tool.execution_complete", 9, serde_json::json!({ "toolCallId": "call_e1", "success": true, "fileEdits": [{ "path": "/work/c.txt", "kind": "edit" }], "result": { "content": "updated", "detailedContent": edit } })),
+            rec("tool.execution_complete", 10, serde_json::json!({ "toolCallId": "call_e2", "success": false, "fileEdits": [{ "path": "/work/d.txt", "kind": "edit" }], "result": { "content": "no match" } })),
+            rec("assistant.message", 11, serde_json::json!({ "content": "Done.", "model": "gpt-5.4", "toolRequests": [] })),
+            rec("session.usage_info", 12, serde_json::json!({ "currentTokens": 18664, "tokenLimit": 272000 })),
+        ]
+    }
+
+    #[test]
+    fn copilot_patches_give_one_diff_per_file_and_a_failed_call_gives_none() {
+        let (_dir, path) = write_lines(&copilot_log());
+        let read = read_changes(&path, Store::Copilot, None, 50).unwrap();
+        let listed: Vec<_> = read
+            .changes
+            .iter()
+            .map(|c| (c.path.as_str(), c.kind.as_str(), c.added, c.removed))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                ("/work/a.txt", "add", 3, 0),
+                ("/work/b.txt", "add", 2, 0),
+                ("/work/a.txt", "edit", 2, 1),
+                ("/work/b.txt", "delete", 0, 2),
+                ("/work/c.txt", "edit", 1, 1),
+            ]
+        );
+        // Hunks only: the git header is the panel's to draw, and the diff ends at its last line.
+        assert!(read.changes[0].diff.starts_with("@@ -1,0 +1,3 @@\n+alpha\n"));
+        assert!(read.changes[2].diff.starts_with("@@ -1,3 +1,4 @@\n alpha\n-beta\n"));
+        assert!(read.changes.iter().all(|c| !c.diff.contains("diff --git") && c.diff.ends_with('\n') && !c.diff.ends_with("\n\n")));
+        assert_eq!(read.changes[4].at.as_deref(), Some("2026-10-24T06:37:25.009Z"));
+        // Unchanged since the version the caller holds.
+        let again = read_changes(&path, Store::Copilot, read.version.as_deref(), 50).unwrap();
+        assert!(again.unchanged);
     }
 
     #[test]

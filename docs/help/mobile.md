@@ -49,8 +49,9 @@ Tailscale command.
    loopback port and origin it fills in, then switch Mobile on. Tabtivity checks
    the Serve mapping before it starts the host.
 5. **Choose what the phone may open.** Under **Project access**, switch on the
-   projects and boxes the phone may reach. All start off. Only local,
-   non-container projects are eligible. A switch turned on reaches **all
+   projects and boxes the phone may reach. All start off. Every project type
+   can be switched on (see below for what a remote, container or VM project
+   shares). A switch turned on reaches **all
    phones**, including ones you pair later; to limit it, press the
    **All phones ▾** button beside it and pick **Only these phones**, then tick
    the phones. The side panel's phone button opens the same choice.
@@ -72,6 +73,35 @@ terminal session for the phone to attach to yet. Tap it on the phone and the
 desktop restarts it in one, resuming its conversation; that waits until the
 agent is idle, and a tab that cannot resume its conversation (a local-model,
 sign-in or cloud tab) is reopened on the desktop instead.
+
+### Remote, container and VM projects
+
+Any project type can be shared. A **remote** project gives the phone its agents
+that run on this computer (the default for agents) and the files of its local
+mirror, and you can start an agent from the phone, which runs in the mirror;
+the phone shows no git dot or "uncommitted changes" card for it.
+
+Its tabs that run on the remote host (or on one of its worker hosts) are listed
+too, marked **on host**. The phone reaches them through the desktop's own
+connection to that host, so they open only while the project is connected on
+the desktop (and for up to ten minutes after the desktop lets go of the
+connection); the phone never logs in to a host itself and never asks for a
+password. While the desktop is not connected, such a tab says "Connect this
+project on the desktop to open it", and an open one closes with that line.
+Shell tabs on the host follow the **shell tabs** switch, as local ones do. A
+host tab is only typed into: sending a file from the phone or the desktop,
+**Submit** of a markup and **Sign in** are not offered on it (they work through
+the project's inbox and this computer, which the host cannot see), and with no
+window open its schedules are not offered either. Recaps fall back to the
+screen for it, and its Chat has no conversation to show — use **Terminal** —
+as the desktop has no transcript of a session on the host. A tab on the host
+has a session to attach to only while the project's **Persistent sessions
+(tmux)** (its pill's menu) is on, the default.
+
+A **container** or **VM** project is
+listed on the phone with its tabs that run on this computer; the tabs inside the
+container or VM reach the phone in a later version. A VM has files on the phone
+only if you set up a local mirror for it.
 
 ### Which phones see a project
 
@@ -125,11 +155,12 @@ is refused. Works with the desktop window closed.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box
   to write the next one, and the agent's questions as buttons to tap. The
   pill at the top right names the view on screen; tap it to switch to
-  **Terminal** (the real terminal) and back, and, in Chat, to choose whether
-  it shows the stored conversation (**Session**) or the screen as text
-  (**Screen**). A shell tab has no conversation, so its pill offers
-  **Reader** (the screen as text) and **Terminal**. The desktop offers the
-  same chat on its agent tabs (help topic `agent-clis`).
+  **Terminal** (the real terminal) and back. Chat shows the agent's stored
+  conversation; for an agent Tabtivity cannot read one of (Kimi, Qwen, Aider
+  and most other CLIs) Chat is dimmed and the tab opens in Terminal. A shell
+  tab has no conversation, so its pill offers **Reader** (the screen as text)
+  and **Terminal**. The desktop offers the same chat on its agent tabs (help
+  topic `agent-clis`).
 - Over the chat, **Files (n)** lists every file the conversation carried —
   what the agent sent from this tab and what you sent with your prompts —
   newest first, with who sent it; tap one to open it. It sits beside
@@ -343,6 +374,11 @@ switched or created from there:
 It works with the desktop closed, refreshes when you come back to the app or
 tap **↻ Refresh**, and covers projects only, not boxes or the root console.
 The ＋ sheet's **Agents start in** row lists the same worktrees.
+
+To move a running agent to another of these worktrees, tap the **⎇ branch**
+chip in its chat's facts row, as on the desktop (see `agent-clis`). The row
+also names the worktree the agent is in. The move needs desktop Tabtivity
+open, and is off while the agent works or asks a question.
 
 ### What this chat has not committed
 

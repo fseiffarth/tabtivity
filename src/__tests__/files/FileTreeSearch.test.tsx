@@ -91,9 +91,10 @@ async function renderPanel() {
 
 /** A toolbar button by its glyph, or — for the drawn search icon, which has
  *  no text — by its label. The search fold and the ↻ re-list both live in
- *  the Files/Git/Apps row now, not in a row of the tree's own. */
+ *  the panel's action row (below the view tabs), not in a row of the tree's
+ *  own. */
 function toolbarBtn(glyph: string): HTMLButtonElement {
-  const toolbar = document.querySelector(".side-panel-toolbar");
+  const toolbar = document.querySelector(".side-panel-actions");
   expect(toolbar).toBeTruthy();
   const btn = [...toolbar!.querySelectorAll("button")].find((b) =>
     glyph === "🔍"

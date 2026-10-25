@@ -58,7 +58,7 @@
  * an ordinary end, because on this engine a gesture can finish with either.
  */
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { ContextMenuPortal } from "../../common/ContextMenuPortal";
 import { useT } from "../../../lib/i18n";
 import { UntestedTag } from "../../common/UntestedTag";
 import { formatPdfDate, HIGHLIGHT_ALPHA } from "./pdfDoc";
@@ -228,14 +228,6 @@ export function PdfNoteLayer({
   useEffect(() => {
     if (edit?.noteId && !open) onEdit(null);
   }, [edit?.noteId, open, onEdit]);
-
-  // The menu is dismissed by the next press anywhere, exactly as the page rail's is.
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => onCloseMenu();
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menu, onCloseMenu]);
 
   const commit = () => {
     if (!edit) return;
@@ -466,7 +458,7 @@ export function PdfNoteLayer({
           role="group"
           aria-label={t("pdfNotes.editorLabel")}
           // The card sits over the page; a press inside it must not reach the
-          // window listener that dismisses the menu, nor the page beneath.
+          // page beneath.
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
@@ -555,85 +547,84 @@ export function PdfNoteLayer({
         </div>
       )}
 
-      {menu &&
-        createPortal(
-          <div
-            className="context-menu file-viewer-pdf-note-menu"
-            style={{ left: menu.clientX, top: menu.clientY }}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            {menu.noteId ? (
-              (() => {
-                const target = byId(menu.noteId);
-                const hl = target && isHighlight(target);
-                return (
-                  <>
-                    <button
-                      onClick={() => {
-                        onCloseMenu();
-                        if (target) onEdit({ noteId: target.id, x: target.x, y: target.y });
-                      }}
-                    >
-                      {t(hl ? "pdfNotes.editHighlight" : "pdfNotes.edit")}
-                    </button>
-                    {hl ? (
-                      // Recolouring is offered here and not in the card, because it is
-                      // a property of the mark rather than of what was said about it —
-                      // and because a reader who wants a different colour usually
-                      // wants it for a highlight already made, not while writing one.
-                      <div className="file-viewer-pdf-note-menu-colors" role="group">
-                        {HIGHLIGHT_COLORS.map((c, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            className="file-viewer-pdf-sel-swatch"
-                            style={{ background: swatchCss(c) }}
-                            title={t("pdfNotes.recolor")}
-                            aria-label={t("pdfNotes.recolor")}
-                            onClick={() => {
-                              onCloseMenu();
-                              onRecolor?.(target!.id, [...c] as [number, number, number]);
-                            }}
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      // The move has no menu item, because it is not an action taken
-                      // from a menu — it is the marker itself. What the menu can do is
-                      // say the gesture exists, which nothing on the page otherwise
-                      // does. A highlight has no such gesture: it is pinned to words.
-                      <div className="context-menu-note">{t("pdfNotes.dragHint")}</div>
-                    )}
-                    <hr />
-                    <button
-                      className="danger"
-                      onClick={() => {
-                        onCloseMenu();
-                        if (menu.noteId) onDelete(menu.noteId);
-                      }}
-                    >
-                      {t(hl ? "pdfNotes.deleteHighlight" : "pdfNotes.delete")}
-                    </button>
-                  </>
-                );
-              })()
-            ) : (
-              <button
-                className="untested"
-                disabled={!ready}
-                title={ready ? undefined : t("pdfNotes.readingTitle")}
-                onClick={() => {
-                  onCloseMenu();
-                  onEdit(noteAnchorAt(menu.x, menu.y));
-                }}
-              >
-                {ready ? t("pdfNotes.addHere") : t("pdfNotes.reading")}
-                <UntestedTag id="pdfNoteLayer.1" />
-              </button>
-            )}
-          </div>,
-          document.body,
-        )}
+      {menu && (
+        <ContextMenuPortal
+          x={menu.clientX}
+          y={menu.clientY}
+          onClose={onCloseMenu}
+          className="context-menu file-viewer-pdf-note-menu"
+        >
+          {menu.noteId ? (
+            (() => {
+              const target = byId(menu.noteId);
+              const hl = target && isHighlight(target);
+              return (
+                <>
+                  <button
+                    onClick={() => {
+                      onCloseMenu();
+                      if (target) onEdit({ noteId: target.id, x: target.x, y: target.y });
+                    }}
+                  >
+                    {t(hl ? "pdfNotes.editHighlight" : "pdfNotes.edit")}
+                  </button>
+                  {hl ? (
+                    // Recolouring is offered here and not in the card, because it is
+                    // a property of the mark rather than of what was said about it —
+                    // and because a reader who wants a different colour usually
+                    // wants it for a highlight already made, not while writing one.
+                    <div className="file-viewer-pdf-note-menu-colors" role="group">
+                      {HIGHLIGHT_COLORS.map((c, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          className="file-viewer-pdf-sel-swatch"
+                          style={{ background: swatchCss(c) }}
+                          title={t("pdfNotes.recolor")}
+                          aria-label={t("pdfNotes.recolor")}
+                          onClick={() => {
+                            onCloseMenu();
+                            onRecolor?.(target!.id, [...c] as [number, number, number]);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    // The move has no menu item, because it is not an action taken
+                    // from a menu — it is the marker itself. What the menu can do is
+                    // say the gesture exists, which nothing on the page otherwise
+                    // does. A highlight has no such gesture: it is pinned to words.
+                    <div className="context-menu-note">{t("pdfNotes.dragHint")}</div>
+                  )}
+                  <hr />
+                  <button
+                    className="danger"
+                    onClick={() => {
+                      onCloseMenu();
+                      if (menu.noteId) onDelete(menu.noteId);
+                    }}
+                  >
+                    {t(hl ? "pdfNotes.deleteHighlight" : "pdfNotes.delete")}
+                  </button>
+                </>
+              );
+            })()
+          ) : (
+            <button
+              className="untested"
+              disabled={!ready}
+              title={ready ? undefined : t("pdfNotes.readingTitle")}
+              onClick={() => {
+                onCloseMenu();
+                onEdit(noteAnchorAt(menu.x, menu.y));
+              }}
+            >
+              {ready ? t("pdfNotes.addHere") : t("pdfNotes.reading")}
+              <UntestedTag id="pdfNoteLayer.1" />
+            </button>
+          )}
+        </ContextMenuPortal>
+      )}
     </>
   );
 }

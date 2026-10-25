@@ -86,6 +86,7 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         local_model: false,
         schedule_target_id: None,
         host_session: false,
+        api_key: None,
     };
     let own = roots
         .iter()
@@ -112,11 +113,9 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
 /// Discard whatever is waiting in the terminal's input queue. The shim runs
 /// on the user's own shell tab; once the fenced CLI has exited, the next
 /// reader of that queue is the unfenced shell, so nothing the fenced process
-/// left there may reach it (the same drain a fenced tmux pane runs before
-/// its trailing shell, `tmux_local::FENCE_INPUT_DRAIN`). On Linux the fence's
-/// pid namespace dies with the CLI, so nothing fenced can add more after
-/// this; on macOS a process the agent left behind could still, which is the
-/// same limit the pane drain has there.
+/// left there may reach it. On Linux the fence's pid namespace dies with the
+/// CLI, so nothing fenced can add more after this; on macOS a process the
+/// agent left behind could still.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn drain_terminal_input() {
     // SAFETY: plain libc calls on descriptor 0.
@@ -133,6 +132,11 @@ fn drain_terminal_input() {
 /// the shell that continues on it. Every failure is printed and becomes the
 /// exit status; the child's own status is passed through.
 pub fn run(cli: &str, args: &[String]) -> i32 {
+    // The AI switch (`services::ai_switch`): no CLI starts while AI is off.
+    if crate::services::ai_switch::is_off() {
+        eprintln!(concat!("agent shim: AI is off; switch it on with the power button in ", crate::app_name!(), "'s side panel"));
+        return 1;
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::process::{CommandExt, ExitStatusExt};

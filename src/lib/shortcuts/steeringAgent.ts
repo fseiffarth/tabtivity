@@ -20,11 +20,14 @@
  */
 import { agentDraftPrefixes, agentFamily } from "../../../shared/agentComposer";
 import {
+  SessionPickerOpenError,
   scheduledAgentInput,
+  sessionPickerOpen,
   submitScheduledAgentCommand,
   submitScheduledAgentMessage,
 } from "../agents/scheduledAgentInput";
 import { noteSentPrompt } from "../agents/sentPrompts";
+import { noteInputFrom } from "../agents/inputFrom";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { noteTypedClear } from "../../stores/agents/agentClearUndo";
@@ -138,6 +141,9 @@ const START_POLL_MS = 200;
 export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<void> {
   if (!steeringAgentOffer(tab).prompt || !tab.scheduleTargetId) throw new Error("not an agent tab");
   const target = tab.scheduleTargetId;
+  // A picker up in the CLI would take the words as its own keys, and the
+  // agent never see them: refuse at once rather than wait for it to go.
+  if (sessionPickerOpen(target)) throw new SessionPickerOpenError();
   const deadline = Date.now() + START_WAIT_MS;
   for (;;) {
     const input = scheduledAgentInput(target);
@@ -146,4 +152,6 @@ export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<v
   }
   await submitScheduledAgentMessage(target, text, { whileBusy: true });
   noteSentPrompt(target, text);
+  const ptyId = scheduledAgentInput(target)?.ptyId;
+  if (ptyId) noteInputFrom(ptyId, "desktop");
 }

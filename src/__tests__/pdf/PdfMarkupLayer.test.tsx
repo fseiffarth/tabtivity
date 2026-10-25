@@ -101,6 +101,28 @@ describe("PdfMarkupLayer", () => {
     expect(mark.points[mark.points.length - 1]).toEqual([120, 60, 0.5]);
   });
 
+  it("paints the committed marks once while a box is dragged, then from a copy", () => {
+    const calls: Record<string, number> = {};
+    const ctx = new Proxy({}, {
+      get: (_target, name: string) => {
+        if (name === "canvas") return undefined;
+        return (...args: unknown[]) => {
+          if (name === "drawImage") expect(args[0]).toBeInstanceOf(HTMLCanvasElement);
+          calls[name] = (calls[name] ?? 0) + 1;
+        };
+      },
+      set: () => true,
+    }) as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as never);
+    const base = addMark(EMPTY_LAYER, 1, SIZE, { kind: "box", color: "red", rect: [300, 300, 50, 50] });
+    const edit = stubEdit({}, base);
+    const { layer, at } = mount(1, edit);
+    fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "mouse", button: 0, ...at(100, 100) });
+    for (const x of [120, 140, 160, 180]) fireEvent.pointerMove(layer, { pointerId: 1, pointerType: "mouse", ...at(x, 130) });
+    // Each move repaints from the copy of the committed marks.
+    expect(calls.drawImage ?? 0).toBeGreaterThanOrEqual(4);
+  });
+
   it("ignores a right or middle button", () => {
     const edit = stubEdit();
     const { layer, at } = mount(1, edit);

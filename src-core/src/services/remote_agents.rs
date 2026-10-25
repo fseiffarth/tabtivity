@@ -88,9 +88,9 @@ static RECIPES: &[AgentRecipe] = &[
     },
     AgentRecipe {
         bin: "opencode",
-        install: "curl -fsSL https://opencode.ai/install | bash",
-        manual_hint: "curl -fsSL https://opencode.ai/install | bash \
-                      (see https://opencode.ai/docs/)",
+        install: "curl -fsSL https://opencode.ai/v2/install | bash",
+        manual_hint: "curl -fsSL https://opencode.ai/v2/install | bash \
+                      (see https://opencode.ai/v2/docs/)",
     },
 ];
 

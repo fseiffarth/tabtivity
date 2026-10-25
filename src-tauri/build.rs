@@ -75,6 +75,58 @@ fn generate_mobile_assets() {
     fs::write(out, generated).expect("write mobile assets");
 }
 
+/// Every regular file under `dir` (never through a link), as `(name, path)`.
+fn collect_regular(dir: &Path, root: &Path, out: &mut Vec<(String, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            collect_regular(&path, root, out);
+        } else if kind.is_file() {
+            let name = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            out.push((name, path));
+        }
+    }
+}
+
+/// The browser desktop client's bundle (`web-dist/`), embedded in a dev build
+/// only — the build `package-dev.sh` exports `DEV_SOURCE_ROOT` for. The
+/// checkout's `web-dist/` is gitignored and rewritten by any `npm run build`,
+/// an agent's included, so the sidecar never reads it from disk (threat
+/// recheck 2026-10-24, gap 45). One `include_bytes!` per file, so the ~17 MB
+/// never becomes a byte-literal source file. Release builds and the server
+/// daemon get an empty table (they read `<ENV>_WEB_DIST` or the control
+/// dir's copy), and so does a dev build made before `npm run web:bundle`.
+fn generate_web_assets() {
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let dist = manifest.join("../web-dist");
+    let dev = brand::env_name("DEV_SOURCE_ROOT");
+    println!("cargo:rerun-if-env-changed={dev}");
+    println!("cargo:rerun-if-changed={}", dist.display());
+    let mut files = Vec::new();
+    if env::var_os(&dev).is_some_and(|root| !root.is_empty()) {
+        collect_regular(&dist, &dist, &mut files);
+        if !files.iter().any(|(name, _)| name == "index.html") {
+            files.clear();
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let rows = files
+        .into_iter()
+        .map(|(name, path)| {
+            let path = fs::canonicalize(&path).unwrap_or(path);
+            format!("({name:?}, include_bytes!({:?}) as &[u8])", path.to_string_lossy())
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let generated = format!("pub static WEB_ASSETS: &[(&str, &[u8])] = &[{rows}];\n");
+    let out = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("web_assets.rs");
+    fs::write(out, generated).expect("write web assets");
+}
+
 /// The desktop frontend is embedded by `generate_context!()` at macro expansion
 /// time, and the only record of that is the crate's rustc depfile, which names
 /// each asset by its vite content hash. On a rebuild those assets are not
@@ -522,6 +574,7 @@ fn main() {
     watch_frontend_dist();
     embed_build_commit();
     generate_mobile_assets();
+    generate_web_assets();
     generate_help_corpus();
     generate_core_dispatch();
     // Only the desktop build is a Tauri app; the server daemon builds this

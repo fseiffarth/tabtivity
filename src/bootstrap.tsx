@@ -11,6 +11,7 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { installCrashReporter } from "./crashReporter";
 import { installCustomScrollbars } from "./lib/theme/customScrollbar";
+import { installNativeContextMenuGuard } from "./lib/window/nativeContextMenuGuard";
 import { installStrayDropGuard } from "./lib/window/strayDropGuard";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -28,6 +29,8 @@ installCustomScrollbars();
 /** Same reasoning: a file dropped where nothing takes it must not navigate the
  *  window to it, in any window. */
 installStrayDropGuard();
+/** And no WebKit Back/Forward/Reload menu on a right-click nothing took. */
+installNativeContextMenuGuard();
 
 /**
  * Dev-only: hand each commit's duration to the perf monitor. Reached through

@@ -436,6 +436,17 @@ pub struct Settings {
     /// they wrote rather than what DNS answered today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_allow_remote_host: Option<bool>,
+    /// The uid of the account that runs the Ollama listening on loopback, when
+    /// it is neither this account, root nor a system account (below
+    /// `SYS_UID_MAX`, which already covers the usual `ollama` service user).
+    /// Every request that sends private content to a loopback Ollama first
+    /// looks up who owns the listening socket (`services::loopback_owner`,
+    /// Linux) and refuses an unnamed owner: whoever binds the port while Ollama
+    /// is down — another account, a fenced agent — would otherwise be answered
+    /// as Ollama. Unset: only those owners. Ignored on a hosted server, where
+    /// the administrator names it in the server policy file instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_listener_uid: Option<u32>,
     /// Where Ollama saves the models it downloads — its `OLLAMA_MODELS`
     /// directory. `None`/empty means Ollama's own default (`~/.ollama/models`,
     /// or the system-service dir when one holds models).
@@ -609,6 +620,11 @@ pub struct Settings {
     /// session because it is a policy about the machine, not one act.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_fence_platform_accepted: Option<bool>,
+    /// The AI switch (`services::ai_switch`, the side panel's power button):
+    /// `true` stops every new AI use machine-wide — agent spawns, input to
+    /// agents, scheduled prompts, completions, mail AI. Unset is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_off: Option<bool>,
     /// Let a fenced **root** agent read every project (local directories, box
     /// folders, remote mirrors) read-only. Default off: one poisoned project can
     /// then reach the others through an agent with open network access.
@@ -933,6 +949,10 @@ pub struct Settings {
     /// pane to. Unset falls back to the frontend's DEFAULT_MIN_SUBWINDOW_PX.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_subwindow_height: Option<u32>,
+    /// When true, closing a subwindow's last tab closes the subwindow too.
+    /// Defaults OFF: the emptied subwindow stays, ready for a new tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_subwindow_on_last_tab: Option<bool>,
     /// When true, the in-app text/TeX/markdown viewers debounce-save edits to
     /// disk automatically (#47). Defaults OFF; the #43 diff-aware reload is its
     /// counterpart for external changes.
@@ -988,6 +1008,19 @@ pub struct Settings {
     /// itself either way (see `stores/headerStatus`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_status_expanded: Option<bool>,
+    /// Top-bar placement overrides by item id: `true` keeps the item in the bar
+    /// while the chevron is collapsed, `false` folds it behind the chevron. An
+    /// absent id follows the frontend's default (`lib/headerPins`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_pins: Option<HashMap<String, bool>>,
+    /// The header's Mobile setup guide has been opened once; until then (and
+    /// while Mobile is off) the phone icon stays pinned (`lib/headerPins`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_setup_seen: Option<bool>,
+    /// Top-bar item ids in the order the user dragged them; an id that is absent
+    /// keeps its built-in place after the listed ones (`lib/headerPins`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_order: Option<Vec<String>>,
     /// Default printer per network, keyed by the network key the frontend
     /// derives (`wlan:<ssid>`, `lan:<hashed gateway mac>`, `lan`). When the machine
     /// joins a keyed network, the print manager's host makes that printer the

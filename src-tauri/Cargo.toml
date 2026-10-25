@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.2.21"
+version = "0.2.34"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
@@ -58,8 +58,16 @@ path = "tests/server_secrets.rs"
 # (Secret Service over libdbus). The per-user server daemon (`src-serverd/`)
 # builds this library with `default-features = false`, so it links none of
 # them (hosted plan §3.2, TODO #2349) — check with `ldd`.
+#
+# `voice` (default) is the desktop's speech engine (docs/desktop_voice_plan.md,
+# step 2): whisper.cpp through `whisper-rs`, built by cmake. `voice-io` is the
+# audio half alone (`cpal` capture; the `tts` crate on Windows/macOS), split
+# out so the Windows/macOS cross-checks in `scripts/ci-local.sh`, which have no
+# cl.exe or Xcode for whisper.cpp, still check it (`--features
+# desktop,voice-io`). `desktop` must never turn `voice` on, or a build could
+# not drop it; without `voice` the voice commands answer "not built".
 [features]
-default = ["desktop"]
+default = ["desktop", "voice"]
 desktop = [
     "dep:tauri",
     "dep:tauri-build",
@@ -74,6 +82,8 @@ desktop = [
     "dep:gtk",
 ]
 custom-protocol = ["desktop", "tauri/custom-protocol"]
+voice-io = ["desktop", "dep:cpal", "dep:tts"]
+voice = ["voice-io", "dep:whisper-rs"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
@@ -177,6 +187,17 @@ starship-battery = "0.11"
 # system's own `.aff`/`.dic` pairs (`/usr/share/hunspell` on Linux) plus any
 # dropped into `<state_dir>/dictionaries/`.
 spellbook = "0.4"
+
+# ── Voice (docs/desktop_voice_plan.md) ────────────────────────────────────────
+# Pins from step 0: the newest releases at least two weeks old on 2026-10-22.
+# Microphone capture. Default features = the ALSA host only on Linux (PipeWire
+# through `pipewire-alsa`); its `pulseaudio` host drops input after the first
+# callback in 0.18.2, so never enable it.
+cpal = { version = "=0.18.2", optional = true }
+# whisper.cpp 1.8.3, CPU only (no vulkan/metal/cuda/openmp: step 8). Its build
+# script runs bindgen, so libclang is a build dependency; CI sets
+# `GGML_NATIVE=OFF` so the package never ships tuned to the runner's CPU.
+whisper-rs = { version = "=0.16.0", optional = true }
 
 # ── Mail (see docs/mail_client_plan_b.md) ────────────────────────────────────
 # MIME parsing of untrusted network input. Chosen over hand-rolling because it is
@@ -410,6 +431,12 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSWindow"] }
 objc2-pdf-kit = { version = "0.3", default-features = false, features = ["std", "PDFDocument", "objc2-app-kit"] }
+
+# The OS voice on Windows (WinRT) and macOS (AVFoundation) for read-aloud. Not
+# on Linux, where it would link libspeechd: there `services::voice` speaks SSIP
+# to speech-dispatcher's socket itself.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tts = { version = "=0.26.3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

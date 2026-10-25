@@ -247,8 +247,12 @@ const AGENTS: &[AgentSpec] = &[
         label: "OpenCode",
         bin: "opencode",
         resume: Resume::Args(&["--continue"]),
-        install_cmd: "curl -fsSL https://opencode.ai/install | bash",
-        install_cmd_windows: Some("npm install -g opencode-ai"),
+        // OpenCode 2: `opencode.ai/install` and npm `opencode-ai` only ever
+        // serve OpenCode 1. The V2 script replaces a V1 binary in place
+        // (same `~/.opencode/bin`); on Windows the V1 package goes first, as
+        // both packages link an `opencode` launcher.
+        install_cmd: "curl -fsSL https://opencode.ai/v2/install | bash",
+        install_cmd_windows: Some("npm uninstall -g opencode-ai && npm install -g @opencode/cli"),
         extra_paths: &[".opencode/bin/opencode", ".local/bin/opencode"],
         docs: "https://opencode.ai/docs/",
         auth_paths: &[auth_file(".local/share/opencode/auth.json")],
@@ -897,6 +901,16 @@ pub async fn codex_hook_status() -> crate::services::agent_session::CodexHookSta
     crate::services::agent_session::codex_hook_state()
 }
 
+/// Trust Tabtivity's own Codex hooks in every agent home at once — what `/hooks`
+/// would record, in each scope's config rather than only the one tab's. Returns
+/// the state afterwards, as [`codex_hook_status`] reports it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn codex_hook_trust() -> crate::services::agent_session::CodexHookState {
+    app_core::rt::spawn_blocking(crate::services::agent_session::trust_codex_hooks)
+        .await
+        .unwrap_or_else(|_| crate::services::agent_session::codex_hook_state())
+}
+
 /// `cmd` prefixed with `sudo`, for the one-click "run with elevated rights"
 /// terminal fallback beside a plain `npm install -g`/`npm uninstall -g`
 /// command — the actual EACCES case (a system-wide, root-owned npm global
@@ -1172,9 +1186,12 @@ fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, Strin
 /// The npm package spec an `npm install -g <pkg>` command installs, or `None`
 /// for a curl/irm script installer (which has no npm package to remove — its
 /// binary is deleted directly instead). Used so uninstall targets the exact
-/// package the installer added rather than guessing from the agent id.
+/// package the installer added rather than guessing from the agent id. Of a
+/// `&&` chain, the install that ends it.
 fn npm_package_from_cmd(cmd: &str) -> Option<&str> {
-    cmd.trim()
+    cmd.rsplit("&&")
+        .next()?
+        .trim()
         .strip_prefix("npm install -g ")?
         .split_whitespace()
         .next()
@@ -1439,6 +1456,7 @@ pub struct AgentWarmupLaunch {
 /// `WARMUP_TIMEOUT`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupLaunch, String> {
+    crate::services::ai_switch::check()?;
     let message = message.trim().to_string();
     if message.is_empty() || message.len() > WARMUP_MESSAGE_MAX || message.contains(['\n', '\r']) {
         return Err("warm-up message must be one short line".into());
@@ -1642,7 +1660,10 @@ pub async fn agent_tab_recent_prompts(
 /// `unchanged` without a parse. `local_model` marks a local-model tab, whose
 /// OpenCode keeps its sessions in the scope's local-model home. Always
 /// answers: an agent with no readable transcript comes back
-/// `available: false` with the reason, never an error.
+/// `available: false` with the reason, never an error. `remote_host` is the
+/// host (`primary` or a worker id) a remote project's tab runs on, whose
+/// conversation is on that host (`services::remote_transcript`); unset for a
+/// tab that runs here.
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_transcript(
@@ -1657,8 +1678,29 @@ pub async fn agent_tab_transcript(
     local_model: Option<bool>,
     watch: Option<String>,
     chat: Option<String>,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
+    if let (Some(project), Some(host), None, false) = (project_id.as_deref(), remote_host.as_deref(), chat.as_deref(), local_model == Some(true)) {
+        let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+        let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, agent_transcript::MAX_LIMIT);
+        let read = crate::services::remote_transcript::host_tab_transcript(
+            pool,
+            &agent,
+            project,
+            host,
+            &session_id,
+            subagent.as_deref(),
+            version.as_deref(),
+            limit,
+        )
+        .await;
+        // Nothing on disk here to watch: the Reader reads on its own clock.
+        if let Some(read) = read {
+            return read;
+        }
+    }
     app_core::rt::spawn_blocking(move || {
         if let Some(chat) = chat {
             let mut read = agent_transcript::stored_chat_transcript(
@@ -1779,8 +1821,8 @@ pub fn agent_transcript_unwatch(watch_id: String) {
 
 /// The files the tab's conversation — or `subagent`'s — changed, as the
 /// diffs its CLI recorded (`services::agent_changes`): the desktop Reader's
-/// Changes panel. Takes `agent_tab_transcript`'s arguments; never reaches
-/// the phone.
+/// Diffs tab. Takes `agent_tab_transcript`'s arguments; the phone reads the
+/// same through `mobile_control::chat_changes`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_changes(
@@ -1918,12 +1960,33 @@ pub async fn agent_tab_resume_chat(
     chat: String,
 ) -> Option<crate::services::agent_session::UndoClearPlan> {
     app_core::rt::spawn_blocking(move || {
-        crate::services::agent_chats::chat_file(&agent, project_id.as_deref(), tab_dir.as_deref(), &session_id, &chat)?;
+        crate::services::agent_chats::is_folder_chat(&agent, project_id.as_deref(), tab_dir.as_deref(), &session_id, &chat)
+            .then_some(())?;
         crate::services::agent_session::resume_chat_plan(&agent, project_id.as_deref(), &session_id, &chat)
     })
     .await
     .ok()
     .flatten()
+}
+
+/// Take the conversation of the tab launched as `agent` with launch id
+/// `session_id` from the folder `from` to `to`, another worktree of the
+/// project (`services::agent_relocate`), before the window respawns the tab
+/// there. The window has stopped the tab's CLI. `fresh` when the CLI cannot
+/// take it along and starts a new one there.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_move_session(
+    agent: String,
+    project_id: String,
+    session_id: String,
+    from: String,
+    to: String,
+) -> Result<crate::services::agent_relocate::Moved, String> {
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_relocate::move_session(&agent, &project_id, &session_id, &from, &to)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read `agent`'s own usage panel by running its CLI's print mode once.
@@ -2274,6 +2337,21 @@ pub(crate) fn codex_takes_no_daemon() -> bool {
     host_agent_version_says("codex", &PROBING, crate::services::agent_versions::codex_takes_no_daemon)
 }
 
+/// V2 changes startup flags, so the first launch must wait for the bounded
+/// version probe rather than letting an unknown release join a shared server.
+pub(crate) async fn opencode_is_v2() -> bool {
+    use crate::services::agent_versions as versions;
+    let Some(spec) = find_spec("opencode") else { return false };
+    let Some(path) = resolve_spec_path(spec) else { return false };
+    let store = versions::load();
+    let seen = store.get(spec.id);
+    if seen.is_some_and(|s| versions::fresh_for_path(s, versions::PROBE_TTL, &path)) {
+        return versions::opencode_is_v2(seen);
+    }
+    let result = probe_agent_version(spec, &path).await;
+    versions::opencode_is_v2(Some(&versions::remember(spec.id, result, &path)))
+}
+
 /// Answer `check` from the version store's entry for `agent`, refreshing a
 /// missing or day-old entry in the background (one probe per agent at a time).
 fn host_agent_version_says(
@@ -2321,6 +2399,45 @@ pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(),
     Ok(())
 }
 
+/// The identity of the executable `agent` (registry id or binary name) runs as
+/// on this host — what `services::model_rows` keys a CLI build by. `None` for
+/// an unknown or missing CLI.
+pub fn installed_source(agent: &str) -> Option<(&'static str, crate::services::agent_versions::VersionSource)> {
+    let spec = find_spec_by_id_or_bin(agent)?;
+    let path = resolve_spec_path(spec)?;
+    Some((spec.id, crate::services::agent_versions::version_source(&path)?))
+}
+
+/// `remembered_model_rows({ agent })` → `{ title?, rows }`, what `agent`'s own
+/// model picker drew last time in this build of it (`services::model_rows`),
+/// for a model sheet to list while the session draws its picker; `null` when
+/// none.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remembered_model_rows(agent: String) -> Option<crate::services::model_rows::Rows> {
+    use crate::services::model_rows;
+    app_core::rt::spawn_blocking(move || {
+        let (id, source) = installed_source(&agent)?;
+        model_rows::rows_in(&model_rows::store_path(), id, Some(&source))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// `remember_model_rows({ agent, rows: { title?, rows } })`: keep what
+/// `agent`'s picker just drew for its installed build. A patch of that one
+/// entry.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remember_model_rows(agent: String, rows: crate::services::model_rows::Rows) -> Result<(), String> {
+    use crate::services::model_rows;
+    app_core::rt::spawn_blocking(move || {
+        let (id, source) = installed_source(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
+        model_rows::remember_rows_in(&model_rows::store_path(), id, Some(&source), rows)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Whether Claude already trusts `cwd`, i.e. it will NOT open its "Is this a
 /// project you created or one you trust?" dialog there.
 ///
@@ -2359,11 +2476,17 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
         // `agent_auth::status_in`, whose tests stay keyring-free. With no CLI
         // switched on this reads no keychain entry at all.
         let ready = crate::services::agent_api_keys::ready_clis();
-        // Of those, the ones whose provider is out of budget this month (or
+        // The ones a key could run, switched on or not: the ＋ menu's API
+        // section. Only providers with a limit set are looked up.
+        let keyable = crate::services::agent_api_keys::keyable_clis();
+        // Of both, the ones whose provider is out of budget this month (or
         // has no limit): their keyed tabs are refused.
-        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&ready);
+        let mut either = ready.clone();
+        either.extend(keyable.iter().copied().filter(|id| !ready.contains(id)));
+        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&either);
         for login in &mut logins {
             login.api_key = ready.contains(&login.id.as_str());
+            login.api_key_saved = keyable.contains(&login.id.as_str());
             login.api_budget_reached = blocked.contains(&login.id.as_str());
         }
         logins
@@ -2379,30 +2502,66 @@ pub async fn agent_api_keys_status() -> Result<crate::services::agent_api_keys::
     app_core::rt::blocking("agent", crate::services::agent_api_keys::status).await
 }
 
+/// The pending "the API proxy's remembered port is taken" notice
+/// (`services::api_proxy_port`), if the last start left one. Cheap: one small
+/// file, no keychain.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn api_proxy_port_notice() -> Option<crate::services::api_proxy_port::PortNotice> {
+    crate::services::api_proxy_port::read_notice()
+}
+
+/// The user saw the notice: forget it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn api_proxy_port_notice_ack() {
+    crate::services::api_proxy_port::ack_notice();
+}
+
 fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::Provider, String> {
     crate::services::agent_api_keys::Provider::from_id(provider)
         .ok_or_else(|| format!("unknown API key provider: {provider}"))
 }
 
-/// Save `provider`'s API key in the OS keychain. A locked or missing keyring
-/// refuses (its own message); there is no other place a key is kept. A key is
-/// only saved beside a monthly token limit (`Settings::agent_api_token_limits`,
-/// written first by Manage CLIs): refused without one.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
-    let provider = api_key_provider(&provider)?;
-    app_core::rt::try_blocking("agent", move || {
-        crate::services::agent_api_keys::require_limit(provider)?;
-        crate::services::agent_api_keys::set_key(provider, Some(key.trim()))
-    })
-    .await
+/// What saving a key came to: saved, or an Anthropic key that is not scoped
+/// to a workspace and could not be given one by itself — nothing is saved
+/// until the user picks one of `workspaces` (or types an id, when the key
+/// could list none) and saves again with it.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ApiKeySave {
+    Saved,
+    PickWorkspace { workspaces: Vec<crate::services::api_proxy::Workspace> },
 }
 
-/// Remove `provider`'s API key from the OS keychain.
+/// Save `provider`'s API key in the OS keychain, with the workspace an
+/// Anthropic key that is not scoped to one names (`workspace`, or the only
+/// one it lists). A locked or missing keyring refuses (its own message);
+/// there is no other place a key is kept. A key is only saved beside a
+/// monthly token limit (`Settings::agent_api_token_limits`, written first by
+/// Manage CLIs): refused without one. A key the provider refuses
+/// (`api_proxy::check_key`) is not saved.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_api_key_set(provider: String, key: String, workspace: Option<String>) -> Result<ApiKeySave, String> {
+    use crate::services::api_proxy::KeyCheck;
+    let provider = api_key_provider(&provider)?;
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::require_limit(provider)).await?;
+    let key = key.trim().to_string();
+    let workspace = workspace.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
+    let workspace = match crate::services::api_proxy::check_key(provider, &key, workspace.as_deref()).await? {
+        KeyCheck::Save { workspace } => workspace,
+        KeyCheck::PickWorkspace(workspaces) => return Ok(ApiKeySave::PickWorkspace { workspaces }),
+    };
+    app_core::rt::try_blocking("agent", move || {
+        crate::services::agent_api_keys::set_key(provider, Some(&key), workspace.as_deref())
+    })
+    .await?;
+    Ok(ApiKeySave::Saved)
+}
+
+/// Remove `provider`'s API key (and its workspace) from the OS keychain.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
-    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, None))
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, None, None))
         .await
 }
 
@@ -2419,6 +2578,13 @@ pub async fn agent_login_import(id: String) -> Result<usize, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
     app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out(&id)).await
+}
+
+/// Sign OpenCode out of one scope whose database the startup sweep flagged as
+/// holding a `wellknown` source (`agent_auth::sign_out_scope`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_login_scope_sign_out(scope: String) -> Result<(), String> {
+    app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out_scope(&scope)).await
 }
 
 /// On a hosted server: run `id`'s agents on the administrator's API key
@@ -2655,6 +2821,10 @@ mod tests {
         assert_eq!(
             npm_package_from_cmd("npm install -g opencode-ai"),
             Some("opencode-ai")
+        );
+        assert_eq!(
+            npm_package_from_cmd("npm uninstall -g opencode-ai && npm install -g @opencode/cli"),
+            Some("@opencode/cli")
         );
         // curl/irm script installers have no npm package to uninstall.
         assert_eq!(

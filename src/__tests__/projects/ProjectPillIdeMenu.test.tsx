@@ -22,6 +22,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
+import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import type { IdeCandidate } from "../../components/projects/IdeMenuItems";
 
 const PROJECT = {
@@ -92,6 +93,17 @@ describe("pill menu · Open in <IDE>", () => {
     expect(screen.getByText("Open in PyCharm Professional")).toBeTruthy();
     expect(screen.getByText("Open in Visual Studio (not found)")).toBeTruthy();
     expect(screen.queryByText("Use the detected PyCharm")).toBeNull();
+  });
+
+  it("closes the menu when the Remote machines manager opens by another route", async () => {
+    stub([PYCHARM]);
+    await openPillMenu();
+    expect(screen.getByText("Open in PyCharm Professional")).toBeTruthy();
+    await act(async () => {
+      useRemoteMachinesStore.getState().open("p1");
+    });
+    expect(screen.queryByText("Open in PyCharm Professional")).toBeNull();
+    useRemoteMachinesStore.getState().close();
   });
 
   it("shows no IDE rows for a project without markers", async () => {

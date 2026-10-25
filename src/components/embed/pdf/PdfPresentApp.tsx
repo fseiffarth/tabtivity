@@ -27,9 +27,10 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
 import { fileMtime, readFileBytes } from "../fileAccess";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
-import { applyTheme, THEME_CHANGED_EVENT, useSettingsStore } from "../../../stores/settings";
+import { useSettingsStore } from "../../../stores/settings";
 import { useT } from "../../../lib/i18n";
-import { subscribeTauri, useTauriListener } from "../../../hooks/useTauriListener";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
+import { useCrossWindowAppearance } from "../../../hooks/useCrossWindowAppearance";
 import { osFullscreenChord } from "../../../lib/shortcuts/shortcutHint";
 import { storageKey } from "../../../lib/brand";
 import {
@@ -129,7 +130,7 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     void loadSettings({ skipZoom: true });
   }, [loadSettings]);
 
-  useTauriListener(() => listen<string>(THEME_CHANGED_EVENT, (e) => applyTheme(e.payload)), []);
+  useCrossWindowAppearance();
 
   // Don't let the screensaver blank a projector mid-talk. The inhibitor is the
   // deck presenter's — global, idempotent and released on the way out — so a PDF

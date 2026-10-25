@@ -18,6 +18,25 @@
  * drift apart.
  */
 
+/**
+ * The scope that belongs to no project: the root control terminal's, and the
+ * scope every tab opened outside a project lands in. Its working directory is
+ * `~/tabtivity/root` (`root_work_dir`). One literal for the tabs and usage
+ * stores and every `scope === root` test; mirrors `storage::ROOT_SCOPE`
+ * (`is_reserved_scope` also reserves `assistant`, `lib/assistant.ASSISTANT_SCOPE`).
+ */
+export const ROOT_SCOPE = "root";
+
+/**
+ * The project id a scope stands for, as a backend command's `projectId`
+ * argument wants it: `null` for the root scope (no project), the scope itself
+ * for anything else. The assistant scope stays `"assistant"` on purpose — the
+ * backend keys its agent home by it — and a box scope stays `box:<id>`.
+ */
+export function projectIdOfScope(scope: string): string | null {
+  return scope === ROOT_SCOPE ? null : scope;
+}
+
 /** Scope-id prefix for box-rooted tabs, disjoint from project ids and "root".
  *  Mirrors `BOX_SCOPE_PREFIX` in `src-tauri/src/commands/boxes.rs`. */
 export const BOX_SCOPE_PREFIX = "box:";

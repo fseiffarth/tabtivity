@@ -302,6 +302,11 @@ run() {
   # Paused while settling: nothing was built, nothing to announce.
   [ "$passes" -eq 0 ] && paused && return 0
 
+  # Keep target/ under its size cap (it reached 1 TB). After the loop, so the
+  # build's own cargo is done; the script itself backs off while any other
+  # cargo/rustc runs.
+  nice -n 19 "$ROOT/scripts/target-prune.sh" || true
+
   # No desktop notification: one per commit filled the GNOME tray and lock
   # screen (user, 2026-10-07). The window's dev-build chip shows both outcomes.
   return "$status"

@@ -49,7 +49,7 @@ const AFFIRM_WORD = /^(?:yes|allow|approve|accept|proceed|continue|run|apply|ok)
 const DENY_WORD =
   /^(?:no|don'?t|deny|reject|decline|cancel|keep|skip|stop|abort|quit)$/i;
 
-// Codex's startup hook-trust menu (0.160.1–0.163.0): "Hooks need review" over
+// Codex's startup hook-trust menu (0.160.1–0.164.0): "Hooks need review" over
 // "1. Review hooks / 2. Trust all and continue / 3. Continue without trusting".
 // None of its labels is a deny word, so `hasYesNoMenu` misses it, yet Codex
 // waits on it before the session starts. Anchored on the heading as well as a
@@ -122,6 +122,22 @@ export function looksLikeDecisionPromptStripped(plain: string): boolean {
   if (POINTER_WORD.test(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;
   return hasYesNoMenu(plain);
+}
+
+/**
+ * Claude Code's cold-resume dialog (2.1.304): `--resume` of a long-idle
+ * conversation on Pro/Max asks "Resume this conversation?" before it spends a
+ * share of the 5-hour limit. Title and cost line are the CLI's own wording,
+ * matched space-tolerantly because a PTY tail that lost its cursor moves has
+ * lost its spaces too. Distinctive enough to be read off a repainted
+ * conversation, which no other menu is (see `stores/activity`'s
+ * `awaitingHookByPty`).
+ */
+const COLD_RESUME_DIALOG = /Resume\s*this\s*conversation\?[\s\S]{0,800}?5-hour\s*usage\s*limit/;
+
+/** `COLD_RESUME_DIALOG` on already ANSI-stripped text. */
+export function looksLikeColdResumeDialogStripped(plain: string): boolean {
+  return plain.includes("conversation?") && COLD_RESUME_DIALOG.test(plain);
 }
 
 /**

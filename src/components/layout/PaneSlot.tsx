@@ -23,6 +23,7 @@ import {
 import type { HostConnState } from "../../stores/remote/remoteStatus";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import { mobileTmuxReadyKey } from "../../lib/terminal/mobileTmuxReady";
+import { tabRunsInContainer } from "../../lib/projectTabHost";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
@@ -199,13 +200,9 @@ function PaneSlotImpl({
   // shell from staying inside the container after the scope changes (the flag
   // is a spawn dep, so the change respawns exactly the affected tabs), and
   // avoid claiming a container the backend is about to take away.
-  const containerScope = paneProject?.sandbox?.scope ?? "all";
-  const sandbox =
-    (tab.kind === "agent" || tab.kind === "shell") &&
-    (containerScope === "all" || tab.kind === "agent") &&
-    scopeKey !== "root" &&
-    !!paneProject?.sandbox?.enabled &&
-    !paneProject?.remote;
+  // The rule is `lib/projectTabHost`'s, which the Mobile bridge also asks
+  // whether the phone can reach a tab.
+  const sandbox = tabRunsInContainer(paneProject, tab.kind, scopeKey);
   // Persistent sessions (TODO #85): the stable, persisted session name to wrap
   // a shell/script tab in a tmux session, so a long run survives — for a
   // REMOTE tab an SSH drop / relaunch (default ON per project, opt out via the

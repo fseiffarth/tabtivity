@@ -145,6 +145,10 @@ button.settings-btn.danger:hover:not(:disabled),
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* Inset like `.dialog-framed > .dialog-scroll`: a pane running edge to edge
+     puts its scrollbar into the dialog's rounded bottom corners, which clip it. */
+  margin: 0 12px 14px;
+  border-radius: 8px;
 }
 
 /* Print preview overlay (src/lib/viewers/print.ts). Reuses .modal-backdrop +
@@ -3528,9 +3532,8 @@ label.settings-toggle-card-row {
 }
 
 /* The same bar above a root-console login tab (TabPane): second in the DOM (the
-   terminal host stays the pane's first child), first on screen — the
-   `.prompt-strip` arrangement. A fixed row, so the terminal refits once when it
-   appears and never again. */
+   terminal host stays the pane's first child), first on screen by `order`. A
+   fixed row, so the terminal refits once when it appears and never again. */
 .credential-paste-bar-tab {
   order: -1;
   flex: none;

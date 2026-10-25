@@ -436,8 +436,12 @@ variable (`ANTHROPIC_AUTH_TOKEN` for Claude, which takes it without its
 custom-key dialog; `GEMINI_API_KEY`), and the CLI's base-URL variable
 (`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) set plain to
 `http://127.0.0.1:<port>/<provider>`. Only CLIs an environment variable can
-point at the proxy keep a row (Claude, Gemini; Codex, Vibe and OpenCode are
-out). The proxy refuses a browser request (`Origin`) or another `Host`,
+point at the proxy keep a row (Claude, Gemini; Vibe is out). Codex gets a
+launch-only provider in its argv; OpenCode, which reads no base-URL variable,
+gets each keyed provider in its inline config (`OPENCODE_CONFIG_CONTENT`:
+`baseURL` at the proxy and the key field naming the token variable as
+`{env:<token var>}`, so the token stays out of the tmux argv), which outranks
+a key or Claude login in its `auth.json` (checked on 1.19.3 and 2.1.3). The proxy refuses a browser request (`Origin`) or another `Host`,
 needs a live token of the route's provider (`x-api-key`, `Authorization:
 Bearer`, `x-goog-api-key` or `key=`, one value), forwards only the provider's
 allowlisted paths (`/v1/messages`, `count_tokens`, `/v1/models`; Gemini's
@@ -464,7 +468,11 @@ took the port. Injection happens inside both fence wraps and in
 `launch_prep`'s Host-session and fence-less-platform arms, only while the
 proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
 shell tab, its own process) gets nothing and stays on its login. Only CLIs
-listed in `agent_api_key_clis` get a token; never a remote, container or
+listed in `agent_api_key_clis` get a token — unless the tab picked for itself
+(`PtyOptions::api_key`, `agent_api_keys::with_pick`: the ＋ menu's API section
+`true`, its plain rows `false`; persisted on the tab, dropped by the
+untrusted-layout sanitizer so an adopted folder or imported bundle cannot
+spend the key); never a remote, container or
 local-model spawn, nor a subcommand (a sign-in tab); a credential or base URL
 the user set wins. On Linux and macOS the token travels under an app-named
 carrier (`<APP>_AGENT_SECRET_<VAR>`, `agent_api_keys::CARRIERS`), and only the

@@ -1,5 +1,5 @@
-import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { useTauriListener } from "../../hooks/useTauriListener";
 import { applyWorkspacePatch, type WorkspacePatch } from "../../stores/tabs";
 
 /**
@@ -11,16 +11,12 @@ import { applyWorkspacePatch, type WorkspacePatch } from "../../stores/tabs";
  * another process and reaches a window at its next sync or hydrate instead.
  */
 export function WorkspacePatchHost() {
-  useEffect(() => {
-    let disposed = false;
-    const unlisten = listen<WorkspacePatch>("workspace:patch", (event) => {
-      if (disposed) return;
-      void applyWorkspacePatch(event.payload);
-    });
-    return () => {
-      disposed = true;
-      void unlisten.then((stop) => stop());
-    };
-  }, []);
+  useTauriListener(
+    () =>
+      listen<WorkspacePatch>("workspace:patch", (event) => {
+        void applyWorkspacePatch(event.payload);
+      }),
+    [],
+  );
   return null;
 }

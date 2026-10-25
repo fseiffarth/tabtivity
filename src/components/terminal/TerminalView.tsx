@@ -10,12 +10,14 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { noteInput } from "../../lib/agents/promptCount";
+import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
-import { ROOT_SCOPE, bumpUsage, markAgentActive } from "../../stores/usage";
+import { bumpUsage, markAgentActive } from "../../stores/usage";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import {
   onTerminalExit,
   onTerminalOutput,
@@ -28,10 +30,11 @@ import { terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
+import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
-import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFiles } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
@@ -57,12 +60,12 @@ import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
-import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
-import { readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
-import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
+import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
+import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
 import { buildScaffoldFillPrompt } from "../projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
@@ -159,6 +162,9 @@ interface Props {
    *  home (`PtyOptions.host_session`). Honoured by the backend only with no
    *  project id. */
   hostSession?: boolean;
+  /** The tab's login-or-key pick (`TabEntry.apiKey`); null leaves it to the
+   *  Manage CLIs switch. */
+  apiKey?: boolean | null;
   /** A Tabby chat's launch (`PtyOptions.assistant`): the backend builds the
    *  argv from it and ignores `cmd`/`args`/`env` but the `TAB_UID` in `env`. */
   assistant?: AssistantLaunch | null;
@@ -283,7 +289,7 @@ function sweepXtermElements(container: HTMLElement) {
   }
 }
 
-export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, promptTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
+export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, apiKey = null, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, promptTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
   // The id the pane's prompt input is registered under (scheduler, Reader).
   const inputTargetId = promptTargetId ?? scheduleTargetId;
   const viewerId = useRef(crypto.randomUUID()).current;
@@ -308,6 +314,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const openWatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silentStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstOutputAt = useRef<number | null>(null);
+  // When the PTY's size last changed (`noteFit`). An auto-typed command line
+  // waits for it to settle: bash redraws its line on SIGWINCH from the OLD width
+  // while xterm has already reflowed the wrapped text, so a long command typed
+  // just before the open-time refits is left on screen twice.
+  const ptySizeAt = useRef({ cols: 0, rows: 0, at: 0 });
+  const noteFit = (cols: number, rows: number) => {
+    const last = ptySizeAt.current;
+    if (last.cols !== cols || last.rows !== rows) ptySizeAt.current = { cols, rows, at: Date.now() };
+  };
   const scheduledReady = useRef(false);
   const terminalReadySeen = useRef(false);
   const scheduledSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -350,6 +365,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // What the pane says when the Windows "full rights" acceptance was declined.
   const unfencedDeclinedTextRef = useRef<() => string>(() => "");
   unfencedDeclinedTextRef.current = () => t("unfencedPlatform.declined");
+  // The AI switch: an agent pane says, the whole time AI is off, that what is
+  // typed does not reach it (the backend drops it, `pty_write`).
+  const aiOff = useAiOff();
+  const aiOffWaitingTextRef = useRef<() => string>(() => "");
+  aiOffWaitingTextRef.current = () => t("terminal.aiOff.waiting");
   // A clicked link never opens straight away: the user confirms the exact URL
   // first, since anything a program prints can be a link. Refs, because the
   // spawn effect below outlives renders.
@@ -466,7 +486,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // Mode's synthetic cleanup, which therefore still sees the PTY parked.
     const spawnKey = attachOnly
       ? null
-      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+    // Ends a spawn waiting on the AI switch when this lifecycle does.
+    const aiWait = new AbortController();
     const parked = attachOnly ? undefined : asleepPty(id);
     const waking = !!parked && parked.spawnKey !== null && parked.spawnKey === spawnKey;
     // This lifecycle runs (spawned) or took over the PTY: only then does its
@@ -583,17 +605,21 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // A file path the program printed opens the file's tab, on the same click
       // (after the double-click window) — no question first, since it only ever
       // opens an in-app viewer of a file inside the tab's folder or project; a
-      // double-click copies it, like a URL.
+      // double-click copies it, like a URL. Ctrl (⌘) + click opens it in a new
+      // subwindow.
       termDisposables.push(registerPathLinkProvider(term, () => pathLinkContextRef.current, {
         activate: (event, entry, at) => {
           if (event.detail > 1) return;
           cancelLinkOpen();
           setPathHover(null);
+          const newSubwindow = event.ctrlKey || event.metaKey;
           linkOpenTimer = setTimeout(() => {
             linkOpenTimer = null;
             const ctx = pathLinkContextRef.current;
             const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
-            openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current });
+            openPathLink(entry, at, {
+              scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current, newSubwindow,
+            });
           }, LINK_OPEN_DELAY_MS);
         },
         hover: (event, entry, at, text) => {
@@ -832,6 +858,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       built.options.theme = terminalTheme(colorSchemeRef.current);
       fitRef.current?.fit();
       flushPending();
+      noteFit(built.cols, built.rows);
+      notePtyResize(id);
       invoke("pty_resize", { id, cols: built.cols, rows: built.rows }).catch(() => {});
       if (focusedRef.current) built.focus();
       // The pane may keep growing right after open — the startup fullscreen
@@ -993,6 +1021,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // Read before the keystroke retires the agent's decision verdict.
         const deciding = useActivityStore.getState().attentionByTab[id] === "decision";
         noteUserInput(id, isInterruptInput(data));
+        noteInputFrom(id, "desktop");
         if (noteInput(id, data) > 0) countSubmit();
         // A typed `/clear` (or `/new`) offers "Undo clear" and empties the
         // Reader — the one way the window learns of it at once (Codex's hook
@@ -1220,14 +1249,22 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // multi-line paste then lands in the composer as one block instead of a burst
     // of Enters that submits the first line and types the rest into what it
     // opened. The text leaves through xterm's own `onData` handler above, so it
-    // counts as user input exactly like a keystroke does.
+    // counts as user input exactly like a keystroke does. A clipboard with no
+    // text may hold an image (a screenshot): that is typed the way a dropped
+    // file is (`pasteClipboardImage`).
     const pasteClipboard = () => {
-      navigator.clipboard
-        ?.readText()
+      (navigator.clipboard?.readText() ?? Promise.resolve(""))
+        .catch(() => "")
         .then((text) => {
-          if (text) term?.paste(text);
-        })
-        .catch(() => {});
+          if (text) {
+            term?.paste(text);
+            return;
+          }
+          void pasteClipboardImage(id, zoomable).then(({ text: typed, error }) => {
+            if (typed) term?.paste(typed);
+            if (error) useProjectsStore.setState({ switchToast: tRef.current(error) });
+          });
+        });
     };
 
     // Agent CLIs set the terminal title (OSC 0/2) to a short summary of what
@@ -1331,6 +1368,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         }
         return false;
       }
+      // Plain Ctrl+V in an agent pane pastes too, as in a chat box. The agent
+      // CLIs read it as "paste the clipboard's image", which a fenced one
+      // cannot do itself (its private /tmp and /run hide the display), so the
+      // image comes through `pasteClipboard` instead.
+      if (zoomable && e.key.toLowerCase() === "v" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        pasteClipboard();
+        return false;
+      }
       // Alt+arrow keeps the word-jump encoding xterm 5 gave it (xterm 6 sends
       // the plain Alt form — see altArrowWordJump). Sent through `term.input`
       // so it leaves by the same `onData` path a keystroke does, and cancelled
@@ -1407,13 +1453,19 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // bracketed-paste/buffered input handling.
         const READY_CUSHION_MS = 1200;
         const MAX_WAIT_MS = 5000;
+        // Longer than the resize debounce (`PTY_RESIZE_DEBOUNCE_MS`), so a refit
+        // still on its way to the PTY holds the typing back.
+        const SIZE_SETTLE_MS = 400;
         const scheduledAt = Date.now();
         const typeWhenReady = () => {
           if (cancelled) return;
           const elapsed = Date.now() - scheduledAt;
           const firstOut = firstOutputAt.current;
           const ready =
-            launchNamed !== null && firstOut !== null && Date.now() - firstOut >= READY_CUSHION_MS;
+            launchNamed !== null &&
+            firstOut !== null &&
+            Date.now() - firstOut >= READY_CUSHION_MS &&
+            Date.now() - ptySizeAt.current.at >= SIZE_SETTLE_MS;
           if (!ready && elapsed < MAX_WAIT_MS) {
             initialEnterTimer.current = setTimeout(typeWhenReady, 100);
             return;
@@ -1621,11 +1673,20 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // about the previous occupant of this id, so a reopened project's resume
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
+      forgetInputFrom(id);
+      // A shell tab Tabtivity opened to run something — a program of its own
+      // (`git clone`, an install's `bash`) or a line it types (a script's Run)
+      // — was asked for by whoever opened it, so it is commanded from its spawn,
+      // like a plain shell once a command is typed into it. The typed line would
+      // stamp it too, but a program has nothing to type, and a remount whose
+      // line was already typed (`claimInitialInput`) types nothing again: both
+      // stayed unstamped and never wore the running ▶.
+      if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
-          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
+          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
@@ -1648,6 +1709,34 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // silent-start notice would only talk over it.
         spawnState = "failed";
         if (cancelled) return;
+        // **The AI switch's refusal, made a wait** (`lib/aiSwitch.ts`). An
+        // agent tab opened or restored while AI is off says so and starts the
+        // moment AI is back on — the same spawn, nothing to click in the tab.
+        // A retry refused again waits again: the switch went back off, or the
+        // backend read `settings.json` before the write this store already
+        // shows had landed (then a growing pause, not a tight loop).
+        if (isAiOffRefusal(e)) {
+          writeTerm(`\r\n\x1b[33m[${aiOffWaitingTextRef.current()}]\x1b[0m\r\n`);
+          let pause = 300;
+          for (;;) {
+            if (!(await whenAiOn(aiWait.signal)) || cancelled) return;
+            try {
+              await spawn();
+              spawnState = "spawned";
+              ownsPty = true;
+              return;
+            } catch (retryErr) {
+              if (cancelled) return;
+              if (!isAiOffRefusal(retryErr)) {
+                writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, pause));
+              pause = Math.min(pause * 2, 5000);
+              if (cancelled) return;
+            }
+          }
+        }
         // **The HPC tag's refusal, made actionable** (G.24). `pty_spawn` dials the
         // host before wrapping a remote tab, and on a machine tagged HPC it
         // refuses with `hpc_mode`'s sentinel — deliberately, because it receives
@@ -1795,7 +1884,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       resizeTimer = null;
       const size = pendingResize;
       pendingResize = null;
-      if (size) invoke("pty_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
+      if (!size) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: size.cols, rows: size.rows }).catch(() => {});
     };
     const queueResize = (cols: number, rows: number) => {
       pendingResize = { cols, rows };
@@ -1817,6 +1908,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           flushPending();
         }
         fitRef.current.fit();
+        noteFit(termRef.current.cols, termRef.current.rows);
         queueResize(termRef.current.cols, termRef.current.rows);
       }
     };
@@ -1978,6 +2070,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
 
     return () => {
       cancelled = true;
+      aiWait.abort();
       holdForSpawn(false);
       clearPtyInput(id);
       if (initialEnterTimer.current) clearTimeout(initialEnterTimer.current);
@@ -2116,7 +2209,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       fitRef.current = null;
       openedRef.current = false;
     };
-  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, inputTargetId, relaunchSeq]);
+  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, apiKey, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, inputTargetId, relaunchSeq]);
 
   // Re-theme a LIVE, OPEN terminal. Both halves of that guard are load-bearing,
   // and `termRef.current` alone was neither: assigning `options.theme` makes
@@ -2194,18 +2287,30 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // through the owner's input registration (`scheduledAgentInput`).
   const readerIds = splitPtyId(id);
   const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
-  const readerAvailable = readerOffered(readerTab);
+  // A tab on a remote project's host: its conversation is read off that host.
+  const readerOnHost = !localOnly && !!remoteHostId;
+  const readerAvailable = readerOffered(readerTab, readerOnHost);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
-  const readerOn = readerAlways ? readerAvailable : readerPreferred;
-  const changesOn = useReaderChangesOpen(readerAgent);
-  /** The Changes panel over the terminal itself while the Reader is off —
-   * the pane pads its right edge by the panel, so the fit leaves it free. */
-  const terminalChanges = changesOn && readerAvailable && !readerOn && !!readerTab;
-  const changesWidth = useAgentReaderStore((state) => state.changesWidth);
+  const readerTopBar = readerAvailable && !readerAlways;
+  /** This pane's Diffs tab: the pane's own, unlike the Chat/Terminal choice
+   * (per CLI) — a full-pane view must not take over every pane of the CLI,
+   * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
+  const [changesPicked, setChangesPicked] = useState(false);
+  // Diffs reads the conversation's files here, which a host tab's are not.
+  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
+  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
+  const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
+  const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
+    setChangesPicked(false);
     useAgentReaderStore.getState().set(readerAgent, on);
     if (!on) setTimeout(() => termRef.current?.focus(), 0);
+  };
+  /** Leave Diffs (or the terminal) for this pane's chat. */
+  const showReaderChat = () => {
+    setChangesPicked(false);
+    if (!readerPreferred) useAgentReaderStore.getState().set(readerAgent, true);
   };
 
   // Take keyboard focus only when this pane is the focused one (and opened);
@@ -2308,9 +2413,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     <>
     <div
       ref={containerRef}
-      className={[terminalChanges && "terminal-pane-with-changes", dropActive && "terminal-drop-active"].filter(Boolean).join(" ") || undefined}
+      className={dropActive ? "terminal-drop-active" : undefined}
       style={{
-        ...(terminalChanges ? changesWidthStyle(changesWidth) : null),
         flex: 1,
         minHeight: 0,
         minWidth: 0,
@@ -2321,7 +2425,6 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // on the right (the viewport scrollbar already insets the right edge), so
         // the text margins read as balanced. FitAddon accounts for this padding.
         ...(zoomable ? { paddingLeft: 10, paddingRight: 4 } : null),
-        ...(terminalChanges ? { paddingRight: "var(--reader-changes-inset)" } : null),
         // The ground under xterm's own canvas, which must be the SAME colour the
         // terminal paints — it shows through before the renderer's first frame
         // and in the strip below the last row. So it is read straight off
@@ -2331,8 +2434,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         background: terminalTheme(colorScheme).background,
       }}
     />
-    {/* After the terminal in the DOM (the pane's first child is its xterm
-        host everywhere else), drawn above it by `order` in the stylesheet. */}
+    {/* After the terminal, under it: the pane's first child stays its xterm
+        host, and the strip keeps its place whether the chat is shown or not. */}
     {(paneKind === "agent" || paneKind === "local_agent") && splitId && (
       <TerminalPromptStrip
         ptyId={id}
@@ -2340,25 +2443,33 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         background={terminalTheme(colorScheme).background}
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
-        onReturnFocus={() => termRef.current?.focus()}
+        onReturnFocus={() => {
+          // Over the chat the keys go back to its text box, not the terminal under it.
+          const box = readerOn && !changesOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
+          if (box) box.focus();
+          else if (changesOn) host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
+          else termRef.current?.focus();
+        }}
+        chatShown={readerOn}
+        topBar={readerTopBar}
+        navigationSlot={setReaderNavigationSlot}
+        actionSlot={setReaderActionSlot}
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
-          changes: { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) },
+          changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, onToggle: () => {
+            if (changesOn) showReaderChat();
+            else setChangesPicked(true);
+          } } : undefined,
           cwd,
+          onHost: readerOnHost,
         } : undefined}
       />
     )}
-    {terminalChanges && readerTab && splitId && host && createPortal(
-      <TerminalReaderChanges
-        scope={splitId.scope}
-        tab={readerTab}
-        cwd={cwd}
-        visible={visible}
-        subagent={undefined}
-        subagentTitle={undefined}
-        onClose={() => useAgentReaderStore.getState().setChanges(readerAgent, false)}
-      />,
+    {aiOff && (agentPane || assistant) && host && createPortal(
+      <div className="terminal-drop-banner terminal-ai-off-banner" role="status">
+        {t("terminal.aiOff.banner")} <UntestedTag id="sidePanel.aiSwitch" />
+      </div>,
       host,
     )}
     {dropActive && host && createPortal(
@@ -2367,7 +2478,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       </div>,
       host,
     )}
-    {readerOn && splitId && host && (
+    {(readerOn || readerTopBar) && splitId && host && (
       <TerminalReaderView
         host={host}
         ptyId={id}
@@ -2375,8 +2486,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         cwd={cwd}
         localOnly={localOnly}
-        visible={visible}
-        focused={focused}
+        visible={visible && readerOn}
+        focused={focused && readerOn && !changesOn}
+        shown={readerOn}
+        changesOpen={changesOn}
+        onShowChat={showReaderChat}
+        navigationSlot={readerNavigationSlot}
+        actionSlot={readerActionSlot}
       />
     )}
     {signIn && host && (
@@ -2417,6 +2533,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     )}
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
+    )}
+    {agentPane && !attachOnly && !signIn && !signInDone && host && (
+      <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}
     {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard

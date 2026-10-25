@@ -15,6 +15,7 @@ import { describeFailure } from "../connection";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { useBackLayer } from "../backStack";
+import { startVisiblePoll } from "../visiblePoll";
 
 /** The project's collected prompts — text kept without a tab. Sending aims
  * one at an agent tab now (the desktop queues a one-time schedule at its own
@@ -70,17 +71,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
   useEffect(() => {
     // Gated like the project screen's poll: a sheet left open when the screen
     // went off kept a desktop round trip going every 5s all night.
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      void refresh();
-    };
-    void refresh();
-    const timer = window.setInterval(tick, 5_000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
-    };
+    return startVisiblePoll(() => refresh(), 5_000).stop;
   }, [refresh]);
 
   const reset = () => {

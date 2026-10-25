@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ApiError, setTabColor, type TabRow } from "../api";
-import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS } from "../tabColors";
+import { TAB_COLORS, TAB_COLOR_IDS } from "../../../src/lib/theme/tabColors";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { useBackLayer } from "../backStack";
@@ -75,7 +75,7 @@ export function ColorSheet({ tab, onClose, onColored }: {
             onClick={() => void pick(id)}
           >
             <span className="tab-color-chip-dot" style={{ background: TAB_COLORS[id] }} aria-hidden="true" />
-            {TAB_COLOR_LABELS[id] ? t(TAB_COLOR_LABELS[id]) : id}
+            {t(`tabColor.${id}`)}
           </button>
         ))}
       </div>

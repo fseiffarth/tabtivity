@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
+import { usePaneRects } from "./usePaneRects";
 import {
   clampRootOverlayFrame,
   filledRootOverlayFrame,
@@ -40,9 +42,10 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { NewTabMenu } from "../tabs/NewTabMenu";
+import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { TabScopeContext } from "../tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
-import { TabAgentModeMarks, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
+import { TabAgentModeMarks, TabContinueButton, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
 import { pickEdge, previewInset } from "../tabs/dragGeometry";
 import { dragPreviewLayout } from "../tabs/dragPreview";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -141,11 +144,12 @@ function filesReserveStyle(files: GroupFiles | undefined): React.CSSProperties |
  */
 export function RootOverlayHost() {
   const open = useRootOverlayStore((s) => s.open);
-  useEffect(() => {
+  useTauriListener(() => {
     const refresh = () => { void useRootReviewStore.getState().refresh(); };
-    const unlisten = listen<number>("root-mcp-review-changed", refresh);
-    void unlisten.then(refresh);
-    return () => { void unlisten.then((stop) => stop()); };
+    return listen<number>("root-mcp-review-changed", refresh).then((stop) => {
+      refresh();
+      return stop;
+    });
   }, []);
   const rootTabs = useTabsStore((s) => s.tabsByScope[ROOT_SCOPE]);
   useEffect(() => {
@@ -172,7 +176,7 @@ export function RootOverlayHost() {
     // a delete and an upsert of the same id, and that is an update, not an
     // arrival. Pruned on every event, so it holds a few ids at most.
     const justDeleted = new Map<string, number>();
-    const unlisten = listen<RootMcpChange>("root-mcp-changed", ({ payload }) => {
+    return subscribeTauri(() => listen<RootMcpChange>("root-mcp-changed", ({ payload }) => {
       const upsert = <T extends { id: string }>(rows: T[], row: T) =>
         rows.some((r) => r.id === row.id)
           ? rows.map((r) => (r.id === row.id ? row : r))
@@ -223,10 +227,7 @@ export function RootOverlayHost() {
       }
       if (payload.local) return;
       void notifyCalendarWrite(payload).catch(() => {});
-    });
-    return () => {
-      void unlisten.then((stop) => stop());
-    };
+    }));
   }, []);
 
   return open ? <RootOverlay /> : null;
@@ -290,7 +291,6 @@ function RootOverlay() {
   // tells the proposals panel whether the review gate is only advisory.
   const rights = useRootMcpRights();
   const [drag, setDrag] = useState<OverlayDrag | null>(null);
-  const [groupRects, setGroupRects] = useState<Record<string, Rect>>({});
   // The frame while a move/resize drag is in flight — local, so a gesture costs
   // no store write per pointer move (the docked file column's own bargain).
   const [liveFrame, setLiveFrame] = useState<RootOverlayFrame | null>(null);
@@ -446,45 +446,7 @@ function RootOverlay() {
   };
 
   // ── Measurement ─────────────────────────────────────────────────────────
-  const measure = useCallback(() => {
-    const region = regionRef.current;
-    if (!region) return;
-    const base = region.getBoundingClientRect();
-    const next: Record<string, Rect> = {};
-    for (const [id, el] of bodyRefs.current) {
-      if (!el.isConnected) continue;
-      const r = el.getBoundingClientRect();
-      next[id] = { left: r.left - base.left, top: r.top - base.top, width: r.width, height: r.height };
-    }
-    setGroupRects((prev) => {
-      const keys = Object.keys(next);
-      const same =
-        keys.length === Object.keys(prev).length &&
-        keys.every((k) => {
-          const a = next[k];
-          const b = prev[k];
-          return !!b && a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
-        });
-      return same ? prev : next;
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    measure();
-  }, [measure, renderLayout]);
-
-  useEffect(() => {
-    const region = regionRef.current;
-    if (!region || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => measure());
-    ro.observe(region);
-    for (const el of bodyRefs.current.values()) ro.observe(el);
-    window.addEventListener("resize", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, [measure, renderLayout]);
+  const { groupRects, measure } = usePaneRects(regionRef, bodyRefs, renderLayout);
 
   const registerBody = useCallback(
     (id: string) => (el: HTMLDivElement | null) => {
@@ -984,8 +946,14 @@ function GroupStrip({
   // which of the console's tabs is running what they just asked for.
   const installTabs = useRootOverlayStore((s) => s.installTabs);
   const clearInstallTab = useRootOverlayStore((s) => s.clearInstallTab);
+  // The shared strip, so an overflowing console bar scrolls with the same
+  // chevrons as every other tab bar.
   return (
-    <div className="tab-strip" ref={stripRef}>
+    <ScrollingTabStrip
+      revision={tabs.map((tab) => tab.key).join(",")}
+      activeKey={activeKey ?? undefined}
+      stripRef={stripRef}
+    >
       {tabs.map((tab) => {
         const isActive = tab.key === activeKey;
         const ptyId = `${ROOT_SCOPE}:${tab.key}`;
@@ -1016,6 +984,7 @@ function GroupStrip({
             <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
             <span className="tab-label">{tab.label}</span>
             <TabAgentModeMarks scope={ROOT_SCOPE} tab={tab} isActive={isActive} />
+            <TabContinueButton tab={tab} stateClass={stateClass} />
             {install && <UntestedTag id="rootConsole.installTabTitle" />}
             <button
               className="tab-close"
@@ -1032,7 +1001,7 @@ function GroupStrip({
           </div>
         );
       })}
-    </div>
+    </ScrollingTabStrip>
   );
 }
 

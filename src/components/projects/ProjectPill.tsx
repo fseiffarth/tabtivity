@@ -3,9 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { IdeMenuItems } from "./IdeMenuItems";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   resolveProjectDirectory,
   type GitHostingInfo,
@@ -1332,15 +1333,15 @@ export function ProjectPill({
     const doomed = tabs.filter((t) => t.kind === "agent" && !isResumableAgentTab(t));
     if (doomed.length > 0) {
       const names = [...new Set(doomed.map((t) => t.cmd))].join(", ");
-      const ok = await confirm(
-        t(
+      const ok = await confirmAction({
+        title: t("pill.containerRestartTitle"),
+        body: t(
           doomed.length > 1
             ? "pill.containerRestartConfirm"
             : "pill.containerRestartConfirmOne",
           { state: t(enabling ? "common.on" : "common.off"), count: doomed.length, names },
         ),
-        { title: t("pill.containerRestartTitle"), kind: "warning" },
-      );
+      });
       if (!ok) return;
     }
     let outcome = await setProjectSandbox(project.id, enabling);
@@ -1348,9 +1349,9 @@ export function ProjectPill({
       // O#143: the repo declares its own Dockerfile/devcontainer image —
       // never adopted silently, since `docker build` runs it as root.
       const { source } = outcome;
-      const adopt = await confirm(describeDetectedSpecSource(source), {
+      const adopt = await confirmAction({
         title: t("scaffold.adoptTitle"),
-        kind: "warning",
+        body: describeDetectedSpecSource(source),
       });
       outcome = await setProjectSandbox(project.id, enabling, { hash: source.hash, adopt });
     }
@@ -1374,7 +1375,7 @@ export function ProjectPill({
     } catch {
       // Preflight is advisory; a real problem still surfaces in the next tab spawn.
     }
-  }, [project.id, project.sandbox?.enabled, setProjectSandbox, t]);
+  }, [project.id, project.sandbox?.enabled, setProjectSandbox, t, confirmAction]);
 
   const setProjectAutoConnect = useProjectsStore((s) => s.setProjectAutoConnect);
   const setProjectPersistSessions = useProjectsStore((s) => s.setProjectPersistSessions);
@@ -1486,13 +1487,13 @@ export function ProjectPill({
     [project.id, project.name, moveRemoteMirror],
   );
 
-  // Close context menu on outside click
+  // The Remote machines manager can open without a pointer press on this menu
+  // (a lamp, a header machine drop, the keyboard): the menu would then stay
+  // above the dialog's backdrop with its hover hint, so any open closes it.
+  const machinesDialogOpen = useRemoteMachinesStore((s) => s.projectId !== null);
   useEffect(() => {
-    if (!contextMenu) return;
-    const dismiss = () => setContextMenu(null);
-    window.addEventListener("pointerdown", dismiss);
-    return () => window.removeEventListener("pointerdown", dismiss);
-  }, [contextMenu]);
+    if (machinesDialogOpen) setContextMenu(null);
+  }, [machinesDialogOpen]);
 
   const handleMouseEnter = () => {
     if (contextMenu) return;
@@ -1733,19 +1734,17 @@ export function ProjectPill({
       {pillDialogs}
 
       {/* Right-click context menu */}
-      {contextMenu && createPortal(
-        <div
+      {contextMenu && (
+        // Opens downward from the pill, so a long menu (remote, git, Python
+        // entries all present) ran past the window's bottom edge. `keepBelow`
+        // caps it to the room below the anchor; the inner wrapper scrolls,
+        // keeping the accent wash (`::before`, inset 0) covering the whole menu.
+        <ContextMenuPortal
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
           className="context-menu project-pill-menu"
-          // Opens downward from the pill, so a long menu (remote, git, Python
-          // entries all present) ran past the window's bottom edge. Cap it to
-          // the room below the anchor; the inner wrapper scrolls, keeping the
-          // accent wash (`::before`, inset 0) covering the whole menu.
-          style={{
-            left: contextMenu.x,
-            top: contextMenu.y,
-            maxHeight: `calc(100vh - ${contextMenu.y}px - 8px)`,
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
+          keepBelow
         >
           <div className="project-pill-menu-scroll">
           {/* View / inspect */}
@@ -2391,8 +2390,7 @@ export function ProjectPill({
             )}
           </div>
           </div>
-        </div>,
-        document.body,
+        </ContextMenuPortal>
       )}
 
       {/* Activity window */}

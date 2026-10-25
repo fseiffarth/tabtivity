@@ -25,6 +25,16 @@ import {
   DELIMITER_CANDIDATES,
   type ParsedTable,
 } from "../../lib/viewers/table";
+import {
+  resolveRange,
+  selectionValues,
+  valuesToTsv,
+  rangeSize,
+  selectAllRows,
+  moveFocus,
+  type GridSelection,
+} from "../../lib/viewers/tableSelection";
+import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { viewerErrorText } from "../../lib/viewers/limitError";
 import { useFileScope } from "./fileAccess";
@@ -94,6 +104,14 @@ const SORTED_EDGE = `inset 2px 0 0 ${TABLE_ACCENT}, inset -2px 0 0 ${TABLE_ACCEN
 const HEADER_TEXT = "var(--doc-blue, var(--text-secondary))";
 const HEADER_TEXT_SORTED = "var(--doc-blue, var(--text-primary))";
 const SORT_ARROW = "var(--doc-yellow, var(--accent))";
+/** Selected cells, rows and columns: the accent mixed into each surface it sits
+ *  on, opaque for the same sticky-bleed reason as `STRIPE_BG`. The selection wins
+ *  over the zebra stripe and the sorted-column tint. */
+const SEL_CELL_BG = `color-mix(in srgb, ${TABLE_ACCENT} 28%, var(--bg-panel))`;
+const SEL_HEADER_BG = `color-mix(in srgb, ${TABLE_ACCENT} 45%, var(--bg-header-solid))`;
+const SEL_GUTTER_BG = `color-mix(in srgb, ${TABLE_ACCENT} 40%, var(--bg-panel))`;
+/** How long the "copied" confirmation stays in the header, in ms. */
+const COPIED_MS = 1500;
 /** Sentinel `SortSpec.col` for the row-number gutter: it sorts on each row's
  *  source index, not a cell value, so it needs a column id no real column has. */
 const GUTTER_SORT_COL = -1;
@@ -289,6 +307,10 @@ export function TableView({
 
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortSpec | null>(null);
+  // What the reader has picked (cells, rows or columns). Keyed by source row
+  // index and parsed column index, so a re-sort or filter leaves it on the same
+  // data. Not persisted: it is a moment's working state, not a view setting.
+  const [gridSel, setGridSel] = useState<GridSelection | null>(null);
 
   // ── Hidden columns ────────────────────────────────────────────────────────
   const [hidden, setHidden] = useState<Set<number>>(
@@ -318,6 +340,7 @@ export function TableView({
     settledDelimiter.current = delimiter;
     setHidden(new Set());
     setColWidths({});
+    setGridSel(null);
   }, [loaded, delimiter]);
 
   const toggleColumn = (col: number) => {
@@ -581,13 +604,11 @@ export function TableView({
   const removeRow = (row: number) => {
     if (!editable) return;
     setEditing(null);
+    // Rows below the deleted one shift up by one source index, so a selection
+    // keyed by index would now point at different rows.
+    setGridSel(null);
     setDraft(deleteRow(draft, table, row));
   };
-
-  // A single click on a header sorts, a double click renames it — so when the file
-  // is editable the sort waits long enough to find out which it was. A read-only
-  // sheet has no second meaning to disambiguate, so it sorts immediately.
-  const sortClick = useRef<number | null>(null);
 
   // asc → desc → default: the third click clears the sort, which is the only
   // way back to the file's own row order once a column has been sorted.
@@ -603,27 +624,198 @@ export function TableView({
   // so it sorts immediately — asc restores the file's row order, desc reverses it.
   const onGutterClick = () => toggleSort(GUTTER_SORT_COL);
 
-  const onHeaderClick = (col: number) => {
-    if (!editable) {
-      toggleSort(col);
-      return;
-    }
-    if (sortClick.current != null) return;
-    sortClick.current = window.setTimeout(() => {
-      sortClick.current = null;
-      toggleSort(col);
-    }, 200);
+  // A header's name selects its column; its sort arrow sorts. A double click on
+  // the name renames, which the selecting click before it does not get in the way
+  // of — so nothing has to wait to tell a click from a double click.
+  const onHeaderDoubleClick = (col: number) => beginEdit(0, col);
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+  // Mouse: a click picks a cell / row number / column name, Shift+click extends
+  // from the last pick, and dragging on from a pick sweeps a range. Keyboard (the
+  // grid focused): arrows move, Shift+arrows extend, Ctrl+A all rows, Ctrl+C
+  // copies, Escape clears.
+  const dragMode = useRef<GridSelection["kind"] | null>(null);
+  const keyboardMove = useRef(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const copiedTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const up = () => {
+      dragMode.current = null;
+    };
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mouseup", up);
+      if (copiedTimer.current != null) clearTimeout(copiedTimer.current);
+    };
+  }, []);
+
+  // The grid itself takes keyboard focus on a pick, so the selection keys have a
+  // target — a clicked header button would otherwise keep it.
+  const focusGrid = () => scrollRef.current?.focus({ preventScroll: true });
+
+  const pickCell = (e: React.MouseEvent, row: number, col: number) => {
+    if (e.button !== 0) return;
+    focusGrid();
+    dragMode.current = "cells";
+    const extend = e.shiftKey;
+    setGridSel((cur) => ({
+      kind: "cells",
+      anchor: extend && cur?.kind === "cells" ? cur.anchor : { row, col },
+      focus: { row, col },
+    }));
   };
 
-  const onHeaderDoubleClick = (col: number) => {
-    if (sortClick.current != null) {
-      clearTimeout(sortClick.current);
-      sortClick.current = null;
+  const pickRow = (e: React.MouseEvent, row: number) => {
+    if (e.button !== 0) return;
+    focusGrid();
+    dragMode.current = "rows";
+    const extend = e.shiftKey;
+    setGridSel((cur) =>
+      // A plain click on the one row already picked puts it back.
+      !extend && cur?.kind === "rows" && cur.anchor === row && cur.focus === row
+        ? null
+        : {
+            kind: "rows",
+            anchor: extend && cur?.kind === "rows" ? cur.anchor : row,
+            focus: row,
+          },
+    );
+  };
+
+  const pickCol = (e: React.MouseEvent, col: number) => {
+    if (e.button !== 0) return;
+    focusGrid();
+    dragMode.current = "cols";
+    const extend = e.shiftKey;
+    setGridSel((cur) =>
+      // A plain click on the one column already picked puts it back.
+      !extend && cur?.kind === "cols" && cur.anchor === col && cur.focus === col
+        ? null
+        : {
+            kind: "cols",
+            anchor: extend && cur?.kind === "cols" ? cur.anchor : col,
+            focus: col,
+          },
+    );
+  };
+
+  /** The pointer entering a cell / row number / column name while a drag of the
+   *  same kind is in progress moves the selection's far end there. */
+  const dragOver = (kind: GridSelection["kind"], row: number, col: number) => {
+    if (dragMode.current !== kind) return;
+    setGridSel((cur) => {
+      if (!cur || cur.kind !== kind) return cur;
+      if (cur.kind === "cells") {
+        if (cur.focus.row === row && cur.focus.col === col) return cur;
+        return { ...cur, focus: { row, col } };
+      }
+      const next = cur.kind === "rows" ? row : col;
+      return cur.focus === next ? cur : { ...cur, focus: next };
+    });
+  };
+
+  const gridRange = useMemo(
+    () => resolveRange(gridSel, visible, cols),
+    [gridSel, visible, cols],
+  );
+
+  const copySelection = () => {
+    if (!gridSel || !gridRange) return;
+    const grid = selectionValues(gridSel, gridRange, visible, cols, header);
+    const size = rangeSize(gridRange);
+    navigator.clipboard
+      ?.writeText(valuesToTsv(grid))
+      .then(() => {
+        setCopied(t("tableView.selectionCopied", { rows: size.rows, cols: size.cols }));
+        if (copiedTimer.current != null) clearTimeout(copiedTimer.current);
+        copiedTimer.current = window.setTimeout(() => setCopied(null), COPIED_MS);
+      })
+      .catch(() => {});
+  };
+
+  // After an arrow key moves the focus, keep it on screen. Rows are windowed, so
+  // a row that is not rendered yet is reached by scrolling to its computed
+  // offset; a rendered cell is brought in with scrollIntoView (its scroll-margin
+  // keeps it clear of the sticky header and gutter).
+  const focusKey =
+    gridSel == null
+      ? null
+      : gridSel.kind === "cells"
+        ? `${gridSel.focus.row}:${gridSel.focus.col}`
+        : `${gridSel.focus}`;
+  useEffect(() => {
+    if (!keyboardMove.current || gridSel == null) return;
+    keyboardMove.current = false;
+    const el = scrollRef.current;
+    if (!el) return;
+    const row = gridSel.kind === "cols" ? null : gridSel.kind === "cells" ? gridSel.focus.row : gridSel.focus;
+    if (row != null) {
+      const pos = visible.findIndex((r) => r.index === row);
+      if (pos >= 0) {
+        // The sticky header covers about one row of the viewport's top.
+        const top = pos * rowH;
+        if (top < el.scrollTop) el.scrollTop = top;
+        else if (top + rowH * 2 > el.scrollTop + el.clientHeight) {
+          el.scrollTop = top + rowH * 2 - el.clientHeight;
+        }
+      }
     }
-    beginEdit(0, col);
+    // Column scroll waits a frame so a freshly windowed row has rendered.
+    requestAnimationFrame(() => {
+      const col = gridSel.kind === "cells" ? gridSel.focus.col : gridSel.kind === "cols" ? gridSel.focus : null;
+      const cell =
+        col == null
+          ? null
+          : (el.querySelector(`[data-col="${col}"]`) as HTMLElement | null);
+      cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
+
+  /** Selection keys, only while the grid itself has focus. Returns whether the
+   *  key was taken. */
+  const onSelectionKey = (e: React.KeyboardEvent): boolean => {
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    if (mod && key === "c") {
+      if (!gridSel || !gridRange) return false;
+      e.preventDefault();
+      copySelection();
+      return true;
+    }
+    if (mod && key === "a") {
+      const all = selectAllRows(visible);
+      if (!all) return false;
+      e.preventDefault();
+      setGridSel(all);
+      return true;
+    }
+    if (mod) return false;
+    if (e.key === "Escape") {
+      if (!gridSel) return false;
+      e.preventDefault();
+      setGridSel(null);
+      return true;
+    }
+    const step: Record<string, [number, number]> = {
+      ArrowUp: [-1, 0],
+      ArrowDown: [1, 0],
+      ArrowLeft: [0, -1],
+      ArrowRight: [0, 1],
+    };
+    const delta = step[e.key];
+    if (!delta) return false;
+    const next = moveFocus(gridSel, delta[0], delta[1], e.shiftKey, visible, cols);
+    if (!next) return false;
+    e.preventDefault();
+    keyboardMove.current = true;
+    setGridSel(next);
+    return true;
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (editing == null && e.target === scrollRef.current && onSelectionKey(e)) return;
     if (!editable) return;
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) return;
@@ -766,6 +958,40 @@ export function TableView({
             {countLabel}
           </span>
         )}
+        {loaded && !error && gridSel != null && gridRange != null && (
+          <>
+            <span
+              style={{
+                fontSize: 12,
+                color: TABLE_ACCENT,
+                alignSelf: "center",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {copied ??
+                t("tableView.selectionSize", {
+                  rows: rangeSize(gridRange).rows,
+                  cols: rangeSize(gridRange).cols,
+                })}
+            </span>
+            <button
+              onClick={copySelection}
+              title={t("tableView.copySelectionTitle")}
+              style={{
+                all: "unset",
+                cursor: "var(--cur-pointer, pointer)",
+                padding: "2px 8px",
+                borderRadius: "var(--radius-sm)",
+                fontSize: 12,
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+              }}
+            >
+              {t("common.copy")}
+            </button>
+            <UntestedTag id="tableView.selection" />
+          </>
+        )}
         {editable && (
           <button
             onClick={addRow}
@@ -884,23 +1110,30 @@ export function TableView({
                     )}
                   </button>
                 </th>
-                {cols.map((c) => {
+                {cols.map((c, ci) => {
                   const active = sort?.col === c;
                   const isEditing = editing?.row === 0 && editing.col === c;
+                  const colPicked =
+                    gridSel?.kind === "cols" &&
+                    gridRange != null &&
+                    ci >= gridRange.colLo &&
+                    ci <= gridRange.colHi;
                   return (
                     <th
                       key={c}
+                      data-col={c}
                       style={{
                         position: "sticky",
                         top: 0,
                         zIndex: 1,
-                        background: active ? SORTED_HEADER_BG : HEADER_BG,
+                        background: colPicked ? SEL_HEADER_BG : active ? SORTED_HEADER_BG : HEADER_BG,
                         boxShadow: active ? SORTED_EDGE : undefined,
                         borderBottom: "1px solid var(--border-color)",
                         borderRight: "1px solid var(--border-color)",
                         padding: 0,
                         textAlign: "left",
                         whiteSpace: "nowrap",
+                        scrollMarginLeft: GUTTER_W,
                       }}
                     >
                       {isEditing ? (
@@ -911,43 +1144,60 @@ export function TableView({
                           onBlur={() => commitEdit()}
                         />
                       ) : (
-                        <button
-                          onClick={() => onHeaderClick(c)}
-                          onDoubleClick={() => onHeaderDoubleClick(c)}
-                          title={
-                            editable
-                              ? t("tableView.sortColumnRenameTitle")
-                              : t("tableView.sortColumnTitle")
-                          }
-                          style={{
-                            all: "unset",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 4,
-                            width: "100%",
-                            boxSizing: "border-box",
-                            padding: "5px 10px",
-                            cursor: "var(--cur-pointer, pointer)",
-                            userSelect: "none",
-                            fontWeight: active ? 700 : 600,
-                            color: active ? HEADER_TEXT_SORTED : HEADER_TEXT,
-                          }}
-                        >
-                          <span
+                        <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
+                          <button
+                            onMouseDown={(e) => pickCol(e, c)}
+                            onMouseEnter={() => dragOver("cols", 0, c)}
+                            onClick={(e) => {
+                              // A keyboard activation has no mouse-down to select on.
+                              if (e.detail === 0) setGridSel({ kind: "cols", anchor: c, focus: c });
+                            }}
+                            onDoubleClick={() => onHeaderDoubleClick(c)}
+                            title={
+                              editable
+                                ? t("tableView.selectColumnRenameTitle")
+                                : t("tableView.selectColumnTitle")
+                            }
                             style={{
+                              all: "unset",
+                              flex: 1,
+                              minWidth: 0,
+                              boxSizing: "border-box",
+                              padding: "5px 4px 5px 10px",
+                              cursor: "var(--cur-pointer, pointer)",
+                              userSelect: "none",
+                              fontWeight: active || colPicked ? 700 : 600,
+                              color: active || colPicked ? HEADER_TEXT_SORTED : HEADER_TEXT,
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
                             }}
                           >
                             {header[c] ?? ""}
-                            {active && (
-                              <span style={{ color: SORT_ARROW, fontWeight: 700 }}>
-                                {sort!.dir === "asc" ? " ▲" : " ▼"}
-                              </span>
-                            )}
-                          </span>
-                        </button>
+                          </button>
+                          <button
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSort(c);
+                            }}
+                            title={t("tableView.sortColumnTitle")}
+                            aria-label={t("tableView.sortColumnTitle")}
+                            style={{
+                              all: "unset",
+                              flex: "0 0 auto",
+                              padding: "5px 8px 5px 4px",
+                              cursor: "var(--cur-pointer, pointer)",
+                              userSelect: "none",
+                              fontSize: 11,
+                              color: active ? SORT_ARROW : HEADER_TEXT,
+                              opacity: active ? 1 : 0.45,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {active ? (sort!.dir === "asc" ? "▲" : "▼") : "⇅"}
+                          </button>
+                        </div>
                       )}
                       {/* The drag-to-resize grip on the column's right edge. It sits
                           over the sort button (which is why its pointer handlers
@@ -990,7 +1240,10 @@ export function TableView({
               {rendered.map((row, i) => {
                 // Zebra stripe by on-screen position (not source index), so rows
                 // stay alternating after a sort or filter reorders them.
-                const stripeBg = (firstRow + i) % 2 === 1 ? STRIPE_BG : undefined;
+                const pos = firstRow + i;
+                const stripeBg = pos % 2 === 1 ? STRIPE_BG : undefined;
+                const rowIn = gridRange != null && pos >= gridRange.rowLo && pos <= gridRange.rowHi;
+                const rowPicked = rowIn && gridSel?.kind === "rows";
                 return (
                 <tr
                   key={row.index}
@@ -999,13 +1252,17 @@ export function TableView({
                   style={{ height: rowH }}
                 >
                   <td
+                    onMouseDown={(e) => pickRow(e, row.index)}
+                    onMouseEnter={() => dragOver("rows", row.index, 0)}
                     style={{
                       position: "sticky",
                       left: 0,
                       zIndex: 1,
                       // Its own chrome tint, not the zebra stripe, so the sticky
                       // column stays distinct from the body scrolling under it.
-                      background: GUTTER_BG,
+                      background: rowPicked ? SEL_GUTTER_BG : GUTTER_BG,
+                      cursor: "var(--cur-pointer, pointer)",
+                      userSelect: "none",
                       borderBottom: "1px solid var(--border-color)",
                       borderRight: GUTTER_BORDER,
                       padding: "4px 8px",
@@ -1024,6 +1281,7 @@ export function TableView({
                       <span style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                         <span>{row.index}</span>
                         <button
+                          onMouseDown={(e) => e.stopPropagation()}
                           onClick={() => removeRow(row.index)}
                           title={t("tableView.deleteRowTitle", { n: row.index })}
                           aria-label={t("tableView.deleteRowTitle", { n: row.index })}
@@ -1041,21 +1299,32 @@ export function TableView({
                       row.index
                     )}
                   </td>
-                  {cols.map((c) => {
+                  {cols.map((c, ci) => {
                     const isEditing = editing?.row === row.index && editing.col === c;
+                    const picked =
+                      rowIn && gridRange != null && ci >= gridRange.colLo && ci <= gridRange.colHi;
+                    const isFocus =
+                      gridSel?.kind === "cells" &&
+                      gridSel.focus.row === row.index &&
+                      gridSel.focus.col === c;
                     const value = row.cells[c] ?? "";
                     // The sorted column carries its own accent tint (stacked over
                     // the zebra stripe) and the accent edge-lines, so it reads as
                     // one continuous band down the table, not just a tinted header.
                     const sortedCol = sort?.col === c;
-                    const cellBg = sortedCol
-                      ? stripeBg
-                        ? SORTED_CELL_BG_STRIPE
-                        : SORTED_CELL_BG
-                      : stripeBg;
+                    const cellBg = picked
+                      ? SEL_CELL_BG
+                      : sortedCol
+                        ? stripeBg
+                          ? SORTED_CELL_BG_STRIPE
+                          : SORTED_CELL_BG
+                        : stripeBg;
                     return (
                       <td
                         key={c}
+                        data-col={c}
+                        onMouseDown={isEditing ? undefined : (e) => pickCell(e, row.index, c)}
+                        onMouseEnter={() => dragOver("cells", row.index, c)}
                         onDoubleClick={() => beginEdit(row.index, c)}
                         // A column clips at its measured width, so the full value
                         // has to stay reachable somewhere.
@@ -1074,6 +1343,11 @@ export function TableView({
                           textOverflow: "ellipsis",
                           verticalAlign: "middle",
                           cursor: editable ? "text" : "default",
+                          userSelect: isEditing ? undefined : "none",
+                          outline: isFocus ? `2px solid ${TABLE_ACCENT}` : undefined,
+                          outlineOffset: isFocus ? -2 : undefined,
+                          scrollMarginLeft: GUTTER_W,
+                          scrollMarginTop: rowH,
                           color: isEditing ? undefined : cellToneColor(value),
                         }}
                       >

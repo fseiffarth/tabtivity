@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { aiIsOff } from "../../aiSwitch";
 import type { Settings } from "../../../types";
 import { isProseLang } from "./autocomplete";
 import {
@@ -47,6 +48,8 @@ export class CopilotCompletionProvider implements CompletionProvider {
 
   async complete(document: CompletionDocument, signal: AbortSignal,
     publish: (candidates: CompletionCandidate[]) => void): Promise<CompletionCandidate[]> {
+    // The AI switch (`lib/aiSwitch.ts`): no suggestion while AI is off.
+    if (aiIsOff()) return [];
     const position = offsetToPosition(document.text, document.caret);
     if (!position) return [];
     const { projectId, editor, automatic, tabSize, insertSpaces } = this.options;

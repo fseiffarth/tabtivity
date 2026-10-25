@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { runWithProgress } from "../../../lib/runWithProgress";
 import { useT } from "../../../lib/i18n";
 import { formatBytes } from "../../../lib/formatBytes";
 import { IS_HOST_WINDOWS } from "../../../lib/platform";
@@ -186,21 +186,19 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
     setPull({ pct: null });
     // The same progress events the 🧠 menu and Settings follow, so this
     // download shows there too if the intro is closed mid-way.
-    const unlisten = await listen<{ model: string; status: string; completed: number; total: number }>(
-      "ollama-pull-progress",
-      (e) => {
-        if (!live.current || !sameModel(e.payload.model, model)) return;
-        const { completed, total } = e.payload;
-        setPull({ pct: total > 0 ? Math.round((completed / total) * 100) : null });
-      },
-    );
     try {
-      await invoke("pull_ollama_model", { model });
+      await runWithProgress<{ model: string; status: string; completed: number; total: number }, unknown>(
+        "ollama-pull-progress",
+        (p) => {
+          if (!live.current || !sameModel(p.model, model)) return;
+          setPull({ pct: p.total > 0 ? Math.round((p.completed / p.total) * 100) : null });
+        },
+        () => invoke("pull_ollama_model", { model }),
+      );
       if (live.current) refreshModels();
     } catch (e) {
       if (live.current) setError(String(e));
     } finally {
-      unlisten();
       if (live.current) setPull(null);
     }
   };

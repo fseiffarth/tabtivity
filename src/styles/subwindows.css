@@ -930,6 +930,11 @@ button.steering-legend-hub:hover::before {
   border: 1px solid var(--accent);
   border-radius: 9px;
 }
+/* The folded badge's exit key, on the opposite rim. */
+.steering-legend-fab-button kbd.steering-legend-fab-exit {
+  right: auto;
+  left: -5px;
+}
 
 /* Keyboard select's legend (TerminalView, Ctrl+Shift+X): the steering legend,
    pinned to the bottom of its own pane instead of the window. */
@@ -1061,6 +1066,8 @@ button.steering-legend-hub:hover::before {
   font-size: var(--text-sm);
   font-weight: 600;
 }
+.steering-prompt-option-group { display: flex; flex-direction: column; gap: 4px; }
+.steering-prompt-option-group + .steering-prompt-option-group { margin-top: 8px; }
 .steering-prompt-list .terminal-reader-option[aria-selected="true"] {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -1811,25 +1818,61 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 
 /* ── Agent prompt strip (components/terminal/TerminalPromptStrip) ─────────────
-   The agent pane's top row, between the tab bar and the terminal: the tab's
-   last prompt on one line. Its ground and ink are the terminal's own (set
-   inline), so it reads as part of the pane, not a toolbar over it. A fixed
-   height — it never refits the terminal; the drop-down floats over the
-   terminal's top, sized against `.center-pane` (its containing block). */
+   The agent pane's bottom row, under the terminal: the tab's last prompt on
+   one line, the pane's switches at its right end. Its ground and ink are the
+   terminal's own (set inline), so it reads as part of the pane, not a toolbar
+   under it. Under the chat (`.chat`) the chat reaches down over its row
+   (`.terminal-reader.over-strip`) and its composer is that row, the switches
+   lifted over it, right of the text box. One fixed height in both, so a mode
+   switch never refits the terminal or moves a switch; the pop-ups float up
+   over the terminal's bottom, sized against `.center-pane` (their containing
+   block). */
+.prompt-strip,
+.terminal-reader {
+  --prompt-strip-h: 36px;
+}
 .prompt-strip {
-  /* Second in the DOM (the terminal host stays the pane's first child),
-     first on screen. */
-  order: -1;
   flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 6px 0 10px;
+  height: var(--prompt-strip-h);
+  padding: 0 8px 0 12px;
   font-family: var(--font-sans);
   font-size: var(--text-sm);
-  border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
   min-width: 0;
+}
+.prompt-strip.chat {
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border-top-color: transparent;
+}
+/* A z-index on the flex item, not a position: the pop-ups inside must still
+   size against `.center-pane`. Above the chat's z-index 4. */
+.prompt-strip.chat .prompt-strip-actions {
+  z-index: 5;
+}
+/* The switches, always flush right: the same spot with or without the
+   prompt before them. */
+.prompt-strip-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+/* Chat / Terminal: both labels in one cell, the inactive one invisible, so
+   the switch is as wide in either mode. */
+.prompt-strip-mode {
+  display: inline-grid;
+}
+.prompt-strip-mode > span {
+  grid-area: 1 / 1;
+  text-align: center;
+}
+.prompt-strip-mode > span[aria-hidden="true"] {
+  visibility: hidden;
 }
 .prompt-strip-label {
   flex: none;
@@ -1905,13 +1948,13 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 .prompt-strip-panel {
   position: absolute;
-  top: 30px;
+  bottom: calc(var(--prompt-strip-h) + 6px);
   left: 8px;
   right: 8px;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  max-height: calc(100% - 42px);
+  max-height: calc(100% - var(--prompt-strip-h) - 18px);
   /* Explicit ink: the panel is an app surface, not the terminal's. */
   color: var(--text-primary);
   background: var(--bg-elevated);
@@ -1936,7 +1979,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 /* Browsing the trail swaps the full text above it: a content-sized panel and
    text box moved the list (and the row under the pointer) with every prompt. */
 .prompt-strip-panel:has(> .prompt-strip-list) {
-  height: calc(100% - 42px);
+  height: calc(100% - var(--prompt-strip-h) - 18px);
 }
 .prompt-strip-panel:has(> .prompt-strip-list) > .prompt-strip-full {
   flex: 0 0 auto;
@@ -1990,8 +2033,8 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 20px;
-  padding: 0 8px;
+  height: 22px;
+  padding: 0 10px;
   font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -2001,6 +2044,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   border-radius: var(--radius-full);
   cursor: var(--cur-pointer, pointer);
   opacity: 0.8;
+  transition: background-color 120ms ease, opacity 120ms ease;
 }
 .prompt-strip-reader:hover {
   opacity: 1;
@@ -2023,13 +2067,14 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   border-color: var(--accent);
 }
 
-/* The Resume drop-down (components/terminal/TerminalReaderChats): the trail's
+/* The Resume pop-up (components/terminal/TerminalReaderChats): the trail's
    panel, anchored at the strip's right end where its button sits. The
    wrapper stays static, so the panel still sizes against `.center-pane`. */
 .reader-chats {
   flex: none;
   display: inline-flex;
 }
+/* Also the caret on the strip's Prompts pill (TerminalPromptStrip). */
 .reader-chats-caret {
   font-size: 0.85em;
   transition: transform 120ms ease;
@@ -2040,7 +2085,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 .reader-chats-panel {
   left: auto;
   width: min(640px, calc(100% - 16px));
-  height: min(560px, calc(100% - 42px));
+  height: min(560px, calc(100% - var(--prompt-strip-h) - 18px));
 }
 .reader-chats-head {
   flex: none;
@@ -2266,6 +2311,10 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 .terminal-reader-turn .inbox-album:last-child {
   margin-bottom: 0;
 }
+/* An answer's pictures and PDFs (`ReaderAnswerFiles`) sit under its words. */
+.terminal-reader-turn.agent .inbox-album {
+  margin: 6px 0 0;
+}
 .terminal-reader-turn .outbox-post-album {
   display: grid;
   gap: 2px;
@@ -2355,6 +2404,14 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   margin-top: 4px;
   font-size: var(--text-xs);
   color: color-mix(in srgb, var(--accent) 45%, var(--text-secondary));
+}
+/* Send now / Cancel and edit under the last queued prompt. */
+.terminal-reader-queued-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
 }
 .terminal-reader-turn.agent {
   align-self: flex-start;
@@ -2473,6 +2530,13 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 [data-theme="light_lavender"] .terminal-reader-turn.terminal-reader-pinned-prompt,
 [data-theme-pick="system"] .terminal-reader-turn.terminal-reader-pinned-prompt {
   padding: 7px 13px;
+}
+/* Its bubble's time, after the words rather than in the corner: the pinned
+   copy is two lines at most and has no room under them. */
+.terminal-reader-pinned-prompt .terminal-reader-time {
+  position: static;
+  flex: none;
+  align-self: flex-end;
 }
 .terminal-reader-pinned-prompt-text {
   display: -webkit-box;
@@ -2762,44 +2826,43 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-secondary);
   border-left: none;
 }
-/* The Reader's Changes panel (components/terminal/TerminalReaderChanges):
-   docked at the pane's right, the chat's own right edge moved in by the same
-   width (`--reader-changes-w`, dragged), so neither covers the other; the
-   chat keeps 320px at least. */
-.terminal-reader.with-changes,
-.terminal-pane-with-changes,
-.terminal-changes {
-  --reader-changes-inset: min(var(--reader-changes-w, 520px), calc(100% - 320px));
-}
-.terminal-reader.with-changes { right: var(--reader-changes-inset); }
-/* Terminal mode (`.terminal-pane-with-changes`): the panel over the pane's
-   right edge, which the pane pads by this inset so the fit leaves it free. */
+/* The Diffs tab occupies the same pane as Chat and Terminal. */
 .terminal-changes {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: var(--reader-changes-inset);
+  inset: 0;
   z-index: 4;
   display: flex;
   flex-direction: column;
   min-width: 0;
   color: var(--text-primary);
   background: var(--bg-panel);
-  border-left: 1px solid var(--border-subtle);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
 }
-.terminal-changes-resize {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -3px;
-  width: 6px;
-  z-index: 1;
-  cursor: var(--cur-col-resize, col-resize);
+.terminal-changes-body { display: flex; flex: 1; min-height: 0; }
+.terminal-changes-body > .terminal-changes-files {
+  width: clamp(160px, 22%, 260px);
+  max-height: none;
+  border-bottom: none;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
 }
-.terminal-changes-resize:hover { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.terminal-changes-body > .terminal-changes-list { min-width: 0; }
+.terminal-changes-view { margin-left: auto; }
+.terminal-changes-split { min-width: 500px; }
+.terminal-changes-split-heading, .terminal-changes-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.terminal-changes-split-heading > span { padding: 6px 12px; color: var(--text-secondary); background: var(--bg-subtle); border-bottom: 1px solid var(--border-subtle); }
+.terminal-changes-split-row > div { display: flex; min-width: 0; }
+.terminal-changes-split-row > div:first-child, .terminal-changes-split-heading > span:first-child { border-right: 1px solid var(--border-subtle); }
+.terminal-changes-split-row > div > span { flex: none; width: 42px; padding: 0 8px; text-align: right; color: var(--text-muted); user-select: none; }
+.terminal-changes-split-row code { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.terminal-changes-split-row .add { background: color-mix(in srgb, #3fb950 13%, transparent); }
+.terminal-changes-split-row .del { background: color-mix(in srgb, #f85149 13%, transparent); }
+.terminal-changes-split-note { padding: 4px 12px; color: var(--text-muted); background: var(--bg-subtle); }
+@media (max-width: 600px) {
+  .terminal-changes-body { flex-direction: column; }
+  .terminal-changes-body > .terminal-changes-files { width: auto; max-height: 25%; border-right: none; border-bottom: 1px solid var(--border-subtle); }
+}
 .terminal-changes-head {
   flex: none;
   display: flex;
@@ -3003,37 +3066,262 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel);
 }
+/* The phone composer's Plan / Goal / Clear / Commit chips, at the facts row's
+   end (`.terminal-reader-facts-chips`), or a row over the text box where
+   there is none; the Commit menu opens upward from it. */
+.terminal-reader-composer { flex-wrap: wrap; }
+.terminal-reader-chips {
+  position: relative;
+  flex: 0 0 100%;
+  display: flex;
+  gap: 6px;
+}
+.terminal-reader-chip {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-chip:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
+.terminal-reader-chip.active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.terminal-reader-chip:disabled {
+  opacity: 0.45;
+  cursor: var(--cur-default, default);
+}
+.terminal-reader-commit-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 28px));
+  padding: 6px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+}
+.terminal-reader-commit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-commit-row:hover { background: var(--bg-hover); }
+.terminal-reader-commit-row small {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+/* The text box with Send inside its corner: three lines (its bottom where a
+   one-line 30px box would sit centred on the strip's row when the composer is
+   that row), growing upward with the text (`ReaderComposer` sets the height)
+   up to max-height. */
+.terminal-reader-input {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
 .terminal-reader-composer textarea {
   flex: 1;
-  min-height: 2.6em;
+  box-sizing: border-box;
+  min-height: calc(3 * 1.4em + 10px);
   max-height: 12em;
-  padding: 6px 10px;
-  resize: vertical;
+  padding: 4px 40px 4px 12px;
+  resize: none;
+  overflow-y: auto;
   font: inherit;
+  line-height: 1.4;
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius);
+  border-radius: 15px;
 }
 .terminal-reader-composer textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
+/* The untested pill of Claude's suggestion, dimmed in the empty box as its
+   placeholder: top right, clear of Send and the mic. */
+.terminal-reader-suggestion-tag {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+}
+/* The phone composer's Send (`.send-icon` in mobile-web): a paper plane in
+   an accent disc, faded while there is nothing to send. */
 .terminal-reader-send {
-  flex: none;
-  padding: 6px 14px;
-  font: inherit;
-  font-weight: 600;
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   color: var(--accent-contrast);
   background: var(--accent);
   border: none;
-  border-radius: var(--radius);
+  border-radius: 50%;
   cursor: var(--cur-pointer, pointer);
+  transition: opacity 120ms ease;
+}
+.terminal-reader-send svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.terminal-reader-send svg path:last-child {
+  stroke: var(--accent);
 }
 .terminal-reader-send:disabled {
   opacity: 0.45;
   cursor: var(--cur-default, default);
 }
+/* The mic (`ReaderVoice`) left of Send, in the same corner. Listening, it
+   turns red with a ring that follows the level (`--mic-level`, painted by
+   the hook); the ring is a border scaled by transform, never a blurred
+   shadow (WebKitGTK). */
+.terminal-reader-input.with-mic textarea {
+  padding-right: 72px;
+}
+.terminal-reader-mic {
+  position: absolute;
+  right: 36px;
+  bottom: 7px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-mic:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.terminal-reader-mic:disabled {
+  opacity: 0.35;
+  cursor: var(--cur-default, default);
+}
+.terminal-reader-mic.preparing {
+  color: var(--accent);
+}
+.terminal-reader-mic.listening {
+  color: #fff;
+  background: var(--danger, #d9534f);
+}
+.terminal-reader-mic.listening::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid var(--danger, #d9534f);
+  opacity: calc(0.15 + var(--mic-level, 0) * 0.75);
+  transform: scale(calc(1 + var(--mic-level, 0) * 0.4));
+  transition: transform 80ms linear, opacity 80ms linear;
+  pointer-events: none;
+}
+/* "Heard: …", the mic's state or its error, and the install card: under the
+   chip row, over the text box. */
+.terminal-reader-voice {
+  position: relative;
+  flex: 0 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.terminal-reader-voice-line {
+  padding: 0 12px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.terminal-reader-voice-line.error {
+  color: var(--danger, #d9534f);
+}
+.terminal-reader-voice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+.terminal-reader-voice-card span {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.terminal-reader-voice-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+/* The approved desktop layout: a stable toolbar above the pane, with the
+   whole width below reserved for the selected view and its composer. */
+.prompt-strip.reader-topbar {
+  order: -1;
+  position: relative;
+  z-index: 6;
+  height: auto;
+  min-height: 46px;
+  padding: 7px 12px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border-top: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.reader-topbar .prompt-strip-actions { flex: 1; min-width: 0; flex-wrap: wrap; margin-left: 0; gap: 6px; }
+.reader-topbar-navigation { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.reader-topbar-actions { display: inline-flex; margin-left: auto; }
+.reader-view-tabs { display: inline-flex; align-items: center; flex: none; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
+.reader-view-tabs > button { padding: 5px 11px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius); background: transparent; cursor: var(--cur-pointer, pointer); }
+.reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--accent); }
+.reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
+.reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
+.reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
+.reader-topbar .terminal-reader-subagent-index { position: relative; padding: 0; border: none; background: none; }
+.reader-topbar .terminal-reader-subagent-list { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, 80vw); margin: 0; padding: 6px; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius); z-index: 2; }
+.reader-toolbar-dropdown .dropdown-trigger { font-size: var(--text-sm); border-color: transparent; background: none; }
+.reader-toolbar-dropdown .dropdown-menu { width: max-content; max-width: min(420px, 80vw); color: var(--text-primary); }
+.reader-toolbar-dropdown .dropdown-menu button { white-space: normal; overflow-wrap: anywhere; }
+.reader-toolbar-error { max-width: 260px; color: var(--danger); font-size: var(--text-xs); }
+.terminal-reader[hidden] { display: none; }
+.terminal-reader-chip-actions { display: inline-flex; align-items: center; gap: 6px; position: relative; }
+.reader-topbar-actions .terminal-reader-chip { border-color: transparent; border-radius: var(--radius); }
+.reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border-color)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel)); }
+.reader-topbar-actions .terminal-reader-commit-menu { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; z-index: 3; }
+.terminal-reader.has-topbar .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
+.terminal-reader.has-topbar .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
+.terminal-reader.has-topbar .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+.terminal-reader.has-topbar .terminal-reader-send { right: 10px; bottom: 10px; }
+.terminal-reader.has-topbar .terminal-reader-mic { right: 42px; bottom: 12px; }
 .terminal-reader-error {
   flex: none;
   padding: 0 14px 8px;
@@ -3135,10 +3423,15 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-facts-wrap {
   position: relative;
   flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-subtle);
 }
 .terminal-reader-facts {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -3150,10 +3443,41 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   white-space: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Scrolls, shows nothing: an app-painted thumb over the text hid the dotted
+     underlines, and the path below gives way first so it rarely scrolls. */
+  --app-scrollbar: none;
 }
 .terminal-reader-fact { flex: none; }
+/* The one elastic fact: in a narrow pane (a file viewer beside the chat) the
+   path is ellipsised instead of the whole row becoming a scroller. */
+.terminal-reader-fact.terminal-reader-fact-path {
+  flex: 0 1 auto;
+  min-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .terminal-reader-fact.high { color: var(--warning, #f0a35e); }
 .terminal-reader-fact.worktree { color: var(--accent); }
+/* A limit fact flips between its percentage and a bar of what is left. */
+.terminal-reader-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 -4px;
+  padding: 2px 4px;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-limit:hover { color: var(--text-primary); background: var(--bg-hover); }
+.terminal-reader-limit.high:hover { color: var(--warning, #f0a35e); }
+.terminal-reader-limit-bar { width: 52px; height: 6px; overflow: hidden; background: var(--bg-hover); border-radius: 3px; }
+.terminal-reader-limit:hover .terminal-reader-limit-bar { background: var(--border-subtle); }
+.terminal-reader-limit-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.terminal-reader-limit.high .terminal-reader-limit-bar > span { background: var(--warning, #f0a35e); }
 .terminal-reader-fact-model {
   flex: none;
   max-width: 18em;
@@ -3181,6 +3505,19 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   opacity: 0.6;
   cursor: var(--cur-default, default);
 }
+/* The composer's chip row, portaled to the facts row's end: kept out of its
+   scroll so the chips stay in view and the Commit menu, anchored to the wrap,
+   is not clipped. When the facts need the width, the chips wrap to a line of
+   their own, still at the right end, instead of cutting the facts off. */
+.terminal-reader-facts-chips {
+  flex: none;
+  display: flex;
+  margin-left: auto;
+  padding: 6px 14px 2px 0;
+}
+.terminal-reader-facts-chips:empty { display: none; }
+.terminal-reader-facts-chips .terminal-reader-chips { position: static; flex: none; }
+.terminal-reader-facts-chips .terminal-reader-commit-menu { left: auto; right: 14px; }
 /* The composer's own top rule is the facts row's now. */
 .terminal-reader-facts-wrap + .terminal-reader-composer { border-top: none; }
 .terminal-reader-picker {
@@ -3260,6 +3597,61 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-status-raw { color: var(--text-muted); }
 .terminal-reader-status-raw summary { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-status-raw pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
+/* Claude's /context, in the status card's box: one stacked bar of the window
+   (free space is the track), its legend, the listings folded under it. */
+.terminal-reader-context { overflow-y: auto; }
+.terminal-reader-context-total { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.terminal-reader-context-total > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.terminal-reader-context-total strong { font-size: var(--text-lg); font-variant-numeric: tabular-nums; }
+.terminal-reader-context-percent { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.terminal-reader-context-bar {
+  display: flex;
+  flex-shrink: 0;
+  height: 14px;
+  overflow: hidden;
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+.terminal-reader-context-bar > span { flex: none; min-width: 2px; background: var(--context-swatch); }
+.terminal-reader-context-bar > span + span { box-shadow: inset 1px 0 0 var(--bg-elevated); }
+.terminal-reader-context-bar > span.reserved,
+.terminal-reader-context-legend > li.reserved .terminal-reader-context-swatch {
+  background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, transparent 2px 5px);
+  opacity: 0.6;
+}
+/* The bar's reserved share sits at its far end, as the CLI's grid draws it. */
+.terminal-reader-context-bar > span.reserved { order: 1; margin-left: auto; }
+.terminal-reader-context-legend { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.terminal-reader-context-legend > li,
+.terminal-reader-context-group li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto 52px;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.terminal-reader-context-swatch { width: 10px; height: 10px; background: var(--context-swatch); border-radius: 2px; }
+.terminal-reader-context-legend > li.free .terminal-reader-context-swatch { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border-subtle); }
+.terminal-reader-context-legend > li.free { color: var(--text-muted); }
+.terminal-reader-context-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-reader-context-tokens { font-family: var(--font-mono); text-align: right; }
+.terminal-reader-context-share { color: var(--text-muted); text-align: right; }
+.terminal-reader-context-section {
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+.terminal-reader-context-section > summary { display: flex; align-items: baseline; gap: 8px; cursor: var(--cur-pointer, pointer); }
+.terminal-reader-context-section > summary > span { font-weight: 600; }
+.terminal-reader-context-section > summary > small { color: var(--text-muted); }
+.terminal-reader-context-section > summary > small:last-child { margin-left: auto; font-variant-numeric: tabular-nums; }
+.terminal-reader-context-group { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.terminal-reader-context-group ul { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.terminal-reader-context-group li { grid-template-columns: minmax(0, 1fr) auto 64px; font-size: var(--text-xs); }
+.terminal-reader-context-group .terminal-reader-context-name { font-family: var(--font-mono); }
+.terminal-reader-context-item-bar { height: 4px; overflow: hidden; background: var(--bg-hover); border-radius: 2px; }
+.terminal-reader-context-item-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 /* The live screen's rows under the chat (`lib/agents/readerLive`): the
    choice the session waits on, as buttons, and the agent at work. */
 .terminal-reader-question {
@@ -3291,6 +3683,11 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-secondary);
   background: var(--bg-inset);
   border-radius: var(--radius);
+}
+/* What a screen the chat cannot read shows, over its Go to terminal row. */
+.terminal-reader-stray-screen {
+  align-self: stretch;
+  max-height: 24em;
 }
 .terminal-reader-question-ask {
   margin: 0;
@@ -3353,6 +3750,15 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.terminal-reader-option-group { display: flex; flex-direction: column; gap: 4px; }
+.terminal-reader-option-group + .terminal-reader-option-group { margin-top: 8px; }
+.terminal-reader-option-group-title {
+  padding: 5px 10px 2px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 .terminal-reader-option {
   display: flex;
@@ -3502,13 +3908,21 @@ button.terminal-reader-option:hover:not(:disabled) {
 .terminal-reader-stop:hover {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
-.terminal-reader-stray .terminal-reader-stop {
+.terminal-reader-stray .terminal-reader-stop,
+.terminal-reader-queued-actions .terminal-reader-stop {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
 }
-.terminal-reader-stray .terminal-reader-stop:hover {
+.terminal-reader-stray .terminal-reader-stop:hover,
+.terminal-reader-queued-actions .terminal-reader-stop:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 @media (prefers-reduced-motion: reduce) {
   .terminal-reader-working-dots i { animation: none; opacity: 0.7; }
+}
+/* Settings → Voice: the model picker and its Install button side by side. */
+.settings-voice-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }

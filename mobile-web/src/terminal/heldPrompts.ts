@@ -88,6 +88,15 @@ export function patchHeld(tabId: string, id: number, patch: Patch): void {
   for (const listener of listeners) listener(tabId, id, patch);
 }
 
+/** Every kept hold, gone — this device was unpaired (`forgetDeviceData`). */
+export function forgetHeld(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    // No storage: nothing was kept.
+  }
+}
+
 /** Hear `patchHeld`; the return value stops it. */
 export function onHeldPatched(listener: Listener): () => void {
   listeners.add(listener);

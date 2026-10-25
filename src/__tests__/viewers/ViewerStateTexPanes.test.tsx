@@ -15,10 +15,14 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 vi.mock("../../stores/windows", () => ({
   useWindowsStore: { getState: () => ({ openFile: () => Promise.resolve() }) },
 }));
-vi.mock("../../stores/settings", () => ({
-  useSettingsStore: (sel: (s: unknown) => unknown) =>
-    sel({ settings: { autosave: false, viewer_prefs: {} } }),
-}));
+vi.mock("../../stores/settings", () => {
+  const state = { settings: { autosave: false, viewer_prefs: {} } };
+  return {
+    useSettingsStore: Object.assign((sel: (s: unknown) => unknown) => sel(state), {
+      getState: () => state,
+    }),
+  };
+});
 
 import { useViewerState } from "../../components/embed/FileViewerPane";
 import {

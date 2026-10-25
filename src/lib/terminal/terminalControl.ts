@@ -170,6 +170,9 @@ export const OSC52_MAX_CHARS = 4096;
  * - **Newlines are stripped.** A `\n` is what turns a paste into an *executed*
  *   command line; without one the payload has to be read and submitted by hand.
  *   (Bracketed paste is no defence — the payload can carry its own newline.)
+ * - **Other control characters are stripped** (every C0 character but tab, DEL
+ *   and C1): ESC would close a bracketed paste early, and ^C/^D/^U/^V act on the
+ *   shell's line editor.
  * - **Length is capped** at [`OSC52_MAX_CHARS`], so a long run of spaces cannot
  *   scroll a malicious tail out of sight.
  * - A read-back query (`Pc;?`) returns `null`: answering it would let any program
@@ -197,7 +200,10 @@ export function decodeOsc52Clipboard(data: string): string | null {
     // Malformed payload — ignore rather than surface a write error.
     return null;
   }
-  const flattened = text.replace(/[\r\n]+/g, " ").slice(0, OSC52_MAX_CHARS);
+  // The rest of C0 (ESC would end a bracketed paste early, ^C/^D/^U edit the
+  // line, ^V quotes the next byte) goes too, and so do DEL and the C1 block.
+  // Only tab stays.
+  const flattened = text.replace(/[\r\n]+/g, " ").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").slice(0, OSC52_MAX_CHARS);
   return flattened.length > 0 ? flattened : null;
 }
 

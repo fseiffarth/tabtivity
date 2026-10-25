@@ -10,6 +10,8 @@ import {
   readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
+  pressHintShown,
+  readStrayDialog,
   selectKeys,
   selectSignature,
   UNNUMBERED,
@@ -18,7 +20,9 @@ import {
   type SelectOption,
   type SelectPrompt,
 } from "../../../mobile-web/src/terminal/selectPrompt";
+import { isAntigravityTab, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort } from "../../../mobile-web/src/terminal/antigravity";
 import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
+import { readPromptSuggestion } from "../../../mobile-web/src/terminal/promptSuggestion";
 import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
@@ -62,11 +66,21 @@ export interface ReaderLive {
    * error or a screen of the CLI's own the chat cannot draw. The Reader
    * points at the terminal once this lasts (`STRAY_MS`). */
   stray: boolean;
+  /** The bottom of that screen as drawn, blank rows dropped at its ends, so
+   * the chat can show what it cannot read. Empty unless `stray`. */
+  screen: string[];
+  /** Claude Code's prompt suggestion, dimmed in its empty input box ("" when
+   * none): on the screen only, no stored record carries it. */
+  suggestion: string;
 }
 
 export const NO_LIVE: ReaderLive = {
-  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false,
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false, screen: [], suggestion: "",
 };
+
+/** Rows of a stray screen the chat shows: a first-run screen fits, a long
+ * output's end says enough. */
+const STRAY_SCREEN_ROWS = 40;
 
 /** Rows read off the end of the buffer for the live reading. What it looks
  * for — a dialog, the busy row, the status line — sits at the bottom of the
@@ -83,7 +97,9 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
-  const frameStart = inputFrameStart(lines, agentLabel);
+  // A page that names its own keys (`Press enter to save`) holds no input box,
+  // whatever line of it reads as one.
+  const frameStart = pressHintShown(lines) ? lines.length : inputFrameStart(lines, agentLabel);
   const screen = lines.slice(0, frameStart);
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
@@ -91,7 +107,13 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // reads as: it is read off the whole screen.
   const hooksPage = readCodexHooksPage(lines, agentLabel);
   const tail = hooksPage ? lines : screen.slice(start);
-  const question = hooksPage ?? (tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null);
+  // No input box and no busy row: the CLI has put a screen of its own in its
+  // place — a first run's theme picker or notes — read without a footer.
+  const noFrame = frameStart >= lines.length;
+  const question = hooksPage ?? (tail.length > 0
+    ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
+      ?? (noFrame && !agentWork(lines) ? readStrayDialog(tail, columns) : null)
+    : null);
   if (question) {
     const parts = questionParts(tail, question);
     const ask = parts.ask.map((line) => line.text.trimEnd());
@@ -113,13 +135,27 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
       working: null,
       status,
       stray: false,
+      screen: [],
+      suggestion: "",
     };
   }
   const working = agentWork(lines);
   // `inputFrameStart` answers the screen's length when it finds no input box
   // (or the box-like row is a dialog's highlighted option).
-  const stray = !working && frameStart >= lines.length && lines.some((line) => line.text.trim() !== "");
-  return { ...NO_LIVE, working, status, stray };
+  const stray = !working && noFrame && lines.some((line) => line.text.trim() !== "");
+  return {
+    ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [],
+    // Only an idle box holds one; a busy row means a turn is running.
+    suggestion: working ? "" : readPromptSuggestion(lines, agentLabel),
+  };
+}
+
+function strayScreen(rows: string[]): string[] {
+  let end = rows.length;
+  while (end > 0 && !rows[end - 1].trim()) end -= 1;
+  let start = Math.max(0, end - STRAY_SCREEN_ROWS);
+  while (start < end && !rows[start].trim()) start += 1;
+  return rows.slice(start, end).map((row) => row.trimEnd());
 }
 
 function tabsKey(tabs: readonly QuestionTab[]): string {
@@ -140,6 +176,8 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.working?.tokens === b.working?.tokens
     && a.working?.effort === b.working?.effort
     && a.stray === b.stray
+    && a.screen.join("\n") === b.screen.join("\n")
+    && a.suggestion === b.suggestion
     && sameStatus(a.status, b.status);
 }
 
@@ -157,7 +195,15 @@ function sameStatus(a: SessionStatus | null, b: SessionStatus | null): boolean {
  */
 export function readModelPicker(buffer: ReadableBufferLike, agentLabel: string): SelectPrompt | null {
   const { lines } = readableScreen(buffer, READER_ROWS);
+  if (isAntigravityTab(agentLabel)) return readAntigravityPicker(lines);
   return isOpenCodeTab(agentLabel) ? readOpenCodePicker(lines) : readSelectPrompt(lines, agentLabel);
+}
+
+/** The effort slider Antigravity's `Switch Model` dialog draws under the row
+ * its highlight is on: model and effort are one dialog there, so the effort is
+ * read off the same screen as the models, for whichever model is highlighted. */
+export function readAntigravitySlider(buffer: ReadableBufferLike): AntigravityEffort | null {
+  return readAntigravityEffort(readableScreen(buffer, READER_ROWS).lines);
 }
 
 /** The frame of OpenCode's picker on screen, rows and headings as drawn:

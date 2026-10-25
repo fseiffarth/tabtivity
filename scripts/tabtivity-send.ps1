@@ -3,11 +3,17 @@
 # conversion. Windows PowerShell 5.1 and PowerShell 7 both run it.
 $ErrorActionPreference = 'Stop'
 function Fail($Code, $Message) { [Console]::Error.WriteLine("tabtivity-send: $Message"); exit $Code }
-function Usage { Write-Output @('tabtivity-send FILE...', 'command | tabtivity-send -n NAME', 'tabtivity-send --clear', 'tabtivity-send --help') }
+function Usage { Write-Output @('tabtivity-send [--phone|--desktop] FILE...', 'command | tabtivity-send -n NAME', 'tabtivity-send --clear', 'tabtivity-send --help') }
 if ($args.Count -eq 0) { Usage; exit 2 }
 if ($args[0] -ceq '--help') { Usage; exit 0 }
 $mode = 'files'
 $label = $null
+$route = $null
+if (($args.Count -gt 0) -and (($args[0] -ceq '--phone') -or ($args[0] -ceq '--desktop'))) {
+    $route = ([string]$args[0]).Substring(2)
+    $args = @($args | Select-Object -Skip 1)
+    if ($args.Count -eq 0) { Fail 2 'Name at least one file.' }
+}
 switch -CaseSensitive ($args[0]) {
     '--clear' { if ($args.Count -ne 1) { Fail 2 'Use --clear alone.' }; $mode = 'clear' }
     '-n' { if ($args.Count -ne 2) { Fail 2 'Use -n NAME for stdin.' }; $mode = 'stdin'; $label = $args[1] }
@@ -34,6 +40,52 @@ foreach ($dir in @((Join-Path $root '.tabtivity'), $outbox)) {
 # the file; every gallery lists it. No tab (a plain shell): gallery only.
 $tab = $env:TABTIVITY_TAB_UID
 if ($tab -cnotmatch '^[A-Za-z0-9-]{1,64}\z') { $tab = $null }
+# Where the user last typed into this tab (see the sh twin): the live-sessions
+# folder sits beside this script's. Unknown goes to both screens.
+if (-not $route) {
+    $route = 'both'
+    if ($tab) {
+        $from = Join-Path (Split-Path -Parent $PSScriptRoot) "live_sessions\$tab.from"
+        try {
+            $item = Get-Item -Force -LiteralPath $from -ErrorAction Stop
+            if (-not $item.PSIsContainer -and -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                $word = [IO.File]::ReadAllText($from)
+                if ($word.StartsWith('phone')) { $route = 'phone' } elseif ($word.StartsWith('desktop')) { $route = 'desktop' }
+            }
+        } catch {}
+    }
+}
+# Where a sent file lives in the project, root-relative with `/`, for its
+# origin marker: the phone then opens the project file itself, and its marks
+# are the files drawer's. Empty for a file outside the project, an outbox file
+# sent again, or a path the marker could not hold. It is also the path the
+# desktop chat shows a file by: it looks names up under the tab's project.
+function OriginOf($Full) {
+    $dir = [IO.Path]::GetDirectoryName($Full)
+    if (-not $dir) { return '' }
+    if (-not $dir.EndsWith('\')) { $dir = $dir + '\' }
+    if (-not $dir.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { return '' }
+    $rel = ($dir.Substring($rootPrefix.Length) + [IO.Path]::GetFileName($Full)).Replace('\', '/')
+    if ($rel.StartsWith('.tabtivity/', [StringComparison]::OrdinalIgnoreCase) -or $rel.Contains("`n")) { return '' }
+    return $rel
+}
+
+function DesktopLine($Rel) { Write-Output "$([char]0x2192) desktop: name $Rel in your reply; the desktop chat shows it" }
+# The desktop has nothing to copy: the agent names the project file in its
+# reply and the chat draws it. Piped bytes have no file to name, so -n goes
+# to the phone wherever the user is.
+if (($mode -eq 'files') -and ($route -eq 'desktop')) {
+    $rels = @()
+    foreach ($source in $args) {
+        $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($source)
+        if (-not [IO.File]::Exists($full)) { Fail 4 'Only regular files can be sent.' }
+        $rel = OriginOf $full
+        if (-not $rel) { Fail 4 'The desktop shows project files only; copy it into the project first.' }
+        $rels += $rel
+    }
+    foreach ($rel in $rels) { DesktopLine $rel }
+    exit 0
+}
 try { [void][IO.Directory]::CreateDirectory($outbox) }
 catch { Fail 3 'Cannot create the project outbox.' }
 # One send or clear at a time: the `.send-lock` directory is the mutex,
@@ -53,20 +105,6 @@ catch {
 # clear removes and what the 1 GiB cap sums.
 function OutboxFiles {
     @(Get-ChildItem -Force -LiteralPath $outbox -File | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })
-}
-
-# Where a sent file lives in the project, root-relative with `/`, for its
-# origin marker: the phone then opens the project file itself, and its marks
-# are the files drawer's. Empty for a file outside the project, an outbox file
-# sent again, or a path the marker could not hold.
-function OriginOf($Full) {
-    $dir = [IO.Path]::GetDirectoryName($Full)
-    if (-not $dir) { return '' }
-    if (-not $dir.EndsWith('\')) { $dir = $dir + '\' }
-    if (-not $dir.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { return '' }
-    $rel = ($dir.Substring($rootPrefix.Length) + [IO.Path]::GetFileName($Full)).Replace('\', '/')
-    if ($rel.StartsWith('.tabtivity/', [StringComparison]::OrdinalIgnoreCase) -or $rel.Contains("`n")) { return '' }
-    return $rel
 }
 
 # A directory entry by that name, a dangling link included: the sh twin's
@@ -194,6 +232,8 @@ try {
             }
             $report = KindOf $dest
             Write-Output "$([char]0x2192) phone: $leaf ($([Math]::Ceiling($size / 1024)) KB) $([char]0x2014) $report"
+            # Nobody typed into the tab yet: the desktop gets the pointer too.
+            if (($route -eq 'both') -and $originRel) { DesktopLine $originRel }
         } catch { Fail 4 $_.Exception.Message }
         finally {
             if ($inputStream) { $inputStream.Dispose() }

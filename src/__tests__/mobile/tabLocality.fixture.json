@@ -1,0 +1,16 @@
+[
+  { "kind": "agent", "location": null, "vm": false, "local": true },
+  { "kind": "agent", "location": "local", "vm": false, "local": true },
+  { "kind": "agent", "location": "remote", "vm": false, "local": false },
+  { "kind": "agent", "location": "host:w1", "vm": false, "local": false },
+  { "kind": "shell", "location": null, "vm": false, "local": false },
+  { "kind": "shell", "location": "local", "vm": false, "local": true },
+  { "kind": "shell", "location": "remote", "vm": false, "local": false },
+  { "kind": "shell", "location": "host:w1", "vm": false, "local": false },
+  { "kind": "local_agent", "location": null, "vm": false, "local": true },
+  { "kind": "local_agent", "location": "remote", "vm": false, "local": true },
+  { "kind": "local_agent", "location": null, "vm": true, "local": true },
+  { "kind": "agent", "location": null, "vm": true, "local": false },
+  { "kind": "agent", "location": "local", "vm": true, "local": false },
+  { "kind": "shell", "location": "local", "vm": true, "local": false }
+]

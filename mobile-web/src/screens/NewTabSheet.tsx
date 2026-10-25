@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { getLaunchOptions, type AgentRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
+import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
+import { apiTarget, localTarget } from "../newTabDefault";
 
 /** How the tap wants the agent started, beyond which agent and mode. */
 export interface NewTabLaunch {
@@ -14,8 +15,8 @@ export interface NewTabLaunch {
   sign_in?: "default" | "alternate";
   /** A local-model agent: the opaque id `launch-options` listed. */
   local?: string;
-  /** A chat of the assistant scope: the opaque launch id its sheet listed. */
-  assistant?: string;
+  /** On the API key the desktop keeps, whatever Manage CLIs says. */
+  api_key?: true;
 }
 
 /**
@@ -38,6 +39,8 @@ export interface NewTabLaunch {
  *
  * A desktop with a local (Ollama) model set for tabs adds the desktop "+"'s
  * local-model group under the agents: the same agents, driving that model.
+ * One with a provider API key saved adds its API section the same way: the
+ * agents that key can run, each started on the key.
  *
  * "Sign in to an agent" lists every agent with the state of its shared login
  * and opens a sign-in tab for the one picked (`src/lib/agents/signInLaunch.ts`)
@@ -47,7 +50,7 @@ export interface NewTabLaunch {
  * new session, and the sheet closes on the tap rather than waiting for the
  * desktop, so a slow create is a screen the reader can still read.
  */
-export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, defaultAgent, onDefault, onPick, onSendFile, onClose }: {
+export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, agentsOnly = false, defaultTarget, defaultLabel, onDefault, onPick, onSendFile, onClose }: {
   projectId: string;
   agents: AgentRow[];
   /** The desktop lets the phone open shells (off by default). */
@@ -64,10 +67,16 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
    *  the sheet is the send-a-file row alone, titled as such, since the
    *  project inbox is a file the sidecar writes and needs no tab. */
   creates?: boolean;
-  /** The agent a tap on the screen's ＋ starts (`newTabDefault.ts`); with
-   *  `onDefault`, each agent tile gets a ★ that makes it that agent. */
-  defaultAgent?: string;
-  onDefault?: (agent: AgentRow) => void;
+  /** The project's type takes agents alone from the phone (`create: "agents"`;
+   *  a remote project's shell would run on the remote host): the sheet says
+   *  so in place of the shell button the caller has already left out. */
+  agentsOnly?: boolean;
+  /** What a tap on the screen's ＋ starts (`newTabDefault.ts`): the stored key
+   *  and its name. With `onDefault`, each agent tile — and each API and
+   *  local-model row — gets a ★ that makes it that. */
+  defaultTarget?: string;
+  defaultLabel?: string;
+  onDefault?: (key: string, label: string) => void;
   onPick: (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => void;
   /** Opens the phone's file picker; runs inside the tap, which the picker needs. */
   onSendFile: () => void;
@@ -96,7 +105,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
     onPick("agent", agent, undefined, { cloud: launch.action });
   };
   const title = t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send");
-  const starred = onDefault ? agents.find((agent) => agent.id === defaultAgent) : undefined;
+  const starred = onDefault && defaultTarget ? defaultLabel : undefined;
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet new-tab-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
@@ -112,6 +121,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         </div>
       </div> : <>
       {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
+      {creates && agentsOnly && <p className="sheet-note">{t("mobile.newTab.agentsOnly")}</p>}
       {creates && headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
         {/* Every row that opens a tab is behind `creates`; the file row at the
@@ -126,19 +136,14 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         <div className="new-tab-agents">{agents.map((agent) => <div className="agent-create" key={agent.id}>
           <button disabled={busy} onClick={() => pickAgent(agent)}>{agent.label}</button>
           {!headless && agent.modes.map((mode) => <button className="mode" disabled={busy} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
-          {onDefault && <button
-            className="new-tab-default"
-            aria-pressed={agent.id === defaultAgent}
-            aria-label={t(agent.id === defaultAgent ? "mobile.newTab.isDefault" : "mobile.newTab.setDefault", { agent: agent.label })}
-            title={t(agent.id === defaultAgent ? "mobile.newTab.isDefault" : "mobile.newTab.setDefault", { agent: agent.label })}
-            onClick={() => onDefault(agent)}
-          ><span aria-hidden="true">{agent.id === defaultAgent ? "★" : "☆"}</span></button>}
+          {onDefault && <DefaultStar starred={agent.id === defaultTarget} label={agent.label} onClick={() => onDefault(agent.id, agent.label)} />}
         </div>)}</div>
-        {starred && <p className="sheet-note">{t("mobile.newTab.defaultNote", { agent: starred.label })}{isUntested("mobile.project.fabQuick") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+        {starred && <p className="sheet-note">{t("mobile.newTab.defaultNote", { agent: starred })}{isUntested("mobile.project.fabQuick") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
         {/* A desktop that reports no agents still opens shells — say so, rather
             than leaving the sheet looking half-loaded. */}
         {agents.length === 0 && <p className="sheet-note">{t("mobile.newTab.noAgents")}</p>}
-        {options.local && !headless && <LocalModelGroup local={options.local} busy={busy} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
+        {options.local && !headless && <LocalModelGroup local={options.local} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
+        {options.api_key && !headless && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
         {!headless && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {options.sign_in.length > 0 && !headless && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && <NeedsWindow agents={agents} options={options} linked={linked} />}
@@ -154,6 +159,16 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
       </>}
     </section>
   </div>;
+}
+
+/** The ★ in a tile's corner: makes that row the ＋'s tap. `label` is the name
+ * the notes and the tooltip give the row. */
+function DefaultStar({ starred, label, onClick }: { starred: boolean; label: string; onClick: () => void }) {
+  const t = useT();
+  const text = t(starred ? "mobile.newTab.isDefault" : "mobile.newTab.setDefault", { agent: label });
+  return <button className="new-tab-default" aria-pressed={starred} aria-label={text} title={text} onClick={onClick}>
+    <span aria-hidden="true">{starred ? "★" : "☆"}</span>
+  </button>;
 }
 
 /** With no window, everything only the window can start, folded into one
@@ -203,16 +218,41 @@ function CloudGroup({ agents, cloud, busy, onPick }: { agents: AgentRow[]; cloud
 /** The local-model agents, as the desktop "+" groups them under the model's
  * name. A model not yet on the GPU still offers them — the phone cannot watch
  * a load the way the desktop menu does — and says the first answer waits. */
-function LocalModelGroup({ local, busy, onPick }: { local: LocalLaunchRow; busy: boolean; onPick: (id: string) => void }) {
+function LocalModelGroup({ local, busy, defaultTarget, onDefault, onPick }: { local: LocalLaunchRow; busy: boolean; defaultTarget?: string; onDefault?: (key: string, label: string) => void; onPick: (id: string) => void }) {
   const t = useT();
   const cautioned = local.agents.filter((row) => row.caution).map((row) => row.label);
   return <div className="new-tab-local" role="group" aria-label={t("mobile.newTab.localGroup", { model: local.model })}>
     <small>{t("mobile.newTab.localGroup", { model: local.model })}{isUntested("mobile.newTab.local") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
     <div className="new-tab-agents">{local.agents.map((row) => <div className="agent-create" key={row.id}>
       <button disabled={busy} onClick={() => onPick(row.id)}>{row.label}</button>
+      {onDefault && <DefaultStar starred={localTarget(row.id) === defaultTarget} label={`${row.label} · ${local.model}`} onClick={() => onDefault(localTarget(row.id), `${row.label} · ${local.model}`)} />}
     </div>)}</div>
     {!local.ready && <p className="sheet-note">{t("mobile.newTab.localLoads", { model: local.model })}</p>}
     {cautioned.length > 0 && <p className="sheet-note">{t("mobile.newTab.localCaution", { agents: cautioned.join(", ") })}</p>}
+  </div>;
+}
+
+/** The desktop "+"'s API section: one "<agent> (API)" button per agent a
+ * stored provider key can run, started on the key while the grid's plain
+ * buttons keep to what Manage CLIs says. A spent budget leaves its button
+ * disabled, as the desktop row is. */
+function ApiKeyGroup({ agents, rows, busy, defaultTarget, onDefault, onPick }: { agents: AgentRow[]; rows: ApiKeyLaunchRow[]; busy: boolean; defaultTarget?: string; onDefault?: (key: string, label: string) => void; onPick: (agent: AgentRow) => void }) {
+  const t = useT();
+  const listed = rows.flatMap((row) => {
+    const agent = agents.find((entry) => entry.id === row.agent_id);
+    return agent ? [{ agent, row }] : [];
+  });
+  if (!listed.length) return null;
+  return <div className="new-tab-local" role="group" aria-label={t("newTabMenu.groupApiKey")}>
+    <small>{t("newTabMenu.groupApiKey")}{isUntested("mobile.newTab.apiKey") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
+    <div className="new-tab-agents">{listed.map(({ agent, row }) => {
+      const label = t("newTabMenu.apiKeyEntry", { label: agent.label });
+      return <div className="agent-create" key={agent.id}>
+        <button disabled={busy || row.budget_reached} onClick={() => onPick(agent)}>{row.budget_reached ? t("newTabMenu.apiKeyEntryBudgetReached", { label }) : label}</button>
+        {onDefault && <DefaultStar starred={apiTarget(agent.id) === defaultTarget} label={label} onClick={() => onDefault(apiTarget(agent.id), label)} />}
+      </div>;
+    })}</div>
+    <p className="sheet-note">{t("mobile.newTab.apiKeyNote")}</p>
   </div>;
 }
 

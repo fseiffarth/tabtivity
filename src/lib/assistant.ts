@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Settings } from "../types";
+import { DEFAULT_AGENT_MODELS } from "./agents/agentPrefaces";
+import { readableScreen, type ReadableBufferLike } from "../../mobile-web/src/terminal/readableScreen";
+import { mergeSelectRows, readSelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 
 /**
  * The chat assistant's shared frontend constants (`docs/assistant_plan.md`).
@@ -87,6 +90,87 @@ export interface AssistantCliOption {
   signedIn: boolean | null;
   /** A chat can start now. */
   ready: boolean;
+  /** Codex: the models its chat can be switched to (its catalog's listed
+   *  slugs, the start model first). Empty for every other CLI. */
+  models?: string[];
+}
+
+/** The model of a Claude chat launched without `--model`: the picker's
+ *  "Default" row. Never reaches an argv — `switchAssistantModel` turns it into
+ *  a launch with no model. */
+export const ASSISTANT_DEFAULT_MODEL = "default";
+
+/** One model a chat can be switched to, as its sheet lists it. */
+export interface AssistantModelRow {
+  /** What the chat is launched with (`AssistantLaunch.model`), or
+   *  {@link ASSISTANT_DEFAULT_MODEL}. */
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/** The row a chat's launch runs on now; `undefined` for a launch no row names. */
+export function assistantCurrentModel(launch: AssistantLaunch): string | undefined {
+  return launch.model ?? (launch.cli === "claude" ? ASSISTANT_DEFAULT_MODEL : undefined);
+}
+
+/** The `--model` a row of Claude's picker stands for: `Default (recommended)`
+ *  is the default, `Opus 5.5` is `claude-opus-5-5`, a bare `Fable` (older
+ *  pickers name the family and put the version in the note) the alias. A row
+ *  in any other shape (`Opus (1M context)`) has no name a chat can take. */
+export function claudeModelId(label: string): string | null {
+  const clean = label.replace(/\s*\u2714\s*$/u, "").trim();
+  if (/^default\b/iu.test(clean)) return ASSISTANT_DEFAULT_MODEL;
+  const named = /^(opus|sonnet|haiku|fable)(?:\s+(\d+(?:\.\d+)?))?$/iu.exec(clean);
+  if (!named) return null;
+  const family = named[1].toLowerCase();
+  return named[2] ? `claude-${family}-${named[2].replace(".", "-")}` : family;
+}
+
+/** Claude's `/model` rows off the screens its probe captured as the picker's
+ *  highlight walked down (`assistant_claude_models`), read and pieced
+ *  together by the reader the model sheet of every other Claude tab uses
+ *  (`readSelectPrompt`, `mergeSelectRows`). The ✔ Claude draws marks the
+ *  home's default, not the chat's, so it is dropped. Empty when no screen
+ *  holds a picker. */
+export function claudeModelRows(screens: readonly (readonly string[])[]): AssistantModelRow[] {
+  let step: SelectStep | null = null;
+  for (const screen of screens) {
+    const buffer: ReadableBufferLike = {
+      length: screen.length,
+      getLine: (row) => {
+        const text = screen[row];
+        return text === undefined ? undefined : { length: text.length, translateToString: () => text };
+      },
+    };
+    const picker = readSelectPrompt(readableScreen(buffer, screen.length, { plain: true }).lines, "Claude");
+    if (picker) step = mergeSelectRows(step, picker);
+  }
+  const rows: AssistantModelRow[] = [];
+  for (const option of step?.options ?? []) {
+    const id = claudeModelId(option.label);
+    if (!id || rows.some((row) => row.id === id)) continue;
+    const label = option.label.replace(/\s*\u2714\s*$/u, "").trim();
+    rows.push(option.description ? { id, label, description: option.description } : { id, label });
+  }
+  return rows;
+}
+
+/**
+ * The models a chat on `cli` can run, for the Reader's model chip, the head's
+ * model dropdown and the phone's model sheet: a local CLI's installed Ollama
+ * models, Claude's own `/model` rows, Codex's catalog. A chat's slash
+ * commands are off (`--disable-slash-commands`), so Claude's picker is read
+ * in a probe of the assistant's home instead (its aliases when that fails),
+ * and a pick restarts the chat on it (`switchAssistantModel`).
+ */
+export async function assistantModelRows(cli: AssistantCliOption, options: AssistantOptions): Promise<AssistantModelRow[]> {
+  const plain = (id: string): AssistantModelRow => ({ id, label: id });
+  if (cli.local) return options.localModels.map(plain);
+  if (cli.id !== "claude") return (cli.models ?? []).map(plain);
+  const screens = await invoke<string[][]>("assistant_claude_models").catch(() => null);
+  const rows = Array.isArray(screens) ? claudeModelRows(screens) : [];
+  return rows.length > 0 ? rows : (DEFAULT_AGENT_MODELS.claude ?? []).map(plain);
 }
 
 /** The web lane's search backend. Never carries the key. */

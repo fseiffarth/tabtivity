@@ -24,7 +24,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as pickOnServer, save as saveOnServer } from "@tauri-apps/plugin-dialog";
 import { isServerClient } from "./transport/linkState";
-import { stripFormatControls } from "./textSafety";
+import { escapeHtml, stripFormatControls } from "./textSafety";
 import { formatBytes } from "./formatBytes";
 import { hashString } from "./theme/categoryColor";
 import type { TranslationKey } from "./i18n";
@@ -676,7 +676,8 @@ export function mailAiFeatureOn(
   account: MailAccount | null | undefined,
   feature: MailAiFeature,
 ): boolean {
-  return account?.ai?.[feature] === true && mailAiResolvable(settings);
+  // Not while the AI switch is off (`lib/aiSwitch.ts`); the settings stay as set.
+  return account?.ai?.[feature] === true && mailAiResolvable(settings) && settings?.ai_off !== true;
 }
 
 /** {@link mailAiFeatureOn} as a store subscription — the call site for a
@@ -686,7 +687,7 @@ export function useMailAiFeature(
   account: MailAccount | null | undefined,
   feature: MailAiFeature,
 ): boolean {
-  const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings));
+  const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings) && s.settings?.ai_off !== true);
   return resolvable && account?.ai?.[feature] === true;
 }
 
@@ -1074,17 +1075,6 @@ const FRAME_STYLE = `
   .mail-link::after { content: " \\2197"; font-size: 0.85em; opacity: 0.7; }
   blockquote { margin: 0 0 0 10px; padding-left: 10px; border-left: 2px solid #c8c8c8; color: #555; }
 `;
-
-/** Escape text for a text node / attribute value. Used for the plain-text body,
- *  which is never HTML and must never be treated as such. */
-export function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 /**
  * **The tripwire, not a second sanitizer.**

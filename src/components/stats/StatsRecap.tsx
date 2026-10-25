@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 
 import { APP_TIMER_ID } from "../../stores/timer";
-import { ROOT_SCOPE, useUsageStore, type GitStats } from "../../stores/usage";
+import { useUsageStore, type GitStats } from "../../stores/usage";
+import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { NAMES } from "../../lib/brand";
 import { useProjectsStore } from "../../stores/projects";
@@ -25,6 +26,7 @@ import { Toggle } from "../common/Toggle";
 import { Typewriter } from "../common/Typewriter";
 import { UntestedTag } from "../common/UntestedTag";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { formatWorkedTime } from "../../lib/formatWorkedTime";
 import { dayAnchorMs, type WelcomeBack } from "../../lib/welcomeBack";
 import {
   fetchTokenReport,
@@ -40,12 +42,9 @@ import {
   type TokenSplit,
 } from "../../lib/tokenStats";
 
-/** Human duration, matching the header timer's phrasing. */
-function formatTime(secs: number): string {
-  if (secs < 60) return secs > 0 ? "< 1m" : "0m";
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+/** Human duration, matching the header timer's phrasing; none at all reads `0m`. */
+function formatTime(t: (key: TranslationKey) => string, secs: number): string {
+  return secs > 0 ? formatWorkedTime(t, secs) : "0m";
 }
 
 const PERIOD_LABEL_KEYS: Record<Period, TranslationKey> = {
@@ -572,7 +571,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
               <Metric label={t("stats.metricTabsOpened")} value={String(openedTabs)} />
               <Metric
                 label={t("stats.metricAgentsWorking")}
-                value={formatTime(workedS)}
+                value={formatTime(t, workedS)}
                 sub={t("stats.metricSummedAcrossTabs")}
               />
               <Metric
@@ -603,7 +602,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
                     label={projectName(pid)}
                     value={secs}
                     max={rankedProjects[0][1]}
-                    suffix={formatTime(secs)}
+                    suffix={formatTime(t, secs)}
                   />
                 ))}
               </div>
@@ -611,7 +610,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
               <p className="settings-help">{t("stats.noTrackedTime")}</p>
             )}
             <div className="stats-metrics">
-              <Metric label={t("stats.metricAppOpen")} value={formatTime(appSecs)} />
+              <Metric label={t("stats.metricAppOpen")} value={formatTime(t, appSecs)} />
               <Metric
                 label={t("stats.metricCommandsRun")}
                 value={String(shellCommands)}

@@ -178,6 +178,7 @@ describe("#62 keyboard nav wiring", () => {
     const groups = allGroups(useTabsStore.getState().layout);
     const bGroup = groups.find((g) => g.tabKeys.includes(b.key))!;
     useTabsStore.getState().focusGroup(bGroup.id);
+    useSettingsStore.setState({ settings: { close_subwindow_on_last_tab: true } });
     render(<Harness />);
 
     // Ctrl+W closes the active tab (b) → its group empties and collapses.

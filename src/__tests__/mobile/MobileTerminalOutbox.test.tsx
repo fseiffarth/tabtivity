@@ -101,7 +101,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     fireEvent.click(screen.getByRole("button", { name: "Open plot.png" }));
     const viewer = screen.getByRole("dialog", { name: "plot.png" });
     expect(viewer.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/plot.png");
-    expect(viewer.textContent).toContain("47 KB");
+    expect(viewer.textContent).toContain("46.9 KB");
     // Closing the picture lands back on the grid it was opened from.
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     screen.getByRole("dialog", { name: "Files from the agent" });

@@ -1192,6 +1192,23 @@
   text-overflow: ellipsis;
 }
 
+/* A shell tab's launch line (program + args, typed command): monospace and
+   wrapped, since the whole point is reading the args the tab was started with;
+   capped at four lines so a long one-liner can't grow the card down the window. */
+.tab-popup-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
 .tab-popup-meta.working {
   color: var(--success);
 }
@@ -1939,6 +1956,28 @@ button.tab-todo-link {
 }
 .tab-mode-mark.plan { color: var(--accent-secondary); }
 .tab-mode-mark.goal { color: var(--accent); }
+/* The ▶ Continue pill on an interrupted agent tab (`TabContinueButton`): the
+   mode pills' shape, in the interrupted ring's colour, and a button. */
+.tab-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  height: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--status-interrupted);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  cursor: var(--cur-pointer, pointer);
+}
+.tab-continue:hover { background: color-mix(in srgb, currentColor 28%, transparent); }
+.tab-continue:disabled { cursor: var(--cur-default, default); opacity: 0.55; }
+.tab-continue svg { width: 7px; height: 7px; }
 .tab-source { cursor: var(--cur-default, default); }
 .tab-locality.local,
 .tab-source.local { color: var(--success); }
@@ -2091,6 +2130,15 @@ button.tab-todo-link {
      the strip only takes what its tabs need now (so the + stays beside them),
      so the auto margin is what claims the free space instead. */
   margin-left: auto;
+}
+/* The cluster right-aligns its buttons itself (`justify-content: flex-end`).
+   Their own `margin-left: auto` would split the free space a docked viewer's
+   reserved width adds — with no hide button between ◫ and close (an empty
+   subwindow) the ◫ drifted to the middle of the band when the viewer opened. */
+.tab-controls > .subwindow-files-toggle,
+.tab-controls > .subwindow-hide,
+.tab-controls > .subwindow-close {
+  margin-left: 0;
 }
 
 /* #42: detached ("pop out") window title-bar controls — the native
@@ -2730,7 +2778,10 @@ button:has(> .menu-shortcut) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 240px;
+  /* A fixed width, never wider than the window: a long argument line scrolls
+     inside its field instead of pushing the popover off-screen. */
+  width: min(420px, calc(100vw - 16px));
+  box-sizing: border-box;
   padding: 8px;
   color: var(--text-primary);
 }
@@ -2749,6 +2800,21 @@ button:has(> .menu-shortcut) {
   padding: 4px 6px;
   font-family: var(--font-mono, monospace);
   font-size: 11px;
+}
+/* The interpreter picker: a long venv path must not stretch the popover. */
+select.file-run-args-input {
+  max-width: 100%;
+}
+/* The arguments as a list — one option per line (`runArgsFormat.ts`), shared
+   by the file tree's and the editor's Run popovers. */
+.file-run-args-list {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
 }
 .file-run-args-input:focus {
   outline: none;

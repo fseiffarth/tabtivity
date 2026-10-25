@@ -127,6 +127,16 @@ describe("OSC 52 clipboard writes are bounded, not trusted", () => {
     expect(decodeOsc52Clipboard(osc52("\n\n"))).toBe(" ");
   });
 
+  it("strips every other control character but tab", () => {
+    // ESC closes a bracketed paste early (`ESC[201~`), ^C/^D/^U/^V act on the
+    // shell's line editor, DEL is no text either.
+    expect(decodeOsc52Clipboard(osc52("a\u001b[201~b\u0003c\u0004d\u0015e\u0016f\u0000g\u007fh"))).toBe(
+      "a[201~bcdefgh",
+    );
+    expect(decodeOsc52Clipboard(osc52("col1\tcol2"))).toBe("col1\tcol2");
+    expect(decodeOsc52Clipboard(osc52("\u001b\u0003"))).toBeNull();
+  });
+
   it("caps the payload length", () => {
     const long = "x".repeat(OSC52_MAX_CHARS + 500);
     expect(decodeOsc52Clipboard(osc52(long))!.length).toBe(OSC52_MAX_CHARS);

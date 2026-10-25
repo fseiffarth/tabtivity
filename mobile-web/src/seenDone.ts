@@ -8,6 +8,7 @@
 // with no `done_at` (an older desktop) is seen once for good.
 
 import { storageKey } from "../../src/lib/brand";
+import { readJson, writeJson } from "../../src/lib/persist";
 
 const KEY = storageKey("mobile.seenDone");
 
@@ -23,19 +24,13 @@ type SeenStorage = Pick<Storage, "getItem" | "setItem">;
 
 /** Anything that is not a list of [id, number] pairs reads as nothing seen,
  * rather than being trusted into the check. */
-export function parseSeenDone(raw: string | null): SeenDone {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is [string, number] => Array.isArray(entry)
-      && entry.length === 2
-      && typeof entry[0] === "string"
-      && typeof entry[1] === "number"
-      && Number.isFinite(entry[1]));
-  } catch {
-    return [];
-  }
+export function parseSeenDone(parsed: unknown): SeenDone {
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((entry): entry is [string, number] => Array.isArray(entry)
+    && entry.length === 2
+    && typeof entry[0] === "string"
+    && typeof entry[1] === "number"
+    && Number.isFinite(entry[1]));
 }
 
 /** The list with `tabId` marked seen at `doneAt`, moved to the front and the
@@ -54,22 +49,14 @@ export function isUnseenDone(seen: SeenDone, tab: { id: string; agent_status?: s
 }
 
 export function readSeenDone(storage?: SeenStorage): SeenDone {
-  try {
-    return parseSeenDone((storage ?? localStorage).getItem(KEY));
-  } catch {
-    // Storage can be unavailable in a private browser: nothing is seen.
-    return [];
-  }
+  // Storage can be unavailable in a private browser: nothing is seen.
+  return readJson(KEY, parseSeenDone, [], storage);
 }
 
 /** Marks one tab seen and stores it; answers the list as stored. */
 export function markDoneSeen(tabId: string, doneAt: number | undefined, storage?: SeenStorage): SeenDone {
   const next = withSeen(readSeenDone(storage), tabId, doneAt);
-  try {
-    (storage ?? localStorage).setItem(KEY, JSON.stringify(next));
-  } catch {
-    // See readSeenDone.
-  }
+  writeJson(KEY, next, storage);
   return next;
 }
 
@@ -81,20 +68,12 @@ const INTERRUPTED_KEY = storageKey("mobile.seenInterrupted");
  * soon as it reports any other state (`withoutResumed`) and its next
  * interruption shows again. */
 export function readSeenInterrupted(storage?: SeenStorage): ReadonlyArray<string> {
-  try {
-    const parsed: unknown = JSON.parse((storage ?? localStorage).getItem(INTERRUPTED_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
+  return readJson(INTERRUPTED_KEY, (parsed) =>
+    Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [], [], storage);
 }
 
 export function writeSeenInterrupted(ids: ReadonlyArray<string>, storage?: SeenStorage): ReadonlyArray<string> {
-  try {
-    (storage ?? localStorage).setItem(INTERRUPTED_KEY, JSON.stringify(ids));
-  } catch {
-    // See readSeenDone.
-  }
+  writeJson(INTERRUPTED_KEY, ids, storage);
   return ids;
 }
 

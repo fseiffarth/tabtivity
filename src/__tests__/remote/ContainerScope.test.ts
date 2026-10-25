@@ -13,20 +13,21 @@
  * backend is about to take away, which would otherwise log an authority downgrade
  * on every ordinary shell spawn.
  *
- * The derivation is inlined in `PaneSlot`'s body, so it is restated here
- * rather than imported. That is a real duplication, and it is why the last test
- * pins the *shape* of the expression: if the component's version gains a term,
- * this file must be updated deliberately rather than silently passing.
+ * The derivation is `lib/projectTabHost.tabRunsInContainer`, one copy that
+ * `PaneSlot` and the Mobile bridge (is a tab reachable from the phone) share;
+ * the last test pins that `PaneSlot` still asks it.
  */
 
 import { describe, it, expect } from "vitest";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
 import { readFileSync } from "node:fs";
-import type { SandboxScope } from "../../types";
+import type { ProjectEntry, SandboxScope } from "../../types";
+import { tabRunsInContainer } from "../../lib/projectTabHost";
 
 type Kind = "agent" | "shell" | "local_agent" | "files";
 
-/** `PaneSlot`'s rule, verbatim. */
+/** `PaneSlot`'s rule (now `lib/projectTabHost.tabRunsInContainer`), over the
+ * options these tests vary. */
 function sandboxFor(opts: {
   kind: Kind;
   scopeKey: string;
@@ -34,14 +35,11 @@ function sandboxFor(opts: {
   scope?: SandboxScope;
   remote?: boolean;
 }): boolean {
-  const containerScope = opts.scope ?? "all";
-  return (
-    (opts.kind === "agent" || opts.kind === "shell") &&
-    (containerScope === "all" || opts.kind === "agent") &&
-    opts.scopeKey !== "root" &&
-    opts.enabled &&
-    !opts.remote
-  );
+  const entry = {
+    sandbox: { enabled: opts.enabled, ...(opts.scope ? { scope: opts.scope } : {}) },
+    ...(opts.remote ? { remote: { host: "h", user: "u", path: "/p" } } : {}),
+  } as unknown as ProjectEntry;
+  return tabRunsInContainer(entry, opts.kind, opts.scopeKey);
 }
 
 const project = { scopeKey: "p1", enabled: true } as const;
@@ -105,14 +103,12 @@ describe("container scope", () => {
     );
   });
 
-  it("still matches the expression PaneSlot actually spawns with", () => {
-    // The tripwire for the duplication above: the component reads the scope and
-    // gates agent-vs-shell on it. A refactor that drops either term makes every
-    // assertion in this file describe code that no longer runs.
+  it("is the expression PaneSlot actually spawns with", () => {
+    // The tripwire: a refactor that inlines a second copy in the component makes
+    // every assertion in this file describe code that no longer runs.
     // Repo-relative, the convention the other tripwire tests use (vitest runs
     // from the repo root).
     const src = readFileSync("src/components/layout/PaneSlot.tsx", "utf8") as string;
-    expect(src).toContain('const containerScope = paneProject?.sandbox?.scope ?? "all";');
-    expect(src).toContain('(containerScope === "all" || tab.kind === "agent")');
+    expect(src).toContain("const sandbox = tabRunsInContainer(paneProject, tab.kind, scopeKey);");
   });
 });

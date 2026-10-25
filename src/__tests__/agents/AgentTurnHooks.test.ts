@@ -401,6 +401,26 @@ describe("activity store — hook verdicts", () => {
     expect(attention()).toBe("decision");
   });
 
+  it("lights a resumed tab sitting on Claude's cold-resume dialog, until it is answered", () => {
+    // The dialog comes up after the resume's SessionStart (which silences the
+    // screen check) and fires no hook, so the tab would look idle.
+    const dialog =
+      "Resume this conversation?\r\nThis conversation has been inactive for 3d 4h and is 183k tokens long. " +
+      "Resuming it will use about 12% of your 5-hour usage limit.\r\n❯ 1. Resume\r\n  2. Start a new conversation\r\n";
+    noteAgentSessionStart(PTY, "resume");
+    notePtyOutput(PTY, "❯ continue\r\n⏺ Next steps:\r\n  1. Run the gates\r\n  2. Skip the live check\r\n");
+    notePtyOutput(PTY, dialog);
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBe("decision");
+    // Answering empties the tail; the agent's next output is not the dialog.
+    noteUserInput(PTY);
+    notePtyOutput(PTY, "❯ \r\n");
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+  });
+
   it("reads no question off the screen between an answer and the agent's next hook", () => {
     noteAgentTurn(PTY, "working");
     noteAgentTurn(PTY, "decision");

@@ -18,6 +18,8 @@ import { CloudIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
+import { useAiOff } from "../../lib/aiSwitch";
 
 /**
  * The two per-tab local/remote badges + the locality menu, factored out so the
@@ -438,6 +440,54 @@ export function TabStatusMark({ stateClass, slots }: { stateClass: string; slots
         </span>
       ))}
     </span>
+  );
+}
+
+/** The word the Continue pill submits — the one the auto-continue switch sends
+ *  at a rate-limit rollover, typed here on demand. */
+const CONTINUE_PROMPT = "continue";
+
+/** A ▶ Continue pill on an agent tab whose turn the user cut off (the ■ mark,
+ *  `interrupted` in the strip's state class): one click submits `continue` into
+ *  that tab without switching to it, through the steering prompt box's path
+ *  (`sendSteeringPrompt` — recorded as a prompt sent from this desktop, queued
+ *  by the CLI if a turn has started meanwhile). Typing what the user could have
+ *  typed, nothing more (AGENTS.md, agent authority). Hidden while AI is off,
+ *  where the write would be refused. Shared by every tab strip. */
+export function TabContinueButton({ tab, stateClass }: { tab: TabEntry; stateClass: string }) {
+  const t = useT();
+  const aiOff = useAiOff();
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const agent = tab.kind === "agent" || tab.kind === "local_agent";
+  if (!agent || !tab.scheduleTargetId || aiOff || !stateClass.includes("interrupted")) return null;
+  const title = error ? t("tabBar.continueFailed", { reason: error }) : t("tabBar.continueTitle");
+  return (
+    <>
+      <button
+        type="button"
+        className="tab-continue"
+        title={title}
+        aria-label={title}
+        disabled={sending}
+        // Neither a drag, an activation nor a root-console tab switch: the
+        // point is to set the agent going again without leaving this tab.
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setSending(true);
+          setError(null);
+          sendSteeringPrompt(tab, CONTINUE_PROMPT)
+            .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .finally(() => setSending(false));
+        }}
+      >
+        <PlayMark />
+        {t("tabBar.continue")}
+      </button>
+      <UntestedTag id="tabBar.continue" />
+    </>
   );
 }
 

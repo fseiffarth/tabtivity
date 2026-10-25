@@ -7,7 +7,7 @@ import { AGENT_ITEMS } from "../../components/tabs/newTabItems";
 import { adoptTranscriptPrompts, adoptTypedPrompt, type TranscriptPrompt } from "../../lib/agents/prompt/adopt";
 import { lastPromptEcho } from "../../lib/agents/prompt/echo";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
-import { splitPtyId } from "../../lib/terminal/ptyId";
+import { splitPtyId, projectIdOfScope } from "../../lib/terminal/ptyId";
 import { useActivityStore } from "../activity";
 import { isDetachedWindow } from "../detachedContext";
 import { useTabsStore, type TabEntry } from "../tabs";
@@ -225,7 +225,7 @@ export const useAgentModelsStore = create<AgentModelsStore>((set, get) => ({
     const asked = askedAt[ptyId];
     if (!force && asked !== undefined && now - asked < REFRESH_FLOOR_MS) return;
     askedAt[ptyId] = now;
-    const args = { agent: tab.cmd, projectId: scope === "root" ? null : scope, sessionId: tab.sessionId };
+    const args = { agent: tab.cmd, projectId: projectIdOfScope(scope), sessionId: tab.sessionId };
     // Reads of the same tail; a failure of one must not cost the others.
     const [model, recent, goal] = await Promise.all([
       invoke("agent_tab_model", args).catch(() => null),

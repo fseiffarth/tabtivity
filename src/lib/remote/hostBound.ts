@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ROOT_SCOPE } from "../terminal/ptyId";
 
 /**
  * Host-bound local-model tabs (`docs/sandbox_hardening_plan.md` Phase 2 / #150).
@@ -44,7 +45,7 @@ function mintUid(): string {
  * a visible, diagnosable problem, unlike a silent escape.
  */
 export async function registerHostBoundTab(scope: string): Promise<string | undefined> {
-  if (!scope || scope === "root") return undefined;
+  if (!scope || scope === ROOT_SCOPE) return undefined;
   const uid = mintUid();
   try {
     await invoke("register_host_bound_tab", { projectId: scope, uid });

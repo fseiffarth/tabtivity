@@ -381,6 +381,7 @@ function Meter({
 
 /** One GPU's detail card: identity, memory + utilization meters, live sensors. */
 function GpuSection({ gpu }: { gpu: GpuSample }) {
+  const t = useT();
   const { used, total } = gpuTotals([gpu]);
   const link = gpuLinkLabel(gpu);
   const tip = gpuAdapterTooltip(gpu);
@@ -422,7 +423,7 @@ function GpuSection({ gpu }: { gpu: GpuSample }) {
         />
         {/* `busy_percent` is null when the driver won't report it — omit the meter
             rather than show a misleading 0%. */}
-        {gpu.busy_percent != null && <Meter label="Util" pct={gpu.busy_percent} />}
+        {gpu.busy_percent != null && <Meter label={t("sysmon.utilLabel")} pct={gpu.busy_percent} />}
       </div>
       {sensors.length > 0 && (
         <div className="sysmon-stats sysmon-gpu-sensors">
@@ -1700,7 +1701,11 @@ const SYSMON_CSS = `
 }
 .sysmon-table {
   width: 100%;
-  border-collapse: collapse;
+  /* \`separate\`, not \`collapse\`: WebKitGTK leaves a collapsed table's sticky
+     header cells painted at their old screen position while the scroller moves
+     (a gray ghost over the vitals). The row rules are per-cell borders anyway. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 .sysmon-table thead th {

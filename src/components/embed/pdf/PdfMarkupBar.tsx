@@ -7,13 +7,13 @@
  * nothing portaled.
  *
  * The tool strip reads left to right: the tools, the armed tool's options
- * (the pen's style, size and colours; a box's or note's colours; the text
+ * (the pen's style — one button that opens the styles drawn — its size and colours; a box's or note's colours; the text
  * marks' mode, the stamp's symbol; the selection's colours, styles, Delete
  * and Comment; the eraser's reach or area), the saved pens (presets),
  * undo/redo and a ⋯ menu for the clearing and the pen's settings; the
  * sending half — target, model, Submit, Done — sits at the right end.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { STAMP_SYMBOLS, type Layer, type MarkColor, type StampSymbol } from "../../../../mobile-web/src/markup/layer";
@@ -77,10 +77,10 @@ function toolList(pen: PenPrefs): { tool: MarkupTool; glyph: ReactNode; label: T
   ];
 }
 
-/** A preset's chip: the glyph of its tool (the pen's style) over a bar of its
- *  colour. */
+/** A preset's chip: the glyph of its tool (the pen's style, drawn) over a bar
+ *  of its colour. */
 function presetGlyph(preset: PenPreset): ReactNode {
-  if (preset.tool === "ink") return STYLE_GLYPHS[preset.style];
+  if (preset.tool === "ink") return <StyleSample style={preset.style} width={18} />;
   if (preset.tool === "box") return "▭";
   if (preset.tool === "text") return "T";
   if (preset.tool === "stamp") return STAMP_GLYPHS.insert;
@@ -101,7 +101,31 @@ export function selectionColors(layer: Layer, selection: MarkSelection | null): 
   return colorsFor(highlights ? "box" : "ink", "pen");
 }
 
-export const STYLE_GLYPHS: Record<PenStyle, string> = { pen: "✎", marker: "▬", dashed: "┄", arrow: "↗" };
+/** A pen style drawn as the stroke it makes: a plain line with a curve, the
+ *  marker's wide see-through band, a dashed line, a line with the arrow's
+ *  open head — not a glyph to learn. */
+function StyleSample({ style, width = 26 }: { style: PenStyle; width?: number }) {
+  const end = width - 2;
+  return (
+    <svg
+      className="file-viewer-pdf-markup-sample"
+      width={width}
+      height="12"
+      viewBox={`0 0 ${width} 12`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {style === "pen" && <path d={`M2 8 C ${width * 0.3} 2, ${width * 0.55} 11, ${end} 4`} />}
+      {style === "marker" && <path d={`M3 6 H${end - 1}`} strokeWidth="6" strokeOpacity="0.45" strokeLinecap="butt" />}
+      {style === "dashed" && <path d={`M2 6 H${end}`} strokeDasharray="3.5 2.5" strokeLinecap="butt" />}
+      {style === "arrow" && <path d={`M2 6 H${end} M${end - 5} 2 L${end} 6 L${end - 5} 10`} />}
+    </svg>
+  );
+}
 export const STYLE_KEYS: Record<PenStyle, TranslationKey> = {
   pen: "mobile.markup.style.pen",
   marker: "mobile.markup.style.marker",
@@ -156,23 +180,17 @@ const ROUND_MARK: Partial<Record<RoundPhase, string>> = {
   finished: "finished",
 };
 
-/** The ⋯ menu: the clearing and the sent marks' switch, then the pen's
- *  settings (shape snapping, the pressure curve) and the presets, out of the
- *  strip's way — the shared dropdown (`.context-menu.dropdown-menu`), closed
- *  by a click outside or Escape. */
-function PdfMarkupMore({ markup, page, busy }: { markup: PdfMarkup; page: number; busy: boolean }) {
-  const t = useT();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
+/** Closes an open dropdown on a click outside `ref` or Escape. */
+function useDismiss(open: boolean, close: () => void, ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     if (!open) return;
     const onDocPointer = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+      if (!ref.current?.contains(event.target as Node)) close();
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        setOpen(false);
+        close();
       }
     };
     document.addEventListener("pointerdown", onDocPointer);
@@ -181,7 +199,68 @@ function PdfMarkupMore({ markup, page, busy }: { markup: PdfMarkup; page: number
       document.removeEventListener("pointerdown", onDocPointer);
       document.removeEventListener("keydown", onKey, true);
     };
-  }, [open]);
+  }, [open, close, ref]);
+}
+
+/** The pen's styles behind one button: it shows the chosen style drawn, and a
+ *  click opens every style, each drawn and named, in the shared dropdown.
+ *  `chosen` null — a selection mixing styles — shows the word instead. */
+function PdfPenStyleMenu({ chosen, onPick, keyHint }: { chosen: PenStyle | null; onPick: (style: PenStyle) => void; keyHint?: string }) {
+  const t = useT();
+  const chordHint = useChordHint();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, close, ref);
+  const label = chosen ? t("mobile.markup.styleOf", { style: t(STYLE_KEYS[chosen]) }) : t("mobile.markup.style");
+  return (
+    <span className="dropdown file-viewer-pdf-markup-style" ref={ref}>
+      <button
+        type="button"
+        className={`file-viewer-zoom-btn file-viewer-pdf-markup-style-btn${open ? " active" : ""}`}
+        onClick={() => setOpen((was) => !was)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={keyHint ? chordHint(label, { key: keyHint }) : label}
+        aria-label={label}
+      >
+        {chosen ? <StyleSample style={chosen} /> : <span className="file-viewer-zoom-text">{label}</span>}
+        <span className="file-viewer-pdf-markup-caret" aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div className="context-menu dropdown-menu" role="menu" aria-label={t("mobile.markup.style")}>
+          {PEN_STYLES.map((style) => (
+            <button
+              key={style}
+              type="button"
+              role="menuitemradio"
+              aria-checked={chosen === style}
+              onClick={() => {
+                onPick(style);
+                setOpen(false);
+              }}
+            >
+              <span aria-hidden="true" className="file-viewer-pdf-markup-check">{chosen === style ? "✓" : ""}</span>
+              <StyleSample style={style} />
+              {t(STYLE_KEYS[style])}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/** The ⋯ menu: the clearing and the sent marks' switch, then the pen's
+ *  settings (shape snapping, the pressure curve) and the presets, out of the
+ *  strip's way — the shared dropdown (`.context-menu.dropdown-menu`), closed
+ *  by a click outside or Escape. */
+function PdfMarkupMore({ markup, page, busy }: { markup: PdfMarkup; page: number; busy: boolean }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, close, ref);
   const pick = (run: () => void) => () => {
     run();
     setOpen(false);
@@ -298,23 +377,7 @@ function PdfSelectionOptions({ markup }: { markup: PdfMarkup }) {
   return (
     <>
       <span className="file-viewer-pdf-redact-count">{t("mobile.markup.selected", { count: selection.indices.length })}</span>
-      {inks.length > 0 && (
-        <span className="file-viewer-pdf-markup-styles" role="group" aria-label={t("mobile.markup.style")}>
-          {PEN_STYLES.map((entry) => (
-            <button
-              key={entry}
-              type="button"
-              className={`file-viewer-zoom-btn${style === entry ? " active" : ""}`}
-              aria-pressed={style === entry}
-              title={t(STYLE_KEYS[entry])}
-              aria-label={t(STYLE_KEYS[entry])}
-              onClick={() => markup.restyleSelection({ style: entry })}
-            >
-              {STYLE_GLYPHS[entry]}
-            </button>
-          ))}
-        </span>
-      )}
+      {inks.length > 0 && <PdfPenStyleMenu chosen={style} onPick={(next) => markup.restyleSelection({ style: next })} />}
       <Swatches colors={selectionColors(markup.edit.base, selection)} chosen={color} onPick={(next) => markup.restyleSelection({ color: next })} />
       <button
         type="button"
@@ -378,23 +441,7 @@ function PdfMarkupOptions({ markup }: { markup: PdfMarkup }) {
   const colors = colorsFor(tool, pen.style, pen.textMark);
   return (
     <span className="file-viewer-pdf-markup-options">
-      {tool === "ink" && (
-        <span className="file-viewer-pdf-markup-styles" role="group" aria-label={t("mobile.markup.style")}>
-          {PEN_STYLES.map((style) => (
-            <button
-              key={style}
-              type="button"
-              className={`file-viewer-zoom-btn${pen.style === style ? " active" : ""}`}
-              aria-pressed={pen.style === style}
-              title={chordHint(t(STYLE_KEYS[style]), { key: "p" })}
-              aria-label={t(STYLE_KEYS[style])}
-              onClick={() => markup.setStyle(style)}
-            >
-              {STYLE_GLYPHS[style]}
-            </button>
-          ))}
-        </span>
-      )}
+      {tool === "ink" && <PdfPenStyleMenu chosen={pen.style} onPick={markup.setStyle} keyHint="p" />}
       {tool === "textmark" && (
         <span className="file-viewer-pdf-markup-styles" role="group" aria-label={t("mobile.markup.tool.textmark")}>
           {TEXT_MARK_MODES.map((mode) => (
@@ -620,7 +667,7 @@ export function PdfMarkupBar({
               ptyId={target.ptyId}
               label={target.label}
               model={markup.targetModelTag}
-              agent={markup.agent}
+              agent={markup.chipAgent}
               disabled={busy}
             />
           )}
@@ -658,7 +705,7 @@ export function PdfMarkupBar({
               <span>{roundWords}</span>
             </span>
           )}
-          {markup.tabDialog && target && (
+          {markup.tabDialog && markup.roundTarget && (
             <>
               {markup.tabDialog.line && (
                 <span className="file-viewer-pdf-markup-dialog" title={markup.tabDialog.line}>
@@ -668,8 +715,8 @@ export function PdfMarkupBar({
               <button
                 type="button"
                 className="file-viewer-zoom-btn file-viewer-zoom-text active"
-                onClick={markup.showTarget}
-                title={t("pdfMarkup.answerInTabTitle", { tab: target.label })}
+                onClick={markup.showRoundTarget}
+                title={t("pdfMarkup.answerInTabTitle", { tab: markup.roundTarget.label })}
               >
                 {t("pdfMarkup.answerInTab")} <UntestedTag id="desktop.markup.tabDialog" />
               </button>

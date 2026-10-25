@@ -201,6 +201,44 @@ describe("Mark up in the PDF viewer", () => {
     expect(container.querySelector(".file-viewer-pdf-markup-layer")).toBeNull();
   });
 
+  it("mounts the markup canvas only on pages near the viewport", async () => {
+    const watchers: { cb: IntersectionObserverCallback; targets: Element[] }[] = [];
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class {
+      private rec: (typeof watchers)[number];
+      constructor(cb: IntersectionObserverCallback) {
+        this.rec = { cb, targets: [] };
+        watchers.push(this.rec);
+      }
+      observe(el: Element) { this.rec.targets.push(el); }
+      unobserve() {}
+      disconnect() { this.rec.targets = []; }
+      takeRecords() { return []; }
+    };
+    try {
+      const { container } = render(viewer());
+      await loaded();
+      await waitFor(() => expect(watchers.flatMap((w) => w.targets).length).toBe(2));
+      await waitFor(() => expect(markUp()!.disabled).toBe(false));
+      fireEvent.click(markUp()!);
+      expect(container.querySelectorAll(".file-viewer-pdf-page-wrap.is-marking").length).toBe(2);
+      // Nothing is near: no page holds a markup canvas.
+      expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(0);
+      const report = (hit: (el: Element) => boolean) => {
+        for (const w of watchers) {
+          const entries = w.targets.map((target) => ({ target, isIntersecting: hit(target) }) as IntersectionObserverEntry);
+          if (entries.length) w.cb(entries, w as unknown as IntersectionObserver);
+        }
+      };
+      const first = container.querySelector(".file-viewer-pdf-page-wrap")!;
+      act(() => report((el) => el === first));
+      expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(1);
+      act(() => report(() => false));
+      expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(0);
+    } finally {
+      delete (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver;
+    }
+  });
+
   it("steers the pen bar from the keyboard and keeps the choices", async () => {
     localStorage.clear();
     const { container } = render(viewer());
@@ -210,10 +248,10 @@ describe("Mark up in the PDF viewer", () => {
     const scroll = container.querySelector(".file-viewer-pdf-scroll")!;
     const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
     expect(pressed("Pen")).toBe("true");
-    expect(pressed("Plain pen")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Plain pen" })).toBeTruthy();
     // P on the armed pen steps its style; the marker offers yellow as its 4th colour.
     fireEvent.keyDown(scroll, { key: "p" });
-    expect(pressed("Marker")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Marker" })).toBeTruthy();
     fireEvent.keyDown(scroll, { key: "4" });
     expect(pressed("Colour: Yellow")).toBe("true");
     fireEvent.keyDown(scroll, { key: "]" });
@@ -255,10 +293,13 @@ describe("Mark up in the PDF viewer", () => {
     expect(pressed("Stamp")).toBe("true");
     fireEvent.keyDown(scroll, { key: "k" });
     expect(pressed("Delete")).toBe("true");
-    // Shift+3 arms the third preset (a blue arrow), by the key's place.
+    // Shift+2 arms the second preset (a yellow marker), Shift+3 the third (a
+    // blue pen), by the key's place.
+    fireEvent.keyDown(scroll, { key: "@", code: "Digit2", shiftKey: true });
+    expect(screen.getByRole("button", { name: "Pen style: Marker" })).toBeTruthy();
     fireEvent.keyDown(scroll, { key: "#", code: "Digit3", shiftKey: true });
     expect(pressed("Pen")).toBe("true");
-    expect(pressed("Arrow")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pen style: Plain pen" })).toBeTruthy();
     expect(pressed("Colour: Blue")).toBe("true");
     // S arms the select tool; a click picks the stored box on page 1.
     fireEvent.keyDown(scroll, { key: "s" });

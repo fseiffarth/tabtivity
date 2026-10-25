@@ -61,3 +61,31 @@ const FORMAT_CONTROL_CLASS =
 export function hasFormatControls(text: string): boolean {
   return new RegExp(FORMAT_CONTROL_CLASS).test(text);
 }
+
+const HTML_SPECIAL = /[&<>"']/;
+const HTML_SPECIAL_ALL = /[&<>"']/g;
+
+function escapeHtmlChar(c: string): string {
+  switch (c) {
+    case "&": return "&amp;";
+    case "<": return "&lt;";
+    case ">": return "&gt;";
+    case '"': return "&quot;";
+    case "'": return "&#39;";
+    default: return c;
+  }
+}
+
+/**
+ * HTML-escape `s` (`& < > " '`) — the ONE escape for a text node and for a
+ * quoted attribute value alike. One pass, and no pass at all for the common
+ * case of nothing to escape: the highlighter calls this once per token — and,
+ * for a run of prose, once per character — on every keystroke of the whole
+ * document, and the old five chained `replace` calls were most of what
+ * highlighting a large `.tex` file cost.
+ */
+export function escapeHtml(s: string): string {
+  if (s.length === 1) return escapeHtmlChar(s);
+  if (!HTML_SPECIAL.test(s)) return s;
+  return s.replace(HTML_SPECIAL_ALL, escapeHtmlChar);
+}

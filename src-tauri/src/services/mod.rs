@@ -1,5 +1,6 @@
 pub mod agent_prompts;
 pub mod agent_session;
+pub mod agent_sqlite;
 // The turn state an agent's own hooks report (working / decision / done),
 // relayed from the hook script's per-tab record to the window's activity
 // store — the authority for the tab's working and finished marks.
@@ -11,6 +12,9 @@ pub mod proc_table;
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
 pub mod agent_chats;
+// An agent tab's conversation taken along to another worktree (the Reader's
+// branch chip).
+pub mod agent_relocate;
 pub mod google_chat;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
@@ -63,20 +67,32 @@ pub mod api_meter;
 pub mod api_prices;
 pub mod api_usage;
 pub mod agent_global;
+// What a live agent tab was handed (sandbox, MCP servers, skills, API key),
+// for the tab hover card.
+pub mod agent_features;
 pub mod agent_hint;
 pub mod agent_home;
 // The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
 pub mod assistant;
+// Claude's own `/model` list for the assistant's chats, read by a short-lived probe.
+pub mod assistant_model_probe;
+// The rows each CLI's own model picker last drew, per installed build.
+pub mod model_rows;
 // Where each CLI keeps its conversations in an agent home, for export/import.
 pub mod agent_history;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
 pub mod tar_stream;
 pub mod agent_install;
 pub mod agent_shim;
+// The AI switch: the side panel's power button, read by every AI gate.
+pub mod ai_switch;
 // Copilot CLI sign-in for fenced tabs: Tabtivity keeps the token in its own
 // keyring entry (the fence hides the keyring) and hands it to each fenced
 // Copilot as COPILOT_GITHUB_TOKEN.
 pub mod copilot_auth;
+// Copilot CLI's own session store: the tab's pinned session, its events, its
+// folder's chats (the Reader's chat, Diffs and Resume menu).
+pub mod copilot_session;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
@@ -124,11 +140,21 @@ pub mod git_peer;
 // Directory-handle-relative I/O inside agent-writable homes: what every
 // unfenced write into a scope home goes through.
 pub mod home_io;
+// Folder copy for the file tree: no link below the top level is followed, no
+// special file is read, and bytes and entries are bounded.
+pub mod tree_copy;
 pub mod hpc_mode;
 // Which IDE a project tree belongs to (`.idea/`, `.vs/` + `*.sln`, `.vscode/`)
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Who owns a loopback listener (`/proc/net/tcp{,6}`, Linux): Ollama, the API
+// proxy's remembered port and the phone's sign-in relay judge the owner, not
+// the address.
+pub mod loopback_owner;
+// The API proxy's remembered port when someone else holds it: who, which keyed
+// tmux agents name it (ended), and the notice the window shows once.
+pub mod api_proxy_port;
 // Hosted plan §3.3: every registered Tauri command's class (core / client /
 // admin / off) and the test that fails when one is added without a row.
 pub mod command_class;
@@ -174,6 +200,7 @@ pub mod mail_store;
 pub mod mail_thunderbird;
 pub mod mobile_control;
 pub mod net_usage;
+pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;
 pub mod openvpn;
@@ -184,6 +211,8 @@ pub mod remote;
 pub use app_core::services::remote_agents;
 pub mod remote_credentials;
 pub mod remote_sync;
+// A host tab's conversation, copied from the host over the pooled SFTP session.
+pub mod remote_transcript;
 pub mod remote_usage;
 pub mod restore_service;
 pub mod root_mcp;
@@ -208,6 +237,7 @@ pub mod ssh_common;
 pub mod ssh_exec;
 pub mod state_gc;
 pub mod sync_auto;
+pub mod sync_op;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
@@ -235,6 +265,11 @@ pub mod usage_stats;
 // plus its allowlisting egress proxy and the built-in cloud-init seed writer.
 pub mod iso9660;
 pub mod vm;
+// The desktop's speech engine (docs/desktop_voice_plan.md): the microphone,
+// whisper and read-aloud belong to the machine the user sits at, so the
+// daemon's build leaves it out.
+#[cfg(feature = "desktop")]
+pub mod voice;
 pub use app_core::services::vm_proxy;
 pub use app_core::services::web_safety;
 pub use app_core::services::webkit_a11y;

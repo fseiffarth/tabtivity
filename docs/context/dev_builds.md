@@ -224,6 +224,13 @@ change was not run live.
   like it needed a second click (2026-10-20); the hook's `--queue` never waits;
   `scripts/package-dev-auto.sh --status` says what it is doing and
   `~/.local/share/tabtivity/package-dev-auto.log` holds the last build's output.
+  After each run the loop calls `scripts/target-prune.sh` (2026-10-21; `target/`
+  had reached 1.1 TB from per-feature incremental dirs, stale dependency
+  artifacts and the cross-check trees): over `TARGET_PRUNE_CAP_GB` (250) it
+  deletes incremental dirs oldest first, then `examples`, then `deps` files
+  unread for 7 days, then the Windows/macOS trees, stopping once under the cap.
+  It never touches `release/` or `freeze-tree/` and does nothing while any
+  cargo/rustc runs. `--dry-run` lists what it would remove.
   The header's dev-build chip (`header/DevBuildIndicator.tsx`,
   `services::dev_build`, 2026-09-18) reads the same files: step, elapsed, an
   estimate from the last good pass, failure, commits behind, and "relaunch to

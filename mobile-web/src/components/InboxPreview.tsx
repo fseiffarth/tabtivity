@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { inboxFileUrl, sentName, type OutboxFile } from "../api";
-import { sizeLabel } from "../terminal/fileLabels";
+import { formatBytes } from "../../../src/lib/formatBytes";
 
 /** Picture tiles an album shows before the last one reads "+N" (as `OutboxPost`). */
 const ALBUM_TILES = 4;
@@ -112,7 +112,7 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle
       const card = <>
         <span aria-hidden="true">{fileBadge(file.kind)}</span>
         <strong>{sentName(file)}</strong>
-        <small>{sizeLabel(file.size)}</small>
+        <small>{formatBytes(file.size)}</small>
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
       if (from.openable(file)) return <button key={leaf} type="button" className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>;

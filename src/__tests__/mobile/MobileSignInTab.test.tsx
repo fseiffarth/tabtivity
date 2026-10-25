@@ -5,7 +5,7 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasSignInTab, readSignedOut, readSignIn, signInAlternate, signInDone } from "../../../mobile-web/src/terminal/signIn";
+import { hasSignInTab, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInDone, signInPageKeys } from "../../../mobile-web/src/terminal/signIn";
 import { readSelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
 import { SignInSheet } from "../../../mobile-web/src/screens/SignInSheet";
 import { NewTabSheet } from "../../../mobile-web/src/screens/NewTabSheet";
@@ -76,6 +76,104 @@ describe("reading a session's login state", () => {
     expect(signInAlternate("claude")).toBe("console");
     expect(signInAlternate("codex")).toBe("browser");
     expect(signInAlternate("copilot")).toBeUndefined();
+  });
+});
+
+/** Antigravity 1.4.5's link page at 42×24 (1.3.0 drew it the same): too long
+ * for the pane, so the CLI pages it in its own window, one line per Shift+↓ —
+ * the first frame, and the last after paging to the end. */
+const AGY_PAGE_TOP = rows(
+  "",
+  "     ▄▀▀▄",
+  "    ▀▀▀▀▀▀",
+  "   ▀▀▀▀▀▀▀▀",
+  "  ▄▀▀    ▀▀▄",
+  " ▄▀▀      ▀▀▄",
+  "",
+  " Your browser should open automatically.",
+  " If not:",
+  "",
+  " https://accounts.google.com/o/oauth2/aut",
+  " h?access_type=offline&client_id=10710060",
+  " 60591-tmhssin2h21lcre235vtolojh4g403ep.a",
+  " pps.googleusercontent.com&code_challenge",
+  " =T4ClIoR27NKPzV8eP-db9aJ_U3_4cQQ18FWkWwP",
+  " xHOw&code_challenge_method=S256&prompt=c",
+  " onsent&redirect_uri=https%3A%2F%2Fantigr",
+  " avity.google%2Foauth-callback&response_t",
+  " ype=code&scope=https%3A%2F%2Fwww.googlea",
+  " pis.com%2Fauth%2Fcloud-platform+https%3A",
+  "  (1–20 of 34 lines)",
+  "",
+  "  shift+up/down Navigate",
+);
+const AGY_PAGE_END = rows(
+  " =T4ClIoR27NKPzV8eP-db9aJ_U3_4cQQ18FWkWwP",
+  " xHOw&code_challenge_method=S256&prompt=c",
+  " onsent&redirect_uri=https%3A%2F%2Fantigr",
+  " avity.google%2Foauth-callback&response_t",
+  " ype=code&scope=https%3A%2F%2Fwww.googlea",
+  " pis.com%2Fauth%2Fcloud-platform+https%3A",
+  " %2F%2Fwww.googleapis.com%2Fauth%2Fuserin",
+  " fo.email+https%3A%2F%2Fwww.googleapis.co",
+  " m%2Fauth%2Fuserinfo.profile+https%3A%2F%",
+  " 2Fwww.googleapis.com%2Fauth%2Fcclog+http",
+  " s%3A%2F%2Fwww.googleapis.com%2Fauth%2Fex",
+  " perimentsandconfigs+https%3A%2F%2Fwww.go",
+  " ogleapis.com%2Fauth%2Faicode+openid&stat",
+  " e=JTdeFjiXvAzIOIbmlQzbIA",
+  "",
+  " If you aren't automatically redirected,",
+  " paste the authorization code below:",
+  "",
+  " authorization code...",
+  "",
+  "  (15–34 of 34 lines)",
+  "",
+  "  shift+up/down Navigate",
+);
+const SHIFT_DOWN = "\u001b[1;2B";
+const SHIFT_UP = "\u001b[1;2A";
+
+describe("a sign-in page the CLI pages in its own window", () => {
+  it("offers no link the window cuts off", () => {
+    expect(readSignIn(AGY_PAGE_TOP)).toBeNull();
+  });
+
+  it("pages down to the end, then reads the whole link and the paste prompt under it", () => {
+    const top = readSignInPage(AGY_PAGE_TOP, null)!;
+    expect(top.lines.filter((line) => line !== undefined)).toHaveLength(20);
+    expect(readPagedSignIn(top)).toBeNull();
+    // At most a window's height, so the next window still meets this one.
+    expect(signInPageKeys(top)).toEqual(Array(14).fill(SHIFT_DOWN));
+
+    const whole = readSignInPage(AGY_PAGE_END, top)!;
+    expect(signInPageKeys(whole)).toEqual([]);
+    const signIn = readPagedSignIn(whole)!;
+    expect(signIn.url.startsWith("https://accounts.google.com/o/oauth2/auth?access_type=offline")).toBe(true);
+    expect(new URL(signIn.url).searchParams.get("state")).toBe("JTdeFjiXvAzIOIbmlQzbIA");
+    expect(new URL(signIn.url).searchParams.get("scope")).toContain("openid");
+    expect(signIn.flow).toBe("code");
+    // A frame that shows nothing new hands the same page back.
+    expect(readSignInPage(AGY_PAGE_END, whole)).toBe(whole);
+  });
+
+  it("pages up to lines it has not seen above the window", () => {
+    const end = { lines: [...Array(14).fill(undefined), ...Array(20).fill("x")], first: 15, last: 34 };
+    expect(signInPageKeys(end)).toEqual(Array(14).fill(SHIFT_UP));
+  });
+
+  it("starts over on a page whose lines differ, and starts none without a cut sign-in link", () => {
+    // A retry's link: lines 1–20 again, but a new challenge on line 15. Its
+    // end is not the old page's end.
+    const whole = readSignInPage(AGY_PAGE_END, readSignInPage(AGY_PAGE_TOP, null))!;
+    expect(signInPageKeys(whole)).toEqual([]);
+    const retry = rows(...AGY_PAGE_TOP.map((row) => row.text.replace("T4ClIoR27NKPzV8eP", "U5DmJpS38OLQaW9fQ")));
+    const restarted = readSignInPage(retry, whole)!;
+    expect(restarted.lines.filter((line) => line !== undefined)).toHaveLength(20);
+    expect(restarted.lines[14]).toContain("U5DmJpS38OLQaW9fQ");
+    expect(readSignInPage(rows("some output", "  (1–2 of 9 lines)"), null)).toBeNull();
+    expect(readSignInPage(AGY_PAGE_END, null)).toBeNull();
   });
 });
 

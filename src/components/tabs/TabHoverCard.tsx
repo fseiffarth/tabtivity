@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import {
   effectiveTabLocation,
   isLocatableKind,
@@ -65,6 +66,19 @@ const VIEWER_LABEL_KEY: Record<InternalViewer, TranslationKey> = {
   eldeck: "viewerLabel.eldeck",
 };
 
+/** What the backend knows an agent tab was handed (`agent_tab_features`,
+ *  `services::agent_features`); `null` for a tab this process did not spawn. */
+interface AgentTabFeatures {
+  sandbox: "fenced" | "host_session" | "unfenced" | null;
+  appMcp: string[];
+  ownMcp: string[];
+  skills: string[];
+  apiKeys: ("anthropic" | "gemini" | "openai")[];
+}
+
+/** Names past this many collapse into "+N more". */
+const MAX_SHOWN_NAMES = 6;
+
 /** Gap between the tab and the card, and the keep-inside-the-window margin. */
 const GAP = 6;
 const MARGIN = 8;
@@ -76,6 +90,28 @@ function formatQuiet(ms: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min`;
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+/** Quote one argument for display only — left bare when it needs no quoting, so
+ *  the common `tail -n 60 -F log` reads as typed. Never executed. */
+function displayArg(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * What a shell tab Tabtivity opened was started with: the program and its args
+ * when it launched one (an install's `bash`, a script's interpreter), and the
+ * command it typed into the shell (`initialInput`). A plain shell the user
+ * opened has neither, and gets no rows. Fast mode's plain tooltip (`TabBar`)
+ * reads it too.
+ */
+export function shellLaunch(tab: TabEntry): { program: string | null; input: string | null } {
+  if (tab.kind !== "shell") return { program: null, input: null };
+  const argv = [tab.cmd, ...(tab.args ?? [])].filter((a) => a !== "");
+  return {
+    program: argv.length ? argv.map(displayArg).join(" ") : null,
+    input: tab.initialInput?.trim() || null,
+  };
 }
 
 /**
@@ -158,6 +194,24 @@ export function TabHoverCard({
 
   const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
 
+  // What the agent was handed — sandbox, MCP servers, skills, API key — asked
+  // once per hover; a tab this window's backend did not spawn answers null and
+  // gets no rows.
+  const [features, setFeatures] = useState<AgentTabFeatures | null>(null);
+  useEffect(() => {
+    if (!isAgent) return;
+    let live = true;
+    invoke<AgentTabFeatures | null>("agent_tab_features", { id: ptyId })
+      .then((f) => {
+        // Nothing known, or an answer not shaped like one: no rows.
+        if (live && f && !Array.isArray(f)) setFeatures(f);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [isAgent, ptyId]);
+
   // Muted kind line, enriched with what the tiny tab badges can only hint at:
   // the concrete viewer, where the process runs (remote projects), and which
   // side a viewed file came from. An agent's permission mode is deliberately
@@ -203,11 +257,28 @@ export function TabHoverCard({
     : null;
 
   const path = cardPath(tab);
+  const launch = shellLaunch(tab);
 
   // What the tab holds in this window (an estimate; `lib/tabCost`). Read in
   // render — the 10 s tick above refreshes it while the card is up.
   const costInfo = tabCost(scope, tab);
   const cost = costInfo ? describeTabCost(costInfo, t) : null;
+
+  const names = (list: string[]) =>
+    list.length > MAX_SHOWN_NAMES
+      ? `${list.slice(0, MAX_SHOWN_NAMES).join(", ")} ${t("tabHoverCard.moreNames", { count: list.length - MAX_SHOWN_NAMES })}`
+      : list.join(", ");
+  const featureRows: { label: string; value: string }[] = [];
+  if (features?.sandbox) {
+    featureRows.push({ label: t("tabHoverCard.sandboxLabel"), value: t(`tabHoverCard.sandbox.${features.sandbox}`) });
+  }
+  const mcp = [...(features?.appMcp ?? []), ...(features?.ownMcp ?? [])];
+  if (mcp.length) featureRows.push({ label: t("tabHoverCard.mcpLabel"), value: names(mcp) });
+  if (features?.skills?.length) featureRows.push({ label: t("tabHoverCard.skillsLabel"), value: names(features.skills) });
+  if (features?.apiKeys?.length) {
+    const providers = features.apiKeys.map((p) => t(`tabHoverCard.provider.${p}`)).join(", ");
+    featureRows.push({ label: t("tabHoverCard.apiKeyLabel"), value: t("tabHoverCard.apiKeyValue", { providers }) });
+  }
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -222,7 +293,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features]);
 
   return createPortal(
     <div
@@ -255,6 +326,32 @@ export function TabHoverCard({
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">{t("tabHoverCard.restartLabel")}</span>
           <span className="tab-popup-meta">{restart}</span>
+        </span>
+      )}
+      {featureRows.map((row, i) => (
+        <span key={row.label} className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {row.label}
+            {i === 0 && <> <UntestedTag id="tabHoverCard.agentFeatures" /></>}
+          </span>
+          <span className="tab-popup-meta">{row.value}</span>
+        </span>
+      ))}
+      {launch.program && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.programLabel")} <UntestedTag id="tabHoverCard.shellLaunch" />
+          </span>
+          <span className="tab-popup-command">{launch.program}</span>
+        </span>
+      )}
+      {launch.input && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.commandLabel")}
+            {!launch.program && <> <UntestedTag id="tabHoverCard.shellLaunch" /></>}
+          </span>
+          <span className="tab-popup-command">{launch.input}</span>
         </span>
       )}
       {cost && (

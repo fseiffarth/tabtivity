@@ -57,35 +57,59 @@
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 654,
+    "line": 903,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_open reads only the fixed settings.json leaf to check the assistant opt-in."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 928,
+    "line": 1303,
     "source": "fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed settings.json leaf to check the shell-tab opt-in."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 963,
+    "line": 1448,
     "source": "fs::read(state_dir.join(\"projects.json\")).map_err(|e| format!(\"read projects: {e}\"))?;",
     "rule": "rust/path-injection",
-    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed projects.json registry, never a project-folder file."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 969,
+    "line": 1454,
     "source": "let boxes: Vec<BoxRecord> = fs::read(state_dir.join(\"boxes.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "bb8153ecdf598d127afd16c0cae906d70a7b38addeb59efe9da08c078c1440e9",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed boxes.json registry."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 939,
+    "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_devices reads only the fixed settings.json leaf for the assistant's per-phone list."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 1169,
+    "source": "let projects: Vec<ProjectRecord> = match fs::read(state_dir.join(\"projects.json\")) {",
+    "rule": "rust/path-injection",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. launch_place reads only the fixed projects.json registry, never a project-folder file."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 1405,
+    "source": "fs::read(&path)",
+    "rule": "rust/path-injection",
+    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. read_session reads <state_dir>/sessions/<key>/terminals.json, where project_key maps every character outside [A-Za-z0-9_-] to '_' (and empty to 'x'), so no id can climb out of sessions/."
   },
   {
     "path": "src-tauri/src/services/mobile_control/headless.rs",

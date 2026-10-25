@@ -4,6 +4,8 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { FilesLibrary } from "./FilesLibrary";
+import type { FilesSide } from "../api";
+import { readFilesSide, rememberFilesSide } from "../filesPlace";
 import type { MarkupNewTab, MarkupTarget } from "./OutboxViewer";
 import { useBackLayer } from "../backStack";
 
@@ -20,8 +22,12 @@ export { FileGlyph, asViewerFile } from "./FilesLibrary";
  *
  * With no menu of its own (a tab's Focus view) the drawer would hold Files
  * alone, so the library opens straight away and closing it closes both.
+ *
+ * A remote project's library may have two sides (`here`, `host`): with both,
+ * it opens on the one it was last put away on (`readFilesSide`), and its
+ * root's switch moves between them.
  */
-export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true }: {
+export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, here = true, host = false }: {
   projectId: string;
   /** The project's name, the drawer's heading and the library root's title. */
   label: string;
@@ -40,8 +46,19 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   /** False while the desktop's "Project files on the phone" switch is off:
    * the drawer holds `menu` alone, with no Files row. */
   browse?: boolean;
+  /** This computer's folder is there to browse (a remote project's mirror
+   * may not be yet). */
+  here?: boolean;
+  /** The remote project's tree on its host is there too (`host_files`). */
+  host?: boolean;
 }) {
   const t = useT();
+  const both = here && host;
+  const [side, setSide] = useState<FilesSide>(() => both ? readFilesSide(projectId) : host && !here ? "host" : "here");
+  const pickSide = useCallback((next: FilesSide) => {
+    rememberFilesSide(projectId, next);
+    setSide(next);
+  }, [projectId]);
   const direct = !menu && browse;
   const [library, setLibrary] = useState(direct);
   const closeLibrary = useCallback(() => setLibrary(false), []);
@@ -65,8 +82,8 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   }, [libraryShown, onClose]);
 
   if (libraryShown) {
-    return <FilesLibrary projectId={projectId} label={label} onClose={direct ? onClose : closeLibrary}
-      markup={markup} showTab={showTab} linked={linked} />;
+    return <FilesLibrary key={side} projectId={projectId} label={label} onClose={direct ? onClose : closeLibrary}
+      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} />;
   }
 
   return <div className="sheet-backdrop files-drawer-backdrop" role="presentation" onClick={onClose}>

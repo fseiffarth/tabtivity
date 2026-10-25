@@ -277,6 +277,22 @@ pub fn revoke_tab(tab: &str) -> bool {
     });
     held
 }
+/// The servers `tab` holds a live token for in this process, in lane order —
+/// the hover card's Tabtivity MCP row (`services::agent_features`).
+pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
+    let mut callers: Vec<Caller> = tokens().map().values().filter(|s| s.identity.tab == tab).map(|s| s.identity.caller).collect();
+    callers.sort_by_key(|c| lane(*c));
+    let mut names: Vec<&'static str> = callers.into_iter().map(|caller| match caller {
+        Caller::Agent | Caller::LocalModel | Caller::Reader => SERVER_NAME,
+        Caller::Scheduler => super::schedule_mcp::SERVER_NAME,
+        Caller::Pusher => super::git_push_mcp::SERVER_NAME,
+        Caller::Helper => super::help_mcp::SERVER_NAME,
+        Caller::Marker => super::markup_mcp::SERVER_NAME,
+        Caller::Web => super::web_lane::SERVER_NAME,
+    }).collect();
+    names.dedup();
+    names
+}
 /// Whether a spawn of `tab` still holds a root-lane session (the help, markup
 /// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
@@ -3884,6 +3900,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 

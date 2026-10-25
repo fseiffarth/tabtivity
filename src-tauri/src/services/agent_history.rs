@@ -169,16 +169,20 @@ pub const DATABASES: &[Database] = &[
             "project_directory",
             "workspace",
             "session",
+            "session_v2",
             "message",
             "part",
             "session_context_epoch",
             "session_input",
             "session_message",
+            "instruction_blob",
+            "instruction_entry",
+            "instruction_state",
             "todo",
             "event",
             "event_sequence",
         ],
-        blank: &[("session", "permission")],
+        blank: &[("session", "permission"), ("session_v2", "permission")],
     },
     Database {
         path: ".gemini/antigravity-cli/conversation_summaries.db",
@@ -666,12 +670,12 @@ fn pi_folder_name(path: &str) -> String {
     format!("--{body}--")
 }
 
-fn sha256_hex(text: &str) -> String {
+pub(crate) fn sha256_hex(text: &str) -> String {
     use sha2::Digest;
     hex(&sha2::Sha256::digest(text.as_bytes()))
 }
 
-fn md5_hex(text: &str) -> String {
+pub(crate) fn md5_hex(text: &str) -> String {
     use md5::Digest;
     hex(&md5::Md5::digest(text.as_bytes()))
 }
@@ -1004,10 +1008,16 @@ mod tests {
             "PRAGMA journal_mode = WAL;
              CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, permission TEXT, data TEXT);
              CREATE TABLE account (id TEXT, access_token TEXT);
+             CREATE TABLE credential (id TEXT, value TEXT);
+             CREATE TABLE session_v2 (id TEXT, permission TEXT);
+             CREATE TABLE session_message (id TEXT, session_id TEXT, data TEXT);
              CREATE TABLE migration (id TEXT);
              CREATE TRIGGER t AFTER UPDATE ON session BEGIN INSERT INTO account VALUES ('x', 'planted'); END;
              INSERT INTO session VALUES ('s1', '/home/a/proj', '{\"allow\":\"*\"}', '{\"cwd\":\"/home/a/proj/src\"}');
              INSERT INTO account VALUES ('a1', 'secret-token');
+             INSERT INTO credential VALUES ('c1', 'secret-v2-token');
+             INSERT INTO session_v2 VALUES ('ses_v2', '{\"allow\":\"*\"}');
+             INSERT INTO session_message VALUES ('msg_v2', 'ses_v2', '{\"type\":\"user\",\"text\":\"hello\"}');
              INSERT INTO migration VALUES ('m1');",
         )
         .unwrap();
@@ -1031,11 +1041,18 @@ mod tests {
         assert_eq!(sessions, 1, "rows still in the WAL are in the snapshot");
         let accounts: i64 = conn.query_row("SELECT COUNT(*) FROM account", [], |r| r.get(0)).unwrap();
         assert_eq!(accounts, 0);
+        let credentials: i64 = conn.query_row("SELECT COUNT(*) FROM credential", [], |r| r.get(0)).unwrap();
+        assert_eq!(credentials, 0);
+        let permission: Option<String> = conn.query_row("SELECT permission FROM session_v2", [], |r| r.get(0)).unwrap();
+        assert_eq!(permission, None);
+        let messages: i64 = conn.query_row("SELECT COUNT(*) FROM session_message", [], |r| r.get(0)).unwrap();
+        assert_eq!(messages, 1);
         let perm: Option<String> = conn.query_row("SELECT permission FROM session", [], |r| r.get(0)).unwrap();
         assert_eq!(perm, None);
         drop(conn);
         let bytes = std::fs::read(&snap.path).unwrap();
         assert!(!bytes.windows(12).any(|w| w == b"secret-token"), "no freed page keeps the token");
+        assert!(!bytes.windows(15).any(|w| w == b"secret-v2-token"), "no freed page keeps a V2 credential");
 
         // Import: re-pointed, stripped again, and the file's trigger never fires.
         let r = pairs("/home/a/proj", "/srv/b/proj");

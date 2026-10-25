@@ -253,22 +253,30 @@ fn rel_components(rel: &str) -> Result<Vec<&std::ffi::OsStr>, String> {
 /// below it is a real directory. `root` itself is not checked — a user-chosen
 /// mirror root may legitimately be a link.
 fn refuse_symlinked_components(root: &Path, parts: &[&std::ffi::OsStr], rel: &str) -> Result<(), String> {
+    match first_symlink_component(root, parts) {
+        Ok(None) => Ok(()),
+        Ok(Some(link)) => Err(format!(
+            "refusing '{rel}': '{}' in the local mirror is a symlink",
+            link.strip_prefix(root).unwrap_or(&link).display()
+        )),
+        Err(e) => Err(format!("refusing '{rel}': {e}")),
+    }
+}
+
+/// The first EXISTING path among `root/parts[0]`, `root/parts[0]/parts[1]`, …
+/// that is a symlink, or `None` (a missing component ends the walk).
+fn first_symlink_component(root: &Path, parts: &[&std::ffi::OsStr]) -> std::io::Result<Option<PathBuf>> {
     let mut cur = root.to_path_buf();
     for part in parts {
         cur.push(part);
         match std::fs::symlink_metadata(&cur) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(format!(
-                    "refusing '{rel}': '{}' in the local mirror is a symlink",
-                    cur.strip_prefix(root).unwrap_or(&cur).display()
-                ));
-            }
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(Some(cur)),
             Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(format!("refusing '{rel}': {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// The mirror path a WRITE of project-relative file `rel` may target, or why
@@ -298,13 +306,97 @@ pub fn confined_mirror_dir(root: &Path, rel: &str) -> Result<PathBuf, String> {
 
 // ── Manifest IO ───────────────────────────────────────────────────────────
 
-/// Load a project's manifest from disk, or an empty one if absent/unparseable.
-pub fn load_manifest(project_id: &str) -> Manifest {
-    let path = manifest_path(project_id);
-    if !path.exists() {
-        return Manifest::new();
+/// Load a project's manifest from disk: an empty one only when the file is
+/// positively missing; an unreadable one is an error ([`read_manifest_at`]).
+pub fn load_manifest(project_id: &str) -> Result<Manifest, String> {
+    read_manifest_at(&manifest_path(project_id))
+}
+
+/// Read `sync.json` at `path`. Only a positively missing file is an empty
+/// manifest. A file that exists but cannot be read or parsed is an error,
+/// never "nothing selected": reading it as empty hid every selection and base,
+/// and the next save then replaced the damaged file for good. Its bytes are
+/// kept beside it (`sync.json.unreadable-<secs>`), and that version of the file
+/// is remembered so no save replaces it ([`save_manifest_at`]) until the user
+/// repairs or removes it.
+fn read_manifest_at(path: &Path) -> Result<Manifest, String> {
+    let content = match std::fs::read(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Manifest::new()),
+        Err(e) => return Err(mark_unreadable(path, None, &e.to_string())),
+    };
+    serde_json::from_slice(&content).map_err(|e| mark_unreadable(path, Some(&content), &e.to_string()))
+}
+
+/// Remember `path`'s current version as unreadable, keep a copy of `content`
+/// (once per version), and answer the error every caller reports.
+fn mark_unreadable(path: &Path, content: Option<&[u8]>, why: &str) -> String {
+    let stamp = stamp_of(path);
+    let mut unreadable = unreadable();
+    if let Some((seen, msg)) = unreadable.get(path) {
+        if *seen == stamp {
+            return msg.clone();
+        }
     }
-    crate::storage::read_json(&path).unwrap_or_default()
+    let kept = content.and_then(|bytes| {
+        let name = format!("{}.unreadable-{}", path.file_name()?.to_string_lossy(), now_secs());
+        let copy = path.with_file_name(name);
+        match std::fs::write(&copy, bytes) {
+            Ok(()) => Some(copy),
+            Err(e) => {
+                eprintln!("sync manifest: could not keep a copy of {}: {e}", path.display());
+                None
+            }
+        }
+    });
+    let msg = match kept {
+        Some(copy) => format!(
+            "The sync state of this project ({}) could not be read ({why}); nothing was synced. A copy was kept at {}. Repair or remove the file to sync again.",
+            path.display(),
+            copy.display()
+        ),
+        None => format!(
+            "The sync state of this project ({}) could not be read ({why}); nothing was synced. Repair or remove the file to sync again.",
+            path.display()
+        ),
+    };
+    eprintln!("sync manifest: {msg}");
+    unreadable.insert(path.to_path_buf(), (stamp, msg.clone()));
+    msg
+}
+
+/// The error for `path` when the version on disk is one found unreadable;
+/// `None` once it was repaired or removed (a new version, or no file).
+fn unreadable_now(path: &Path) -> Option<String> {
+    let stamp = stamp_of(path);
+    let mut unreadable = unreadable();
+    match unreadable.get(path) {
+        Some((seen, msg)) if *seen == stamp && stamp.is_some() => Some(msg.clone()),
+        Some(_) => {
+            unreadable.remove(path);
+            None
+        }
+        None => None,
+    }
+}
+
+/// Fail when the project's `sync.json` exists but cannot be read — the gate
+/// every sync command passes before it moves a byte, since the cache
+/// ([`ensure_loaded`]) stands in an empty manifest for an unreadable one. A
+/// version this process already loaded or wrote is not parsed again.
+pub fn check_manifest_readable(project_id: &str) -> Result<(), String> {
+    check_manifest_readable_at(&manifest_path(project_id))
+}
+
+fn check_manifest_readable_at(path: &Path) -> Result<(), String> {
+    if let Some(msg) = unreadable_now(path) {
+        return Err(msg);
+    }
+    let disk = stamp_of(path);
+    if disk.is_none() || stamps().get(path) == Some(&disk) {
+        return Ok(());
+    }
+    read_manifest_at(path).map(|_| ())
 }
 
 /// Persist a project's manifest to disk (creates the state dir if needed).
@@ -330,6 +422,11 @@ fn save_manifest_at(path: &Path, manifest: &Manifest) -> Result<(), String> {
     }
     // On a file system without advisory locks the stamp check alone guards.
     let _lock = crate::storage::FileLock::exclusive_or_unlocked(path).map_err(|e| e.to_string())?;
+    // Never replace a file that could not be read: the cache stood in an empty
+    // manifest for it, so this save would erase what the user selected.
+    if let Some(msg) = unreadable_now(path) {
+        return Err(msg);
+    }
     let mut stamps = stamps();
     if let Some(expected) = stamps.get(path) {
         if *expected != stamp_of(path) {
@@ -351,7 +448,7 @@ pub fn update_manifest(project_id: &str, update: impl FnOnce(&mut Manifest)) -> 
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let _lock = crate::storage::FileLock::exclusive(&path).map_err(|e| e.to_string())?;
-    let mut manifest = load_manifest(project_id);
+    let mut manifest = read_manifest_at(&path)?;
     update(&mut manifest);
     crate::storage::write_json_atomic(&path, &manifest).map_err(|e| e.to_string())?;
     stamps().remove(&path);
@@ -409,11 +506,7 @@ fn mark_stale_on_disk(path: &Path, recorded: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let read_from = stamp_of(path);
-    let mut disk: Manifest = if path.exists() {
-        crate::storage::read_json(path).map_err(|e| e.to_string())?
-    } else {
-        Manifest::new()
-    };
+    let mut disk = read_manifest_at(path)?;
     let mut marked = false;
     for rel in recorded {
         if let Some(entry) = disk.get_mut(rel) {
@@ -471,6 +564,17 @@ fn stamp_of(path: &Path) -> Option<Stamp> {
 fn stamps() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Option<Stamp>>> {
     static STAMPS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Option<Stamp>>>> = std::sync::OnceLock::new();
     STAMPS
+        .get_or_init(Default::default)
+        .lock_ok()
+}
+
+/// Each unreadable manifest's version and the error that names it, by path.
+type Unreadable = HashMap<PathBuf, (Option<Stamp>, String)>;
+
+/// The manifest versions found unreadable ([`read_manifest_at`]).
+fn unreadable() -> std::sync::MutexGuard<'static, Unreadable> {
+    static UNREADABLE: std::sync::OnceLock<std::sync::Mutex<Unreadable>> = std::sync::OnceLock::new();
+    UNREADABLE
         .get_or_init(Default::default)
         .lock_ok()
 }
@@ -701,7 +805,10 @@ fn ensure_loaded_at<'a>(cache: &'a mut HashMap<String, Manifest>, project_id: &s
     let disk = stamp_of(path);
     let fresh = cache.contains_key(project_id) && stamps.get(path) == Some(&disk);
     if !fresh {
-        let manifest = if path.exists() { crate::storage::read_json(path).unwrap_or_default() } else { Manifest::new() };
+        // An unreadable file stands in as empty here (every caller holds a
+        // `&mut Manifest`), so nothing reads as selected or auto; the commands
+        // refuse first (`check_manifest_readable`) and no save replaces it.
+        let manifest = read_manifest_at(path).unwrap_or_default();
         cache.insert(project_id.to_string(), manifest);
         stamps.insert(path.to_path_buf(), disk);
     }
@@ -1326,24 +1433,247 @@ pub fn push_decision(entry: &SyncEntry, host: Option<(u64, Option<u64>)>) -> Pus
     }
 }
 
+/// Why a mirror file was left alone instead of being read for a push: the
+/// mirror is writable by a fenced agent, so a path that was a regular file can
+/// turn into a link to a host file the agent cannot see, a FIFO, or a giant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MirrorSkipKind {
+    /// A link at the file or at a folder on the way to it.
+    Link,
+    /// A FIFO, socket, device or directory where a regular file was expected.
+    Special,
+    /// Over [`MAX_SYNC_FILE_BYTES`].
+    TooLarge,
+}
+
+/// One mirror file left out of a push, as the per-project notice names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MirrorSkip {
+    pub rel: String,
+    pub kind: MirrorSkipKind,
+    /// The size, for [`MirrorSkipKind::TooLarge`].
+    pub size: Option<u64>,
+}
+
+impl std::fmt::Display for MirrorSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            MirrorSkipKind::Link => write!(f, "'{}' is a symlink (or sits behind one) in the local mirror; not pushed", self.rel),
+            MirrorSkipKind::Special => write!(f, "'{}' is not a regular file in the local mirror; not pushed", self.rel),
+            MirrorSkipKind::TooLarge => write!(
+                f,
+                "'{}' is too large to sync ({} bytes; limit {MAX_SYNC_FILE_BYTES})",
+                self.rel,
+                self.size.unwrap_or(0)
+            ),
+        }
+    }
+}
+
+/// The lstat of a mirror file, for the divergence judgement.
+#[derive(Debug)]
+pub enum MirrorStat {
+    Missing,
+    File(std::fs::Metadata),
+    Skip(MirrorSkipKind),
+}
+
+/// `lstat` of project-relative `rel` under `root`, never through a link: a link
+/// at the file or at any folder above it is [`MirrorStat::Skip`], never the
+/// target's metadata. A judgement only — the bytes are read through
+/// [`read_mirror_file`].
+pub fn mirror_lstat(root: &Path, rel: &str) -> Result<MirrorStat, String> {
+    let parts = rel_components(rel)?;
+    if parts.is_empty() {
+        return Err(format!("refusing '{rel}': no file name inside the local mirror"));
+    }
+    if first_symlink_component(root, &parts).map_err(|e| e.to_string())?.is_some() {
+        return Ok(MirrorStat::Skip(MirrorSkipKind::Link));
+    }
+    let path = parts.iter().fold(root.to_path_buf(), |p, part| p.join(part));
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) if m.file_type().is_file() => Ok(MirrorStat::File(m)),
+        Ok(m) if m.file_type().is_symlink() => Ok(MirrorStat::Skip(MirrorSkipKind::Link)),
+        Ok(_) => Ok(MirrorStat::Skip(MirrorSkipKind::Special)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MirrorStat::Missing),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// What [`read_mirror_file`] found.
+#[derive(Debug)]
+pub enum MirrorRead {
+    Missing,
+    Skip(MirrorSkipKind, Option<u64>),
+    /// The bytes and the `(size, mtime)` of the opened handle they came from.
+    File { bytes: Vec<u8>, meta: (u64, Option<u64>) },
+}
+
+/// Read mirror file `rel` for a push through ONE held handle: the folders are
+/// opened by handle without following a link (`home_io::HomeFile`), the file
+/// with `O_NOFOLLOW | O_NONBLOCK`, and "regular" and the
+/// [`MAX_SYNC_FILE_BYTES`] cap are judged on the opened inode — so a swap after
+/// the walk (leaf or folder turned into a link, a FIFO) reads nothing. Blocking:
+/// call from `spawn_blocking`.
+pub fn read_mirror_file(root: &Path, rel: &str) -> Result<MirrorRead, String> {
+    use std::io::Read;
+    use crate::services::home_io::HomeFile;
+    let parts = rel_components(rel)?;
+    let Some((_, dirs)) = parts.split_last() else {
+        return Err(format!("refusing '{rel}': no file name inside the local mirror"));
+    };
+    #[cfg(unix)]
+    if rel.contains('\\') {
+        return Err(format!("'{rel}' has a backslash in its name; not pushed"));
+    }
+    let joined = parts.iter().filter_map(|p| p.to_str()).collect::<Vec<_>>().join("/");
+    let Some(handle) = HomeFile::open_existing(root, &joined) else {
+        return Ok(match first_symlink_component(root, dirs) {
+            Ok(Some(_)) => MirrorRead::Skip(MirrorSkipKind::Link, None),
+            _ => MirrorRead::Missing,
+        });
+    };
+    let kind_now = |h: &HomeFile| match h.lstat() {
+        Ok(m) if m.is_symlink => Ok(Some(MirrorSkipKind::Link)),
+        Ok(m) if m.is_file => Ok(None),
+        Ok(_) => Ok(Some(MirrorSkipKind::Special)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(None),
+        Err(e) => Err(Some(e.to_string())),
+    };
+    match kind_now(&handle) {
+        Ok(Some(kind)) => return Ok(MirrorRead::Skip(kind, None)),
+        Ok(None) => {}
+        Err(None) => return Ok(MirrorRead::Missing),
+        Err(Some(e)) => return Err(e),
+    }
+    let Some(file) = handle.open_read() else {
+        return match kind_now(&handle) {
+            Ok(Some(kind)) => Ok(MirrorRead::Skip(kind, None)),
+            Ok(None) => Err(format!("could not open '{rel}' in the local mirror")),
+            Err(None) => Ok(MirrorRead::Missing),
+            Err(Some(e)) => Err(e),
+        };
+    };
+    let fmeta = file.metadata().map_err(|e| e.to_string())?;
+    if fmeta.len() > MAX_SYNC_FILE_BYTES {
+        return Ok(MirrorRead::Skip(MirrorSkipKind::TooLarge, Some(fmeta.len())));
+    }
+    let mut bytes = Vec::with_capacity(fmeta.len() as usize);
+    file.take(MAX_SYNC_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_SYNC_FILE_BYTES {
+        return Ok(MirrorRead::Skip(MirrorSkipKind::TooLarge, Some(bytes.len() as u64)));
+    }
+    Ok(MirrorRead::File { bytes, meta: local_meta(&fmeta) })
+}
+
+/// Why a push of one file did not happen.
+#[derive(Debug)]
+pub enum PushError {
+    /// The mirror file is a link, special or too large: noted per project.
+    Skipped(MirrorSkip),
+    Failed(String),
+}
+
+impl From<String> for PushError {
+    fn from(e: String) -> Self {
+        PushError::Failed(e)
+    }
+}
+
+impl std::fmt::Display for PushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PushError::Skipped(skip) => skip.fmt(f),
+            PushError::Failed(e) => f.write_str(e),
+        }
+    }
+}
+
+/// The bases a push leaves: the host's after the write, the mirror's from the
+/// handle the bytes were read from.
+#[derive(Debug, Clone, Copy)]
+pub struct PushedFile {
+    pub host: (u64, Option<u64>),
+    pub local: (u64, Option<u64>),
+}
+
+/// The files left out of pushes for one project, as the UI shows them: the
+/// newest [`MIRROR_SKIPS_SHOWN`] and the real count.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct MirrorSkips {
+    pub total: usize,
+    pub items: Vec<MirrorSkip>,
+}
+
+const MIRROR_SKIPS_SHOWN: usize = 20;
+const MIRROR_SKIPS_KEPT: usize = 1000;
+
+type MirrorSkipMap = HashMap<String, std::collections::BTreeMap<String, MirrorSkip>>;
+
+fn mirror_skip_map() -> std::sync::MutexGuard<'static, MirrorSkipMap> {
+    static SKIPS: std::sync::OnceLock<std::sync::Mutex<MirrorSkipMap>> = std::sync::OnceLock::new();
+    SKIPS.get_or_init(Default::default).lock_ok()
+}
+
+/// Record a skipped mirror file for `project_id`; `true` when that changed what
+/// the notice says.
+pub fn note_mirror_skip(project_id: &str, skip: MirrorSkip) -> bool {
+    let mut map = mirror_skip_map();
+    let files = map.entry(project_id.to_string()).or_default();
+    if files.get(&skip.rel) == Some(&skip) {
+        return false;
+    }
+    if files.len() >= MIRROR_SKIPS_KEPT && !files.contains_key(&skip.rel) {
+        return false;
+    }
+    files.insert(skip.rel.clone(), skip);
+    true
+}
+
+/// Forget `rel` once it is an ordinary file again (or gone); `true` when it was
+/// noted.
+pub fn clear_mirror_skip(project_id: &str, rel: &str) -> bool {
+    let mut map = mirror_skip_map();
+    let Some(files) = map.get_mut(project_id) else { return false };
+    let had = files.remove(rel).is_some();
+    if files.is_empty() {
+        map.remove(project_id);
+    }
+    had
+}
+
+/// The project's current notice.
+pub fn mirror_skips(project_id: &str) -> MirrorSkips {
+    let map = mirror_skip_map();
+    let Some(files) = map.get(project_id) else { return MirrorSkips::default() };
+    MirrorSkips { total: files.len(), items: files.values().take(MIRROR_SKIPS_SHOWN).cloned().collect() }
+}
+
 /// Push one local mirror file to the host atomically: write the bytes to a temp
 /// path beside the target, then `rename_on` over it (so a reader never sees a
-/// half-written file). The caller has already decided this is `Safe`. Returns the
-/// host (size, mtime) base captured after the write. Size-guarded (G8).
+/// half-written file). The caller has already decided this is `Safe`. The bytes
+/// come from [`read_mirror_file`] (one held handle, no link on the way, capped,
+/// off the runtime thread); a link, special file or giant is
+/// [`PushError::Skipped`]. Returns the host (size, mtime) base captured after
+/// the write and the mirror's from the read handle.
 pub async fn push_file_atomic(
     sftp: &openssh_sftp_client::Sftp,
-    local: &Path,
+    mirror_root: &Path,
+    rel: &str,
     host_abs: &str,
-) -> Result<(u64, Option<u64>), String> {
-    let meta = std::fs::metadata(local).map_err(|e| e.to_string())?;
-    if meta.len() > MAX_SYNC_FILE_BYTES {
-        return Err(format!(
-            "'{}' is too large to sync ({} bytes; limit {MAX_SYNC_FILE_BYTES})",
-            local.display(),
-            meta.len()
-        ));
-    }
-    let bytes = std::fs::read(local).map_err(|e| e.to_string())?;
+) -> Result<PushedFile, PushError> {
+    let (root, rel_owned) = (mirror_root.to_path_buf(), rel.to_string());
+    let read = app_core::rt::spawn_blocking(move || read_mirror_file(&root, &rel_owned))
+        .await
+        .map_err(|e| PushError::Failed(e.to_string()))??;
+    let (bytes, local) = match read {
+        MirrorRead::File { bytes, meta } => (bytes, meta),
+        MirrorRead::Missing => return Err(PushError::Failed(format!("'{rel}' is gone from the local mirror"))),
+        MirrorRead::Skip(kind, size) => {
+            return Err(PushError::Skipped(MirrorSkip { rel: rel.to_string(), kind, size }));
+        }
+    };
     // Temp path beside the target (same dir → same filesystem → atomic rename).
     // The suffix must be UNIQUE per in-flight write: the manifest lock is held only
     // per file (not for a whole push), so a manual `sync_push` and a background
@@ -1364,15 +1694,13 @@ pub async fn push_file_atomic(
     // made-up base of (len, None) guarantees a false amber on the next status
     // pass, while an unrecorded base only degrades to a conflict prompt (the
     // safe direction). One retry covers a transient hiccup on the pooled session.
-    match sftp::metadata_on(sftp, host_abs).await {
-        Ok(hm) => Ok(hm),
-        Err(_) => match sftp::metadata_on(sftp, host_abs).await {
-            Ok(hm) => Ok(hm),
-            Err(e) => Err(format!(
-                "pushed '{host_abs}' but could not re-stat it to record the new base: {e}"
-            )),
-        },
-    }
+    let host = match sftp::metadata_on(sftp, host_abs).await {
+        Ok(hm) => hm,
+        Err(_) => sftp::metadata_on(sftp, host_abs).await.map_err(|e| {
+            PushError::Failed(format!("pushed '{host_abs}' but could not re-stat it to record the new base: {e}"))
+        })?,
+    };
+    Ok(PushedFile { host, local })
 }
 
 /// Record a freshly-pushed file in the manifest: keep it selected and stamp the
@@ -1489,6 +1817,42 @@ mod tests {
         assert!(fresh.contains_key("theirs-is-longer") && !fresh.contains_key("a"), "re-read, not the stale copy");
         fresh.insert("d".into(), SyncEntry::default());
         save_manifest_at(&path, &cache["p"]).expect("current again");
+    }
+
+    /// An unparseable `sync.json` is never read as "nothing selected" and then
+    /// replaced: the cache stands in an empty manifest, every save refuses, the
+    /// bytes are kept beside it, and a repaired (here: removed) file syncs again.
+    #[test]
+    fn an_unreadable_manifest_is_kept_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p").join("sync.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let damaged = b"{\"notes.md\": {\"selected\": tr";
+        std::fs::write(&path, damaged).unwrap();
+
+        let err = check_manifest_readable_at(&path).unwrap_err();
+        assert!(err.contains("could not be read"), "{err}");
+        let mut cache = HashMap::new();
+        let m = ensure_loaded_at(&mut cache, "p", &path);
+        assert!(m.is_empty(), "stands in as empty for the callers holding a &mut");
+        m.insert("other".into(), SyncEntry::default());
+        assert!(save_manifest_at(&path, &cache["p"]).is_err(), "never replaces the damaged file");
+        assert!(save_or_mark_stale_at(&path, cache.get_mut("p").unwrap(), &["other".to_string()]).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), damaged);
+        let kept: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("sync.json.unreadable-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "one copy per damaged version");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), damaged);
+        assert!(check_manifest_readable_at(&path).is_err(), "still refused");
+
+        std::fs::remove_file(&path).unwrap();
+        check_manifest_readable_at(&path).expect("a positively missing file starts empty");
+        let m = ensure_loaded_at(&mut cache, "p", &path);
+        m.insert("fresh".into(), SyncEntry::default());
+        save_manifest_at(&path, &cache["p"]).expect("writable again once removed");
     }
 
     /// Fixed decision #7: a pull or push whose record fails to save must never
@@ -2697,5 +3061,128 @@ mod tests {
             (false, true),
             "local-only change → push, which is exactly the seed a new host needs"
         );
+    }
+    #[cfg(unix)]
+    mod mirror_reads {
+        use super::*;
+        use crate::services::home_io::{mkfifo, within_deadline};
+
+        fn mirror() -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join("d")).unwrap();
+            std::fs::write(dir.path().join("d").join("f.txt"), b"hello").unwrap();
+            dir
+        }
+
+        fn read(root: &Path, rel: &str) -> MirrorRead {
+            let (root, rel) = (root.to_path_buf(), rel.to_string());
+            within_deadline(move || read_mirror_file(&root, &rel)).expect("a read, not an error")
+        }
+
+        fn skip_kind(r: MirrorRead) -> MirrorSkipKind {
+            match r {
+                MirrorRead::Skip(kind, _) => kind,
+                other => panic!("expected a skip, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_regular_file_is_read_with_the_handles_bases() {
+            let dir = mirror();
+            match read(dir.path(), "d/f.txt") {
+                MirrorRead::File { bytes, meta } => {
+                    assert_eq!(bytes, b"hello");
+                    assert_eq!(meta.0, 5);
+                }
+                other => panic!("{other:?}"),
+            }
+            assert!(matches!(read(dir.path(), "d/none.txt"), MirrorRead::Missing));
+            assert!(matches!(read(dir.path(), "nodir/none.txt"), MirrorRead::Missing));
+        }
+
+        #[test]
+        fn a_link_at_the_file_is_never_read() {
+            let dir = mirror();
+            let secret = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(secret.path(), b"ssh key").unwrap();
+            std::os::unix::fs::symlink(secret.path(), dir.path().join("d").join("l.txt")).unwrap();
+            assert_eq!(skip_kind(read(dir.path(), "d/l.txt")), MirrorSkipKind::Link);
+            assert!(matches!(mirror_lstat(dir.path(), "d/l.txt"), Ok(MirrorStat::Skip(MirrorSkipKind::Link))));
+        }
+
+        #[test]
+        fn a_linked_folder_on_the_way_is_never_read_through() {
+            let dir = mirror();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("f.txt"), b"outside").unwrap();
+            std::os::unix::fs::symlink(outside.path(), dir.path().join("lnk")).unwrap();
+            assert_eq!(skip_kind(read(dir.path(), "lnk/f.txt")), MirrorSkipKind::Link);
+            assert!(matches!(mirror_lstat(dir.path(), "lnk/f.txt"), Ok(MirrorStat::Skip(MirrorSkipKind::Link))));
+            // A dangling link is still a link, never "gone".
+            std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("dangling")).unwrap();
+            assert_eq!(skip_kind(read(dir.path(), "dangling")), MirrorSkipKind::Link);
+            assert!(matches!(mirror_lstat(dir.path(), "dangling"), Ok(MirrorStat::Skip(MirrorSkipKind::Link))));
+        }
+
+        #[test]
+        fn a_fifo_is_skipped_without_blocking() {
+            let dir = mirror();
+            mkfifo(&dir.path().join("d").join("pipe"));
+            assert_eq!(skip_kind(read(dir.path(), "d/pipe")), MirrorSkipKind::Special);
+            assert!(matches!(mirror_lstat(dir.path(), "d/pipe"), Ok(MirrorStat::Skip(MirrorSkipKind::Special))));
+        }
+
+        #[test]
+        fn a_file_over_the_cap_is_skipped_from_the_handle() {
+            let dir = mirror();
+            let big = std::fs::File::create(dir.path().join("big.bin")).unwrap();
+            big.set_len(MAX_SYNC_FILE_BYTES + 1).unwrap();
+            match read(dir.path(), "big.bin") {
+                MirrorRead::Skip(MirrorSkipKind::TooLarge, Some(size)) => assert_eq!(size, MAX_SYNC_FILE_BYTES + 1),
+                other => panic!("{other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_swap_between_the_walk_and_the_read_reads_nothing() {
+            let root = mirror();
+            let secret = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(secret.path(), b"host login").unwrap();
+            // The walk's view: a regular file in a regular folder.
+            let mut listed = Vec::new();
+            walk_mirror_inner(root.path(), root.path(), &mut listed).unwrap();
+            assert_eq!(listed, vec!["d/f.txt".to_string()]);
+            // The leaf is swapped for a link to a file the agent cannot see.
+            std::fs::remove_file(root.path().join("d").join("f.txt")).unwrap();
+            std::os::unix::fs::symlink(secret.path(), root.path().join("d").join("f.txt")).unwrap();
+            assert_eq!(skip_kind(read(root.path(), &listed[0])), MirrorSkipKind::Link);
+            // Then the folder is swapped for a link to a folder holding the same name.
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("f.txt"), b"host login").unwrap();
+            std::fs::remove_file(root.path().join("d").join("f.txt")).unwrap();
+            std::fs::remove_dir(root.path().join("d")).unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.path().join("d")).unwrap();
+            assert_eq!(skip_kind(read(root.path(), &listed[0])), MirrorSkipKind::Link);
+            // And the leaf becomes a FIFO.
+            std::fs::remove_file(root.path().join("d")).unwrap();
+            std::fs::create_dir(root.path().join("d")).unwrap();
+            mkfifo(&root.path().join("d").join("f.txt"));
+            assert_eq!(skip_kind(read(root.path(), &listed[0])), MirrorSkipKind::Special);
+        }
+
+        #[test]
+        fn skips_are_kept_per_project_and_cleared_when_the_file_is_ordinary_again() {
+            let id = format!("skip-notice-{}", std::process::id());
+            let skip = |rel: &str| MirrorSkip { rel: rel.into(), kind: MirrorSkipKind::Link, size: None };
+            assert!(note_mirror_skip(&id, skip("a")));
+            assert!(!note_mirror_skip(&id, skip("a")), "the same notice is not a change");
+            assert!(note_mirror_skip(&id, skip("b")));
+            assert_eq!(mirror_skips(&id).total, 2);
+            assert!(clear_mirror_skip(&id, "a"));
+            assert!(!clear_mirror_skip(&id, "a"));
+            assert_eq!(mirror_skips(&id).items, vec![skip("b")]);
+            assert!(clear_mirror_skip(&id, "b"));
+            assert_eq!(mirror_skips(&id), MirrorSkips::default());
+        }
     }
 }

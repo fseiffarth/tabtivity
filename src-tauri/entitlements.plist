@@ -19,6 +19,10 @@
   <true/>
   <key>com.apple.security.network.server</key>
   <true/>
+  <!-- The Chat's dictation (services::voice): the hardened runtime refuses
+       the microphone without it, whatever the user answers. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
   <!-- AppleScript (osascript) for privileged helpers / future workspace hooks. -->
   <key>com.apple.security.automation.apple-events</key>
   <true/>

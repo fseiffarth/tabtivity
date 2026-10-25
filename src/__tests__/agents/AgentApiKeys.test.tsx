@@ -55,6 +55,7 @@ type ProviderExtra = {
   legacyLimitUsd?: number | null;
   budget?: string;
   unknownModels?: string[];
+  models?: { model: string; input: number; output: number; cacheWrite: number; cacheRead: number; requests: number; billed: number; usd: number }[];
 };
 let extra: Record<string, ProviderExtra> = {};
 
@@ -68,10 +69,12 @@ function status(saved: string[], readable = true) {
     resetsOn: "2026-11-01",
     pricesDate: "2026-10-04",
     ledgerRestarted: null,
-    providers: ["anthropic", "gemini"].map((id) => ({ id, saved: saved.includes(id), ...extra[id] })),
+    providers: ["anthropic", "gemini", "openai"].map((id) => ({ id, saved: saved.includes(id), ...extra[id] })),
     clis: [
       { id: "claude", enabled: false, providers: ["anthropic"], ready: false },
       { id: "gemini", enabled: false, providers: ["gemini"], ready: false },
+      { id: "codex", enabled: false, providers: ["openai"], ready: false },
+      { id: "opencode", enabled: false, providers: ["anthropic", "gemini", "openai"], ready: false },
     ],
   };
 }
@@ -118,6 +121,63 @@ const pick = (cli: string, option: RegExp) => {
 };
 
 describe("API keys for agent CLIs", () => {
+  it("saves an OpenAI key with a limit and switches Codex to that key", async () => {
+    render(<AgentApiKeysRows />);
+    const input = await screen.findByLabelText<HTMLInputElement>("Paste the OpenAI API key");
+    fireEvent.change(input, { target: { value: FAKE_KEY } });
+    const row = input.closest(".agents-row")!;
+    const save = [...row.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+    fireEvent.click(save);
+    await waitFor(() => expect(calls("agent_api_key_set")[0]?.[1]).toEqual({ provider: "openai", key: FAKE_KEY }));
+    expect(order.indexOf("settings:agent_api_token_limits")).toBeLessThan(order.indexOf("key"));
+    expect(input.value).toBe("");
+    await waitFor(() => expect(runsOn("Codex")).toBeTruthy());
+    pick("Codex", /my API key \(OpenAI\)/);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: ["codex"] }));
+    pick("Codex", /its own login/);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] }));
+  });
+
+  it("names only the keyed providers for a CLI of several (OpenCode)", async () => {
+    saved = ["openai"];
+    render(<AgentApiKeysRows />);
+    await waitFor(() => expect(runsOn("OpenCode")).toBeTruthy());
+    fireEvent.click(runsOn("OpenCode"));
+    expect(screen.getByRole("option", { name: "my API key (OpenAI)" })).toBeTruthy();
+  });
+
+  it("asks which workspace an Anthropic key that names none runs in", async () => {
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd, args) => {
+      if (cmd === "agent_api_key_set" && !(args as { workspace?: string }).workspace) {
+        return Promise.resolve({
+          kind: "pickWorkspace",
+          workspaces: [
+            { id: "wrkspc_01A", name: "Default" },
+            { id: "wrkspc_01B", name: "Research" },
+          ],
+        });
+      }
+      return base(cmd, args);
+    });
+    render(<AgentApiKeysRows />);
+    const input = await screen.findByLabelText<HTMLInputElement>("Paste the Anthropic API key");
+    fireEvent.change(input, { target: { value: FAKE_KEY } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    expect(input.value).toBe("");
+    // Nothing saved yet: the row asks for a workspace.
+    const picker = await screen.findByTitle("Anthropic workspace");
+    expect(saved).toEqual([]);
+    expect(document.body.innerHTML).not.toContain(FAKE_KEY);
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole("option", { name: "Research (wrkspc_01B)" }));
+    const pickRow = picker.closest(".agents-row")!;
+    fireEvent.click([...pickRow.querySelectorAll("button")].find((b) => b.textContent === "Save")!);
+    await waitFor(() => expect(calls("agent_api_key_set")).toHaveLength(2));
+    expect(calls("agent_api_key_set")[1][1]).toEqual({ provider: "anthropic", key: FAKE_KEY, workspace: "wrkspc_01B" });
+    await waitFor(() => expect(screen.queryByTitle("Anthropic workspace")).toBeNull());
+  });
+
   it("saves a key, clears the field and never reads it back", async () => {
     const onChange = vi.fn();
     render(<AgentApiKeysRows onChange={onChange} />);
@@ -148,8 +208,8 @@ describe("API keys for agent CLIs", () => {
     await screen.findByRole("button", { name: "Claude runs on" });
     expect(runsOn("Claude").disabled, "only its login to choose").toBe(true);
     expect(runsOn("Claude").textContent).toContain("its own login");
-    // Only CLIs the proxy can serve have a row: Vibe and OpenCode do not.
-    expect(screen.queryByRole("button", { name: /^(Mistral|OpenCode).* runs on/ })).toBeNull();
+    // Only CLIs the proxy can serve have a row: Vibe does not.
+    expect(screen.queryByRole("button", { name: /^Mistral.* runs on/ })).toBeNull();
 
     cleanup();
     saved = ["anthropic"];
@@ -220,7 +280,7 @@ describe("API keys for agent CLIs", () => {
   it("says the keyring is locked and offers the unlock instead of a key field", async () => {
     readable = false;
     render(<AgentApiKeysRows />);
-    expect((await screen.findAllByText(/keyring locked/)).length).toBe(2);
+    expect((await screen.findAllByText(/keyring locked/)).length).toBe(3);
     expect(screen.queryByText(/not saved/)).toBeNull();
     expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Unlock keyring" }));
@@ -231,7 +291,7 @@ describe("API keys for agent CLIs", () => {
     readable = false;
     store = "vault";
     render(<AgentApiKeysRows />);
-    expect((await screen.findAllByText(/sign in on a paired device to unlock the key/)).length).toBe(2);
+    expect((await screen.findAllByText(/sign in on a paired device to unlock the key/)).length).toBe(3);
     expect(screen.queryByText(/keyring locked/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlock keyring" })).toBeNull();
     expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
@@ -266,7 +326,16 @@ describe("API keys for agent CLIs", () => {
     saved = ["anthropic", "gemini"];
     extra = {
       anthropic: { limitTokens: 20_000_000, billed: 20_500_000, spentUsd: 20.5, budget: "reached", unknownModels: ["claude-next"] },
-      gemini: { limitTokens: 10_000_000, billed: 1_234_000, spentUsd: 1.234, budget: "open", unknownModels: [] },
+      gemini: {
+        limitTokens: 10_000_000,
+        billed: 1_234_000,
+        spentUsd: 1.234,
+        budget: "open",
+        unknownModels: [],
+        models: [
+          { model: "gemini-2.5-pro", input: 900_000, output: 300_000, cacheWrite: 0, cacheRead: 340_000, requests: 12, billed: 1_234_000, usd: 1.234 },
+        ],
+      },
     };
     useSettingsStore.setState({
       settings: { agent_api_token_limits: { anthropic: 20_000_000, gemini: 10_000_000 } } as Settings,
@@ -281,7 +350,17 @@ describe("API keys for agent CLIs", () => {
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText(new RegExp(`${compact(1_234_000)} of ${compact(10_000_000)} billed tokens this month \\(≈ \\$1\\.23\\)`)),
+      screen.getByText(
+        new RegExp(
+          `${compact(1_234_000)} of ${compact(10_000_000)} billed tokens this month, ${compact(8_766_000)} left \\(≈ \\$1\\.23\\)`,
+        ),
+      ),
+    ).toBeTruthy();
+    // Input and output apart, by model; a cache kind only when used.
+    expect(
+      screen.getByText(
+        new RegExp(`gemini-2\\.5-pro: ${compact(900_000)} in · ${compact(300_000)} out · ${compact(340_000)} cache read · ≈ \\$1\\.23$`),
+      ),
     ).toBeTruthy();
     expect(screen.getByText(/highest Anthropic rate: claude-next/)).toBeTruthy();
     expect(screen.getByText(/resets on 2026-11-01 \(UTC\)/)).toBeTruthy();

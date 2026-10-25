@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearConnectReload, isConnectReload, noteUnlockedLeave, RELOAD_GRACE_MS, takeConnectReload, takeReloadGrace } from "../../../mobile-web/src/reloadGrace";
+import { clearConnectGrace, clearConnectReload, isConnectReload, noteConnectGrace, noteUnlockedLeave, RELOAD_GRACE_MS, takeConnectGrace, takeConnectReload, takeReloadGrace } from "../../../mobile-web/src/reloadGrace";
 import { BRAND, storageKey } from "../../lib/brand";
 
 const T = 1_000_000;
@@ -56,5 +56,24 @@ describe(`${BRAND.display} Mobile failed-connect reload`, () => {
     expect(takeConnectReload(null)).toBe(false);
     const blocked = { getItem: () => null, setItem: () => { throw new Error("blocked"); }, removeItem: () => undefined };
     expect(takeConnectReload(blocked)).toBe(false);
+  });
+
+  it("keeps an unlock a failed connect wasted across any next page in the window, once", () => {
+    localStorage.clear();
+    noteConnectGrace(T, localStorage);
+    expect(takeConnectGrace(180_000, T + 120_000, localStorage)).toBe(true);
+    expect(takeConnectGrace(180_000, T + 120_001, localStorage)).toBe(false);
+
+    noteConnectGrace(T, localStorage);
+    expect(takeConnectGrace(180_000, T + 180_001, localStorage)).toBe(false);
+    // Consumed even when refused, so a later open cannot reuse it.
+    expect(localStorage.length).toBe(0);
+
+    noteConnectGrace(T, localStorage);
+    clearConnectGrace(localStorage);
+    expect(takeConnectGrace(180_000, T + 1, localStorage)).toBe(false);
+    // A clock set back is not "seconds ago".
+    noteConnectGrace(T, localStorage);
+    expect(takeConnectGrace(180_000, T - 1, localStorage)).toBe(false);
   });
 });

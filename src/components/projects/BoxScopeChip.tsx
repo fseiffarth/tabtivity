@@ -14,6 +14,7 @@ import { StarIcon } from "../layout/StarIcon";
 import { LogoIcon } from "../layout/LogoIcon";
 import { ScopeSetStatusBars } from "./PillStatusBars";
 import { MenuShortcut } from "../common/MenuShortcut";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { BoxColorPicker } from "./BoxColorPicker";
 import { BoxSwatch, CheckboxIcon, SquareIcon } from "../common/icons/Icon";
@@ -126,7 +127,7 @@ export function BoxScopeChip({
 
   // The logo is the window's move handle. The move starts only once the press
   // has travelled LOGO_DRAG_SLOP px, so a press that stays put is still the
-  // click that means "All projects". Once the OS move loop owns the pointer
+  // click that opens the root console. Once the OS move loop owns the pointer
   // the webview may never see the release, so the listeners go at hand-off;
   // `logoDragged` swallows the click that may still follow a move.
   const logoDragged = useRef(false);
@@ -222,10 +223,11 @@ export function BoxScopeChip({
   }, [menuOpen]);
 
   // A press outside the chip, the box pills and the portaled list, or Escape,
-  // closes both the list and the box context menu — the hover grace alone
-  // can't catch a pointer that jumps straight out of the header.
+  // closes the list — the hover grace alone can't catch a pointer that jumps
+  // straight out of the header. (The box context menu is a `ContextMenuPortal`
+  // and closes itself the same way.)
   useEffect(() => {
-    if (!menuOpen && !contextMenu) return;
+    if (!menuOpen) return;
     const onPointer = (e: PointerEvent) => {
       if (chipRef.current?.contains(e.target as Node)) return;
       // The box pills host the rename input, so a press inside them must not
@@ -233,13 +235,9 @@ export function BoxScopeChip({
       if (pillsRef.current?.contains(e.target as Node)) return;
       if ((e.target as HTMLElement).closest?.(".box-chip-menu")) return;
       dismiss();
-      setContextMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        dismiss();
-        setContextMenu(null);
-      }
+      if (e.key === "Escape") dismiss();
     };
     document.addEventListener("pointerdown", onPointer);
     document.addEventListener("keydown", onKey);
@@ -248,7 +246,7 @@ export function BoxScopeChip({
       document.removeEventListener("keydown", onKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [menuOpen, contextMenu]);
+  }, [menuOpen]);
 
   // The box the context menu is open for, if it still exists (a dissolve from
   // elsewhere closes the menu with it).
@@ -289,7 +287,7 @@ export function BoxScopeChip({
 
   const chipTitle = () => {
     if (naming === "root") return t("header.rootProject");
-    return t("boxChip.pickerTitle");
+    return t("boxChip.logoTitle");
   };
 
   const chipLabel = () => {
@@ -312,9 +310,9 @@ export function BoxScopeChip({
           naming ? " filtering" : ""
         }`}
       >
-        {/* The mark: drag it to move the window, click it for "All projects"
-            (the menu's own row — drop the box slice). It does not open the
-            list; only the caret beside it does. */}
+        {/* The mark: drag it to move the window, click it for the root
+            console (the menu's root row; "All projects" is a row there too).
+            It does not open the list; only the caret beside it does. */}
         <button
           type="button"
           className="box-chip-main"
@@ -327,7 +325,8 @@ export function BoxScopeChip({
               logoDragged.current = false;
               return;
             }
-            pick(null);
+            dismiss();
+            onSelectRoot();
           }}
         >
           {naming === "root" ? (
@@ -556,93 +555,91 @@ export function BoxScopeChip({
           document.body,
         )}
 
-      {contextMenu &&
-        menuBox &&
-        createPortal(
-          <div
-            className="context-menu box-pill-menu"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onPointerDown={(e) => e.stopPropagation()}
+      {contextMenu && menuBox && (
+        <ContextMenuPortal
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          className="context-menu box-pill-menu"
+        >
+          <button
+            onClick={() => {
+              setContextMenu(null);
+              onSelect(menuBox.id);
+            }}
           >
-            <button
-              onClick={() => {
-                setContextMenu(null);
-                onSelect(menuBox.id);
-              }}
-            >
-              {t("boxPill.openBox")}
-            </button>
-            <button
-              onClick={() => {
-                setContextMenu(null);
-                setRenameValue(menuBox.name);
-                setRenamingId(menuBox.id);
-              }}
-            >
-              {t("common.rename")}
-            </button>
-            <BoxColorPicker
-              box={menuBox}
-              onPick={(color) => void useBoxesStore.getState().setBoxColor(menuBox.id, color)}
-            />
+            {t("boxPill.openBox")}
+          </button>
+          <button
+            onClick={() => {
+              setContextMenu(null);
+              setRenameValue(menuBox.name);
+              setRenamingId(menuBox.id);
+            }}
+          >
+            {t("common.rename")}
+          </button>
+          <BoxColorPicker
+            box={menuBox}
+            onPick={(color) => void useBoxesStore.getState().setBoxColor(menuBox.id, color)}
+          />
 
-            {/* Members, right on the box: a checkbox row per open project,
-                toggling membership on the spot. The menu STAYS open across
-                toggles — adding three projects is three clicks, not three
-                right-clicks — and closes on Escape or a press elsewhere. */}
-            <div className="context-menu-group">
-              <div className="context-menu-group-label">
-                {t("boxPill.membersGroup")} <UntestedTag id="boxPill.membersGroup" />
-              </div>
-              {memberRows.map((row) => (
-                <button
-                  key={row.id}
-                  className="context-menu-check"
-                  data-member-id={row.id}
-                  onClick={() => {
-                    const store = useBoxesStore.getState();
-                    if (row.member) void store.removeFromBox(row.id, menuBox.id);
-                    else void store.addToBox(row.id, menuBox.id);
-                  }}
-                  title={t(row.member ? "boxPill.removeMemberTitle" : "boxPill.addMemberTitle", {
-                    name: row.name,
-                    box: menuBox.name,
-                  })}
-                >
-                  <span className="context-menu-checkmark" aria-hidden>
-                    {row.member ? <CheckboxIcon /> : <SquareIcon />}
-                  </span>
-                  {row.name}
-                </button>
-              ))}
-              {memberRows.length === 0 && (
-                <div className="context-menu-note">{t("boxEditor.noProjects")}</div>
-              )}
-              {memberRowsTruncated && (
-                <div className="context-menu-note">{t("boxPill.moreInEditor")}</div>
-              )}
+          {/* Members, right on the box: a checkbox row per open project,
+              toggling membership on the spot. The menu STAYS open across
+              toggles — adding three projects is three clicks, not three
+              right-clicks — and closes on Escape or a press elsewhere. */}
+          <div className="context-menu-group">
+            <div className="context-menu-group-label">
+              {t("boxPill.membersGroup")} <UntestedTag id="boxPill.membersGroup" />
             </div>
+            {memberRows.map((row) => (
+              <button
+                key={row.id}
+                className="context-menu-check"
+                data-member-id={row.id}
+                onClick={() => {
+                  const store = useBoxesStore.getState();
+                  if (row.member) void store.removeFromBox(row.id, menuBox.id);
+                  else void store.addToBox(row.id, menuBox.id);
+                }}
+                title={t(row.member ? "boxPill.removeMemberTitle" : "boxPill.addMemberTitle", {
+                  name: row.name,
+                  box: menuBox.name,
+                })}
+              >
+                <span className="context-menu-checkmark" aria-hidden>
+                  {row.member ? <CheckboxIcon /> : <SquareIcon />}
+                </span>
+                {row.name}
+              </button>
+            ))}
+            {memberRows.length === 0 && (
+              <div className="context-menu-note">{t("boxEditor.noProjects")}</div>
+            )}
+            {memberRowsTruncated && (
+              <div className="context-menu-note">{t("boxPill.moreInEditor")}</div>
+            )}
+          </div>
 
-            <button
-              onClick={() => {
-                setContextMenu(null);
-                useBoxEditorStore.getState().openEditor(menuBox.id);
-              }}
-            >
-              {t("boxPill.editBoxEllipsis")}
-            </button>
-            <button
-              className="danger"
-              onClick={() => {
-                setContextMenu(null);
-                onDelete(menuBox.id);
-              }}
-            >
-              {t("boxPill.deleteBox")}
-            </button>
-          </div>,
-          document.body,
-        )}
+          <button
+            onClick={() => {
+              setContextMenu(null);
+              useBoxEditorStore.getState().openEditor(menuBox.id);
+            }}
+          >
+            {t("boxPill.editBoxEllipsis")}
+          </button>
+          <button
+            className="danger"
+            onClick={() => {
+              setContextMenu(null);
+              onDelete(menuBox.id);
+            }}
+          >
+            {t("boxPill.deleteBox")}
+          </button>
+        </ContextMenuPortal>
+      )}
     </>
   );
 }

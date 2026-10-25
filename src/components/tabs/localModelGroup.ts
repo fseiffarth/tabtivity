@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { loadOllamaModel, ollamaGpuStatus, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import type { TranslationKey } from "../../lib/i18n";
+import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
 import { TAB_ACCENT } from "./newTabItems";
 
@@ -63,16 +63,23 @@ export interface LocalModelPlacementState {
  * The GPU gate behind the "+" menu's local-model group. Probes only while
  * `active` (the menu is open) — TabBar mounts its menu data for the life of
  * the bar, and residency is only worth a round trip at the moment someone is
- * about to pick. Follows `ollama-load-progress`, so a load started from the
- * 🧠 menu or Settings flips the rows here too.
+ * about to pick. Follows the shared activity store's loads (fed by
+ * `ollama-load-progress`), so a load started from the 🧠 menu or Settings
+ * flips the rows here too.
  */
 export function useLocalModelPlacement(
   model: string | undefined,
   active: boolean,
 ): LocalModelPlacementState {
   const [placement, setPlacement] = useState<LocalModelPlacement>("probing");
-  const [loading, setLoading] = useState(false);
+  // A load this menu started (`load` below); the store's `loads` covers one
+  // started anywhere else.
+  const [ownLoading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const loads = useOllamaActivityStore((s) => s.loads);
+  const loadKey = model ? Object.keys(loads).find((k) => sameModel(k, model)) : undefined;
+  const storeLoading = loadKey !== undefined && loads[loadKey] === "loading";
+  const loading = ownLoading || storeLoading;
 
   const reprobe = useCallback(() => {
     if (!model) return;
@@ -83,19 +90,18 @@ export function useLocalModelPlacement(
     if (!active || !model) return;
     setPlacement("probing");
     reprobe();
-    const un = listen<{ model: string; status: string }>("ollama-load-progress", (e) => {
-      if (!sameModel(e.payload.model, model)) return;
-      if (e.payload.status === "loading") {
-        setLoading(true);
-        return;
-      }
-      setLoading(false);
-      reprobe();
-    });
-    return () => {
-      void un.then((f) => f()).catch(() => {});
-    };
+    // The store's listeners are ref-counted; a popout has no header menu to
+    // have registered them.
+    return initLocalModelEvents();
   }, [active, model, reprobe]);
+
+  // A load that ended (success or error) moved the model: probe again.
+  const wasStoreLoading = useRef(false);
+  useEffect(() => {
+    const ended = wasStoreLoading.current && !storeLoading;
+    wasStoreLoading.current = storeLoading;
+    if (ended && active) reprobe();
+  }, [storeLoading, active, reprobe]);
 
   const load = useCallback(() => {
     if (!model) return;

@@ -262,9 +262,6 @@ export function SettingsList({
 export interface SettingsNavEntry {
   value: string;
   label: string;
-  /** Which of the page's settings matched the search box, shown under the
-   *  label so a hit on "zoom" says *why* Layout is still listed. */
-  hits?: string[];
 }
 
 export interface SettingsNavGroup {
@@ -272,19 +269,33 @@ export interface SettingsNavGroup {
   entries: SettingsNavEntry[];
 }
 
+/** A search hit: a page, or a setting on one. `trail` says where it is
+ *  ("Manage CLIs › Accounts & keys"), so two settings with the same label
+ *  stay apart. */
+export interface SettingsSearchResult extends SettingsNavEntry {
+  trail: string;
+}
+
 /** Persistent category navigation: a search box, then the groups, each entry
- *  one page on the right. Compacted to the search box plus the shared dropdown
- *  on narrow windows. Enter in the search box opens the first match; Escape
- *  clears a query before it can close the dialog. */
-export function SettingsNavigation({ value, groups, onChange, query, onQuery }: {
+ *  one page on the right. While the box holds a query the groups give way to
+ *  its results, best first — a picked result opens its page at the setting.
+ *  Compacted to the search box plus the shared dropdown on narrow windows.
+ *  Enter in the search box opens the first result; Escape clears a query
+ *  before it can close the dialog. */
+export function SettingsNavigation({ value, groups, results, onChange, query, onQuery }: {
   value: string;
   groups: SettingsNavGroup[];
+  /** Set while searching: shown instead of the groups. */
+  results?: SettingsSearchResult[];
   onChange: (value: string) => void;
   query: string;
   onQuery: (query: string) => void;
 }) {
   const t = useT();
-  const flat = groups.flatMap((group) => group.entries);
+  const flat = results ?? groups.flatMap((group) => group.entries);
+  const options = results
+    ? results.map((r) => ({ value: r.value, label: `${r.label} · ${r.trail}` }))
+    : flat;
   return <nav className="settings-navigation" aria-label={t("settings.categories")}>
     <input
       type="text"
@@ -306,16 +317,23 @@ export function SettingsNavigation({ value, groups, onChange, query, onQuery }: 
       }}
     />
     <div className="settings-navigation-compact">
-      <Dropdown ariaLabel={t("settings.categories")} title={t("settings.categories")} value={value} options={flat} onChange={onChange} placeholder={t("settings.categories")} />
+      <Dropdown ariaLabel={t("settings.categories")} title={t("settings.categories")} value={value} options={options} onChange={onChange} placeholder={t("settings.categories")} />
     </div>
     <div className="settings-navigation-links">
-      {groups.map((group) => <div key={group.label} className="settings-navigation-group" role="group" aria-label={group.label}>
+      {results ? (
+        results.length > 0 && <div className="settings-navigation-group" role="group" aria-label={t("settings.searchResults")}>
+          {results.map((result) => <button key={result.value} type="button" className="settings-btn"
+            onClick={() => onChange(result.value)}>
+            {result.label}
+            <span className="settings-navigation-hit">{result.trail}</span>
+          </button>)}
+        </div>
+      ) : groups.map((group) => <div key={group.label} className="settings-navigation-group" role="group" aria-label={group.label}>
         <div className="settings-navigation-group-title">{group.label}</div>
         {group.entries.map((entry) => <button key={entry.value} type="button" className="settings-btn"
           aria-current={entry.value === value ? "location" : undefined}
           onClick={() => onChange(entry.value)}>
           {entry.label}
-          {entry.hits && entry.hits.length > 0 && <span className="settings-navigation-hit">{entry.hits.join(" · ")}</span>}
         </button>)}
       </div>)}
       {flat.length === 0 && <div className="settings-empty">{t("settings.searchNoMatch")}</div>}

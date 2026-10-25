@@ -257,10 +257,26 @@ pub fn remote_set_default_path(host: String, path: String) -> Result<(), String>
 /// or schemes.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn open_external_url(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("refusing to open a non-web URL".to_string());
+    let url = web_url_to_open(&url)?;
+    opener::open(url.as_str()).map_err(|e| format!("failed to open {url}: {e}"))
+}
+
+/// The URL [`open_external_url`] hands to the OS, parsed (so the OS gets the
+/// normalised form, not the caller's string): `http` or `https` in any case,
+/// with a host, no user name or password, and no control characters or
+/// surrounding whitespace in what was given (the parser would drop a tab or
+/// newline silently, and the OS may not).
+fn web_url_to_open(raw: &str) -> Result<url::Url, String> {
+    const REFUSED: &str = "refusing to open a non-web URL";
+    if raw.chars().any(char::is_control) || raw != raw.trim() {
+        return Err(REFUSED.to_string());
     }
-    opener::open(&url).map_err(|e| format!("failed to open {url}: {e}"))
+    let url = url::Url::parse(raw).map_err(|_| REFUSED.to_string())?;
+    let has_host = url.host_str().is_some_and(|h| !h.is_empty());
+    if !matches!(url.scheme(), "http" | "https") || !has_host || !url.username().is_empty() || url.password().is_some() {
+        return Err(REFUSED.to_string());
+    }
+    Ok(url)
 }
 
 /// Run a built command, returning stdout on success or the trimmed stderr (or a
@@ -854,6 +870,39 @@ pub async fn ssh_mkdir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_web_url_is_handed_to_the_os() {
+        for ok in ["https://example.com/a?b=c#d", "http://127.0.0.1:3000/", "HTTPS://Example.com/", "HtTp://[::1]:80/x"] {
+            assert!(web_url_to_open(ok).is_ok(), "{ok}");
+        }
+        assert_eq!(web_url_to_open("HTTPS://Example.com/x").unwrap().as_str(), "https://example.com/x");
+        for bad in [
+            "",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ms-msdt:/id",
+            "mailto:a@b.c",
+            "https:",
+            "https://",
+            "https://user@example.com/",
+            "https://user:pw@example.com/",
+            "https://:pw@example.com/",
+            "https://example.com/\n",
+            "https://exa\tmple.com/",
+            "https://example.com/\r\nx",
+            "https://example.com/\u{7f}",
+            "https://example.com/\0",
+            " https://example.com/",
+            "https://example.com/ ",
+            "\u{1b}https://example.com/",
+            "notaurl",
+            "//example.com/",
+            "https //example.com",
+        ] {
+            assert!(web_url_to_open(bad).is_err(), "{bad:?}");
+        }
+    }
 
     /// The keychain-touching commands must stay `async`. A **synchronous**
     /// `#[tauri::command]` runs on the **main thread**, and the platform secret

@@ -6,6 +6,7 @@ import { readerAgent } from "../../lib/agents/agentReader";
 import {
   listChats,
   resumeAgentChat,
+  UNTESTED_CHAT_AGENTS,
   useReaderChatsStore,
   type ResumeChatResult,
   type StoredChat,
@@ -187,8 +188,9 @@ export function TerminalReaderChats({ ptyId, scope, tab, cwd, onReturnFocus }: {
         title={t("terminal.chats.hint")}
       >
         {t("terminal.chats.button")}
-        <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▾</span>
+        <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▴</span>
         <UntestedTag id="terminal.reader.chats" />
+        {UNTESTED_CHAT_AGENTS.has(tab.cmd) && <UntestedTag id="terminal.reader.chatsByFolder" />}
       </button>
       {open && (
         <div className="prompt-strip-panel reader-chats-panel" role="dialog" aria-label={t("terminal.chats.title")} onKeyDown={onKey}>

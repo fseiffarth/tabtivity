@@ -120,7 +120,21 @@ openssl dgst -sha256 -verify release-signing.pub.pem -signature SHA256SUMS.sig S
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Both checks must say `Verified OK` and `OK`. Then install it:
+Both checks must say `Verified OK` and `OK`. They prove the package is the file
+the release signed with the key you just downloaded — and that key comes from the
+same repository as the release, so they do not prove the key is the maintainer's.
+Compare its fingerprint with one published somewhere other than this repository:
+
+```bash
+openssl pkey -pubin -in release-signing.pub.pem -outform DER | sha256sum
+```
+
+*Open item (threat-model recheck 2026-10-24):* that fingerprint has not been
+published outside the repository yet (see `docs/context/release_signing.md`), so
+there is nothing to compare it with until it is. Until then the check above is an
+integrity check against the repository, not an independent one.
+
+Then install it:
 
 ```bash
 sudo apt install "./tabtivity-server_${v#v}_amd64.deb"
@@ -294,6 +308,18 @@ done
 
 Agents keep running during the restart: their tabs live in tmux, which is
 not restarted.
+
+## Proxies and remote images
+
+Tabtivity checks where a fetch is going before it connects, and a web proxy
+would resolve the name itself and skip that check. So a markdown image from
+the web (after "Load images"), the assistant's web tools, and a reader page or
+calendar feed fetched by the server for a client never use `HTTP_PROXY` /
+`HTTPS_PROXY`; a server also refuses a client's reader or calendar URL that
+points at the server itself or its private network. If the server (or a
+desktop) reaches the internet only through a proxy, those remote markdown
+images do not load; pages you type into a reader tab on a desktop still use the
+proxy.
 
 ## More
 

@@ -55,7 +55,7 @@ const options = {
   search: { kind: null, searxngUrl: null, ollamaKeyStored: null, keyring: "unlocked", configured: false },
 };
 
-async function ask(request: Record<string, unknown>) {
+async function ask(request: Record<string, unknown>, timeout = 1000) {
   const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
@@ -63,7 +63,7 @@ async function ask(request: Record<string, unknown>) {
   deliver({ payload: request });
   await vi.waitFor(() => expect(invokeMock.mock.calls.some(
     ([command]) => command === "mobile_desktop_respond",
-  )).toBe(true));
+  )).toBe(true), { timeout });
   const call = invokeMock.mock.calls.find(([command]) => command === "mobile_desktop_respond");
   return (call?.[1] as { response: Record<string, unknown> }).response;
 }
@@ -233,6 +233,64 @@ describe("Mobile bridge — the chat assistant", () => {
     await mount(open);
     expect(await ask({ type: "tab_prompt", request_id: "p", project_id: ASSISTANT_SCOPE, tmux_session: TMUX, message: "hello" })).toEqual({ status: "seen" });
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command).filter((command) => /record/.test(command))).toEqual([]);
+  });
+
+  describe("the model chip", () => {
+    const target = { project_id: ASSISTANT_SCOPE, tmux_session: TMUX };
+    const pick = (model: string) => ask({ type: "switch_assistant_model", request_id: "m", ...target, model }, 6000);
+
+    it("lists the models the desktop's own chip lists and the one the chat runs", async () => {
+      await mount(open, [{ ...CHAT, assistant: { cli: "claude", model: "opus" } }]);
+      const listed = await ask({ type: "assistant_models", request_id: "l", ...target });
+      expect(listed).toMatchObject({ status: "assistant_models", current: "opus" });
+      expect((listed as { models: string[] }).models).toEqual(expect.arrayContaining(["opus", "sonnet"]));
+      cleanup();
+      vi.mocked(listen).mockReset();
+      await mount(open, [{ ...CHAT, assistant: { cli: "opencode_local", model: "qwen3:8b" } }]);
+      expect(await ask({ type: "assistant_models", request_id: "l2", ...target })).toEqual({
+        status: "assistant_models", models: ["qwen3:8b"], rows: [{ id: "qwen3:8b", label: "qwen3:8b" }], current: "qwen3:8b",
+      });
+    });
+
+    it("sends Claude's own picker rows, the default ticked for a chat with no model", async () => {
+      await mount(open, [{ ...CHAT, assistant: { cli: "claude" } }]);
+      const fallback = vi.mocked(invoke).getMockImplementation();
+      vi.mocked(invoke).mockImplementation((command, args) => command === "assistant_claude_models"
+        ? Promise.resolve([[
+          "   Select model",
+          "",
+          "     1.  Default (recommended)  Sonnet 5.5 \u00b7 Efficient for routine tasks",
+          "   \u276f 2.  Opus 5.5 \u2714             For complex work and everyday tasks",
+        ]])
+        : fallback!(command, args));
+      expect(await ask({ type: "assistant_models", request_id: "l", ...target })).toEqual({
+        status: "assistant_models",
+        models: ["default", "claude-opus-5-5"],
+        rows: [
+          { id: "default", label: "Default (recommended)", description: "Sonnet 5.5 \u00b7 Efficient for routine tasks" },
+          { id: "claude-opus-5-5", label: "Opus 5.5", description: "For complex work and everyday tasks" },
+        ],
+        current: "default",
+      });
+    });
+
+    it("refuses a tab that is not a Tabby chat", async () => {
+      await mount(open, [{ ...CHAT, assistant: undefined }]);
+      expect(await ask({ type: "assistant_models", request_id: "l", ...target })).toMatchObject({ status: "error", code: "not_assistant_chat" });
+      expect(await pick("opus")).toMatchObject({ status: "error", code: "not_assistant_chat" });
+    });
+
+    it("switches an idle chat in place, and not one at work or to a model nobody listed", async () => {
+      await mount(open);
+      // The chat works (`mount` marks it busy): its restart would end the turn.
+      expect(await pick("opus")).toMatchObject({ status: "error", code: "tab_busy" });
+      expect(await pick("--evil")).toMatchObject({ status: "error", code: "model_not_found" });
+      useActivityStore.setState({ busyByTab: {} });
+      expect(await pick("opus")).toEqual({ status: "seen" });
+      expect(useTabsStore.getState().tabsByScope[ASSISTANT_SCOPE]?.[0]).toMatchObject({ assistant: { cli: "claude", model: "opus" } });
+      // The same model again changes nothing.
+      expect(await pick("opus")).toEqual({ status: "seen" });
+    });
   });
 
   it("closes the chat from the phone like any tab", async () => {

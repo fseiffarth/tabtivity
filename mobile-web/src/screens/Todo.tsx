@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { CheckboxIcon, ClockIcon } from "../../../src/components/common/icons/Icon";
 import { api, normalizeTodoBoard, reloadIfApplied, wasApplied, type TodoBoard, type TodoCard, type TodoColumn, type TodoTaskInput } from "../api";
 import { describeFailure, failureCode } from "../connection";
@@ -7,7 +7,9 @@ import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
-import { COLUMN_FOLLOWS_DATE, intakeColumn, localDate, moveAccepted } from "../todoDates";
+import { COLUMN_FOLLOWS_DATE, moveAccepted } from "../todoDates";
+import { todayStr } from "../../../src/lib/calendar/calendarTime";
+import { fallbackColumnId } from "../../../shared/todoColumns";
 import { ConfirmSheet, NameSheet, type Confirm, type NameAsk } from "../components/ConfirmSheet";
 import { useBackLayer } from "../backStack";
 
@@ -33,7 +35,7 @@ function dayNumber(date: string): number {
 function dueInfo(due: string, t: Translate, lang: Language, now = new Date()): { label: string; tone: string } {
   const date = due.slice(0, 10);
   const time = due.includes("T") ? due.slice(11, 16) : "";
-  const days = dayNumber(date) - dayNumber(localDate());
+  const days = dayNumber(date) - dayNumber(todayStr());
   const nowClock = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   if (days < 0) return { label: t("mobile.todo.dueLate", { days: -days }), tone: "overdue" };
   if (days === 0) {
@@ -69,8 +71,8 @@ function inputOf(task: TodoCard): TodoTaskInput {
 
 function blankTask(board: TodoBoard): TodoTaskInput {
   return {
-    title: "", notes: "", due: localDate(), priority: 0, percent: 0,
-    column: intakeColumn(board.columns),
+    title: "", notes: "", due: todayStr(), priority: 0, percent: 0,
+    column: fallbackColumnId(board.columns),
     calendar_id: board.calendars[0]?.id ?? "", project_id: null, tags: [], subtasks: [],
   };
 }
@@ -266,7 +268,7 @@ function TodoColumnView({ column, index, columns, tasks, cardCount, busy, folded
     {/* An empty column says which kind of empty it is: a column with cards the
         filters are holding back reads as a broken board otherwise. */}
     {!folded && tasks.length === 0 && <p className="todo-column-empty">{t(cardCount > 0 ? "mobile.todo.hiddenByFilters" : "mobile.todo.noCards")}</p>}
-    {!folded && tasks.map((task, index) => <article className={task.done ? "todo-mobile-card done" : "todo-mobile-card"} key={task.id}>
+    {!folded && tasks.map((task, index) => <article className={task.done ? "todo-mobile-card done" : "todo-mobile-card"} key={task.id} style={{ "--todo-accent": accent } as CSSProperties}>
       <div className="todo-mobile-card-title"><button className="todo-check" onClick={() => toggle(task)} disabled={busy} aria-label={t(task.done ? "mobile.todo.markNotDone" : "mobile.todo.markDone", { name: task.title })}>{task.done ? "✓" : ""}</button><strong>{task.title}</strong></div>
       {task.notes.trim() && <p className="todo-mobile-notes">{task.notes.trim()}</p>}
       <TodoMeta task={task} />
@@ -337,7 +339,7 @@ function TaskEditor({ board, task, busy, close, save, remove }: {
     <div className="todo-editor-heading"><h2>{t(task ? "mobile.todo.editTask" : "mobile.todo.addCard")}</h2><button type="button" onClick={close} disabled={busy}>×</button></div>
     <label>{t("todoDialog.titleLabel")}<input value={draft.title} maxLength={300} autoFocus required onChange={(event) => patch({ title: event.target.value })} /></label>
     <label>{t("todoDialog.notes")}<textarea value={draft.notes} maxLength={16 * 1024} rows={3} onChange={(event) => patch({ notes: event.target.value })} /></label>
-    <fieldset><legend>{t("mobile.todo.due")}</legend><div className="todo-due-fields"><input type="date" value={date} onChange={(event) => { setDate(event.target.value); if (!event.target.value) setWithTime(false); }} />{withTime && <TimeFieldCore value={time} use24h={phoneUse24h()} aria-label={t("dateTime.time")} onChange={setTime} />}</div><label className="todo-inline-check"><input type="checkbox" checked={withTime} onChange={(event) => { if (event.target.checked && !date) setDate(localDate()); setWithTime(event.target.checked); }} /> {t("todoDialog.setTime")}</label></fieldset>
+    <fieldset><legend>{t("mobile.todo.due")}</legend><div className="todo-due-fields"><input type="date" value={date} onChange={(event) => { setDate(event.target.value); if (!event.target.value) setWithTime(false); }} />{withTime && <TimeFieldCore value={time} use24h={phoneUse24h()} aria-label={t("dateTime.time")} onChange={setTime} />}</div><label className="todo-inline-check"><input type="checkbox" checked={withTime} onChange={(event) => { if (event.target.checked && !date) setDate(todayStr()); setWithTime(event.target.checked); }} /> {t("todoDialog.setTime")}</label></fieldset>
     <div className="todo-editor-grid"><label>{t("todoDialog.priority")}<select value={draft.priority} onChange={(event) => patch({ priority: Number(event.target.value) })}><option value={0}>{t("todoDialog.priorityNone")}</option><option value={1}>{t("tasksView.priorityHigh")}</option><option value={5}>{t("tasksView.priorityNormal")}</option><option value={9}>{t("tasksView.priorityLow")}</option></select></label><label>{t("todoDialog.percent")} <output>{draft.percent}%</output><input type="range" min={0} max={100} step={5} value={draft.percent} onChange={(event) => patch({ percent: Number(event.target.value) })} /></label></div>
     <div className="todo-editor-grid"><label>{t("todoDialog.column")}<select value={draft.column} onChange={(event) => patch({ column: event.target.value })}>{board.columns.map((column) => <option key={column.id} value={column.id}>{column.name}</option>)}</select></label><label>{t("todoDialog.calendar")}<select value={draft.calendar_id} onChange={(event) => patch({ calendar_id: event.target.value })}>{board.calendars.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}</option>)}</select></label></div>
     <label>{t("todoDialog.project")}<select value={draft.project_id ?? ""} onChange={(event) => patch({ project_id: event.target.value || null })}><option value="">{t("todoDialog.projectNone")}</option>{board.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>

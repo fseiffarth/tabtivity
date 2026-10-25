@@ -3,7 +3,7 @@ import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "
 import type { TabRow, TabSchedules } from "../api";
 import { type FileTab } from "../filesPlace";
 import type { RowDrag } from "../rowDrag";
-import { tabColorCss } from "../tabColors";
+import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { AgentStatusMark } from "./AgentStatusPill";
@@ -39,9 +39,11 @@ export function scheduleLine(schedules: TabSchedules | undefined, t: Translate):
  *
  * The prompts still to come lead the list: the soonest scheduled ones, each
  * behind a ◷ and the desktop time it fires, so the list reads from what is
- * next down to what was asked last.
+ * next down to what was asked last. A message typed on this phone and not
+ * sent yet comes next, drawn like the newest prompt but with no time — it has
+ * not gone anywhere.
  */
-export function PromptLines({ tab }: { tab: TabRow }) {
+export function PromptLines({ tab, draft }: { tab: TabRow; draft?: string }) {
   const t = useT();
   const lines = promptLines(tab);
   const scheduled = tab.schedules?.upcoming ?? [];
@@ -54,13 +56,16 @@ export function PromptLines({ tab }: { tab: TabRow }) {
         <span className="tab-card-prompt-text">{prompt.text}</span>
       </p>;
     })}
+    {draft && <p className="tab-card-prompt latest draft">
+      <span className="tab-card-prompt-text">{draft}{isUntested("mobile.project.draftLine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+    </p>}
     {lines.length === 0
-      ? <p className="tab-card-prompt empty">{promptsFromTranscript(tab)
+      ? !draft && <p className="tab-card-prompt empty">{promptsFromTranscript(tab)
         ? t("mobile.project.noPromptsRead")
         : t("mobile.project.openCodeHistory")}</p>
       : lines.map((prompt, index) => {
         const when = promptClock(prompt.at);
-        return <p className={index === 0 ? "tab-card-prompt latest" : "tab-card-prompt"} key={`${prompt.at ?? ""}-${index}`}>
+        return <p className={index === 0 && !draft ? "tab-card-prompt latest" : "tab-card-prompt"} key={`${prompt.at ?? ""}-${index}`}>
           {when && <span className="tab-card-prompt-when">{when}</span>}
           <span className="tab-card-prompt-text">{prompt.text}</span>
         </p>;
@@ -94,28 +99,29 @@ export function firstGrapheme(text: string): string {
  * doing (turn time, PLAN/GOAL, worktree, subagents), then what it was asked.
  * Rename, colour and the rest live behind ⋯ (`moreFor`).
  */
-export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, chat, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
+export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOffered, swiped, closing, moreOpen, scheduleOpen, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
   tab: TabRow;
+  /** What this phone's composer holds for the tab, unsent (`draftPreview`). */
+  draft?: string;
   /** False once a finished or interrupted tab has been opened here. */
   statusShown: boolean;
   drag: RowDrag;
   canReorder: boolean;
-  terminalsOffered: boolean;
+  /** The tab's schedules can be reached: the host has tmux, and a tab on
+   * the remote host has a window to type them (`schedulesOffered`). */
+  schedulesOffered: boolean;
   /** A swipe is closing this card: it slides out while the desktop answers. */
   swiped: boolean;
   /** Some close is in flight: every ✕ waits for it. */
   closing: boolean;
   moreOpen: boolean;
   scheduleOpen: boolean;
-  /** Set on a chat of the assistant scope: the chat may have no process yet
-   * (`starting` = this one is being started, `busy` = some chat is), so the
-   * card opens by starting it, says so under the name, and offers no schedule. */
-  chat?: { busy: boolean; starting: boolean };
-  /** Set on an agent tab outside the assistant scope: one the desktop started
+  /** Set on an agent tab: one the desktop started
    * before the project's Mobile switch went on runs outside tmux and is listed
    * as not available, so the card still opens — by asking the desktop to
    * restart it where the phone can attach (`starting` = this one, `busy` = some
-   * tab is). */
+   * tab is). Never on a tab on the remote host (`on_host`), which no restart
+   * here brings back. */
   restart?: { busy: boolean; starting: boolean };
   onOpen: () => void;
   onModel: () => void;
@@ -129,7 +135,7 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
   const agent = tab.kind === "agent";
   // The ◷ is a shortcut to schedules a tab already has; adding the first one
   // is a row of the ⋯ sheet, so a card without any spends no width on it.
-  const scheduled = agent && terminalsOffered && (tab.schedules?.total ?? 0) > 0;
+  const scheduled = agent && schedulesOffered && (tab.schedules?.total ?? 0) > 0;
   const schedule = agent ? scheduleLine(tab.schedules, t) : null;
   return <div
     className={`tab-card${color ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}${swiped ? " swiped-out" : ""}`}
@@ -157,12 +163,16 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
             {tab.agent_model && !tab.local_model && <button className="tab-card-model" disabled={!tab.available} onClick={onModel} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
             {tab.agent_model && !tab.local_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             {scheduled && <button className="tab-card-icon accent tab-card-schedule" onClick={onSchedule} aria-haspopup="dialog" aria-expanded={scheduleOpen} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
-            {agent && !chat && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+            {agent && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </span>
           {/* What the session is doing, under its name: how long the turn has
               run, PLAN/GOAL, the worktree it (and its subagents) work in, and
               how many subagents are at work — a tap lists them. */}
           <span className="tab-card-meta">
+            {/* Runs on the remote project's host, which the phone reaches
+                through the desktop's SSH connection. */}
+            {tab.on_host && <small className="agent-mode-mark" title={t("mobile.project.onHostTitle")}>{t("mobile.project.onHost")}</small>}
+            {tab.on_host && isUntested("mobile.project.onHost") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             {agent && <TurnDuration tab={tab} />}
             <AgentModeMarks tab={tab} />
             <WorktreeMark tab={tab} />
@@ -184,17 +194,19 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
         {...drag.gripProps(tab.id)}
       ><span aria-hidden="true">⠿</span></button>}
     </div>
-    {agent && <PromptLines tab={tab} />}
+    {agent && <PromptLines tab={tab} draft={draft} />}
     {/* The desktop's schedule summary, only when the tab has schedules; the
         upcoming ones are listed with the prompts above. */}
     {schedule && <div className="tab-card-foot">
       <small className="tab-card-when" title={tab.schedules?.next ? t("mobile.project.nextRunTitle", { when: tab.schedules.next.replace("T", " ") }) : undefined}>{schedule}</small>
     </div>}
-    {chat && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t(chat.starting ? "mobile.assistant.starting" : "mobile.assistant.notRunning")}</small></div>}
+    {/* A host tab is out of reach while the desktop is not connected to the
+        host; it never restarts for the phone, so the card says what to do. */}
+    {tab.on_host && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t(tab.host_down ? "mobile.project.hostOffline" : "mobile.project.hostSessionEnded")}</small></div>}
     {restart?.starting && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.restarting")}</small>{isUntested("mobile.project.restartForPhone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>}
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}
-    <button className="tab-card-open" disabled={chat ? chat.busy : restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
+    <button className="tab-card-open" disabled={restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
   </div>;
 }
 
@@ -203,12 +215,20 @@ export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, 
  * keeps one accessible name. */
 export type TabAction = "rename" | "color" | "schedule" | "subagents" | "close";
 
-export function tabActions(tab: TabRow, terminalsOffered: boolean): TabAction[] {
+/** Whether a tab's schedules are offered: the host has tmux (`terminals`),
+ * and a tab on the remote host only while a desktop window is open — with
+ * none, the Mobile host's scheduler types into local tmux only and refuses
+ * them (`tab_on_host`). */
+export function schedulesOffered(tab: TabRow, terminalsOffered: boolean, desktopAvailable: boolean | undefined): boolean {
+  return terminalsOffered && !(tab.on_host && desktopAvailable === false);
+}
+
+export function tabActions(tab: TabRow, schedules: boolean): TabAction[] {
   const agent = tab.kind === "agent";
   return [
     ...(agent ? ["rename" as const] : []),
     "color" as const,
-    ...(agent && terminalsOffered ? ["schedule" as const] : []),
+    ...(agent && schedules ? ["schedule" as const] : []),
     ...(agent && tab.available && (tab.agent_subagents ?? 0) > 0 ? ["subagents" as const] : []),
     "close" as const,
   ];

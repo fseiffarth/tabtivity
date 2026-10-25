@@ -751,9 +751,7 @@ struct DbThread {
 /// like the rest of `codex_store`. `None` when the store cannot be read or has
 /// another shape — which must not read as "every thread is gone".
 fn codex_db_threads(db: &Path) -> Option<Vec<DbThread>> {
-    use rusqlite::{Connection, OpenFlags};
-
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = codex_store::open(db)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, tokens_used, coalesce(updated_at_ms, updated_at * 1000), model

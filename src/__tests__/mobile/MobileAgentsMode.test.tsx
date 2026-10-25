@@ -68,7 +68,7 @@ describe("Mobile home — agents mode", () => {
       ],
       desktop_available: true,
     });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await enterAgentsMode();
     expect(await screen.findByText("Claude")).toBeTruthy();
     expect(screen.getByText("Aurora")).toBeTruthy();
@@ -84,7 +84,7 @@ describe("Mobile home — agents mode", () => {
 
   it("stops polling the project list while the mode is on", async () => {
     answerActivity({ tabs: [activityTab("t1", "Claude", "Aurora", "done")], desktop_available: true });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await enterAgentsMode();
     await screen.findByText("Claude");
     const before = fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/v1/projects")).length;
@@ -96,7 +96,7 @@ describe("Mobile home — agents mode", () => {
   it("opens the session itself, naming the project it belongs to", async () => {
     answerActivity({ tabs: [activityTab("t1", "Claude", "Aurora", "question")], desktop_available: true });
     const opened: [string, string][] = [];
-    render(<Home open={noop} openTab={(projectId, tab) => opened.push([projectId, tab.id])} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={(projectId, tab) => opened.push([projectId, tab.id])} todo={noop} mail={noop} />);
     await enterAgentsMode();
     fireEvent.click(await screen.findByText("Claude"));
     expect(opened).toEqual([["Aurora-id", "t1"]]);
@@ -104,7 +104,7 @@ describe("Mobile home — agents mode", () => {
 
   it("says the desktop is what classifies, rather than reading an empty list as quiet", async () => {
     answerActivity({ tabs: [], desktop_available: false });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await enterAgentsMode();
     expect((await screen.findByText(/Desktop unavailable/)).textContent).toContain("desktop");
     expect(screen.queryByText(/Nothing is working/)).toBeNull();
@@ -112,7 +112,7 @@ describe("Mobile home — agents mode", () => {
 
   it("says nothing is waiting only when the desktop answered", async () => {
     answerActivity({ tabs: [], desktop_available: true });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await enterAgentsMode();
     expect(await screen.findByText(/Nothing is working, waiting or done/)).toBeTruthy();
   });
@@ -128,18 +128,18 @@ describe("Mobile home — agents mode", () => {
       ],
       desktop_available: true,
     });
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await enterAgentsMode();
     await screen.findByText("Busy");
     // The oldest tab of the four leads the list: it is the only one that cannot
     // go on without the reader.
     expect(rowLabels()).toEqual(["Asking", "Busy", "Finished", "Recent"]);
-    expect(screen.getByText(/opus-4-1/).textContent).toContain("Aurora · opus-4-1 · finished 9m ago");
+    expect(screen.getByText(/opus-4-1/).textContent).toContain("Aurora · opus-4-1 · finished 9 min ago");
     expect(screen.getByText(/gpt-5-codex/).textContent).toContain("working now");
 
     fireEvent.change(screen.getByLabelText("Sort agent tabs"), { target: { value: "lastDone" } });
     expect(rowLabels()).toEqual(["Busy", "Finished", "Recent", "Asking"]);
-    expect(screen.getByText(/gpt-5-codex/).textContent).toContain("finished 3m ago");
+    expect(screen.getByText(/gpt-5-codex/).textContent).toContain("finished 3 min ago");
     expect(localStorage.getItem(storageKey("mobile.agentsSort"))).toBe("lastDone");
 
     // The sidecar's own order (waiting first, finished last) is still on offer.
@@ -149,18 +149,18 @@ describe("Mobile home — agents mode", () => {
 
   it("comes back in the mode it was left in, and forgets it when the reader leaves", async () => {
     answerActivity({ tabs: [activityTab("t1", "Claude", "Aurora", "working")], desktop_available: true });
-    const first = render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    const first = render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await enterAgentsMode();
     await screen.findByText("Claude");
     first.unmount();
 
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(await screen.findByText("Claude")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Active" }));
     await screen.findByText("Alpha");
     cleanup();
 
-    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(await screen.findByText("Alpha")).toBeTruthy();
   });
 });

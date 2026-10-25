@@ -1,5 +1,7 @@
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
+import { storageKey } from "../../src/lib/brand";
+import type { ModelRows } from "./terminal/modelRows";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -9,7 +11,14 @@ export type ScopeKind = "project" | "box" | "root" | "assistant";
 /** A project's pending git state, the desktop pill's dot: changes not yet added ▸ staged, not committed ▸ committed, not pushed ▸ `.git` missing. Absent when clean. */
 export type GitDot = "dirty" | "staged" | "unpushed" | "broken";
 export interface AgentCounts { working: number; question: number; done: number }
-export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+/** Where a project runs, as a type word (`host` on the host's project row; absent
+ * from an older desktop, which only listed `local` ones). */
+export type ProjectHost = "local" | "remote" | "container" | "vm";
+/** What the phone may start in a project (`create` on the detail): every kind,
+ * agents alone (a remote project's shell would run on the remote host), or
+ * nothing. Absent from an older desktop is `all`. */
+export type CreateVerdict = "all" | "agents" | "none";
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -31,7 +40,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[] }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
 export interface TabWorktree { label: string; branch?: string }
 export interface SubagentWorktree extends TabWorktree { count: number }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
@@ -59,7 +68,11 @@ export interface LocalLaunchRow { model: string; ready: boolean; agents: LocalAg
  * is a CLI that is not signed in; `default` the desktop's own preselection. */
 export interface AssistantLaunchRow { id: string; label: string; local: boolean; model?: string; ready: boolean; default: boolean }
 export interface AssistantLaunchOptions { ollama_reachable: boolean; launches: AssistantLaunchRow[] }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions }
+/** One agent the ＋ can start on an API key the desktop keeps — the desktop
+ * "+"'s "<agent> (API)" row. `budget_reached`: the key's monthly budget is
+ * spent or unset, so a new tab would be refused. Flags only. */
+export interface ApiKeyLaunchRow { agent_id: string; budget_reached?: boolean }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[] }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -67,7 +80,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;
@@ -109,7 +122,8 @@ export async function getGitOverview(projectId: string, signal?: AbortSignal): P
  * the project it lives in, because that list is flat and a tab label on its own
  * does not say where the session is. */
 export interface ActivityTab extends TabRow { project_id: string; project_label: string }
-export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean }
+/** `ai_off`: the desktop's AI switch is off (absent from an older desktop). */
+export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean; ai_off?: boolean }
 
 /** `GET /api/v1/activity` — every agent tab the desktop reports as working,
  * waiting on a decision, or done, across every project this phone may reach.
@@ -144,6 +158,16 @@ export interface ClosedTabRow { id: string; label: string; agent: string; closed
  * (the desktop's switch is on, and it is a project, not a box or root). */
 export interface ProjectDetail {
   project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  /** Whether the file browser also has a remote side: a remote project's tree
+   * on its host, read over the desktop's connection (`?on=host`). The host is
+   * never named. Absent (an older desktop) is none. */
+  host_files?: boolean;
+  /** Whether the host has a folder to give the phone for this project (a remote
+   * project before its first sync, a VM without a mirror: no). Without one the
+   * project screen hides the files, Git and send-a-file entries and says why.
+   * Absent (an older desktop) is `true`. */
+  folder?: boolean;
+  create?: CreateVerdict;
   /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */
   shells?: boolean;
   /** How the host's tabs reach the phone: `tmux`, or `unsupported` on a host
@@ -315,9 +339,9 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
 
 /** The host reads these display preferences from desktop settings on each
  * probe: the untested pills, the desktop's theme for a phone that follows it,
- * and the sections the desktop keeps this phone out of (absent from an older
- * host: none). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[] }> {
+ * the sections the desktop keeps this phone out of (absent from an older
+ * host: none) and the desktop's AI switch (`ai_off`, absent: on). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */
@@ -347,6 +371,26 @@ let onUnauthorized: (() => Promise<boolean>) | undefined;
 
 export function setUnauthorizedHandler(handler: (() => Promise<boolean>) | undefined): void {
   onUnauthorized = handler;
+}
+
+/** Set by the app root: told the id of a project the host answered
+ * `project_not_found` for — gone, or no longer shared with this phone — so
+ * what the phone kept for it (its covers) goes too. */
+let onProjectGone: ((projectId: string) => void) | undefined;
+
+export function setProjectGoneHandler(handler: ((projectId: string) => void) | undefined): void {
+  onProjectGone = handler;
+}
+
+/** The project a `/api/v1/projects/{id}/…` path names. */
+function projectOfPath(path: string): string | null {
+  const match = /^\/api\/v1\/projects\/([^/?#]+)/.exec(path);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 /** Renew the session the way a 401 would, for a caller that met the lapse
@@ -423,10 +467,10 @@ function withTimeout(signal: AbortSignal | null | undefined, ms: number): AbortS
  */
 export function primeConnection(): void {
   const started = performance.now();
-  traceConnect("warm-up sent");
+  traceConnect(navigator.onLine === false ? "warm-up sent (browser says offline)" : "warm-up sent");
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT);
   void fetch("/healthz", { cache: "no-store", signal })
-    .then((response) => traceConnect(`warm-up ${response.status} after ${Math.round(performance.now() - started)} ms`))
+    .then((response) => traceConnect(`warm-up ${response.status} after ${Math.round(performance.now() - started)} ms${hopOf("/healthz")}`))
     .catch((error: unknown) => traceConnect(`warm-up ${aborted(error, signal) ? "timed out" : "failed"} after ${Math.round(performance.now() - started)} ms`));
 }
 
@@ -436,22 +480,71 @@ export function primeConnection(): void {
  * or last came to the front. The slow "Connecting…" splash and the failure
  * splash show it, so a slow unlock can be read off the phone instead of
  * guessed at from the desktop.
+ *
+ * A new stamp origin keeps the lines before it: coming to the front used to
+ * clear them, and a fingerprint sheet that hid the page took the warm-up's
+ * outcome with it. The reload a failed connect asks for carries them across
+ * (`carryConnectTrace`), so the splash after it shows both pages' attempts.
  */
 let traceOrigin = 0;
 let trace: string[] = [];
-const TRACE_LINES = 24;
+const TRACE_LINES = 32;
+const CARRIED_TRACE_KEY = storageKey("mobile.connectTrace");
 
 export function traceConnect(event: string, restart = false): void {
   const now = performance.now();
   if (restart) {
     traceOrigin = now;
-    trace = [];
+    if (trace.length > 0) trace = [...trace, "—"];
+    // Lookups by path (`hopOf`) read the newest entry; a full buffer would
+    // stop taking new ones and leave them reading a stale one.
+    try { performance.clearResourceTimings(); } catch { /* no resource timing */ }
   }
   trace = [...trace, `${((now - traceOrigin) / 1000).toFixed(1)} s  ${event}`].slice(-TRACE_LINES);
 }
 
 export function connectTrace(): readonly string[] {
   return trace;
+}
+
+/** Keep this page's trace for the next one: the reload a failed connect asks for. */
+export function carryConnectTrace(): void {
+  try {
+    sessionStorage.setItem(CARRIED_TRACE_KEY, JSON.stringify(trace));
+  } catch {
+    // The next page starts its own trace, as it always did.
+  }
+}
+
+/** Start this page's trace from the one the page before it carried, if any. One-shot. */
+export function takeCarriedTrace(): void {
+  try {
+    const carried: unknown = JSON.parse(sessionStorage.getItem(CARRIED_TRACE_KEY) ?? "null");
+    sessionStorage.removeItem(CARRIED_TRACE_KEY);
+    if (Array.isArray(carried)) trace = carried.filter((line): line is string => typeof line === "string").slice(-TRACE_LINES);
+  } catch {
+    // Unreadable: nothing carried.
+  }
+}
+
+/**
+ * The protocol the newest request to `path` went over, for the trace: `h2`
+ * means it rode the one shared connection that may be the stale one from
+ * before the phone slept, `http/1.1` a pooled socket of its own. Empty when
+ * the browser recorded no timing for it (a cancelled request, an old browser).
+ */
+export function hopOf(path: string): string {
+  try {
+    const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      if (new URL(entries[index].name, location.href).pathname !== path) continue;
+      const protocol = entries[index].nextHopProtocol;
+      return protocol ? ` (${protocol})` : "";
+    }
+  } catch {
+    // No resource timing here.
+  }
+  return "";
 }
 
 /** `timeoutMs` overrides the default deadline for the routes that need a
@@ -505,10 +598,16 @@ export async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUE
     // Once: a 401 on the retry means the renewed session is refused too.
     if (!retried && await onUnauthorized?.()) return api<T>(path, init, timeoutMs, true);
   }
+  if (response.status === 404 && body?.error === "project_not_found") {
+    const gone = projectOfPath(path);
+    if (gone) onProjectGone?.(gone);
+  }
   if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   // A truncated body on a 200 used to become `{}` and reach callers as `T`,
   // which then read `undefined.map` and white-screened the whole app.
-  if (body === undefined) throw new ApiError(response.status, "malformed_response");
+  // Valid JSON that is no object (`null`, a number) is the same: callers read
+  // fields off `T`.
+  if (typeof body !== "object" || body === null) throw new ApiError(response.status, "malformed_response");
   return body as T;
 }
 
@@ -586,6 +685,84 @@ export function editHeldPrompt(tabId: string, heldId: string, message: string): 
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/held/${encodeURIComponent(heldId)}`, { method: "PUT", body: JSON.stringify({ message }) });
 }
 
+/** Where the ⎇ chip can move an agent tab: the project folder (`main`, empty
+ * label) and its linked worktrees by opaque id, the one it runs in
+ * (`current`), and whether its CLI takes the conversation along (`carries`)
+ * or starts a new one there. No path crosses. */
+export interface TabWorktrees { worktrees: WorktreeRow[]; current?: string; carries: boolean }
+
+/** `GET /api/v1/tabs/{id}/worktrees` — asked when the ⎇ chip's sheet opens. */
+export async function getTabWorktrees(tabId: string): Promise<TabWorktrees> {
+  const body = await api<Partial<TabWorktrees>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktrees`);
+  return { worktrees: body.worktrees ?? [], ...(body.current ? { current: body.current } : {}), carries: body.carries === true };
+}
+
+/** `POST /api/v1/tabs/{id}/worktree` — move the agent tab to that worktree,
+ * as the desktop Reader's ⎇ chip does: the desktop stops its CLI, takes the
+ * conversation along where the CLI allows and restarts it there. `409
+ * move_failed` means it restarted in its old folder. */
+export function moveTabWorktree(tabId: string, worktree: string): Promise<{ moved: "carried" | "fresh" }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
+}
+
+/** One model of a Tabby chat's sheet: `id` is what a switch sends, the words
+ * are Claude's own picker's where the desktop read them. */
+export interface AssistantModelRow { id: string; label: string; description?: string }
+
+/** The models a Tabby chat's model chip can switch it to (the rows the
+ * desktop's own chip lists) and the one it runs now. */
+export interface AssistantModels { models: AssistantModelRow[]; current?: string }
+
+/** Past the sidecar's 32 s wait on the desktop, whose first list for a Claude
+ * chat comes from a probe that starts a CLI (`DesktopRequest::response_timeout`). */
+const ASSISTANT_MODELS_TIMEOUT = 36_000;
+
+/** `GET /api/v1/tabs/{id}/assistant-models` — asked when the chip's sheet opens
+ * on a chat of the assistant scope, whose `/model` is off. A desktop that sends
+ * no rows yet is read from its names. */
+export async function getAssistantModels(tabId: string): Promise<AssistantModels> {
+  const body = await api<{ models?: unknown; rows?: unknown; current?: unknown }>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-models`, undefined, ASSISTANT_MODELS_TIMEOUT);
+  const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+  const rows: AssistantModelRow[] = Array.isArray(body.rows)
+    ? body.rows.flatMap((row: unknown) => {
+      const { id, label, description } = (row ?? {}) as Record<string, unknown>;
+      const [shownId, shownLabel, note] = [text(id), text(label), text(description)];
+      return shownId && shownLabel ? [note ? { id: shownId, label: shownLabel, description: note } : { id: shownId, label: shownLabel }] : [];
+    })
+    : [];
+  const names = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
+  return {
+    models: rows.length > 0 ? rows : names.map((id) => ({ id, label: id })),
+    ...(text(body.current) ? { current: text(body.current) } : {}),
+  };
+}
+
+/** `GET /api/v1/tabs/{id}/model-rows` — the rows the tab's CLI build's own
+ * model picker drew last time (`services::model_rows`), for the model sheet to
+ * list while the session draws its picker. `409 not_this_machine` for a tab
+ * whose CLI runs elsewhere. */
+export function getModelRows(tabId: string): Promise<ModelRows> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`);
+}
+
+/** `POST /api/v1/tabs/{id}/model-rows` — keep the rows just read off the
+ * tab's live model picker for its CLI build. */
+export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kept: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
+}
+
+/** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
+ * the desktop restarts its CLI on it and resumes the conversation (so the wait
+ * is `WORKTREE_MOVE_TIMEOUT`'s). `409 tab_busy` while the chat is at work. */
+export function switchAssistantModel(tabId: string, model: string): Promise<{ switched: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/assistant-model`, { method: "POST", body: JSON.stringify({ model }) }, WORKTREE_MOVE_TIMEOUT);
+}
+
+/** Past the sidecar's own 20 s wait on the desktop's move
+ * (`DesktopRequest::response_timeout`), which stops the old CLI first. */
+const WORKTREE_MOVE_TIMEOUT = 25_000;
+
 /** `POST /api/v1/tabs/{id}/undo-clear` — take back this agent tab's last
  * `/clear`: the desktop types the resume of the conversation it ended (the
  * session id never comes here). `409 nothing_to_undo` once the session has
@@ -607,6 +784,13 @@ export function finishSignIn(tabId: string, url: string): Promise<{ delivered: b
  * own. `alternate` asks for the CLI's other way in. */
 export function openSignInTab(tabId: string, alternate: boolean, idempotencyKey: string): Promise<{ tab: TabRow }> {
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/sign-in`, { method: "POST", body: JSON.stringify({ alternate, idempotency_key: idempotencyKey }) }, TAB_CREATE_TIMEOUT);
+}
+
+/** `POST /api/v1/tabs/{id}/teleport` — the session this cloud tab started,
+ * pulled onto the desktop as a new agent tab in a fresh linked worktree
+ * (Claude's `--teleport <session>`); `session` is the id the tab printed. */
+export function openTeleportTab(tabId: string, session: string, idempotencyKey: string): Promise<{ tab: TabRow }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/teleport`, { method: "POST", body: JSON.stringify({ session, idempotency_key: idempotencyKey }) }, TAB_CREATE_TIMEOUT);
 }
 
 /** Which side of the anchor tab a dragged row lands on — the desktop's own
@@ -758,6 +942,9 @@ export interface TranscriptEntry {
   /** On an `agent`: it runs in the background (Claude's async launch), at
    * work while the session's own turn may be over. */
   background?: boolean;
+  /** On an `agent`: a Claude `Workflow` run, not one subagent — its handle
+   * opens the run's agents as entries, and nothing can be typed to it. */
+  workflow?: boolean;
   /** On an `agent`: the linked worktree it works in (Claude's
    * `isolation: "worktree"`, or the one the session was in when it spawned
    * it); absent in the project folder's own checkout. */
@@ -789,9 +976,9 @@ export interface SessionTranscript {
   entries: TranscriptEntry[];
   /** Earlier turns exist that this answer does not carry. */
   truncated: boolean;
-  /** Those earlier turns hold a subagent the answer does not list — what
-   * the Subagents index's "+" stands for. */
-  agentsEarlier?: boolean;
+  /** How many subagents only those earlier turns hold — the Subagents
+   * index counts them with the ones it lists. */
+  agentsEarlier?: number;
   /** How many of the session's subagents are at work right now, the ones
    * the answer leaves out included; absent at zero and on a CLI whose record
    * does not say (only Claude's does). */
@@ -811,6 +998,9 @@ export interface SessionTranscript {
    * agent is running now — Claude's `Bash` calls still without a result, and
    * background ones still running. */
   shells?: RunningShell[];
+  /** Desktop Reader only (the phone's API strips it): the newest `/context`
+   * card Claude printed, colour codes stripped. */
+  contextCard?: string;
   /** Desktop Reader only: the read named a watch id and the backend armed
    * it, so a change will be announced (`lib/agents/transcriptWatch`). */
   watched?: boolean;
@@ -882,6 +1072,55 @@ export async function getUncommitted(tabId: string, signal?: AbortSignal): Promi
     return await api<ChatUncommitted>(`/api/v1/tabs/${encodeURIComponent(tabId)}/uncommitted`, { signal });
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404 && reason.code === "request_failed") return null;
+    throw reason;
+  }
+}
+
+/** One file one call of the chat changed, as the diff its CLI recorded:
+ * unified-diff hunks, each opened by its `@@` line. `path` (and `moved_to`)
+ * is relative to its checkout; `worktree` names a linked worktree (or a box
+ * member's folder) it is in, never by path. */
+export interface ChatChange {
+  path: string;
+  worktree?: TabWorktree;
+  kind: "edit" | "add" | "delete" | "write";
+  diff: string;
+  added: number;
+  removed: number;
+  at?: string;
+  cut?: boolean;
+  moved_to?: string;
+}
+/** The Diffs view's feed. `outside` counts changes to files in no checkout
+ * of the project (left out). `available: false` with `reason` — `files_off`
+ * while the desktop's "Project files on the phone" switch is off. */
+export interface ChatChanges {
+  available: boolean;
+  reason?: string;
+  version?: string;
+  unchanged?: boolean;
+  changes: ChatChange[];
+  truncated: boolean;
+  outside?: number;
+}
+
+/** `GET /api/v1/tabs/{id}/changes` — the diffs the chat (or `subagent`'s
+ * conversation) recorded; `version` as `getTranscript`'s. The route sits
+ * behind the "Project files on the phone" switch: refused as `files_off`, it
+ * answers unavailable with that reason; a host older than the route (a
+ * bodiless 404) as `unsupported`. */
+export async function getChanges(tabId: string, version?: string, subagent?: string, signal?: AbortSignal): Promise<ChatChanges> {
+  const query = new URLSearchParams();
+  if (version) query.set("version", version);
+  if (subagent) query.set("subagent", subagent);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  try {
+    const body = await api<Partial<ChatChanges>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/changes${suffix}`, { signal });
+    return { ...body, available: body.available === true, changes: body.changes ?? [], truncated: body.truncated === true };
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && (reason.code === "files_off" || reason.code === "request_failed")) {
+      return { available: false, reason: reason.code === "files_off" ? "files_off" : "unsupported", changes: [], truncated: false };
+    }
     throw reason;
   }
 }
@@ -1053,11 +1292,19 @@ export function outboxFileUrl(scope: OutboxScope, name: string, download = false
   return `${outboxBase(scope)}/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
 }
 
+/** Which side of the file browser: this computer's folder, or (`host`) a
+ * remote project's tree on its host. */
+export type FilesSide = "here" | "host";
+
 /** Where the full-screen viewer reads a file from: one project's outbox (by
  * its tab or the project), `files` — the project's own tree through the
- * read-only file browser, where a file is fetched by its sealed `ref` — or
- * `inbox`, what the phone sent into a tab's project inbox (by the tab). */
-export type ViewerScope = OutboxScope | { files: string } | { inbox: string };
+ * read-only file browser, where a file is fetched by its sealed `ref`, on the
+ * remote side with `on: "host"` — or `inbox`, what the phone sent into a
+ * tab's project inbox (by the tab). */
+export type ViewerScope = OutboxScope | { files: string; on?: "host" } | { inbox: string };
+
+/** The query a file-browser request names its side by: none for this computer. */
+const sideQuery = (side: FilesSide | undefined) => side === "host" ? "on=host" : "";
 
 /** The URL a file the phone sent into a tab's project inbox loads from (its
  * leaf, out of the phone's own `@` reference) — same origin, so an `<img>`
@@ -1079,7 +1326,7 @@ export async function describeInbox(tabId: string, names: readonly string[], sig
 export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = false): string {
   if ("inbox" in scope) return inboxFileUrl(scope.inbox, file.name, download);
   if ("files" in scope) {
-    return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}`;
+    return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}${scope.on === "host" ? "&on=host" : ""}`;
   }
   return outboxFileUrl(scope, file.name, download);
 }
@@ -1127,12 +1374,14 @@ export interface ProjectFileEntry {
  * the way down starts with a dot. An older desktop omits it (no uploads). */
 export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
 
-/** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the
- * project; no `dir` is the project's root. Answers only while the desktop's
- * "Project files on the phone" switch is on (`files_off` else). */
-export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
-  const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
-  return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
+/** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
+ * the project; no `dir` is the project's root. Answers only while the
+ * desktop's "Project files on the phone" switch is on (`files_off` else). The
+ * remote side (`side` `host`) answers `host_offline` while the desktop holds
+ * no connection to the host. */
+export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileListing> {
+  const query = [dir ? `dir=${encodeURIComponent(dir)}` : "", sideQuery(side)].filter(Boolean).join("&");
+  return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query ? `?${query}` : ""}`, { signal });
 }
 
 /** A file or folder whose name matched a search: its row, and the sealed
@@ -1145,8 +1394,9 @@ export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean 
  * and folders whose names hold every word, any case, the closest first. In a
  * git repo what git ignores is not searched. Behind the same switch as the
  * listing. */
-export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
-  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileSearch> {
+  const on = sideQuery(side);
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal });
 }
 
 /** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the

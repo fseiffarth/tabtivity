@@ -195,7 +195,10 @@ export function DevBuildIndicator() {
 
   if (!status) return null;
 
-  const reveal = () => openMenu(MENU_ID);
+  const reveal = () => {
+    window.clearTimeout(closeTimer.current);
+    openMenu(MENU_ID);
+  };
   const scheduleClose = () => {
     window.clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);

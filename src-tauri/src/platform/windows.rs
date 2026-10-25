@@ -40,10 +40,11 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetAncestor, GetCursorPos, GetForegroundWindow, GetParent,
-    GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WindowFromPoint, GA_ROOT,
-    GWL_STYLE, GW_OWNER, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    GetWindow, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WindowFromPoint, GA_ROOT, GWL_STYLE, GW_OWNER, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWMINNOACTIVE, WS_MAXIMIZEBOX,
+    WS_THICKFRAME,
 };
 
 pub struct WindowsBackend {
@@ -254,6 +255,41 @@ impl Drop for WindowsBackend {
 
 pub fn list_window_ids() -> Vec<u64> {
     enumerate_windows().into_iter().map(hwnd_to_u64).collect()
+}
+
+/// Every visible top-level window with its executable's file name as the
+/// class, for [`super::named_windows`].
+pub fn named_windows() -> Vec<super::NamedWindow> {
+    enumerate_windows()
+        .into_iter()
+        .map(|hwnd| {
+            let mut buf = [0u16; 512];
+            // SAFETY: the buffer outlives the call, which bounds the write by its length.
+            let len = unsafe { GetWindowTextW(hwnd, &mut buf) }.max(0) as usize;
+            super::NamedWindow {
+                id: hwnd_to_u64(hwnd),
+                class: window_pid(hwnd).and_then(process_exe_basename).unwrap_or_default(),
+                title: String::from_utf16_lossy(&buf[..len.min(buf.len())]),
+            }
+        })
+        .collect()
+}
+
+/// Restore a minimized window and bring it to the foreground. Windows lets
+/// the foreground process (Tabtivity, at the click) hand the foreground on.
+pub fn activate_window(window_id: u64) -> Result<(), String> {
+    let hwnd = hwnd_from_u64(window_id)?;
+    if !is_window(hwnd) {
+        return Err(format!("window {window_id} is gone"));
+    }
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+    }
+    Ok(())
 }
 
 /// Ensure the main window participates in Aero Snap (drag to the top edge →
@@ -481,7 +517,13 @@ fn restore_and_raise(hwnd: HWND) {
         // used to park: it un-hides the window while preserving its prior
         // maximized/normal placement. `SW_RESTORE` would also un-maximize, so a
         // maximized project app would lose that state on every switch-back. The
-        // explicit raise below handles bringing it to front.
+        // explicit raise below handles bringing it to front. A window the user
+        // minimized stays minimized (`SW_HIDE` keeps `WS_MINIMIZE`): shown as
+        // its taskbar button, not activated or raised.
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+            return;
+        }
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = BringWindowToTop(hwnd);
         let _ = SetForegroundWindow(hwnd);

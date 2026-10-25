@@ -112,3 +112,60 @@ export function clearConnectReload(storage = sessionStore()): void {
     // Nothing to undo: a store that cannot be written never handed one out.
   }
 }
+
+/**
+ * An unlock that only the network failed must not be asked for again. After
+ * the fingerprint the reader met "Connecting…" or the failure splash, went to
+ * the Tailscale app as the splash says, or swiped the app away and opened it
+ * again — and every fresh page asked once more, so one unlock was paid two or
+ * three times while the tunnel came back. A page left in that state (or
+ * failing in it) stamps when the reader was last there; the next page within
+ * the window signs
+ * straight in, whatever kind of load it is, since a relaunch is the point.
+ * localStorage, because a relaunched PWA starts a new session store. The
+ * caller's window is the idle lock's: an unlocked app left in the background
+ * stays open that long as well. Read once and removed; a connect that works
+ * removes it too.
+ */
+const CONNECT_GRACE_KEY = storageKey("mobile.connectGrace");
+
+function localStore(): GraceStorage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Stamp an unlocked page that is failing to connect, or being left while it does. */
+export function noteConnectGrace(now = Date.now(), storage = localStore()): void {
+  try {
+    storage?.setItem(CONNECT_GRACE_KEY, String(now));
+  } catch {
+    // A blocked store just means the next page asks, as before.
+  }
+}
+
+/** Whether this page may skip the lock: a connect failed after an unlock
+ * within `windowMs`. One-shot. */
+export function takeConnectGrace(windowMs: number, now = Date.now(), storage = localStore()): boolean {
+  let stamp: string | null = null;
+  try {
+    stamp = storage?.getItem(CONNECT_GRACE_KEY) ?? null;
+    storage?.removeItem(CONNECT_GRACE_KEY);
+  } catch {
+    return false;
+  }
+  if (stamp === null || !/^\d+$/.test(stamp)) return false;
+  const age = now - Number(stamp);
+  return age >= 0 && age <= windowMs;
+}
+
+/** A connect went through: nothing failed for a later page to skip the lock over. */
+export function clearConnectGrace(storage = localStore()): void {
+  try {
+    storage?.removeItem(CONNECT_GRACE_KEY);
+  } catch {
+    // Nothing to undo: a store that cannot be written holds no stamp.
+  }
+}

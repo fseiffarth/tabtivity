@@ -44,6 +44,7 @@ import { useRunHostPrefStore } from "./remote/runHostPref";
 import { useTimerStore } from "./timer";
 import { useSettingsStore, whenSettingsLoaded } from "./settings";
 import { mayAutoTouch, targetOfSpec } from "../lib/remote/hpc/hpcHost";
+import { machineArmsHost } from "../lib/remote/machineSync";
 import { PRIMARY_HOST, useRemoteStatusStore } from "./remote/remoteStatus";
 import { markVpnConnected, markVpnConnecting, markVpnError, releaseVpn } from "./remote/vpn/vpnStatus";
 import { useConnectDialogStore } from "./remote/connectDialog";
@@ -59,7 +60,7 @@ import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../component
 import type { SavedPasswordState } from "../components/projects/useSavedCredential";
 import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
-import { translate, useI18nStore } from "../lib/i18n";
+import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
 
 function connectionsHeadless(): boolean {
@@ -74,7 +75,7 @@ function connectionsHeadless(): boolean {
  * on the auto-connect path, where this toast is the *only* thing the user sees.
  */
 function vpnToast(name: string): string {
-  return translate(useI18nStore.getState().lang, "vpnAutoConnect.upToast", { config: name });
+  return translateNow("vpnAutoConnect.upToast", { config: name });
 }
 
 const deactivatingProjects = new Set<string>();
@@ -85,6 +86,38 @@ const autoConnecting = new Set<string>();
 
 /** The SSH coordinates of one host, as every auto-connect command wants them. */
 type SshArgs = { user: string | null; host: string; port: number | null };
+
+/**
+ * Gate 2 of every unattended connect (`docs/context/remote_autoconnect.md`): who
+ * opted this host in. `"own"` = its own `auto_connect`; `"machine"` = a global
+ * machine armed for auto-connect is the same login (`machineArmsHost`), which
+ * counts as the same opt-in so that one path — this store's — reconnects a project
+ * host whichever surface the user armed it on; `null` = nobody, stay disconnected.
+ *
+ * A machine-only opt-in changes two details downstream, both because the user
+ * armed the *machine*, not this project's credential handling:
+ *  - the probe is its eligibility check (as in the machine's own sweep) rather
+ *    than the keychain read, so a key/agent login the project copy never recorded
+ *    as `key_auth` is not reported "ineligible"; it never prompts either way;
+ *  - non-headless, no login tab is opened in the root console — the machine's own
+ *    sweep never opens one, and the user's login for it lives in the header.
+ * And its `remote_connect` passes `viaLogin`: it may ride the machine's master,
+ * which must not be recorded as key auth (`record_key_auth`).
+ */
+type OptIn = "own" | "machine" | null;
+
+function hostOptIn(spec: {
+  auto_connect?: boolean;
+  user?: string;
+  host: string;
+  port?: number;
+}): OptIn {
+  if (spec.auto_connect === true) return "own";
+  return machineArmsHost(spec) ? "machine" : null;
+}
+
+/** `remote_connect`'s extra argument for a machine-only opt-in (see `OptIn`). */
+const viaMachine = (optIn: OptIn) => (optIn === "machine" ? { viaLogin: true } : {});
 
 /**
  * Say why an armed auto-connect did nothing.
@@ -153,6 +186,7 @@ async function autoConnectInteractive(
   hostId?: string,
   /** A probe the caller already ran (the primary probes first to decide the VPN). */
   probed?: SshProbe,
+  optIn: OptIn = "own",
 ): Promise<void> {
   const status = () => useRemoteStatusStore.getState();
   const stillActive = () => useProjectsStore.getState().activeId === projectId;
@@ -162,6 +196,19 @@ async function autoConnectInteractive(
       () => ({ ok: false, unreachable: false, error: "probe failed" }) as SshProbe,
     ));
   if (!stillActive()) return abandonAutoConnect(projectId, hostId);
+  if (!probe.ok && probe.unreachable) {
+    // Nothing answered, so a login tab could only fail too. Red, and re-tried once the
+    // network is back (`scheduleUnreachableRetry`); a login opens when the host answers.
+    status().setSsh(projectId, "error", hostId);
+    scheduleUnreachableRetry(projectId, hostId);
+    return;
+  }
+  if (!probe.ok && optIn === "machine") {
+    // Armed only through a global machine: no login tab (see `OptIn`). Red, so the
+    // next tunnel-up / machine sweep re-tries it once the machine's master is up.
+    status().setSsh(projectId, "error", hostId);
+    return;
+  }
   if (!probe.ok) {
     // Password host (or one whose key auth just failed): hand the login to the root
     // terminal and wait for its master. Deduped by target, so a login the Connect
@@ -199,6 +246,7 @@ async function autoConnectInteractive(
     viaLogin: true,
   });
   if (!stillActive()) return abandonAutoConnect(projectId, hostId);
+  clearUnreachableRetry(projectId, hostId);
   status().setSsh(projectId, "connected", hostId);
 }
 
@@ -267,15 +315,22 @@ function abandonAutoConnect(projectId: string, hostId?: string): void {
  *  3. *Unreachable* (not "credential rejected" — see the backend's `ssh_unreachable`;
  *     no tunnel fixes a wrong password) and the project has an `.ovpn` whose
  *     passphrase is saved → bring the tunnel up from the keychain and re-probe.
- *  4. Anything else → red lamp and stop. No prompt, no retry loop.
+ *  4. Anything else → red lamp. No prompt; only a host nothing answered is re-tried.
  *
  * Fire-and-forget: it never blocks a switch. Local tabs restore and work on the
  * mirror regardless, and remote panes stay held until the pool is actually up.
+ * An unreachable host is re-tried (`scheduleUnreachableRetry`); `retry` marks such a
+ * re-try, which never re-opens the tunnel's login tab the first attempt already offered.
  */
-async function autoConnectPrimary(projectId: string): Promise<void> {
+async function autoConnectPrimary(
+  projectId: string,
+  { retry = false }: { retry?: boolean } = {},
+): Promise<void> {
   const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
   const remote = project?.remote;
-  if (!remote?.auto_connect) return;
+  if (!remote) return;
+  const optIn = hostOptIn(remote);
+  if (!optIn) return;
   // Never silently, on a machine tagged HPC (`lib/remote/hpc/hpcHost.ts`). A connect is not
   // free on a cluster login node — it opens an SSH master, and Tabtivity's own
   // session machinery may raise a tmux server behind it — and "silently, because
@@ -346,7 +401,9 @@ async function autoConnectPrimary(projectId: string): Promise<void> {
         // flips the tunnel to "connected" it fires `retryAutoConnectAfterVpn`, which
         // resets the red SSH lamp below and re-runs this connect — now reachable.
         const up = await invoke<boolean>("openvpn_status", { config }).catch(() => false);
-        if (!up) {
+        // No tunnel login for a machine-only opt-in (`OptIn`); the red lamp below
+        // still lets the next tunnel-up re-try it.
+        if (!up && optIn === "own" && !retry) {
           // A bad config now surfaces as the login tab's spawn error.
           const login = vpnLogin(config);
           openConnectionInRoot({
@@ -360,19 +417,23 @@ async function autoConnectPrimary(projectId: string): Promise<void> {
         // red lamp is precisely what `retryAutoConnectAfterVpn` clears and re-attempts
         // the instant the reconcile sees the tunnel connected. Leaving it "connecting"
         // would wedge *this* lamp the same way (the re-attempt guard only fires from
-        // "off", which only the reset from "error" produces).
+        // "off", which only the reset from "error" produces). Re-tried on a timer too:
+        // the network itself may come back (back at the site that needs no tunnel).
         status().setSsh(projectId, "error");
+        scheduleUnreachableRetry(projectId);
         return;
       }
-      await autoConnectInteractive(projectId, sshArgs, undefined, probe);
+      await autoConnectInteractive(projectId, sshArgs, undefined, probe, optIn);
       return;
     }
 
     // Re-check eligibility against the backend rather than trusting the toggle: the
     // saved password may have been forgotten since it was ticked, and a stale opt-in
     // must degrade to "stay disconnected", never to a prompt.
-    // A key host needs no credential at all, so it never pays the keychain read.
-    const saved = remote.key_auth === true ? null : await savedPasswordState(sshArgs);
+    // A key host needs no credential at all, so it never pays the keychain read; a
+    // machine-only opt-in leaves the question to the probe (`OptIn`).
+    const saved =
+      remote.key_auth === true || optIn === "machine" ? null : await savedPasswordState(sshArgs);
     if (saved && !saved.saved) {
       autoConnectIneligible(project!.name, sshArgs, saved);
       return;
@@ -416,10 +477,12 @@ async function autoConnectPrimary(projectId: string): Promise<void> {
     if (!probe.ok) {
       console.warn("auto-connect: host not reachable/authenticating", probe.error);
       status().setSsh(projectId, "error");
+      if (probe.unreachable) scheduleUnreachableRetry(projectId);
       return;
     }
-    await invoke("remote_connect", { projectId, password: null });
+    await invoke("remote_connect", { projectId, password: null, ...viaMachine(optIn) });
     if (!stillActive()) return abandon();
+    clearUnreachableRetry(projectId);
     status().setSsh(projectId, "connected");
   } catch (error) {
     console.warn("auto-connect failed", error);
@@ -440,8 +503,10 @@ async function autoConnectPrimary(projectId: string): Promise<void> {
 async function autoConnectRemote(projectId: string): Promise<void> {
   await autoConnectPrimary(projectId);
   const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
+  // Workers fire for a local project too: its `compute_hosts` are hosts like any
+  // other, and an armed global machine may be one of them.
   for (const host of project?.compute_hosts ?? []) {
-    if (host.auto_connect) void autoConnectWorker(projectId, host);
+    if (hostOptIn(host)) void autoConnectWorker(projectId, host);
   }
 }
 
@@ -457,6 +522,8 @@ async function autoConnectRemote(projectId: string): Promise<void> {
  */
 async function autoConnectWorker(projectId: string, host: ComputeHost): Promise<void> {
   const hostId = host.id;
+  const optIn = hostOptIn(host);
+  if (!optIn) return;
   // Same rule as the primary's: a tagged cluster is never dialled by itself.
   if (!mayAutoTouch(useSettingsStore.getState().settings, targetOfSpec(host))) return;
   const claim = `${projectId}:${hostId}`;
@@ -483,11 +550,12 @@ async function autoConnectWorker(projectId: string, host: ComputeHost): Promise<
     // the primary is awaited before any worker fires.
     if (!connectionsHeadless()) {
       status().setSsh(projectId, "connecting", hostId);
-      await autoConnectInteractive(projectId, sshArgs, hostId);
+      await autoConnectInteractive(projectId, sshArgs, hostId, undefined, optIn);
       return;
     }
 
-    const saved = host.key_auth === true ? null : await savedPasswordState(sshArgs);
+    const saved =
+      host.key_auth === true || optIn === "machine" ? null : await savedPasswordState(sshArgs);
     if (saved && !saved.saved) {
       // Named down to the machine: a project can arm four workers, and "auto-connect
       // did nothing" is useless if it doesn't say which one.
@@ -507,10 +575,12 @@ async function autoConnectWorker(projectId: string, host: ComputeHost): Promise<
     if (!probe.ok) {
       console.warn("worker auto-connect: host not reachable/authenticating", probe.error);
       status().setSsh(projectId, "error", hostId);
+      if (probe.unreachable) scheduleUnreachableRetry(projectId, hostId);
       return;
     }
-    await invoke("remote_connect", { projectId, hostId, password: null });
+    await invoke("remote_connect", { projectId, hostId, password: null, ...viaMachine(optIn) });
     if (!stillActive()) return abandon();
+    clearUnreachableRetry(projectId, hostId);
     status().setSsh(projectId, "connected", hostId);
   } catch (error) {
     console.warn("worker auto-connect failed", error);
@@ -547,9 +617,11 @@ async function autoConnectWorker(projectId: string, host: ComputeHost): Promise<
  * expired — and each success re-armed the lamp for the next `ControlPersist`
  * timeout, a loop with no end and no surface. A connection the user never asked to
  * be automatic ends at a red lamp they click, which is what it did before this
- * function existed. The three gates are therefore: headless mode, the host's own
- * `auto_connect`, and `mayAutoTouch`; then, as before, key/agent auth or a saved
- * password.
+ * function existed. The two gates are therefore the host's opt-in (`hostOptIn`:
+ * its own `auto_connect`, or an armed global machine for the same login) and
+ * `mayAutoTouch`; then, as before, key/agent auth or a saved password (for a
+ * machine-only opt-in, or non-headless, the probe). An unreachable host is re-tried
+ * (`scheduleUnreachableRetry`).
  */
 export async function silentReconnectDeadHost(projectId: string, hostId: string): Promise<void> {
   const status = () => useRemoteStatusStore.getState();
@@ -558,35 +630,31 @@ export async function silentReconnectDeadHost(projectId: string, hostId: string)
   // in place — only the eligible-but-still-unreachable case in the try block
   // is a genuine "we tried and it didn't work" that also lands here.
   const markError = () => status().setSsh(projectId, "error", hostId);
-  if (!connectionsHeadless()) return markError();
+  // Non-headless, Tabtivity holds no credential to re-authenticate with, so the probe
+  // is the eligibility check: a key/agent host reconnects, a password host goes red
+  // (its login is the user's, from the pill's lamp). It used to go red outright,
+  // which left even a key host's dropped connection down for good.
+  const headless = connectionsHeadless();
   const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
-  if (!project?.remote) return markError();
-  const target =
+  // A worker is looked up on its own: a LOCAL project's `compute_hosts` pool too, and
+  // it has no `remote` (requiring one here used to leave every such worker red).
+  const spec =
     hostId === PRIMARY_HOST
-      ? {
-          user: project.remote.user ?? null,
-          host: project.remote.host,
-          port: project.remote.port ?? null,
-          keyAuth: project.remote.key_auth === true,
-          autoConnect: project.remote.auto_connect === true,
-        }
-      : (() => {
-          const host = project.compute_hosts?.find((h) => h.id === hostId);
-          return host
-            ? {
-                user: host.user ?? null,
-                host: host.host,
-                port: host.port ?? null,
-                keyAuth: host.key_auth === true,
-                autoConnect: host.auto_connect === true,
-              }
-            : null;
-        })();
-  if (!target) return markError();
+      ? project?.remote
+      : project?.compute_hosts?.find((h) => h.id === hostId);
+  if (!spec) return markError();
+  const target = {
+    user: spec.user ?? null,
+    host: spec.host,
+    port: spec.port ?? null,
+    keyAuth: spec.key_auth === true,
+  };
   // The opt-in is per host and it means "reconnect me without asking" — a host that
   // never opted in has no automatic reconnect to inherit just because it once got
-  // connected by hand and then dropped.
-  if (!target.autoConnect) return markError();
+  // connected by hand and then dropped. An armed global machine for the same login
+  // is that opt-in too (`hostOptIn`); a merely *connected* one is not.
+  const optIn = hostOptIn(spec);
+  if (!optIn) return markError();
   // And never a tagged cluster, on the same terms as the two auto-connect paths: a
   // background re-dial of a login node is the definition of unattended presence, and
   // this one isn't even tied to the project being on screen.
@@ -604,8 +672,12 @@ export async function silentReconnectDeadHost(projectId: string, hostId: string)
   autoConnecting.add(claim);
   try {
     const sshArgs: SshArgs = { user: target.user, host: target.host, port: target.port };
+    // A machine-only opt-in leaves eligibility to the probe below (`OptIn`).
     const eligible =
-      target.keyAuth || (await invoke<boolean>("remote_has_saved_password", sshArgs).catch(() => false));
+      !headless ||
+      target.keyAuth ||
+      optIn === "machine" ||
+      (await invoke<boolean>("remote_has_saved_password", sshArgs).catch(() => false));
     if (!eligible) return markError(); // nothing silent left to try
 
     status().setSsh(projectId, "connecting", hostId);
@@ -614,9 +686,18 @@ export async function silentReconnectDeadHost(projectId: string, hostId: string)
     );
     if (!probe.ok) {
       status().setSsh(projectId, "error", hostId);
+      // Usually the network is not back yet (a wake, a Wi-Fi hop): try again later.
+      if (probe.unreachable) scheduleUnreachableRetry(projectId, hostId);
       return;
     }
-    await invoke("remote_connect", { projectId, hostId, password: null });
+    // `viaLogin` non-headless for the same reason as `autoConnectInteractive`'s.
+    await invoke("remote_connect", {
+      projectId,
+      hostId,
+      password: null,
+      ...(headless ? viaMachine(optIn) : { viaLogin: true }),
+    });
+    clearUnreachableRetry(projectId, hostId);
     status().setSsh(projectId, "connected", hostId);
   } catch (error) {
     console.warn("silent reconnect of dead host failed", error);
@@ -627,35 +708,154 @@ export async function silentReconnectDeadHost(projectId: string, hostId: string)
 }
 
 /**
- * Re-attempt auto-connect for the **active** remote project after a VPN tunnel has
- * just come up (the machine-wide event `lib/remote/remoteAutoReconnect` subscribes to).
+ * Re-attempt auto-connect for the **active** project's hosts after a VPN tunnel has
+ * just come up, or after the launch / tunnel-up global-machine sweep (both from
+ * `lib/remote/remoteAutoReconnect`).
  *
  * A first auto-connect at launch may have run *before* the armed tunnel was up: the
  * probe found the host unreachable and left the lamp red (`autoConnectPrimary` step
  * 4 — no retry loop of its own). Now the routing exists, so we reset that red lamp
  * (primary and each opted-in worker) back to "off" and fire `autoConnectRemote`
  * again — the guard there only re-attempts from "off", so without this reset the
- * fresh tunnel would go unused until the user connected by hand. Only ever clears an
- * `error` lamp: a `connecting`/`connected` lamp is a live or winning attempt and is
- * left strictly alone. No-op unless the active project is a remote that opted in.
+ * fresh tunnel would go unused until the user connected by hand. The machine sweep
+ * needs the same: a host opted in through an armed machine (`hostOptIn`) may have
+ * been tried before the machine list loaded or its master came back. Only ever
+ * clears an `error` lamp on a host that will be re-attempted (opted in, not HPC): a
+ * `connecting`/`connected` lamp is a live or winning attempt and is left strictly
+ * alone. A local project's workers count; a project with no opted-in host is a no-op.
  */
 export function retryAutoConnectAfterVpn(): void {
   const { activeId, projects } = useProjectsStore.getState();
   if (!activeId) return;
   const project = projects.find((p) => p.id === activeId);
-  if (!project?.remote?.auto_connect) return;
+  if (!project) return;
+  const settings = useSettingsStore.getState().settings;
+  const retries = (spec: RemoteSpec) =>
+    hostOptIn(spec) !== null && mayAutoTouch(settings, targetOfSpec(spec));
   const status = useRemoteStatusStore.getState();
-  if ((status.byProject[activeId]?.ssh ?? "off") === "error") status.setSsh(activeId, "off");
+  let any = false;
+  if (project.remote && retries(project.remote)) {
+    any = true;
+    if ((status.byProject[activeId]?.ssh ?? "off") === "error") status.setSsh(activeId, "off");
+  }
   for (const host of project.compute_hosts ?? []) {
-    if (host.auto_connect && (status.byHost[activeId]?.[host.id]?.ssh ?? "off") === "error")
+    if (!retries(host)) continue;
+    any = true;
+    if ((status.byHost[activeId]?.[host.id]?.ssh ?? "off") === "error")
       status.setSsh(activeId, "off", host.id);
   }
-  void autoConnectRemote(activeId);
+  if (any) void autoConnectRemote(activeId);
+}
+
+/**
+ * Re-try an opted-in host the network could not reach, until it answers.
+ *
+ * Every unattended path above tries **once**, and an unreachable host ended at a red
+ * lamp that only a tunnel coming up (`retryAutoConnectAfterVpn`) ever cleared. So a
+ * reconnect worked or not depending on timing alone: the dead-host reconciler notices
+ * a dropped master within 15 s, and after a wake or a Wi-Fi hop the network is often
+ * still not back by then; a launch that beats the network fails the same way. Neither
+ * case has a tunnel to come up, so the project stayed red until the user clicked.
+ *
+ * Only *unreachable* is re-tried (`SshProbe.unreachable`: nothing answered, so no
+ * credential was ever presented). A host that answered and said no ends where it
+ * always did, at a red lamp the user clicks; a re-try loop there would replay a
+ * rejected login. Backed off to a five-minute cadence, and the OS saying the network
+ * is back (`retryUnreachableNow`) skips the wait. Each attempt re-checks what the
+ * first one did: the lamp is still the red one we left (the user connecting,
+ * disconnecting or switching away ends the loop), the host is still opted in, and
+ * `mayAutoTouch` still allows it.
+ */
+const UNREACHABLE_RETRY_MS = [10_000, 20_000, 40_000, 60_000, 120_000, 300_000];
+const unreachableRetries = new Map<
+  string,
+  {
+    projectId: string;
+    hostId?: string;
+    attempt: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  }
+>();
+
+/** The `autoConnecting` claim's shape: the primary by project, a worker by `project:host`. */
+const hostClaim = (projectId: string, hostId?: string) =>
+  hostId && hostId !== PRIMARY_HOST ? `${projectId}:${hostId}` : projectId;
+
+function scheduleUnreachableRetry(projectId: string, hostId?: string): void {
+  const key = hostClaim(projectId, hostId);
+  const prev = unreachableRetries.get(key);
+  if (prev?.timer) clearTimeout(prev.timer);
+  const attempt = prev ? prev.attempt + 1 : 0;
+  const delay = UNREACHABLE_RETRY_MS[Math.min(attempt, UNREACHABLE_RETRY_MS.length - 1)];
+  const timer = setTimeout(() => runUnreachableRetry(projectId, hostId), delay);
+  unreachableRetries.set(key, { projectId, hostId, attempt, timer });
+}
+
+/** A connect succeeded: the next outage backs off from the start again. */
+function clearUnreachableRetry(projectId: string, hostId?: string): void {
+  const key = hostClaim(projectId, hostId);
+  const entry = unreachableRetries.get(key);
+  if (entry?.timer) clearTimeout(entry.timer);
+  unreachableRetries.delete(key);
+}
+
+function runUnreachableRetry(projectId: string, hostId?: string): void {
+  const key = hostClaim(projectId, hostId);
+  const entry = unreachableRetries.get(key);
+  if (entry) entry.timer = null;
+  const worker = hostId && hostId !== PRIMARY_HOST ? hostId : undefined;
+  const status = useRemoteStatusStore.getState();
+  const lamp = worker
+    ? status.byHost[projectId]?.[worker]?.ssh
+    : status.byProject[projectId]?.ssh;
+  const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
+  const spec = worker ? project?.compute_hosts?.find((h) => h.id === worker) : project?.remote;
+  if (
+    lamp !== "error" ||
+    !spec ||
+    // A local project's workers keep their lamps past deactivation (only a remote
+    // project's pool is dropped then), and a stopped project is never re-dialled.
+    project?.status === "inactive" ||
+    !hostOptIn(spec) ||
+    !mayAutoTouch(useSettingsStore.getState().settings, targetOfSpec(spec))
+  ) {
+    unreachableRetries.delete(key);
+    return;
+  }
+  if (useProjectsStore.getState().activeId === projectId) {
+    // The activation path, so the primary still gets its VPN escalation.
+    status.setSsh(projectId, "off", worker);
+    if (worker) void autoConnectWorker(projectId, spec as ComputeHost);
+    else void autoConnectPrimary(projectId, { retry: true });
+  } else {
+    void silentReconnectDeadHost(projectId, worker ?? PRIMARY_HOST);
+  }
+}
+
+/** The OS reports the network back (`online`): run every pending re-try now, with
+ *  its backoff reset, rather than waiting out a delay sized for a network still down. */
+export function retryUnreachableNow(): void {
+  for (const [key, entry] of [...unreachableRetries]) {
+    if (!entry.timer) continue;
+    clearTimeout(entry.timer);
+    unreachableRetries.delete(key);
+    runUnreachableRetry(entry.projectId, entry.hostId);
+  }
+}
+
+/** Cancel a project's pending re-tries (disconnect, deactivation, removal). */
+function cancelUnreachableRetries(projectId: string): void {
+  for (const [key, entry] of [...unreachableRetries]) {
+    if (entry.projectId !== projectId) continue;
+    if (entry.timer) clearTimeout(entry.timer);
+    unreachableRetries.delete(key);
+  }
 }
 
 /** Tear down a remote project's pooled connection on deactivation — the primary
  *  AND every worker host (multi-host remote). Best-effort. */
 function dropRemotePool(projectId: string): void {
+  cancelUnreachableRetries(projectId);
   useRemoteStatusStore.getState().clear(projectId);
   void invoke("remote_disconnect_all_hosts", { projectId }).catch(() => {});
 }
@@ -1258,7 +1458,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             // (AppShell adds a `multiline` class when it sees the newline).
             const local =
               resolveLocalMirror(proj) || resolveProjectDirectory(proj) || proj.name;
-            toastPath = translate(useI18nStore.getState().lang, "projectsStore.switchToastRemote", {
+            toastPath = translateNow("projectsStore.switchToastRemote", {
               local,
               remote: formatRemoteTarget(proj.remote),
             });
@@ -1281,8 +1481,10 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     // until the pool is up) and the user connects it from the pill's connection lamp.
     // The one exception is a project that opted into auto-connect, which is connected
     // here silently — see `autoConnectRemote`. Fire-and-forget; never blocks the switch.
+    // A local project with `compute_hosts` goes through it too — its workers are
+    // pooled hosts with the same opt-in (their own, or an armed global machine).
     const activated = nextProjects.find((p) => p.id === id);
-    if (activated?.remote) void autoConnectRemote(activated.id);
+    if (activated?.remote || activated?.compute_hosts?.length) void autoConnectRemote(activated.id);
     // Fire-and-forget: the switch runs on a backend worker thread and returns
     // immediately. The resulting tab layout / side-panel folder arrives via the
     // `project-runtime-switched` event, handled by listenProjectRuntimeSwitched.
@@ -1471,7 +1673,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       );
       if (failures.length > 0) {
         throw new Error(
-          translate(useI18nStore.getState().lang, "projectsStore.stopSessionsFailed", {
+          translateNow("projectsStore.stopSessionsFailed", {
             failures: failures.join("\n"),
           }),
         );
@@ -1510,9 +1712,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       if (project.remote) dropRemotePool(id);
     } catch (error) {
       await message(String(error), {
-        title: translate(
-          useI18nStore.getState().lang,
-          "projectSwitcher.stopError",
+        title: translateNow("projectSwitcher.stopError",
         ),
         kind: "error",
       });
@@ -1564,7 +1764,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       await get().deactivateProject(id);
       if (get().projects.find((project) => project.id === id)?.status !== "inactive") {
         throw new Error(
-          translate(useI18nStore.getState().lang, "pill.folderRenameStillOpen"),
+          translateNow("pill.folderRenameStillOpen"),
         );
       }
     }

@@ -229,4 +229,29 @@ describe("Mobile project access in the file viewer", () => {
     await waitFor(() => expect(document.querySelector(".mobile-access-picker")).toBeNull());
     expect(useProjectsStore.getState().projects[0][MOBILE_DEVICES_KEY]).toBeUndefined();
   });
+
+  it("offers the phone button for a remote, container and VM project, naming what the phone reaches", async () => {
+    const user = userEvent.setup();
+    const remote = { host: "h.invalid", user: "u", remote_path: "/srv/p" } as ProjectEntry["remote"];
+    const kinds: [Partial<ProjectEntry>, RegExp][] = [
+      [{ remote }, /agents that run on this computer, the files of its local mirror, and its tabs on the remote host/],
+      [{ sandbox: { enabled: true } }, /Container project: .*in a later version/],
+      [{ remote, vm: { enabled: true } as ProjectEntry["vm"] }, /VM project: .*in a later version/],
+    ];
+    for (const [extra, sentence] of kinds) {
+      useProjectsStore.setState({ projects: [{ ...project, ...extra }] });
+      const { unmount } = render(<SidePanel open />);
+      const button = await phoneButton();
+      expect(button.getAttribute("title")).toMatch(sentence);
+      await user.click(button);
+      expect(within(document.querySelector(".mobile-access-picker") as HTMLElement).getByText(sentence)).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("says nothing extra for a plain local project", async () => {
+    render(<SidePanel open />);
+    const title = (await phoneButton()).getAttribute("title") ?? "";
+    expect(title).not.toMatch(/later version|local mirror/);
+  });
 });

@@ -56,6 +56,8 @@
 //!   manager drop hands the window, which name files on the machine the user
 //!   sits at; a daemon would read its own disk outside the user's roots. A
 //!   browser client has no such paths and leaves the drop out.
+//! - **`pty_paste_clipboard_image` is `Client`**: it reads the OS clipboard
+//!   of the machine the user sits at; a daemon has none.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -213,10 +215,13 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_login_import", Off(OffReason::LocalCliFiles)),
     ("agent_logins", Core),
     ("agent_login_sign_out", Core),
+    ("agent_login_scope_sign_out", Core),
     ("agent_login_use_admin_key", Core),
     ("agent_api_key_clear", Core),
     ("agent_api_key_set", Core),
     ("agent_api_keys_status", Core),
+    ("api_proxy_port_notice", Core),
+    ("api_proxy_port_notice_ack", Core),
     ("share_list", Core),
     ("share_create", Core),
     ("share_grant", Core),
@@ -247,12 +252,14 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_undo_clear", Core),
     ("agent_tab_chats", Core),
     ("agent_tab_resume_chat", Core),
+    ("agent_tab_move_session", Core),
     ("agent_usage", Core),
     ("agent_versions", Core),
     ("agent_warmup", Core),
     ("check_agent_updates", Core),
     ("claude_folder_trusted", Core),
     ("codex_hook_status", Core),
+    ("codex_hook_trust", Core),
     ("dismiss_agent_version", Core),
     ("install_agent", Admin),
     ("install_agent_remote", Admin),
@@ -260,6 +267,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_agents", Core),
     ("node_runtime_status", Core),
     ("probe_binaries", Core),
+    ("remember_model_rows", Core),
+    ("remembered_model_rows", Core),
     ("uninstall_agent", Admin),
     ("update_agent", Admin),
     // commands/agent_tasks.rs
@@ -291,6 +300,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // feature (the server case is handled by not offering it), and
     // `assistant_set_search` is their own setting, which `admin` would lock a
     // hosted server's users out of.
+    ("assistant_claude_models", Core),
     ("assistant_new_chat", Core),
     ("assistant_options", Core),
     ("assistant_set_search", Core),
@@ -472,6 +482,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("git_file_at_rev", Core),
     ("git_file_log", Core),
     ("git_file_statuses", Core),
+    ("git_folder_origin", Core),
     ("git_generate_commit_message", Core),
     ("git_log", Core),
     ("git_log_search", Core),
@@ -944,16 +955,20 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),
+    ("agent_tab_features", Core),
     ("copilot_fence_auth_status", Core),
     ("copilot_fence_sign_out", Core),
     ("local_tmux_kill", Core),
     ("local_tmux_kill_app_sessions", Core),
+    ("local_tmux_pane_dead", Core),
     ("local_tmux_rename", Core),
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),
     ("pty_drop_files", Client),
+    ("pty_input_from", Core),
     ("pty_kill", Core),
     ("pty_kill_scope", Core),
+    ("pty_paste_clipboard_image", Client),
     ("pty_remove_view", Core),
     ("pty_resize", Core),
     ("pty_scrollback", Core),
@@ -995,6 +1010,16 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("vm_set_spec", Admin),
     ("vm_shutdown", Admin),
     ("vm_status", Admin),
+    // commands/voice.rs — the microphone and speakers are the machine the
+    // user sits at; a browser client hides the mic button.
+    ("voice_listen_pause", Client),
+    ("voice_listen_start", Client),
+    ("voice_listen_stop", Client),
+    ("voice_model_install_script", Client),
+    ("voice_speak", Client),
+    ("voice_speak_stop", Client),
+    ("voice_status", Client),
+    ("voice_voices", Client),
     // commands/workspace.rs
     ("desktop_owns_super_key", Client),
     ("get_opened_windows", Client),

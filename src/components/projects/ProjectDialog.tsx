@@ -2,7 +2,7 @@ import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { GitProvider, ProjectEntry, SandboxToggleOutcome, VmDoctorReport } from "../../types";
 import { resolveProjectDirectory } from "../../types";
 import { basename } from "../../lib/paths";
@@ -34,6 +34,7 @@ import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../lib/platform";
 import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 
@@ -87,6 +88,7 @@ export function ProjectDialog({
   onProject: (project: ProjectEntry) => void | Promise<void>;
 }) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
   const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
   // A GitHub/GitLab "connection through Tabtivity" = a global access token saved in
   // Settings → Git Hosting (the credential publishing actually uses). Used to
@@ -122,6 +124,11 @@ export function ProjectDialog({
   // wouldn't say (offline, self-hosted, a URL that isn't a repo). `null` while
   // no probe has answered for the URL currently in the field.
   const [cloneVisibility, setCloneVisibility] = useState<string | null>(null);
+  // A folder import's own `origin` (`git_folder_origin`); `null` when the folder
+  // is not a repository, has no `origin`, or the origin is no hosted URL. An
+  // origin means the folder is already hosted: it fills the Git hosting field
+  // the way a clone URL does, and nothing new is published for it.
+  const [folderOrigin, setFolderOrigin] = useState<string | null>(null);
   const [mode, setMode] = useState("keep");
   const [skipScaffold, setSkipScaffold] = useState(false);
   // Trust tier at creation time (`docs/vm_projects_plan.md`): where the
@@ -230,6 +237,13 @@ export function ProjectDialog({
   const isForkImport = kind === "import" && !isRemoteProject && importSource === "fork";
   const isCloneImport =
     (kind === "import" && !isRemoteProject && importSource === "git") || isForkImport;
+  const isHostedFolderImport =
+    kind === "import" && !isRemoteProject && importSource === "folder" && folderOrigin !== null;
+  // An import whose repository already lives on a host: there is an `origin` to
+  // push back to, so the create-time publish and its token gate do not apply.
+  const alreadyHosted = isCloneImport || isHostedFolderImport;
+  // Where that repository is hosted: the URL being cloned, or the folder's origin.
+  const hostedUrl = isCloneImport ? repoUrl : (folderOrigin ?? "");
   // Which provider a fork goes through: the explicit pick, else what the URL's
   // host says. "" means "can't tell" — the user has to choose before submitting.
   const forkProviderResolved = (forkProvider || providerFromCloneUrl(repoUrl)) as
@@ -242,12 +256,13 @@ export function ProjectDialog({
   // the URL can't classify. This is what the created project records as
   // `git_provider`, so a cloned project carries its host from the first second
   // instead of waiting for the `origin` sniff to badge it — and it is what fills
-  // the Git hosting field below.
-  const cloneProvider: GitProvider | "" = isCloneImport
-    ? isForkImport
-      ? forkProviderResolved
-      : providerFromCloneUrl(repoUrl)
-    : "";
+  // the Git hosting field below. A folder import that already has an origin
+  // gets the same from that origin.
+  const originProvider: GitProvider | "" = isForkImport
+    ? forkProviderResolved
+    : alreadyHosted
+      ? providerFromCloneUrl(hostedUrl)
+      : "";
   const forkCli = forkProviderResolved ? PROVIDER_CLI_INSTALL[forkProviderResolved] : null;
   // Same shape as the git-install banner: only claim the CLI is missing once the
   // probe has actually answered.
@@ -268,11 +283,11 @@ export function ProjectDialog({
   // SSH host the files may live on — see the git-hosting hint below.
   const wantsRemoteGit = gitType === "remote-private" || gitType === "remote-public";
   const gitConnected = gitToken.trim() !== "";
-  // A clone is exempt: the gate exists because publishing a *new* repo needs a
-  // token, and a cloned repo is already hosted — it has an origin to push back
-  // to. (The clone itself only needs the token when the repo is private, which
-  // the URL field's own hint covers.)
-  const needsGitConnection = wantsRemoteGit && !gitConnected && !isCloneImport;
+  // A clone (or a folder with an origin) is exempt: the gate exists because
+  // publishing a *new* repo needs a token, and a hosted repo already has an
+  // origin to push back to. (The clone itself only needs the token when the
+  // repo is private, which the URL field's own hint covers.)
+  const needsGitConnection = wantsRemoteGit && !gitConnected && !alreadyHosted;
   // The container toggle, asked here rather than only in the pill menu, because
   // this is the one moment it is cheap: flipping it later restarts every tab of
   // the project (and costs a non-resumable agent its conversation). Same
@@ -339,7 +354,8 @@ export function ProjectDialog({
   // now happens here, through the same `publish_project` that menu drives.
   //
   // Excluded, because for them the create-time publish is not the right move:
-  //  - a clone/fork import is already hosted and already has an `origin`;
+  //  - a clone/fork import, or a folder import with an `origin`, is already
+  //    hosted — publishing it would create a second repository;
   //  - a VM project's tree lives in the guest, whose git has no provider login
   //    (and, under a closed egress policy, no route to one);
   //  - a work-remote project publishes from its lockstep mirror, and lockstep
@@ -353,7 +369,7 @@ export function ProjectDialog({
   // told, below, that the repository is published from the project menu instead.
   const publishesAtCreation =
     wantsRemoteGit &&
-    !isCloneImport &&
+    !alreadyHosted &&
     !isVmProject &&
     !isRemoteProject &&
     !(kind === "new" && skipScaffold);
@@ -427,9 +443,9 @@ export function ProjectDialog({
   // An unreachable or self-hosted host answers "unknown" and the field keeps
   // whatever the source's default put there — private, the safe way to be wrong.
   useEffect(() => {
-    const url = repoUrl.trim();
+    const url = hostedUrl.trim();
     setCloneVisibility(null);
-    if (!isCloneImport || gitTypeTouched || !url || !isCloneUrl(url)) return;
+    if (!alreadyHosted || gitTypeTouched || !url || !isCloneUrl(url)) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       invoke<string>("git_remote_visibility", { url })
@@ -446,7 +462,32 @@ export function ProjectDialog({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [repoUrl, isCloneImport, gitTypeTouched]);
+  }, [hostedUrl, alreadyHosted, gitTypeTouched]);
+
+  // A picked folder that is already a repository says where it is hosted
+  // through its own `origin` (a local-path origin is no host, so it counts as
+  // none). Remote projects are skipped: their origin lives on the host.
+  useEffect(() => {
+    setFolderOrigin(null);
+    if (kind !== "import" || isRemoteProject || importSource !== "folder" || !sourceDir) return;
+    let cancelled = false;
+    invoke<string | null>("git_folder_origin", { sourceDir })
+      .then((url) => {
+        if (!cancelled) setFolderOrigin(url && isCloneUrl(url) ? url : null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, isRemoteProject, importSource, sourceDir]);
+
+  // …and that origin answers the Git hosting field, as a clone URL does: hosted
+  // means private until the visibility probe above says otherwise; no origin
+  // means the folder's own default, a local repository.
+  useEffect(() => {
+    if (kind !== "import" || importSource !== "folder" || gitTypeTouched) return;
+    setGitType(folderOrigin ? "remote-private" : "local");
+  }, [kind, importSource, folderOrigin, gitTypeTouched]);
 
   // Probe the fork provider's CLI whenever the resolved provider changes (it
   // moves as the URL is typed). Reset to `null` first so the banner never shows
@@ -727,7 +768,7 @@ export function ProjectDialog({
         directory: "",
         description,
         gitType,
-        gitProvider: cloneProvider || undefined,
+        gitProvider: originProvider || undefined,
         skipScaffold,
         vm: { enabled: true },
       },
@@ -873,7 +914,7 @@ export function ProjectDialog({
                 gitType,
                 // The clone URL's own host, so the project is badged by where it
                 // actually came from rather than by an `origin` sniff later.
-                gitProvider: cloneProvider || undefined,
+                gitProvider: originProvider || undefined,
                 mode: isRemoteProject || isCloneImport ? "keep" : mode,
                 scaffoldFillModes,
                 manualValidationConfirmed,
@@ -899,9 +940,9 @@ export function ProjectDialog({
             // O#143: the repo declares its own Dockerfile/devcontainer image —
             // never adopted silently, since `docker build` runs it as root.
             const { source } = outcome;
-            const adopt = await confirm(describeDetectedSpecSource(source), {
+            const adopt = await confirmAction({
               title: t("scaffold.adoptTitle"),
-              kind: "warning",
+              body: describeDetectedSpecSource(source),
             });
             outcome = await invoke<SandboxToggleOutcome>("set_project_sandbox", {
               projectId: project.id,
@@ -1300,11 +1341,11 @@ export function ProjectDialog({
           </span>
           {/* Say where the filled-in answer came from — a field that changes
               under the user is only helpful if it names its source. */}
-          {isCloneImport && cloneProvider && !gitTypeTouched && (
+          {isCloneImport && originProvider && !gitTypeTouched && (
             <span className="ssh-optional-hint">
               {cloneVisibility === "public" || cloneVisibility === "private"
                 ? t("projectDialog.gitHostingFromClone", {
-                    provider: cloneProvider === "gitlab" ? "GitLab" : "GitHub",
+                    provider: originProvider === "gitlab" ? "GitLab" : "GitHub",
                     visibility: t(
                       cloneVisibility === "public"
                         ? "projectDialog.visibilityPublic"
@@ -1312,9 +1353,29 @@ export function ProjectDialog({
                     ),
                   })
                 : t("projectDialog.gitHostingFromCloneProviderOnly", {
-                    provider: cloneProvider === "gitlab" ? "GitLab" : "GitHub",
+                    provider: originProvider === "gitlab" ? "GitLab" : "GitHub",
                   })}{" "}
               <UntestedTag id="projectDialog.2" />
+            </span>
+          )}
+          {/* The origin URL itself is never shown: it may carry a token. */}
+          {isHostedFolderImport && !gitTypeTouched && (
+            <span className="ssh-optional-hint">
+              {!originProvider
+                ? t("projectDialog.gitHostingFromOriginOther")
+                : cloneVisibility === "public" || cloneVisibility === "private"
+                  ? t("projectDialog.gitHostingFromOrigin", {
+                      provider: originProvider === "gitlab" ? "GitLab" : "GitHub",
+                      visibility: t(
+                        cloneVisibility === "public"
+                          ? "projectDialog.visibilityPublic"
+                          : "projectDialog.visibilityPrivate",
+                      ),
+                    })
+                  : t("projectDialog.gitHostingFromOriginProviderOnly", {
+                      provider: originProvider === "gitlab" ? "GitLab" : "GitHub",
+                    })}{" "}
+              <UntestedTag id="projectDialog.5" />
             </span>
           )}
         </label>
@@ -1702,6 +1763,7 @@ export function ProjectDialog({
         </div>
         </div>
       </div>
+      {dialogs}
     </div>
   );
 }

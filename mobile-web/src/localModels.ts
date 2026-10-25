@@ -5,7 +5,6 @@
  * nothing here talks to the host.
  */
 import type { LocalModelList, LocalModelRow } from "./api";
-import { sizeLabel } from "./terminal/fileLabels";
 
 /** Read again this soon while something is moving — a load, a start, or a
  * request of the phone's own still on its way. */
@@ -64,11 +63,4 @@ export function summary(list: LocalModelList): Summary {
     case "not_installed": return { key: "notInstalled" };
     default: return { key: "unreachable" };
   }
-}
-
-/** A model's size on disk. Models run to gigabytes, which `sizeLabel` would
- * spell as thousands of megabytes. */
-export function modelSizeLabel(bytes: number): string {
-  const gib = 1024 ** 3;
-  return bytes >= gib ? `${(bytes / gib).toFixed(1)} GB` : sizeLabel(bytes);
 }

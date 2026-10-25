@@ -76,6 +76,35 @@ export function targetKey(t: Target): string {
   return `${n.user ?? ""}@${n.host}:${n.port}`;
 }
 
+/**
+ * Whether a global machine **armed** for auto-connect is this host — which makes
+ * it count as the host's own `auto_connect` (gate 2 of
+ * `docs/context/remote_autoconnect.md`) on every project path in `stores/projects`
+ * (`autoConnectPrimary`/`autoConnectWorker`, `silentReconnectDeadHost`,
+ * `retryAutoConnectAfterVpn`). Those paths stay the one route by which a project
+ * host is reconnected; this only answers their opt-in question.
+ *
+ * Armed, not merely `connected`. The toggle is the machine-wide twin of
+ * `RemoteSpec.auto_connect` — the same durable "connect this login without asking"
+ * — so it can stand in for it. A machine's `connected` lamp is not an opt-in: it is
+ * never polled, so it outlives the session it names, and treating it as one would
+ * hand the dead-host reconciler exactly the endless re-dial of a host the user only
+ * ever connected by hand that gate 2 exists to stop. A hand-connected machine still
+ * reaches the active project on its own `→ connected` edge (`syncGlobalConnected`:
+ * a fresh master, an event rather than a standing claim).
+ *
+ * Off while the Machines feature is off: a feature that is off connects nothing
+ * (`remoteAutoReconnect`'s `machineSweep`), and an armed row the user can no longer
+ * see must not keep dialling projects either. HPC tags are not checked here — every
+ * caller applies `mayAutoTouch` to the host itself.
+ */
+export function machineArmsHost(target: Target): boolean {
+  if (!useSettingsStore.getState().settings?.machines_enabled) return false;
+  return useGlobalMachinesStore
+    .getState()
+    .machines.some((m) => m.auto_connect === true && sameTarget(m, target));
+}
+
 interface ProjectHostRef {
   projectId: string;
   hostId: string;
@@ -128,6 +157,10 @@ function remoteConnectArgs(ref: ProjectHostRef): Record<string, unknown> {
  * `ControlPersist=600` master — a standing presence on a shared login node — and
  * "because another surface authenticated the same host" is not a gesture against
  * *this* project. Connecting it by hand is one click away and untouched.
+ *
+ * This is the machine's *edge* only. Activation, a dead pool and the launch /
+ * tunnel-up sweep reach a project host through the project path alone, where an
+ * armed machine counts as the host's opt-in (`machineArmsHost`).
  */
 export function syncGlobalConnected(target: Target): void {
   const { activeId } = useProjectsStore.getState();

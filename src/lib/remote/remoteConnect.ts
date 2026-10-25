@@ -7,7 +7,7 @@ import { onTerminalSpawnFailed } from "../terminal/terminalSpawnFailed";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { withHostKeyConfirm } from "./hostKey";
 import type { LoginTarget } from "./loginTarget";
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 
 /**
  * The directory a fresh connect/browse should open in for `host`: the standard
@@ -119,7 +119,7 @@ export function openConnectionInRoot(opts: {
   // Surface it without stealing the active project: a transient toast (auto-clears
   // in AppShell) tells the user the connection is waiting in the root terminal.
   useProjectsStore.setState({
-    switchToast: translate(useI18nStore.getState().lang, "remoteConnect.authInRootToast", { label }),
+    switchToast: translateNow("remoteConnect.authInRootToast", { label }),
   });
   // …and put the prompt in front of them: the root console floats over the
   // project, so a login that needs a password no longer waits behind a scope

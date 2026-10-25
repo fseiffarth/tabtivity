@@ -34,10 +34,12 @@ import {
   compactAgentMenuEntries,
   isFileTabKind,
   itemLabel,
+  onOwnLogin,
   type StaticMenuItem,
 } from "./newTabItems";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
+import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
 import { TabColorPicker } from "./TabColorPicker";
 import { TabMarkBadge } from "./TabMarkBadge";
 import { TabMarkMenuItems } from "./TabMarkMenuItems";
@@ -52,10 +54,10 @@ import {
 } from "../../lib/shortcuts/newTabChord";
 import { useAgentWorktreePicker } from "./agentWorktrees";
 import type { CloudLaunch } from "../../lib/agents/cloudSessions";
-import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
+import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { CustomAgentDialog } from "./CustomAgentDialog";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
-import { TabHoverCard } from "./TabHoverCard";
+import { TabHoverCard, shellLaunch } from "./TabHoverCard";
 import { TabStackChip, type StackMember } from "./TabStackChip";
 import { stackNames, stripItems } from "../../lib/tabStacks";
 import { useDialogs } from "../common/PromptDialogs";
@@ -64,6 +66,7 @@ import {
   TabAgentModeMarks,
   TabSourceBadge,
   TabStatusMark,
+  TabContinueButton,
   statusMarkSlots,
   TabTexLinkBadge,
   TabLocalityBadge,
@@ -252,6 +255,12 @@ function selectOnMount(el: HTMLInputElement | null) {
   if (el) el.select();
 }
 
+/** Fast mode's native tooltip: the label, then a shell's launch lines. */
+function fastModeTitle(tab: TabEntry): string {
+  const { program, input } = shellLaunch(tab);
+  return [tab.label, program, input].filter(Boolean).join("\n");
+}
+
 /**
  * One plain tab of the strip. Memoised (performance plan §5.1): the bar
  * re-renders on hover, drag, menu and activity changes, and with sixty tabs
@@ -331,8 +340,8 @@ const TabItem = memo(function TabItem({
       onPointerDown={(e) => bar.pointerDown(e, tab)}
       // Fast mode has no card, so the label becomes a plain tooltip —
       // otherwise a tab whose name is ellipsized would have no way at all
-      // to read it out.
-      title={fastMode ? tab.label : undefined}
+      // to read it out. A shell Tabtivity opened adds what it was started with.
+      title={fastMode ? fastModeTitle(tab) : undefined}
       // Styled hover card (mirrors the project pill's popup) anchored to
       // this tab's bottom-center. Skipped while inline-renaming.
       onMouseEnter={(e) => {
@@ -380,6 +389,7 @@ const TabItem = memo(function TabItem({
       )}
       <TabMarkBadge tab={tab} />
       <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
+      <TabContinueButton tab={tab} stateClass={stateClass} />
       {tab.hostSession && (
         <span className="tab-host-session" title={t("tab.hostSessionBadgeTitle")}>
           {t("tab.hostSessionBadge")}
@@ -494,7 +504,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // tab" (the tab menu, the + menu's Recently closed) brings back.
   const closedAgentTabs = useClosedAgentTabs(scope);
   const hasProjects = useProjectsStore((s) => s.projects.length > 0);
-  const showBlobItem = scope === "root" && hasProjects;
+  const showBlobItem = scope === ROOT_SCOPE && hasProjects;
   const focusGroup = useTabsStore((s) => s.focusGroup);
   const setGroupActive = useTabsStore((s) => s.setGroupActive);
   // Cross-group activation, for the TeX ⇄ PDF jump: the partner tab usually
@@ -661,6 +671,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const menuOpen = menuPos !== null;
   // The local-model group's GPU gate; probes only while the menu is open.
   const localModelGpu = useLocalModelPlacement(localModel, menuOpen);
+  // The API section's CLIs (a stored key can run them); asked while open.
+  const keyableAgents = useKeyableAgents(menuOpen);
 
   const updateScrollState = useCallback(() => {
     const el = stripRef.current;
@@ -834,7 +846,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Cloud sessions clone a project's repository, so they are offered in a
   // project's menu only — not the root console's or a box's.
   const handleAddCloud =
-    scope !== "root" && !scope.startsWith(BOX_SCOPE_PREFIX)
+    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX)
       ? (item: StaticMenuItem, launch: CloudLaunch) => {
           setMenuPos(null);
           const place = placement();
@@ -1018,7 +1030,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     const item =
       request.kind === "shell" ? SHELL_ITEM : agentSlots.current()[request.slot]?.item;
     if (!item) return false;
-    handleAdd(item);
+    // A chord opens what its "+" row would: an agent on its own login.
+    handleAdd(request.kind === "shell" ? item : onOwnLogin(item));
     return true;
   };
   useEffect(() => {
@@ -1770,7 +1783,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             ◫
           </button>
         )}
-        {groupId !== EMPTY_GROUP_ID && (
+        {groupId !== EMPTY_GROUP_ID && tabs.length > 0 && (
           <button
             className="subwindow-hide"
             title={chordHint(t("tabBar.hideSubwindowTitle"), "hideSubwindow")}
@@ -1845,6 +1858,13 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   compactAgentBins,
                 ),
               },
+              ...apiKeyMenuGroups({
+                keyable: keyableAgents,
+                installedBuiltins: enabledAgents,
+                remoteScope: isRemoteScope,
+                pick: handleAdd,
+                t,
+              }),
               // Box scope: one row-trio per member — files view, shell, and a
               // (resume-safe, member-cwd) Claude tab. Empty members list (or a
               // non-box scope) contributes no group at all.

@@ -47,8 +47,22 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "codex" => resolve_codex_session(opts),
         "vibe" => resolve_vibe_session(opts),
         "opencode" => crate::services::opencode_session::resolve(opts),
+        "copilot" => crate::services::copilot_session::resolve(opts),
+        "agy" => crate::services::google_chat::resolve(opts),
         _ => opts,
     }
+}
+
+/// [`resolve_agent_session`] for a spawn on the async path: the OpenCode and
+/// Codex resolvers read stores the agent wrote, so they run under a short
+/// wait, and one that does not answer means no session (a fresh start).
+pub fn resolve_agent_session_bounded(opts: PtyOptions) -> PtyOptions {
+    if !matches!(opts.cmd.as_str(), "opencode" | "codex") {
+        return resolve_agent_session(opts);
+    }
+    let mut fresh = opts.clone();
+    fresh.env.insert(TAB_AGENT_ENV.to_string(), opts.cmd.clone());
+    crate::services::agent_sqlite::bounded(std::time::Duration::from_secs(3), move || resolve_agent_session(opts)).unwrap_or(fresh)
 }
 
 /// Vibe chooses its own session ID. Its post-agent hook records that ID under
@@ -416,11 +430,12 @@ pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> b
 /// The session log behind [`claude_session_exists`], when there is one.
 fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf> {
     let file = format!("{uuid}.jsonl");
-    std::fs::read_dir(projects)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path().join(&file))
-        .find(|path| path.is_file())
+    // By handle from the home: a slug folder the agent linked elsewhere is
+    // another scope's conversations, not this one's.
+    let dir = crate::services::home_io::HomeDir::open_below(projects, 2)?;
+    dir.names().into_iter().find_map(|name| {
+        dir.open_subdir(&name)?.file(&file)?.is_file().then(|| projects.join(&name).join(&file))
+    })
 }
 
 // ── Which model a tab is answering with ──────────────────────────────────────
@@ -458,6 +473,10 @@ pub enum TranscriptKind {
     /// [`crate::services::codex_store`] reads the model from its database
     /// instead, and this stays for the releases that still do.
     Codex,
+    /// `<home>/.copilot/session-state/<sid>/events.jsonl`: `assistant.message`
+    /// and `session.model_change` records name the model
+    /// (`services::copilot_session`).
+    Copilot,
 }
 
 /// The model the tab launched as `cmd` with launch id `launch_id` last answered
@@ -542,7 +561,7 @@ fn claude_goal_in_record(line: &str) -> Option<bool> {
         let failed = attachment.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
         return Some(!met && !failed);
     }
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = claude_command_content(&value)?;
     let args = between(content, "<command-args>", "</command-args>")?.trim();
     (content.contains("<command-name>/goal</command-name>") && args == "clear").then_some(false)
 }
@@ -608,6 +627,8 @@ pub(crate) fn read_agent_transcript_from<T>(
                         .find_map(|db| read_store(db, &live))
                 })
         }
+        "copilot" => crate::services::copilot_session::tab_events(project_id, launch_id)
+            .and_then(|path| read_file(&path, TranscriptKind::Copilot)),
         _ => None,
     }
 }
@@ -683,8 +704,9 @@ pub(crate) fn claude_chat_log(folder: &std::path::Path, uuid: &str) -> Option<Pa
     if !is_uuid_shaped(uuid) {
         return None;
     }
-    let path = folder.join(format!("{uuid}.jsonl"));
-    std::fs::symlink_metadata(&path).ok()?.is_file().then_some(path)
+    let name = format!("{uuid}.jsonl");
+    let dir = crate::services::home_io::HomeDir::open_below(folder, 3)?;
+    dir.file(&name)?.is_file().then(|| folder.join(name))
 }
 
 /// Read the last `MODEL_TAIL_BYTES` of `path` and return `pick`'s answer for
@@ -911,6 +933,7 @@ fn timed_prompt_in_record(line: &str, kind: TranscriptKind) -> Option<Transcript
             claude_prompt_in_record(&value).or_else(|| claude_queued_prompt(&value))?
         }
         TranscriptKind::Codex => codex_prompt_in_record(&value)?,
+        TranscriptKind::Copilot => crate::services::copilot_session::prompt_in_record(&value)?,
     };
     let at = value.get("timestamp")?.as_str()?;
     crate::services::prompt_blame::iso_to_epoch(at)?;
@@ -973,7 +996,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     let model = match kind {
         TranscriptKind::Claude => {
-            if value.get("type").and_then(|t| t.as_str()) == Some("user") {
+            if matches!(value.get("type").and_then(|t| t.as_str()), Some("user" | "system")) {
                 return claude_model_switch(&value);
             }
             if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
@@ -987,6 +1010,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
             }
             value.get("payload")?.get("model")?.as_str()?
         }
+        TranscriptKind::Copilot => crate::services::copilot_session::model_in_record(&value)?,
     };
     clean_model_name(model)
 }
@@ -1001,7 +1025,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
 /// `claude-opus-4-1-…` gets); a name that folds to nothing useful (`Default`)
 /// yields `None` and the scan falls back to the last answer.
 fn claude_model_switch(value: &serde_json::Value) -> Option<String> {
-    let content = value.get("message")?.get("content")?.as_str()?;
+    let content = claude_command_content(value)?;
     let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
     let rest = body
         .strip_prefix("Set model to ")
@@ -1188,8 +1212,41 @@ fn prompt_in_record(line: &str, kind: TranscriptKind) -> Option<String> {
     let raw = match kind {
         TranscriptKind::Claude => claude_prompt_in_record(&value)?,
         TranscriptKind::Codex => codex_prompt_in_record(&value)?,
+        TranscriptKind::Copilot => crate::services::copilot_session::prompt_in_record(&value)?,
     };
     clean_prompt_text(&raw)
+}
+
+/// The string content of a Claude record the CLI writes for a slash command
+/// typed at its prompt — the `<command-name>…` line and the
+/// `<local-command-stdout>…` it answered with. Older releases write both as
+/// `{"type":"user","message":{"content":"…"}}`; current ones (2.1.30x) as
+/// `{"type":"system","subtype":"local_command","content":"…"}`. A sidechain's
+/// is never the session's.
+pub(crate) fn claude_command_content(value: &serde_json::Value) -> Option<&str> {
+    if value.get("isSidechain").and_then(|s| s.as_bool()) == Some(true) {
+        return None;
+    }
+    match value.get("type").and_then(|t| t.as_str())? {
+        "user" => value.get("message")?.get("content")?.as_str(),
+        "system" if value.get("subtype").and_then(|t| t.as_str()) == Some("local_command") => value.get("content")?.as_str(),
+        _ => None,
+    }
+}
+
+/// The slash command a current Claude release recorded as a `local_command`
+/// system record (`/login`, `/model`, `/goal clear`), as
+/// [`claude_prompt_text`] shows it. Its stdout record is not one. `/rename`
+/// is left out: every Claude tab opens by typing one (the session's name).
+pub(crate) fn claude_local_command(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(|t| t.as_str()) != Some("system") {
+        return None;
+    }
+    let text = claude_command_content(value)?;
+    if !text.trim_start().starts_with("<command-name>") {
+        return None;
+    }
+    claude_prompt_text(text).filter(|command| command.split_whitespace().next() != Some("/rename"))
 }
 
 /// A Claude record: `{"type":"user","message":{"content":…}}` whose content is
@@ -1506,7 +1563,7 @@ pub fn read_live_session_and_source_for(
 /// The root holding `uid`'s current session record: of the shared root and the
 /// project's own slice, the one whose record was written last (see
 /// [`read_live_session_for`]).
-fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<PathBuf> {
+pub(crate) fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<PathBuf> {
     let root = live_sessions_dir();
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     let mut consider = |dir: &std::path::Path| {
@@ -1590,7 +1647,7 @@ pub fn undo_clear_plan(agent: &str, project_id: Option<&str>, uid: &str) -> Opti
 /// Point `uid`'s record back at `cleared` and call its start a resume, so the
 /// relaunch resumes that conversation and no second undo is offered for it.
 fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::io::Result<()> {
-    std::fs::write(dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}")), "resume")?;
+    write_live_record(dir, &format!("{uid}{LIVE_SOURCE_SUFFIX}"), "resume")?;
     write_live_session_in(dir, uid, cleared)
 }
 
@@ -1599,20 +1656,36 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// (`services::agent_chats`, which has checked that `chat` is one): the undo's
 /// two ways. Claude types `/resume <chat>` into the running session; Codex has
 /// its record pointed at `chat` — in the root that holds it, else the scope's
-/// own — and is relaunched onto it. `None` for any other agent, or a `chat`
-/// that is no id.
+/// own — and is relaunched onto it. OpenCode and Antigravity have their
+/// record pointed at `chat` the same way and are relaunched: OpenCode's spawn
+/// turns it into `--session <chat>` (`opencode_session::resolve`),
+/// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
+/// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
+/// pins `--session-id <chat>` (`copilot_session::resolve`).
+/// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
-    if !is_uuid_shaped(chat) || !is_uuid_shaped(uid) {
+    if !is_uuid_shaped(uid) {
         return None;
     }
+    let record_dir = || {
+        live_record_dir(project_id, uid).unwrap_or_else(|| match project_id {
+            Some(pid) => project_live_sessions_dir(pid),
+            None => live_sessions_dir(),
+        })
+    };
     match agent {
+        "opencode" if crate::services::opencode_session::is_session_id(chat) => {
+            crate::services::opencode_session::record_session_in(&record_dir(), uid, chat).ok()?;
+            Some(UndoClearPlan::Relaunch)
+        }
+        _ if !is_uuid_shaped(chat) => None,
         "claude" => Some(UndoClearPlan::Type { command: format!("/resume {chat}") }),
         "codex" => {
-            let dir = live_record_dir(project_id, uid).unwrap_or_else(|| match project_id {
-                Some(pid) => project_live_sessions_dir(pid),
-                None => live_sessions_dir(),
-            });
-            restore_cleared_in(&dir, uid, chat).ok()?;
+            restore_cleared_in(&record_dir(), uid, chat).ok()?;
+            Some(UndoClearPlan::Relaunch)
+        }
+        "agy" | "copilot" => {
+            write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
         _ => None,
@@ -1643,6 +1716,58 @@ pub fn read_live_source_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}")))?;
     let word = raw.trim().to_string();
     is_session_source(&word).then_some(word)
+}
+
+/// Suffix of the record a resume's `SessionStart` leaves beside the session
+/// record: what that start's first request will cost, as Claude Code 2.1.30x
+/// reports it in the payload — `<seconds idle> <context tokens> <cache-write
+/// USD> <cache expired>`. Written before the source, cleared by any other start.
+pub const LIVE_RESUME_SUFFIX: &str = ".resume";
+
+/// What resuming a conversation costs the next request (see
+/// [`LIVE_RESUME_SUFFIX`]). Figures are Claude's own estimates; Tabtivity prices
+/// nothing here.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeCost {
+    /// Seconds between the conversation's last response and this resume.
+    pub seconds_idle: u64,
+    /// Tokens the first request carries.
+    pub context_tokens: u64,
+    /// Claude's estimate of writing those tokens to the prompt cache again, USD.
+    pub cache_write_usd: f64,
+    /// The idle time outlasted the cache's lifetime: the first request re-caches.
+    pub cache_expired: bool,
+}
+
+/// One `.resume` record. The hook wrote it from agent-visible JSON, so every
+/// field is bounded and anything else is dropped rather than shown.
+fn parse_resume_record(raw: &str) -> Option<ResumeCost> {
+    let mut fields = raw.split_whitespace();
+    let seconds_idle = fields.next()?.parse::<u64>().ok()?;
+    let context_tokens = fields.next()?.parse::<u64>().ok()?;
+    let cache_write_usd = fields.next()?.parse::<f64>().ok()?;
+    let cache_expired = match fields.next()? {
+        "true" => true,
+        "false" => false,
+        _ => return None,
+    };
+    if fields.next().is_some()
+        || context_tokens > 100_000_000
+        || !(0.0..=100_000.0).contains(&cache_write_usd)
+    {
+        return None;
+    }
+    Some(ResumeCost { seconds_idle, context_tokens, cache_write_usd, cache_expired })
+}
+
+/// The resume cost recorded beside `uid`'s session record in `dir`.
+pub fn read_live_resume_in(dir: &std::path::Path, uid: &str) -> Option<ResumeCost> {
+    if !is_uuid_shaped(uid) {
+        return None;
+    }
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_RESUME_SUFFIX}")))?;
+    parse_resume_record(&raw)
 }
 
 /// Read the live session id recorded for `uid` from the shared (host-agent) root
@@ -1732,11 +1857,19 @@ pub fn write_live_session_in(dir: &std::path::Path, uid: &str, id: &str) -> std:
             "live-session keys must be uuid-ish",
         ));
     }
+    write_live_record(dir, uid, id)
+}
+
+/// Write `<dir>/<name>` in a live-session folder. A project's slice is mounted
+/// read-write into its fence and container, so the agent can plant a link at
+/// the name or at a predictable temporary beside it: the write goes through a
+/// handle on `dir` (`home_io`), an exclusive temporary renamed into place,
+/// which replaces such a link instead of writing through it.
+pub(crate) fn write_live_record(dir: &std::path::Path, name: &str, text: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{uid}.tmp"));
-    std::fs::write(&tmp, id)?;
-    std::fs::rename(&tmp, dir.join(uid))?;
-    Ok(())
+    crate::services::home_io::HomeFile::open_below(&dir.join(name), 1)
+        .ok_or_else(|| std::io::Error::other("the live-session folder is not a plain folder"))?
+        .write(text.as_bytes())
 }
 
 // ── Codex hook trust state ──────────────────────────────────────────────────
@@ -1911,6 +2044,275 @@ pub fn codex_binder_enabled(scope_id: Option<&str>) -> bool {
     codex_hook_state_of_home(&crate::services::agent_home::scope_home(scope_id)) != CodexHookState::Enabled
 }
 
+/// Trust Tabtivity's own Codex hooks in every agent home that holds a Codex
+/// config, the way Codex's `/hooks` "trust" would: a `trusted_hash` under each
+/// hook's `[hooks.state."…"]` table, and a hook switched off is switched back
+/// on. Codex asks for that approval per config file and every scope has its
+/// own, so trusting once in one tab left every other home "not trusted".
+/// Only hooks whose `command` is [`hook_command`] are touched. Returns the
+/// state afterwards, as [`codex_hook_state`] reads it.
+pub fn trust_codex_hooks() -> CodexHookState {
+    let cmd = hook_command();
+    for home in crate::services::agent_home::existing_homes_in(&storage::state_dir()) {
+        // The agent can rewrite its own config: never a link, never a FIFO.
+        let Some(config) = HomeFile::open_existing(&home, ".codex/config.toml") else {
+            continue;
+        };
+        if !config.is_file() {
+            continue;
+        }
+        let Some(bytes) = config.read() else { continue };
+        let src = String::from_utf8_lossy(&bytes);
+        if let Some(out) = trust_codex_hooks_in(&src, &codex_config_key_paths(&home), &cmd) {
+            if let Err(e) = config.write(out.as_bytes()) {
+                eprintln!("agent_session: trust codex hooks in {}: {e}", home.display());
+            }
+        }
+    }
+    codex_hook_state()
+}
+
+/// The spellings Codex may give one home's `config.toml` in its trust keys:
+/// the path itself (the unfenced host session, macOS), and on Linux the user's
+/// own home, where bubblewrap binds a scope home for a fenced tab.
+fn codex_config_key_paths(home: &std::path::Path) -> Vec<String> {
+    let mut paths = vec![home.join(".codex").join("config.toml").to_string_lossy().into_owned()];
+    if cfg!(target_os = "linux") {
+        let fenced = paths::home_dir().join(".codex").join("config.toml").to_string_lossy().into_owned();
+        if !paths.contains(&fenced) {
+            paths.push(fenced);
+        }
+    }
+    paths
+}
+
+/// Codex's key label for one of [`CODEX_HOOK_EVENTS`], and whether the event
+/// keeps a group's `matcher` (Codex drops it for the rest, hash included).
+fn codex_event_label(event: &str) -> Option<(&'static str, bool)> {
+    Some(match event {
+        "SessionStart" => ("session_start", true),
+        "PostToolUse" => ("post_tool_use", true),
+        "SessionEnd" => ("session_end", true),
+        "UserPromptSubmit" => ("user_prompt_submit", false),
+        "Stop" => ("stop", false),
+        _ => return None,
+    })
+}
+
+/// The `trusted_hash` Codex records for one command hook: SHA-256 of the
+/// hook's normalized identity as JSON with sorted keys (codex-rs
+/// `hooks::engine::discovery::hook_hash` → `config::version_for_toml`). The
+/// timeout is normalized first — `SessionEnd` defaults to 1 s and is clamped
+/// to 1–3, every other event defaults to 600 — so a `SessionEnd` lowered from
+/// 10 to 3 keeps its hash. Reproduced against hashes Codex 0.164.0 wrote.
+fn codex_hook_hash(label: &str, matcher: Option<&str>, command: &str, timeout: Option<u64>) -> String {
+    use sha2::{Digest, Sha256};
+    let timeout = if label == "session_end" {
+        timeout.unwrap_or(1).clamp(1, u64::from(CODEX_SESSION_END_TIMEOUT))
+    } else {
+        timeout.unwrap_or(600).max(1)
+    };
+    let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
+    let mut identity = format!(
+        "{{\"event_name\":{},\"hooks\":[{{\"async\":false,\"command\":{},\"timeout\":{timeout},\"type\":\"command\"}}]",
+        quote(label),
+        quote(command),
+    );
+    if let Some(m) = matcher {
+        identity.push_str(&format!(",\"matcher\":{}", quote(m)));
+    }
+    identity.push('}');
+    let digest = Sha256::digest(identity.as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
+/// A TOML string value [`toml_value`] can hand over verbatim: a literal
+/// string, or a basic one without escapes. `None` for anything else, so a
+/// hook whose bytes we cannot be sure of is left for `/hooks` to judge.
+fn plain_toml_string(line: &str, key: &str) -> Option<String> {
+    let raw = line.split_once('=')?.1.trim();
+    if raw.starts_with("'''") || raw.starts_with("\"\"\"") || (raw.starts_with('"') && raw.contains('\\')) {
+        return None;
+    }
+    if !(raw.starts_with('\'') || raw.starts_with('"')) {
+        return None;
+    }
+    toml_value(line, key)
+}
+
+/// Testable core of [`trust_codex_hooks`]: `src` with every hook of ours
+/// trusted under each of `key_paths`, or `None` when nothing changes.
+///
+/// A line scanner and text edit, like [`register_codex_hook_as`]: it finds
+/// each `[[hooks.<Event>.hooks]]` table whose `command` is `cmd`, counts its
+/// group and position the way Codex keys them, hashes it with
+/// [`codex_hook_hash`], and sets `trusted_hash` in the matching
+/// `[hooks.state."<path>:<event>:<group>:<hook>"]` table — in place when the
+/// table exists (an `enabled = false` there is dropped), appended otherwise.
+/// A table of ours holding anything beyond `type`, `command` and `timeout` is
+/// skipped: its hash would cover fields this does not model.
+pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Option<String> {
+    struct Hook {
+        label: &'static str,
+        group: usize,
+        index: usize,
+        matcher: Option<String>,
+        command: Option<String>,
+        timeout: Option<u64>,
+        plain: bool,
+    }
+    let mut groups: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut handlers: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut hooks: Vec<Hook> = Vec::new();
+    let mut matcher: Option<String> = None;
+    // False once the group's matcher is a string we cannot read verbatim.
+    let mut matcher_known = true;
+    // Which table the scanner is in: a group (its event), or a handler (an
+    // index into `hooks`, `None` for an event that is not ours).
+    enum At {
+        Other,
+        Group,
+        Handler(Option<usize>),
+    }
+    let mut at = At::Other;
+    for raw in src.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            at = At::Other;
+            if let Some(ev) = line.strip_prefix("[[hooks.").and_then(|s| s.strip_suffix(".hooks]]")) {
+                let group = groups.get(ev).map_or(0, |g| g.saturating_sub(1));
+                let index = handlers.entry(ev.to_string()).or_insert(0);
+                let slot = codex_event_label(ev).map(|(label, keeps)| {
+                    hooks.push(Hook {
+                        label,
+                        group,
+                        index: *index,
+                        matcher: if keeps { matcher.clone() } else { None },
+                        command: None,
+                        timeout: None,
+                        plain: matcher_known || !keeps,
+                    });
+                    hooks.len() - 1
+                });
+                *index += 1;
+                at = At::Handler(slot);
+            } else if let Some(ev) = line.strip_prefix("[[hooks.").and_then(|s| s.strip_suffix("]]")) {
+                *groups.entry(ev.to_string()).or_insert(0) += 1;
+                handlers.insert(ev.to_string(), 0);
+                matcher = None;
+                matcher_known = true;
+                at = At::Group;
+            }
+            continue;
+        }
+        match at {
+            At::Group => {
+                if toml_value(line, "matcher").is_some() {
+                    matcher = plain_toml_string(line, "matcher");
+                    matcher_known = matcher.is_some();
+                }
+            }
+            At::Handler(Some(i)) => {
+                let hook = &mut hooks[i];
+                let key = line.split_once('=').map(|(k, _)| k.trim()).unwrap_or("");
+                match key {
+                    "type" => hook.plain &= toml_value(line, "type").as_deref() == Some("command"),
+                    "command" => hook.command = plain_toml_string(line, "command"),
+                    "timeout" => {
+                        hook.timeout = toml_value(line, "timeout").and_then(|v| v.parse().ok());
+                        hook.plain &= hook.timeout.is_some();
+                    }
+                    _ => hook.plain = false,
+                }
+            }
+            At::Handler(None) | At::Other => {}
+        }
+    }
+
+    // (state key, hash) for every hook of ours whose hash is known.
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for hook in &hooks {
+        if !hook.plain || hook.command.as_deref() != Some(cmd) {
+            continue;
+        }
+        let hash = codex_hook_hash(hook.label, hook.matcher.as_deref(), cmd, hook.timeout);
+        for path in key_paths {
+            wanted.push((format!("{path}:{}:{}:{}", hook.label, hook.group, hook.index), hash.clone()));
+        }
+    }
+    if wanted.is_empty() {
+        return None;
+    }
+
+    // Rewrite the state tables that exist, then append the missing ones.
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let eol_of = |l: &str| if l.ends_with("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(src.len() + wanted.len() * 160);
+    let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut changed = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let header = lines[i];
+        let want = toml_state_table_key(header.trim())
+            .and_then(|key| wanted.iter().find(|(k, _)| *k == key).cloned());
+        let Some((key, hash)) = want else {
+            out.push_str(header);
+            i += 1;
+            continue;
+        };
+        let end = (i + 1..lines.len())
+            .find(|&j| lines[j].trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        let eol = eol_of(header);
+        let new_line = format!("trusted_hash = \"{hash}\"{eol}");
+        let mut body = String::new();
+        let mut wrote = false;
+        for l in &lines[i + 1..end] {
+            let t = l.trim();
+            if toml_value(t, "trusted_hash").is_some() {
+                // One hash per table; a stale or duplicate one goes.
+                changed |= wrote || t != new_line.trim();
+                if !wrote {
+                    body.push_str(&new_line);
+                    wrote = true;
+                }
+            } else if toml_value(t, "enabled").as_deref() == Some("false") {
+                changed = true;
+            } else {
+                body.push_str(l);
+            }
+        }
+        out.push_str(header);
+        if !header.ends_with('\n') {
+            out.push_str(eol);
+        }
+        if !wrote {
+            // Straight under the header, so the table's blank tail stays last.
+            out.push_str(&new_line);
+            changed = true;
+        }
+        out.push_str(&body);
+        done.insert(key);
+        i = end;
+    }
+    for (key, hash) in &wanted {
+        if done.contains(key) {
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("\n[hooks.state.\"{key}\"]\ntrusted_hash = \"{hash}\"\n"));
+        done.insert(key.clone());
+        changed = true;
+    }
+    changed.then_some(out)
+}
+
 /// Install (idempotently) the session hooks and their script for every agent
 /// Tabtivity can track (Claude + Codex), so it learns each tab's live session id,
 /// its live permission mode (Claude's `Stop`), and its turn state (see
@@ -1957,6 +2359,7 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     }
     // OpenCode's session plugin (`services::opencode_session`).
     crate::services::opencode_session::register_in_home(home);
+    crate::services::opencode_session::disable_service_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);
@@ -2157,6 +2560,10 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          reason=$(printf '%s' \"$input\" | sed -n 's/.*\"reason\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          tpath=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p')\n\
          tnull=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*null.*/null/p')\n\
+         secs=$(printf '%s' \"$input\" | sed -n 's/.*\"seconds_since_last_response\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')\n\
+         ctxt=$(printf '%s' \"$input\" | sed -n 's/.*\"context_tokens\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')\n\
+         usd=$(printf '%s' \"$input\" | sed -n 's/.*\"estimated_cache_write_usd\"[[:space:]]*:[[:space:]]*\\([0-9][0-9.]*\\).*/\\1/p')\n\
+         cold=$(printf '%s' \"$input\" | sed -n 's/.*\"prompt_cache_likely_expired\"[[:space:]]*:[[:space:]]*\\([a-z]*\\).*/\\1/p')\n\
          [ -n \"$sid\" ] || exit 0\n\
          dir=\"{live_dir}\"\n\
          mkdir -p \"$dir\" 2>/dev/null || exit 0\n\
@@ -2259,6 +2666,13 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          # id sees the source that produced it.\n\
          case \"$event\" in\n\
          \x20 SessionStart|Stop)\n\
+         \x20   # What a resume's first request will cost (Claude 2.1.30x puts it in the\n\
+         \x20   # start's payload), written before the source whose write the app reads\n\
+         \x20   # it on; any other start clears the last one.\n\
+         \x20   if [ \"$event\" = SessionStart ]; then\n\
+         \x20     if [ \"$src\" = resume ] && [ -n \"$secs\" ]; then printf '%s %s %s %s' \"$secs\" \"${{ctxt:-0}}\" \"${{usd:-0}}\" \"${{cold:-false}}\" > \"$dir/${UPPER}_TAB_UID.resume\"\n\
+         \x20     else rm -f \"$dir/${UPPER}_TAB_UID.resume\"; fi\n\
+         \x20   fi\n\
          \x20   [ \"$event\" = SessionStart ] && [ -n \"$src\" ] && printf '%s' \"$src\" > \"$dir/${UPPER}_TAB_UID.src\"\n\
          \x20   printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
          \x20   [ -n \"$mode\" ] && printf '%s' \"$mode\" > \"$dir/${UPPER}_TAB_UID.mode\" ;;\n\
@@ -2300,6 +2714,10 @@ fn hook_script_body(live_dir: &str) -> String {
          $me = [regex]::Match($payload, '\"hook_event_name\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mn = [regex]::Match($payload, '\"notification_type\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mr = [regex]::Match($payload, '\"reason\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
+         $mq = [regex]::Match($payload, '\"seconds_since_last_response\"\\s*:\\s*([0-9]+)')\r\n\
+         $mc = [regex]::Match($payload, '\"context_tokens\"\\s*:\\s*([0-9]+)')\r\n\
+         $mu = [regex]::Match($payload, '\"estimated_cache_write_usd\"\\s*:\\s*([0-9.]+)')\r\n\
+         $mx = [regex]::Match($payload, '\"prompt_cache_likely_expired\"\\s*:\\s*([a-z]+)')\r\n\
          if (-not $m.Success) {{ exit 0 }}\r\n\
          $sid = $m.Groups[1].Value\r\n\
          $event = ''\r\n\
@@ -2365,6 +2783,16 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 if ($sid -ne $was) {{ [IO.File]::WriteAllText(($rec + '.prev'), $was) }}\r\n\
          }}\r\n\
          if (($event -eq 'SessionStart') -or ($event -eq 'Stop')) {{\r\n\
+         \x20 # What a resume's first request will cost, written before the source the\r\n\
+         \x20 # app reads it on; any other start clears the last one (see the POSIX twin).\r\n\
+         \x20 if ($event -eq 'SessionStart') {{\r\n\
+         \x20   if ($ms.Success -and ($ms.Groups[1].Value -eq 'resume') -and $mq.Success) {{\r\n\
+         \x20     $cx = '0'; if ($mc.Success) {{ $cx = $mc.Groups[1].Value }}\r\n\
+         \x20     $us = '0'; if ($mu.Success) {{ $us = $mu.Groups[1].Value }}\r\n\
+         \x20     $cd = 'false'; if ($mx.Success) {{ $cd = $mx.Groups[1].Value }}\r\n\
+         \x20     [IO.File]::WriteAllText(($rec + '.resume'), ($mq.Groups[1].Value + ' ' + $cx + ' ' + $us + ' ' + $cd))\r\n\
+         \x20   }} else {{ Remove-Item -LiteralPath ($rec + '.resume') -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }}\r\n\
          \x20 if (($event -eq 'SessionStart') -and $ms.Success) {{ [IO.File]::WriteAllText(($rec + '.src'), $ms.Groups[1].Value) }}\r\n\
          \x20 [IO.File]::WriteAllText($rec, $sid)\r\n\
          \x20 if ($mm.Success) {{ [IO.File]::WriteAllText(($rec + '.mode'), $mm.Groups[1].Value) }}\r\n\
@@ -2512,9 +2940,10 @@ const CODEX_SESSION_END_TIMEOUT: u32 = 3;
 /// `src` with the `timeout` of our own `[[hooks.SessionEnd.hooks]]` table
 /// (the one whose `command` is `cmd`) lowered to
 /// [`CODEX_SESSION_END_TIMEOUT`], or `None` when nothing needs lowering.
-/// Earlier builds wrote `timeout = 10` there. Codex's trust hash does not
-/// cover the timeout (checked live on 0.161.0: the lowered hook stays trusted,
-/// no review menu), so the rewrite costs no re-approval. Other tables and
+/// Earlier builds wrote `timeout = 10` there. Codex's trust hash covers the
+/// timeout only after clamping it to 3 ([`codex_hook_hash`]; live on 0.161.0
+/// the lowered hook stayed trusted, no review menu), so the rewrite costs no
+/// re-approval. Other tables and
 /// lines are left byte for byte.
 fn cap_codex_session_end_timeout(src: &str, cmd: &str) -> Option<String> {
     let lines: Vec<&str> = src.split_inclusive('\n').collect();
@@ -2707,6 +3136,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         }
     }
 
@@ -3012,6 +3442,35 @@ mod tests {
         assert!(!claude_session_exists(&tmp, "no-such-uuid"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_slug_folder_is_not_this_scopes_conversation() {
+        let home = unique_tmp(concat!(crate::app_slug!(), "-claude-link"));
+        let other = unique_tmp(concat!(crate::app_slug!(), "-claude-other"));
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        let projects = home.join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join(format!("{uuid}.jsonl")), b"{}").unwrap();
+        std::os::unix::fs::symlink(&other, projects.join("-slug")).unwrap();
+        assert!(!claude_session_exists(&projects, uuid));
+        assert!(claude_chat_log(&projects.join("-slug"), uuid).is_none());
+
+        let own = projects.join("-own");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join(format!("{uuid}.jsonl")), b"{}").unwrap();
+        assert_eq!(claude_session_log(&projects, uuid), Some(own.join(format!("{uuid}.jsonl"))));
+        assert_eq!(claude_chat_log(&own, uuid), Some(own.join(format!("{uuid}.jsonl"))));
+
+        let projects_link = unique_tmp(concat!(crate::app_slug!(), "-claude-plink"));
+        std::fs::create_dir_all(projects_link.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&projects, projects_link.join(".claude").join("projects")).unwrap();
+        assert!(!claude_session_exists(&projects_link.join(".claude").join("projects"), uuid));
+        for dir in [home, other, projects_link] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]
@@ -3742,6 +4201,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    #[test]
+    fn a_resume_record_is_four_bounded_fields_and_nothing_else() {
+        let ok = parse_resume_record("4 25960 0.1038 false\n").unwrap();
+        assert_eq!(
+            ok,
+            ResumeCost { seconds_idle: 4, context_tokens: 25960, cache_write_usd: 0.1038, cache_expired: false }
+        );
+        assert!(parse_resume_record("90000 183000 0.42 true").unwrap().cache_expired);
+        for junk in ["", "4 25960 0.1038", "4 25960 0.1038 maybe", "4 25960 0.1038 true extra", "x 1 1 true", "1 1 -2 true", "1 1 NaN true", "1 999999999999 1 true", "1 1 1e9 true"] {
+            assert_eq!(parse_resume_record(junk), None, "{junk:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_script_records_what_a_resume_will_cost_and_clears_it_on_any_other_start() {
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-resume"));
+        let live = tmp.join("live");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let script = tmp.join("hook.sh");
+        std::fs::write(&script, hook_script_body(&live.to_string_lossy())).unwrap();
+        let uid = "11111111-1111-4111-8111-111111111111";
+        let claude = Some("claude");
+        let cost = || read_live_resume_in(&live, uid);
+        let start = |source: &str, extra: &str| {
+            format!(r#"{{"session_id":"{uid}","hook_event_name":"SessionStart","source":"{source}"{extra}}}"#)
+        };
+
+        // The 2.1.306 payload: the figures in the order the CLI sends them, and
+        // in another one — keys are matched by name.
+        let figures = r#","seconds_since_last_response":90000,"context_tokens":183000,"prompt_cache_likely_expired":true,"estimated_cache_write_usd":0.4213"#;
+        run_hook(&script, &live, uid, claude, true, &start("resume", figures));
+        assert_eq!(
+            cost(),
+            Some(ResumeCost { seconds_idle: 90000, context_tokens: 183000, cache_write_usd: 0.4213, cache_expired: true })
+        );
+        // A warm resume says so.
+        let warm = r#","seconds_since_last_response":4,"context_tokens":25960,"estimated_cache_write_usd":0.1038,"prompt_cache_likely_expired":false"#;
+        run_hook(&script, &live, uid, claude, true, &start("resume", warm));
+        assert_eq!(cost().map(|c| c.cache_expired), Some(false));
+        // A resume start without the fields (an older CLI) leaves none.
+        run_hook(&script, &live, uid, claude, true, &start("resume", ""));
+        assert_eq!(cost(), None);
+        // Any other start clears the last one, and a Stop does not write one.
+        run_hook(&script, &live, uid, claude, true, &start("resume", figures));
+        assert!(cost().is_some());
+        let stop = format!(r#"{{"session_id":"{uid}","hook_event_name":"Stop"{figures}}}"#);
+        run_hook(&script, &live, uid, claude, true, &stop);
+        assert!(cost().is_some(), "a Stop leaves the record alone");
+        run_hook(&script, &live, uid, claude, true, &start("clear", figures));
+        assert_eq!(cost(), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[cfg(unix)]
     #[test]
     fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
@@ -4139,6 +4652,81 @@ mod tests {
         );
     }
 
+    /// What Codex 0.164.0 itself wrote for a hook whose command is
+    /// `/opt/hooks/session.sh`, through "Trust all and continue" (live,
+    /// 2026-10-23; its `SessionEnd` had `timeout = 10`, which Codex clamps).
+    const LIVE_HASHES: [(&str, &str); 5] = [
+        ("session_start", "sha256:0eed17ea75189a772936e59f60528cdb269f4990d139cbfd832a665def39a987"),
+        ("stop", "sha256:884a6ed2800a693aac33a14bfacb450c35e4d68b5e7dd76b5309cc70c25b86c0"),
+        ("user_prompt_submit", "sha256:996b5f251186849e3aba28f25377d93afe0f19f6b88580139513994a85c183da"),
+        ("post_tool_use", "sha256:cae7882a9a43fe21630abbbcd77dbc94a79f8deccdc8105baeaf5748f50f9151"),
+        ("session_end", "sha256:0aee76ee8e8150b8b99cbacae20528f5663be4655b1590fc1749d43d6291b54b"),
+    ];
+
+    /// Our five hook blocks for `cmd`, exactly as registration writes them.
+    fn registered_codex_config(cmd: &str, before: &str) -> String {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".codex")).unwrap();
+        std::fs::write(tmp.path().join(".codex/config.toml"), before).unwrap();
+        register_codex_hook_as(&HomeFile::open(tmp.path(), ".codex/config.toml").unwrap(), cmd).unwrap();
+        std::fs::read_to_string(tmp.path().join(".codex/config.toml")).unwrap()
+    }
+
+    #[test]
+    fn codex_hooks_are_trusted_with_the_hash_codex_writes() {
+        let cmd = "/opt/hooks/session.sh";
+        let cfg = "/c/.codex/config.toml";
+        let src = registered_codex_config(cmd, "model = \"o3\"\n");
+        let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).expect("something to trust");
+        for (label, hash) in LIVE_HASHES {
+            let table = format!("[hooks.state.\"{cfg}:{label}:0:0\"]\ntrusted_hash = \"{hash}\"\n");
+            assert!(out.contains(&table), "{label} missing in\n{out}");
+        }
+        assert!(out.starts_with(&src), "the existing text is kept byte for byte");
+        assert_eq!(codex_hook_state_in(&out, cfg, cmd), CodexHookState::Enabled);
+        // Run again: nothing left to do.
+        assert_eq!(trust_codex_hooks_in(&out, &[cfg.to_string()], cmd), None);
+    }
+
+    #[test]
+    fn codex_hook_trust_fixes_a_stale_or_disabled_verdict_in_place() {
+        let cmd = "/opt/hooks/session.sh";
+        let codex_cfg = "/c/.codex/config.toml";
+        let src = format!(
+            "{}[hooks.state]\n\n[hooks.state.\"{codex_cfg}:session_start:0:0\"]\n\
+             trusted_hash = \"sha256:0bad\"\nenabled = false\n\n[tui]\nx = 1\n",
+            registered_codex_config(cmd, ""),
+        );
+        let out = trust_codex_hooks_in(&src, &[codex_cfg.to_string()], cmd).unwrap();
+        let start = format!(
+            "[hooks.state.\"{codex_cfg}:session_start:0:0\"]\ntrusted_hash = \"{}\"\n\n[tui]\nx = 1\n",
+            LIVE_HASHES[0].1
+        );
+        assert!(out.contains(&start), "{out}");
+        assert!(!out.contains("sha256:0bad") && !out.contains("enabled = false"));
+        assert_eq!(out.matches(&format!("[hooks.state.\"{codex_cfg}:session_start:0:0\"]")).count(), 1);
+        assert_eq!(codex_hook_state_in(&out, codex_cfg, cmd), CodexHookState::Enabled);
+    }
+
+    #[test]
+    fn codex_hook_trust_counts_positions_and_leaves_other_hooks_alone() {
+        let cmd = "/opt/hooks/session.sh";
+        let cfg = "/c/.codex/config.toml";
+        // The user's own SessionStart hook comes first, so ours is 1:0; their
+        // hook gets no verdict. A Stop of ours with an extra field is skipped,
+        // since its hash would cover that field.
+        let src = format!(
+            "[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = 'mine.sh'\n\n\
+             [[hooks.SessionStart]]\nmatcher = \"startup|resume|clear|compact\"\n\n\
+             [[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = '{cmd}'\ntimeout = 10\n\n\
+             [[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = \"command\"\ncommand = '{cmd}'\ntimeout = 10\nstatusMessage = \"x\"\n"
+        );
+        let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).unwrap();
+        assert!(out.contains(&format!("[hooks.state.\"{cfg}:session_start:1:0\"]\ntrusted_hash = \"{}\"", LIVE_HASHES[0].1)));
+        assert!(!out.contains(":session_start:0:0") && !out.contains(":stop:"), "{out}");
+        assert_eq!(trust_codex_hooks_in("model = \"o3\"\n", &[cfg.to_string()], cmd), None);
+    }
+
     #[test]
     fn codex_hook_state_tolerates_a_config_path_spelled_differently() {
         // Codex builds the key from the path *it* resolved (symlinked CODEX_HOME,
@@ -4169,6 +4757,28 @@ mod tests {
         assert_eq!(read_live_session_in(&tmp, uid).as_deref(), Some(id));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A project's slice is the agent's to write: links it plants at the
+    /// record, the old fixed temporary or the source record are replaced, and
+    /// the user's file they point at keeps its bytes.
+    #[cfg(unix)]
+    #[test]
+    fn live_records_replace_a_planted_link_and_never_write_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let slice = dir.path().join("slice");
+        std::fs::create_dir_all(&slice).unwrap();
+        let users = dir.path().join("bashrc");
+        std::fs::write(&users, "keep").unwrap();
+        let uid = "11111111-2222-3333-4444-555555555555";
+        let id = "019ea7c8-b7d5-7a13-80e2-1ad6608db5e6";
+        for name in [uid.to_string(), format!(".{uid}.tmp"), format!("{uid}{LIVE_SOURCE_SUFFIX}")] {
+            std::os::unix::fs::symlink(&users, slice.join(name)).unwrap();
+        }
+        restore_cleared_in(&slice, uid, id).unwrap();
+        assert_eq!(std::fs::read_to_string(&users).unwrap(), "keep");
+        assert_eq!(read_live_session_in(&slice, uid).as_deref(), Some(id));
+        assert_eq!(std::fs::read_to_string(slice.join(format!("{uid}{LIVE_SOURCE_SUFFIX}"))).unwrap(), "resume");
     }
 
     #[test]
@@ -4353,6 +4963,10 @@ mod tests {
         // A name that folds to nothing useful leaves the last answer standing.
         write(&[answer.into(), switch("<local-command-stdout>Set model to Default</local-command-stdout>")]);
         assert_eq!(read().as_deref(), Some("claude-opus-5"));
+        // Current releases write the confirmation as a `local_command` system record.
+        let system = serde_json::json!({"type": "system", "subtype": "local_command", "content": "<local-command-stdout>Kept model as `Sonnet 5.5`</local-command-stdout>"}).to_string();
+        write(&[answer.into(), system]);
+        assert_eq!(read().as_deref(), Some("sonnet-5-5"));
     }
 
     #[test]
@@ -4499,6 +5113,9 @@ mod tests {
         assert_eq!(read(&[set, typed, answer, failed]), Some(false));
         assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
         assert_eq!(read(&[met, sidechain]), Some(false));
+        // Current releases record the typed command as a `local_command` system record.
+        let cleared = r#"{"type":"system","subtype":"local_command","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>clear</command-args>"}"#;
+        assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
     }
 
     #[test]

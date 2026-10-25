@@ -1072,6 +1072,24 @@ impl MailStore {
 
     // ── Headers ─────────────────────────────────────────────────────────────
 
+    /// A move retains the local id (and encrypted body, marks and attachments),
+    /// while the server gives it a new mailbox-scoped UID. Sync must reuse it.
+    pub fn retain_header_id(&self, header: &mut MailHeader) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM messages WHERE folder_id = ?1 AND uid = ?2",
+                params![header.folder_id, header.uid],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(id) = id {
+            header.id = id;
+        }
+        Ok(())
+    }
+
     /// Insert or update one header row. Returns `true` when the row was new,
     /// which is what the sync summary counts as a new message.
     pub fn upsert_header(&self, header: &MailHeader) -> Result<bool, String> {
@@ -2128,13 +2146,23 @@ impl MailStore {
         &self,
         message_ids: &[String],
         dest_folder_id: &str,
+        uid_pairs: &[(u32, u32)],
     ) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for id in message_ids {
+            let source_uid: u32 = tx
+                .query_row("SELECT uid FROM messages WHERE id = ?1", params![id], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            let dest_uid = uid_pairs
+                .iter()
+                .find(|p| p.0 == source_uid)
+                .map(|p| p.1)
+                .filter(|uid| *uid > 0)
+                .ok_or_else(|| "missing destination UID for moved message".to_string())?;
             tx.execute(
-                "UPDATE messages SET folder_id = ?1 WHERE id = ?2",
-                params![dest_folder_id, id],
+                "UPDATE messages SET folder_id = ?1, uid = ?3 WHERE id = ?2",
+                params![dest_folder_id, id, dest_uid],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -4916,7 +4944,7 @@ mod tests {
         store.upsert_header(&h).unwrap();
 
         store
-            .move_messages(std::slice::from_ref(&h.id), &archive.id)
+            .move_messages(std::slice::from_ref(&h.id), &archive.id, &[(1, 42)])
             .unwrap();
         assert_eq!(
             store
@@ -4932,6 +4960,31 @@ mod tests {
                 .total,
             1
         );
+    }
+
+    #[test]
+    fn moving_a_message_preserves_its_local_id_and_mark_across_sync() {
+        let (_d, store) = store();
+        let inbox = folder("a1", "INBOX");
+        let archive = folder("a1", "Archive");
+        store.upsert_folder(&inbox).unwrap();
+        store.upsert_folder(&archive).unwrap();
+        let h = header(&inbox, 1, "original", "2026-07-01T09:00:00Z");
+        store.upsert_header(&h).unwrap();
+        store.set_priority(&h.id, Some(MailPriority::Important)).unwrap();
+        store.move_messages(std::slice::from_ref(&h.id), &archive.id, &[(1, 42)]).unwrap();
+        let moved = store.header(&h.id).unwrap().unwrap();
+        assert_eq!(moved.uid, 42);
+        let mut synced = header(&archive, 42, "synced", "2026-07-01T09:00:00Z");
+        store.retain_header_id(&mut synced).unwrap();
+        assert_eq!(synced.id, h.id);
+        assert!(!store.upsert_header(&synced).unwrap());
+        let moved = store.header(&h.id).unwrap().unwrap();
+        assert_eq!(moved.priority, Some(MailPriority::Important));
+        assert_eq!(moved.subject, "synced");
+        // Moving back uses the destination's UID, not the original inbox UID.
+        store.move_messages(std::slice::from_ref(&h.id), &inbox.id, &[(42, 99)]).unwrap();
+        assert_eq!(store.header(&h.id).unwrap().unwrap().uid, 99);
     }
 
     #[test]

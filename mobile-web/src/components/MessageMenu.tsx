@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { speechTag } from "../speechLang";
-import { currentSpeechId, speak, speechOutputSupported, spokenText, stopSpeaking, subscribeSpeech } from "../speechOutput";
+import { currentSpeechId, speak, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../speechOutput";
+import { spokenText } from "../../../shared/voice";
 import { useBackLayer } from "../backStack";
 
 /** How long a finger rests on a bubble before its menu opens. Long enough

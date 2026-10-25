@@ -165,7 +165,13 @@ pub fn project_directory(project_id: &str) -> Option<String> {
 /// `extra["remote"]`, or `None` for a local project. Pure, so the "remote iff a
 /// spec is present" mapping is testable without the real state dir.
 fn spec_from_entry(entry: &ProjectEntry) -> Option<RemoteSpec> {
-    let value = entry.extra.get("remote")?;
+    spec_from_value(entry.extra.get("remote")?)
+}
+
+/// [`spec_from_entry`] over the raw `remote` value of a record read some other
+/// way (the phone sidecar's catalog reads `projects.json` from its own state
+/// dir). `None` when the value is not a spec (`null`, a malformed object).
+pub(crate) fn spec_from_value(value: &serde_json::Value) -> Option<RemoteSpec> {
     serde_json::from_value(value.clone()).ok()
 }
 
@@ -176,8 +182,14 @@ fn compute_hosts_from_entry(entry: &ProjectEntry) -> Vec<ComputeHost> {
     entry
         .extra
         .get("compute_hosts")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .map(compute_hosts_from_value)
         .unwrap_or_default()
+}
+
+/// [`compute_hosts_from_entry`] over the raw `compute_hosts` value of a record
+/// read some other way; `[]` when it is not a list of hosts.
+pub(crate) fn compute_hosts_from_value(value: &serde_json::Value) -> Vec<ComputeHost> {
+    serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
 /// The extra worker hosts declared for `project_id`, read from the always-local
@@ -810,6 +822,22 @@ mod tests {
     fn compute_hosts_from_entry_empty_when_absent() {
         let e = entry("p1", Some("/state/p1"), Some(spec()));
         assert!(compute_hosts_from_entry(&e).is_empty());
+    }
+
+    #[test]
+    fn value_helpers_read_a_raw_record_like_the_entry_ones() {
+        let spec_value = serde_json::to_value(spec()).unwrap();
+        let resolved = spec_from_value(&spec_value).expect("a spec value parses");
+        assert_eq!(resolved.host, "host.example");
+        assert!(spec_from_value(&serde_json::Value::Null).is_none());
+        assert!(spec_from_value(&serde_json::json!({"host": 7})).is_none());
+
+        let hosts_value = serde_json::to_value(vec![compute_host("h1", "gpu-2.example")]).unwrap();
+        let hosts = compute_hosts_from_value(&hosts_value);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].id, "h1");
+        assert!(compute_hosts_from_value(&serde_json::json!("not a list")).is_empty());
+        assert!(compute_hosts_from_value(&serde_json::Value::Null).is_empty());
     }
 
     #[test]

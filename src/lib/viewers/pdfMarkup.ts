@@ -12,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { TranslationKey } from "../i18n";
 import type { Mark } from "../../../mobile-web/src/markup/layer";
 import type { Anchor } from "../../../mobile-web/src/markup/anchors";
-import { BOX_SCOPE_PREFIX } from "../terminal/ptyId";
+import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../terminal/ptyId";
 
 /** The largest PDF the backend reads for a bake (`outbox::MAX_OUTBOX_FILE`,
  * what `files::read` serves). */
@@ -44,7 +44,7 @@ export function markupGate(input: {
   claimedElsewhere: boolean;
 }): MarkupGate {
   const { scope } = input;
-  if (!scope || scope === "root" || scope.startsWith(BOX_SCOPE_PREFIX)) return { show: false };
+  if (!scope || scope === ROOT_SCOPE || scope.startsWith(BOX_SCOPE_PREFIX)) return { show: false };
   if (input.source !== "none" || input.detached) return { show: false };
   if (input.size === null || input.size > MAX_MARKUP_PDF) return { show: false };
   if (!input.pristine || input.dirty) return { show: true, blocked: "arranged" };

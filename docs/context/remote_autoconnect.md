@@ -72,6 +72,23 @@ never asked. Every unattended connect now passes the same three, in order:
 3. **eligibility** — a saved password or `key_auth`, so the promise never to
    prompt is kept.
 
+**A global machine armed for auto-connect is the host's opt-in too** (gate 2,
+`machineArmsHost` in `lib/remote/machineSync`, matched by `sameTarget`; only while
+the Machines feature is on). There is **one path**: the project's own
+(`autoConnectPrimary`/`autoConnectWorker`, `silentReconnectDeadHost`,
+`retryAutoConnectAfterVpn`), so HPC, probe, VPN, headless handling and the
+no-prompt rule are the same whichever surface armed the host — a local project's
+`compute_hosts` included (activation fires for them too), and the launch /
+tunnel-up machine sweep ends by re-running it for the active project. *Armed*, not
+*connected*: the toggle is the machine twin of `auto_connect`, while a machine's
+`connected` lamp is never polled and would hand the dead-host reconciler the very
+re-dial loop gate 2 stops. A machine-only opt-in lets the probe stand for
+eligibility (no "nothing saved" toast for a key login the project copy never
+recorded), opens no root-console login tab non-headless (red lamp instead), and
+connects with `viaLogin` so riding the machine's master is never recorded as key
+auth. A hand-connected machine still lights the active project on its own
+`→ connected` edge (`syncGlobalConnected`).
+
 An armed project that fails (3) is no longer *silent*. It used to `return` with no
 lamp, no toast and no console line, which reads exactly like "auto-connect is
 broken" — and, since a locked keyring answers the same as an empty one, that is
@@ -79,6 +96,25 @@ what the user saw when their credential had merely become unreadable. It now say
 which of the two happened (`remote_saved_password_state` returns
 `{ saved, keyring }`, not a boolean), and the keyring case offers the same
 **Unlock keyring** action the VPN side has had all along.
+
+## Unreachable is re-tried; rejected is not
+
+Every unattended path tries **once**, and for a long time an unreachable host
+ended there, at a red lamp only a tunnel coming up (`retryAutoConnectAfterVpn`)
+cleared. That made reconnecting a matter of timing: the dead-host reconciler
+notices a dropped master within 15 s, and after a wake or a Wi-Fi hop the network
+is often not back yet; a launch that beats the network fails the same way. So a
+host whose probe says `unreachable` (nothing answered, no credential presented) is
+re-tried on a backoff to a five-minute cadence (`scheduleUnreachableRetry` in
+`stores/projects`), and the webview's `online` event runs pending re-tries at once
+(`lib/remote/remoteAutoReconnect`). Each re-try re-checks the gates and that the
+lamp is still the red one it left, so the user connecting, disconnecting or
+switching away ends it. A host that answered and said no is **never** re-tried —
+that would replay a rejected login. Non-headless, an unreachable host opens no login
+tab (ssh in it could only fail); the login opens on the re-try that finds the host
+answering, and a re-try never re-opens the tunnel's login. The dead-host path no
+longer gives up outright non-headless either: the probe is its eligibility check,
+so a key host reconnects and a password host goes red.
 
 Finally, none of this is the only line of defence: the backend refuses a
 background dial to a tagged host inside the ssh-argv builders themselves

@@ -8,26 +8,18 @@ import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
-import { translate, useI18nStore, useT } from "../../lib/i18n";
+import { useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "./MobileAccessPicker";
+import { projectHostKind } from "../../lib/projectTabHost";
+import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
-import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
+import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
-
-/** `translate` at the live language, for code that runs outside a render: the
- *  module-level parser below and the async callbacks, whose `useCallback`
- *  identity must not churn on a language switch (their effect re-invokes). */
-function tr(
-  key: Parameters<typeof translate>[1],
-  params?: Parameters<typeof translate>[2],
-): string {
-  return translate(useI18nStore.getState().lang, key, params);
-}
 
 interface RuntimeStatus {
   configured: boolean;
@@ -124,9 +116,9 @@ function detectServeSettingsFromJson(value: unknown): DetectedServeSettings {
   ])).values()];
   if (unique.length === 1) return unique[0];
   if (unique.length === 0) {
-    throw new Error(tr("mobile.errNoServeMapping"));
+    throw new Error(translateNow("mobile.errNoServeMapping"));
   }
-  throw new Error(tr("mobile.errMultiServeMappings"));
+  throw new Error(translateNow("mobile.errMultiServeMappings"));
 }
 
 /** A label whose explanation is its hover hint rather than a paragraph under
@@ -177,7 +169,7 @@ export function MobileSettings() {
   // (a revoke or Forget all changes what a list still reaches).
   const { phones: pairedPhones } = usePairedPhones(devices);
   const [phonePicker, setPhonePicker] = useState<
-    { kind: "project" | "box"; id: string; x: number; y: number } | null
+    { kind: "project" | "box" | "assistant"; id: string; x: number; y: number } | null
   >(null);
   const addDevice = useAddDevice();
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +179,10 @@ export function MobileSettings() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [serveVerification, setServeVerification] = useState<ServeVerification | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
+  // Rows switched in this visit stay listed, so turning one off doesn't pull
+  // it out from under the pointer; keys are `project:<id>` / `box:<id>`.
+  const [touchedRows, setTouchedRows] = useState<ReadonlySet<string>>(() => new Set());
+  const touchRow = (key: string) => setTouchedRows((rows) => (rows.has(key) ? rows : new Set(rows).add(key)));
   // The setup fold: `null` until someone (or the first status read) opens or
   // shuts it; `checked` is that first read having landed.
   const [setupOpen, setSetupOpen] = useState<boolean | null>(null);
@@ -244,10 +240,10 @@ export function MobileSettings() {
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
       .map((result) => String(result.reason));
     if (statusReasons.some((reason) => /command .* not found/i.test(reason))) {
-      failures.push(tr("mobile.errBackendOld"));
+      failures.push(translateNow("mobile.errBackendOld"));
     } else {
-      if (runtimeResult.status === "rejected") failures.push(tr("mobile.errHostStatus", { reason: String(runtimeResult.reason) }));
-      if (serveResult.status === "rejected") failures.push(tr("mobile.errTailscaleStatus", { reason: String(serveResult.reason) }));
+      if (runtimeResult.status === "rejected") failures.push(translateNow("mobile.errHostStatus", { reason: String(runtimeResult.reason) }));
+      if (serveResult.status === "rejected") failures.push(translateNow("mobile.errTailscaleStatus", { reason: String(serveResult.reason) }));
     }
 
     const enteredOrigin = originRef.current.trim();
@@ -316,9 +312,9 @@ export function MobileSettings() {
    * spreads this render's `stored`, so a second write would undo the first. */
   const setProjectFiles = async (on: boolean) => {
     const uploads = on && await confirmAction({
-      title: tr("mobile.projectUploadsAskTitle"),
-      body: tr("mobile.projectUploadsAskBody"),
-      confirmLabel: tr("mobile.projectUploadsAskAllow"),
+      title: translateNow("mobile.projectUploadsAskTitle"),
+      body: translateNow("mobile.projectUploadsAskBody"),
+      confirmLabel: translateNow("mobile.projectUploadsAskAllow"),
     });
     setError(null);
     try {
@@ -340,10 +336,10 @@ export function MobileSettings() {
     try {
       const parsedPort = Number(port);
       if (enabled && (!Number.isInteger(parsedPort) || parsedPort < 1024 || parsedPort > 65535)) {
-        throw new Error(tr("mobile.errPortRange"));
+        throw new Error(translateNow("mobile.errPortRange"));
       }
       if (enabled && !origin.startsWith("https://")) {
-        throw new Error(tr("mobile.errOriginFirst"));
+        throw new Error(translateNow("mobile.errOriginFirst"));
       }
       if (enabled) {
         await invoke("mobile_verify_tailscale_serve", {
@@ -368,6 +364,7 @@ export function MobileSettings() {
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
+          assistant_devices: stored?.assistant_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -386,7 +383,7 @@ export function MobileSettings() {
   /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
    *  a row whose access is on: opens the per-phone picker for it. */
   const phoneScopeButton = (
-    kind: "project" | "box",
+    kind: "project" | "box" | "assistant",
     id: string,
     name: string,
     enabled: boolean,
@@ -411,16 +408,29 @@ export function MobileSettings() {
     );
   };
 
+  /** Tabby's reach, from its picker: every phone (both keys gone), some phones
+   * (the list), or off (`assistant_access` false, the list gone — a list never
+   * outlives the switch). One whole-block write, like `setMailGate`. */
+  const setAssistantReach = async (enabled: boolean, list: string[] | null) => {
+    await updateSettings({
+      [MOBILE_HOST_KEY]: {
+        ...(stored ?? { enabled: false }),
+        assistant_access: enabled ? undefined : false,
+        assistant_devices: enabled ? (list ?? undefined) : undefined,
+      },
+    });
+  };
+
   const setUpInTerminal = async () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
     const ok = await confirmAction({
-      title: tr("mobile.guideSummary"),
+      title: translateNow("mobile.guideSummary"),
       // The prose's blank lines set the command apart; a <p> collapses `\n`.
-      body: tr("mobile.setUpConfirm", { command }).split("\n").flatMap((line, index) => index === 0 ? [line] : [<br key={index} />, line]),
-      confirmLabel: tr("mobile.setUpInTerminal"),
+      body: translateNow("mobile.setUpConfirm", { command }).split("\n").flatMap((line, index) => index === 0 ? [line] : [<br key={index} />, line]),
+      confirmLabel: translateNow("mobile.setUpInTerminal"),
     });
     if (!ok) return;
-    runInstallInTab(tr("mobile.guideSummary"), command, "default");
+    runInstallInTab(translateNow("mobile.guideSummary"), command, "default");
   };
 
   const detectServeSettings = async () => {
@@ -430,7 +440,7 @@ export function MobileSettings() {
     try {
       const result = await invoke<ServeStatus>("mobile_tailscale_serve_status");
       setServeStatus(result);
-      if (!result.installed) throw new Error(tr("mobile.errNoTailscale"));
+      if (!result.installed) throw new Error(translateNow("mobile.errNoTailscale"));
       if (result.error) throw new Error(result.error);
       const detected = result.detected ?? detectServeSettingsFromJson(result.json);
       await invoke("mobile_verify_tailscale_serve", {
@@ -458,6 +468,7 @@ export function MobileSettings() {
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
+          assistant_devices: stored?.assistant_devices,
         },
       });
     } catch (reason) {
@@ -470,9 +481,9 @@ export function MobileSettings() {
 
   const lockDownNow = async () => {
     const ok = await confirmAction({
-      title: tr("mobile.lockdownNow"),
-      body: tr("mobile.lockdownConfirm"),
-      confirmLabel: tr("mobile.lockdownNow"),
+      title: translateNow("mobile.lockdownNow"),
+      body: translateNow("mobile.lockdownConfirm"),
+      confirmLabel: translateNow("mobile.lockdownNow"),
       danger: true,
     });
     if (!ok) return;
@@ -499,29 +510,43 @@ export function MobileSettings() {
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
+          assistant_devices: stored?.assistant_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
       addDevice.clear();
       await refresh();
     } catch (reason) {
-      setError(tr("mobile.lockdownPartial", { reason: String(reason) }));
+      setError(translateNow("mobile.lockdownPartial", { reason: String(reason) }));
     } finally {
       setBusy(false);
     }
   };
 
-  const eligible = projects.filter(isMobileEligible);
-  const eligibleIds = new Set(eligible.map((project) => project.id));
+  // A remote, container or VM project is listed like any other; its row says
+  // (in the switch's title) what the phone reaches of it.
+  const projectRowLabel = (project: ProjectEntry) => (
+    projectHostKind(project) === "local"
+      ? project.name
+      : <>{project.name} <UntestedTag id="mobile-every-project-type" /></>
+  );
+  const projectRowTitle = (project: ProjectEntry) => {
+    const host = projectHostKind(project);
+    return host === "local" ? undefined : t(HOST_REACH_KEY[host]);
+  };
+  // With the search empty only the shared rows are listed — a long project
+  // list made the section a scroll — and the search finds the rest.
   const normalizedProjectSearch = projectSearch.trim().toLocaleLowerCase();
-  const matchingEligible = normalizedProjectSearch
-    ? eligible.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
-    : eligible;
-  // Boxes ride under the same search box: every box is eligible (a box's tabs
-  // run locally whatever its members are), so the list is the box list.
+  const matchingProjects = normalizedProjectSearch
+    ? projects.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
+    : projects.filter((project) => project[MOBILE_ACCESS_KEY] || touchedRows.has(`project:${project.id}`));
+  const hiddenProjects = normalizedProjectSearch ? 0 : projects.length - matchingProjects.length;
+  // Boxes ride under the same search box: every project type and every box may
+  // be shared (a box's tabs run locally whatever its members are).
   const matchingBoxes = normalizedProjectSearch
     ? boxes.filter((box) => box.name.toLocaleLowerCase().includes(normalizedProjectSearch))
-    : boxes;
+    : boxes.filter((box) => box[MOBILE_ACCESS_KEY] || touchedRows.has(`box:${box.id}`));
+  const hiddenBoxes = normalizedProjectSearch ? 0 : boxes.length - matchingBoxes.length;
   const securityHealth = !stored?.enabled
     ? { tone: "off", title: t("mobile.healthOffTitle"), detail: t("mobile.healthOffDetail") }
     : !status?.running
@@ -723,15 +748,16 @@ export function MobileSettings() {
           on (the backend ignores it otherwise), so the row appears with it. */}
       {assistantOn && (
         <ToggleRow
-          label={<><Hint help={t("mobile.assistantGateHelp")}>{t("mobile.assistantGate")}</Hint> <UntestedTag id="settings.assistantPhone" /></>}
+          label={<><Hint help={t("mobile.assistantGateHelp")}>{t("mobile.assistantGate")}</Hint> <UntestedTag id="settings.assistantPhone" /> <UntestedTag id="mobile.assistantPhones" /></>}
           checked={stored?.assistant_access !== false}
           disabled={busy}
           onChange={(event) => void setMailGate("assistant_access", event.target.checked)}
+          aside={phoneScopeButton("assistant", "assistant", t("mobile.assistantGate"), stored?.assistant_access !== false, stored?.assistant_devices)}
         />
       )}
 
       <div className="settings-subheader"><Hint help={t("mobile.projectAccessHelp")}>{t("mobile.projectAccess")}</Hint></div>
-      {eligible.length > 0 && <input
+      {projects.length > 0 && <input
         className="mobile-project-access-search"
         value={projectSearch}
         placeholder={t("mobile.searchProjects")}
@@ -739,21 +765,24 @@ export function MobileSettings() {
         onChange={(event) => setProjectSearch(event.target.value)}
       />}
       <div className="mobile-project-access-list">
-        {matchingEligible.map((project) => (
+        {matchingProjects.map((project) => (
           <ToggleRow
             key={project.id}
-            label={project.name}
+            label={projectRowLabel(project)}
+            title={projectRowTitle(project)}
             checked={project[MOBILE_ACCESS_KEY] ?? false}
             onChange={(event) => {
               setError(null);
+              touchRow(`project:${project.id}`);
               // One click on = every phone; narrowing is the ▾ button's job.
               void setProjectMobileAccess(project.id, event.target.checked, null).catch((reason) => setError(String(reason)));
             }}
             aside={phoneScopeButton("project", project.id, project.name, project[MOBILE_ACCESS_KEY] ?? false, project[MOBILE_DEVICES_KEY])}
           />
         ))}
-        {eligible.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
-        {eligible.length > 0 && matchingEligible.length === 0 && <p className="settings-help">{t("mobile.noProjectsMatch", { query: projectSearch.trim() })}</p>}
+        {projects.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
+        {hiddenProjects > 0 && <p className="settings-help">{t("mobile.hiddenProjects", { count: hiddenProjects })}</p>}
+        {normalizedProjectSearch && projects.length > 0 && matchingProjects.length === 0 && <p className="settings-help">{t("mobile.noProjectsMatch", { query: projectSearch.trim() })}</p>}
       </div>
 
       {boxes.length > 0 && <>
@@ -766,16 +795,29 @@ export function MobileSettings() {
               checked={box[MOBILE_ACCESS_KEY] ?? false}
               onChange={(event) => {
                 setError(null);
+                touchRow(`box:${box.id}`);
                 void setBoxMobileAccess(box.id, event.target.checked, null).catch((reason) => setError(String(reason)));
               }}
               aside={phoneScopeButton("box", box.id, box.name, box[MOBILE_ACCESS_KEY] ?? false, box[MOBILE_DEVICES_KEY])}
             />
           ))}
-          {matchingBoxes.length === 0 && <p className="settings-help">{t("mobile.noBoxesMatch", { query: projectSearch.trim() })}</p>}
+          {hiddenBoxes > 0 && <p className="settings-help">{t("mobile.hiddenBoxes", { count: hiddenBoxes })}</p>}
+          {normalizedProjectSearch && matchingBoxes.length === 0 && <p className="settings-help">{t("mobile.noBoxesMatch", { query: projectSearch.trim() })}</p>}
         </div>
       </>}
 
-      {phonePicker && (() => {
+      {phonePicker && phonePicker.kind === "assistant" && (
+        <MobileAccessPicker
+          x={phonePicker.x}
+          y={phonePicker.y}
+          kind="assistant"
+          enabled={stored?.assistant_access !== false}
+          devices={stored?.assistant_devices}
+          onApply={setAssistantReach}
+          onClose={() => setPhonePicker(null)}
+        />
+      )}
+      {phonePicker && phonePicker.kind !== "assistant" && (() => {
         const target = phonePicker.kind === "project"
           ? projects.find((p) => p.id === phonePicker.id)
           : boxes.find((b) => b.id === phonePicker.id);
@@ -785,6 +827,7 @@ export function MobileSettings() {
             x={phonePicker.x}
             y={phonePicker.y}
             kind={phonePicker.kind}
+            host={phonePicker.kind === "project" ? projectHostKind(target as ProjectEntry) : undefined}
             enabled={target[MOBILE_ACCESS_KEY] ?? false}
             devices={target[MOBILE_DEVICES_KEY]}
             onApply={(enabled, list) => phonePicker.kind === "project"
@@ -820,7 +863,6 @@ export function MobileSettings() {
               <PairedDeviceAccess
                 device={device}
                 pairedIds={(pairedPhones ?? devices).map((phone) => phone.id)}
-                eligibleProjectIds={eligibleIds}
                 onChanged={() => void refresh()}
               />
             </div>
@@ -832,9 +874,9 @@ export function MobileSettings() {
         className="settings-btn sm danger"
         onClick={async () => {
           const ok = await confirmAction({
-            title: tr("mobile.forgetAll"),
-            body: tr("mobile.forgetAllConfirm"),
-            confirmLabel: tr("mobile.forgetAll"),
+            title: translateNow("mobile.forgetAll"),
+            body: translateNow("mobile.forgetAllConfirm"),
+            confirmLabel: translateNow("mobile.forgetAll"),
             danger: true,
           });
           if (!ok) return;

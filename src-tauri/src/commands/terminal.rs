@@ -118,7 +118,11 @@ pub async fn pty_spawn(
                 prepared.spawn_seq(),
             );
         }
-        registry.lock_ok().set_drop_dir(&prepared.opts.id, drop_dir);
+        {
+            let mut reg = registry.lock_ok();
+            reg.set_drop_dir(&prepared.opts.id, drop_dir);
+            reg.set_ai(&prepared.opts.id, prepared.ai);
+        }
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
@@ -228,6 +232,30 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
         return Ok(());
     }
     app_core::rt::try_blocking("terminal", crate::services::tmux_local::kill_app_sessions).await
+}
+
+/// Whether a **local** tmux session's pane has ended and stays on screen — a
+/// fenced agent that quit (`remain-on-exit`, `services::tmux_local`). The pane
+/// card's Restart / Open a shell here offer reads it. `false` for a session
+/// that is not here (a remote tab, one that exited, no tmux).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn local_tmux_pane_dead(session: String) -> Result<bool, String> {
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session)
+        || !crate::services::tmux_local::tmux_available()
+    {
+        return Ok(false);
+    }
+    app_core::rt::blocking("terminal", move || {
+        crate::services::tmux_local::tmux_command()
+            .args(crate::services::tmux_local::local_tmux_pane_dead_args(&session))
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some_and(|output| {
+                crate::services::tmux_local::pane_dead_answer(&String::from_utf8_lossy(&output.stdout))
+            })
+    })
+    .await
 }
 
 /// The visible screen of a **local** tmux session, as plain rows — what the
@@ -371,6 +399,42 @@ fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static st
         .map_err(|e| e.code())
 }
 
+/// The OS clipboard's image pasted into a local terminal tab — the terminal's
+/// paste chord, an agent pane's Ctrl+V or double-click, or the Reader's
+/// composer, whenever the clipboard holds no text. A fenced agent cannot read
+/// the clipboard itself (its `/tmp` and `/run` hide the display), so the image
+/// reaches it the way a dropped file does ([`pty_drop_files`]): as a PNG in
+/// its folder's inbox, typed as the `@` reference. A shell gets the path of a
+/// copy in the global inbox instead, outside the project, since nothing pasted
+/// into a shell files itself into the project. The `Err` is a wire code:
+/// `no_clipboard_image`, `remote_tab` or an inbox one.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Result<String, String> {
+    let dir = ctx
+        .get::<RegistryState>()
+        .lock_ok()
+        .drop_dir(&id)
+        .ok_or("no_terminal")?
+        .ok_or("remote_tab")?;
+    // On X11 a clipboard with no image waits out a selection transfer timeout.
+    let read = app_core::rt::spawn_blocking(crate::commands::mobile_control::clipboard_png);
+    let png = tokio::time::timeout(std::time::Duration::from_secs(3), read)
+        .await
+        .map_err(|_| "no_clipboard_image")?
+        .map_err(|_| "no_clipboard_image")??;
+    let state_dir = crate::storage::state_dir();
+    app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?
+}
+
+fn paste_image(dir: &Path, state_dir: &Path, png: &[u8], agent: bool) -> Result<String, String> {
+    const NAME: &str = "clipboard.png";
+    if agent {
+        return inbox::store(dir, NAME, png).map(|stored| stored.reference).map_err(|e| e.code().into());
+    }
+    let stored = inbox::store_global(state_dir, NAME, png).map_err(|e| e.code().to_string())?;
+    Ok(state_dir.join(inbox::GLOBAL_INBOX_DIR).join(&stored.name).to_string_lossy().into_owned())
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_write(
     ctx: Ctx,
@@ -379,7 +443,23 @@ pub async fn pty_write(
 ) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();
     let id = pty_id_for(&ctx, registry, id);
-    let sender = registry.lock_ok().input_sender(&id);
+    let (sender, ai) = {
+        let reg = registry.lock_ok();
+        (reg.input_sender(&id), reg.is_ai(&id))
+    };
+    // The AI switch: while it is off nothing typed reaches an agent; an
+    // interrupt or a key that only steers its screen still does.
+    let kept = if ai && crate::services::ai_switch::is_off() {
+        crate::services::ai_switch::filter_while_off(&data)
+    } else {
+        None
+    };
+    if let Some(kept) = kept {
+        if let (Some(sender), false) = (sender, kept.is_empty()) {
+            let _ = sender.send(kept).await;
+        }
+        return Err(crate::services::ai_switch::AI_OFF.to_string());
+    }
     if let Some(sender) = sender {
         sender
             .send(data)
@@ -401,6 +481,17 @@ pub async fn pty_resize(
     // client's: each has its own size (TODO #2347).
     let id = pty_id_for(&ctx, registry, id);
     crate::terminal::resize_pty(registry, &id, cols, rows)
+}
+
+/// The user typed into PTY `id` from `from` (`"phone"` or `"desktop"`):
+/// recorded beside the tab's turn record, where `tabtivity-send` reads which
+/// screen a file goes to (`agent_turn::note_input_from`). The window reports
+/// a change of screen, not every keystroke.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_input_from(ctx: Ctx, id: String, from: String) -> Result<(), String> {
+    let from = crate::services::agent_turn::InputFrom::parse(&from).ok_or_else(|| format!("unknown input source '{from}'"))?;
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
+    app_core::rt::blocking("terminal", move || crate::services::agent_turn::note_input_from(&id, from).map_err(|e| e.to_string())).await?
 }
 
 /// A pane's visibility report (visible-only streaming): a hidden pane's PTY
@@ -489,6 +580,16 @@ pub async fn pty_unwatch(ctx: Ctx, id: String) -> Result<(), String> {
     let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_unwatch(&id);
     Ok(())
+}
+
+/// What the agent in tab `id` was handed, for the tab hover card: sandbox,
+/// Tabtivity's MCP servers and the user's own, skills, API keys
+/// (`services::agent_features`). The tab's own id, not a server client's
+/// attach PTY: the record is the spawn's. `None` when this process did not
+/// spawn it. Reads the home's config off the async runtime.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_features(id: String) -> Result<Option<crate::services::agent_features::Features>, String> {
+    app_core::rt::blocking("agent features", move || crate::services::agent_features::features(&id)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -627,6 +728,29 @@ mod tests {
         let dropped = drop_files(tab.path(), std::slice::from_ref(&path), &[], false);
         assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
         assert!(!tab.path().join(inbox::INBOX_DIR).exists());
+    }
+
+    #[test]
+    fn a_pasted_image_reaches_an_agent_through_its_inbox() {
+        let tab = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let reference = paste_image(tab.path(), state.path(), b"png bytes", true).unwrap();
+        assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+        assert!(reference.ends_with(".png"), "{reference}");
+        assert_eq!(fs::read(tab.path().join(&reference)).unwrap(), b"png bytes");
+        assert!(!state.path().join(inbox::GLOBAL_INBOX_DIR).exists());
+    }
+
+    #[test]
+    fn a_pasted_image_reaches_a_shell_as_a_path_outside_the_project() {
+        let tab = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let path = paste_image(tab.path(), state.path(), b"png bytes", false).unwrap();
+        let path = Path::new(&path);
+        assert!(path.starts_with(state.path().join(inbox::GLOBAL_INBOX_DIR)), "{}", path.display());
+        assert_eq!(fs::read(path).unwrap(), b"png bytes");
+        assert!(fs::read_dir(tab.path()).unwrap().next().is_none());
+        assert_eq!(paste_image(tab.path(), state.path(), b"", true).unwrap_err(), "empty_file");
     }
 
     #[test]

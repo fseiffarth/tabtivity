@@ -802,8 +802,9 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     // ever goes into one (#2389): refused before the container comes up.
     crate::services::agent_api_keys::refuse_in_container(
         &opts.cmd,
+        opts.api_key,
         crate::services::agent_api_keys::is_local_model(opts)
-            || crate::services::agent_fence::runs_subcommand(&opts.args),
+            || crate::services::agent_api_keys::keyless_subcommand(&opts.cmd, &opts.args),
     )?;
     let spec = sandbox_spec_for(&project_id);
     // The container mounts the project ROOT; a subdir tab keeps its cwd via -w.
@@ -1736,7 +1737,13 @@ fn transcript_cwd(dir: &Path) -> Option<String> {
 /// **component-wise** (`Path::starts_with`), so a sibling `…/proj2` is not read
 /// as being inside `…/proj`.
 fn cwd_is_within(cwd: &str, project_dir: &str) -> bool {
-    Path::new(cwd).starts_with(Path::new(project_dir))
+    !has_dot_segment(cwd) && Path::new(cwd).starts_with(Path::new(project_dir))
+}
+
+/// Whether a path string has a `.` or `..` segment. `Path::components` folds
+/// an interior `.` away, so the raw text is what is checked.
+pub(crate) fn has_dot_segment(path: &str) -> bool {
+    path.split(['/', '\\']).any(|seg| seg == "." || seg == "..")
 }
 
 /// Name-only fallback for a transcript dir with no readable `cwd` (empty, or
@@ -2428,6 +2435,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         wrap_pty_options_docker(&mut opts).unwrap();
         assert_eq!(opts.cmd, "claude");
@@ -2459,6 +2467,7 @@ mod tests {
             local_model: false,
             schedule_target_id: None,
             host_session: false,
+            api_key: None,
         };
         enforce_spawn_authority(&mut opts);
         assert!(!opts.sandbox, "box tabs must never spawn containerized");
@@ -2766,6 +2775,8 @@ mod tests {
         assert!(cwd_is_within("/home/u/proj/sub", "/home/u/proj"));
         // Not a string prefix match — this is the sibling that used to slip in.
         assert!(!cwd_is_within("/home/u/proj2", "/home/u/proj"));
+        assert!(!cwd_is_within("/home/u/proj/../other", "/home/u/proj"));
+        assert!(!cwd_is_within("/home/u/proj/./sub", "/home/u/proj"));
     }
 
     // ── Dockerfile confinement + network allowlist (S-8) ──────────────────

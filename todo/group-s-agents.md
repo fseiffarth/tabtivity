@@ -1,5 +1,30 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] OpenCode 2 credential sharing (2026-10-22): install/Update/remote and
+  the latest-release source already moved to V2 (the user's call, same day),
+  so until `agent_auth` can share V2's credential records without sharing its
+  conversation database, a V2 sign-in/refresh may have to be repeated per
+  scope. Legacy `auth.json` is imported once by V2, not kept synchronized
+  after sign-in/refresh. Preserve account/command guards and use `home_io`;
+  never write a live, attacker-controlled SQLite path from the host. A bridge
+  running inside the existing fence via the public credential API needs a
+  separate design.
+- [ ] OpenCode 2 structured model/form APIs: evaluate replacing picker scrolling
+  and question screen scraping with authenticated, per-tab server data. Keep
+  browser payloads opaque and preserve the CLI's own permission choices.
+- [ ] 🖐️ OpenCode 2 local tab/Reader QA (`agents.opencode.v2`): two tabs in one
+  folder, `/new`, child agents, restore, local Ollama model launch, Reader
+  text/Changes and project export/import. CLI flags and fixture tests do not
+  verify the live integration; Tabtivity was not restarted.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+
 - [ ] Live-check Codex resume after a deliberate backend restart (2026-09-15):
   tabs started together in one folder must retain distinct conversations.
   Old duplicate assignments now open Codex's session picker in the conflicting
@@ -2791,6 +2816,54 @@ unchanged; the new agents are additive.
     chat's web tools answer `off`. Switch it back on: the chats are still in
     the list. Independent of the switch: a new project named "assistant" is
     refused.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **Follow a Claude cloud session live in a tab** (idea 2026-10-23, not
+  started): the `+` menu's *open a cloud session* runs `claude --teleport`,
+  which copies the session into the tab — the cloud session runs on and the
+  two never sync, so there is no claude.ai-style chat with it. Claude
+  2.1.309's `--help` lists `--cloud [description|session_id|url]`: "create a
+  cloud session …, or attach to an existing one by session ID or
+  claude.ai/code URL" (the *new* action already uses `--cloud <task>`).
+  Probed 2026-10-23 by the user: `claude --cloud https://claude.ai/code/cshk_…`
+  did **not** attach — it took the URL as a description, created a new
+  session (`Created cloud session … View: https://claude.ai/code/session_… ·
+  Resume with: claude --teleport session_…`) and exited. So a *new* cloud tab
+  never stays attached either, and a `cshk_` link is not an id. A bare id is
+  read as one: `claude --cloud session_01Qd…` answered `Error: Attaching to
+  an existing cloud session is not enabled for your account.` **Blocked on
+  Anthropic** turning attach on for the account; re-probe after Claude
+  updates. Still open once it is on: (1) does the attach run live — cloud
+  turns stream into the terminal, typed prompts reach the cloud session;
+  (2) the exact forms the CLI reads as an id (`session_…` yes, a `cshk_…`
+  URL no; anything else silently starts a session titled with that text, so
+  Tabtivity passes only checked `session_` ids); (3) does an attached tab
+  write a local transcript the Chat view (`agent_tab_transcript`) can read,
+  or does Chat need another source. If (1) holds: an `attach` action in
+  `lib/agents/cloudSessions.ts` (`["--cloud", id]`, id through
+  `cleanCloudSession`, or a pasted claude.ai/code URL with its own check),
+  offered in the `+` menu and on the phone beside teleport; the tab stays
+  non-resumable, but restore can re-attach by the stored id. Update
+  `docs/help/agent-clis.md` § Cloud sessions.
+
+### AI switch (edge rail ⏻) — `docs/ai_switch_plan.md`
+
+- [x] Built 2026-10-20 (uncommitted): `services::ai_switch` + gates, side
+  panel button, waiting agent tabs, timers, completions, mail AI, phone.
+- [ ] 🖐️ Manual test — click ⏻ on the edge rail: it turns red. Typing into a
+  running Claude tab does nothing and the red strip says AI is off; Ctrl+C
+  still interrupts it. A new agent tab prints the yellow "AI is off" line and
+  does not start. `claude` typed in a shell tab prints that AI is off. The
+  phone's Agents list shows the notice; typing in a phone terminal shows
+  "AI is off". Restart Tabtivity: ⏻ is still red. Click it again: the waiting
+  tab starts on its own, and typed input reaches the agent.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

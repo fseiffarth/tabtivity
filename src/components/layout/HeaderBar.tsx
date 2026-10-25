@@ -2,15 +2,12 @@ import { IS_MAC } from "../../lib/platform";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
 import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
-import { MailIndicator } from "../header/MailIndicator";
-import { CalendarIndicator } from "../header/CalendarIndicator";
-import { TodoIndicator } from "../header/TodoIndicator";
-import { InboxIndicator } from "../header/InboxIndicator";
-import { SettingsMenu } from "../header/SettingsMenu";
-import { HelpAgentButton } from "../header/HelpAgentButton";
 import { WindowControls } from "../header/WindowControls";
+import { HeaderSlot } from "../header/HeaderSlot";
+import { isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults } from "../../lib/headerPins";
+import { APP_ICONS } from "../header/appIcons";
+import { useSettingsStore } from "../../stores/settings";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { LocalModelMenu } from "./LocalModelMenu";
 
 const NON_DRAG_SELECTOR = [
   "button",
@@ -36,6 +33,9 @@ function handleDrag(e: React.MouseEvent) {
 }
 
 export function HeaderBar() {
+  const order = useSettingsStore((s) => s.settings?.header_order);
+  const pins = useSettingsStore((s) => s.settings?.header_pins);
+  const pinDefaults = useHeaderPinDefaults();
   // (A `workspace_info` fetch whose answer was discarded, and a
   // `workspace-changed` listener unsubscribed the moment it resolved, used to
   // sit here. What the workspace backend can do is now said in Settings →
@@ -60,31 +60,26 @@ export function HeaderBar() {
       <div className="header-center no-drag">
         <ProjectSwitcher open />
       </div>
-      {/* Right of the strip, in three groups separated by gap rather than by more
-          hairlines: the global *apps* (kept as their own buttons — mail, calendar
-          and to-do each carry a live badge, which is exactly what a launcher menu
-          would hide), then the global *menus*, then machine state.
+      {/* Right of the strip, in two groups separated by gap rather than by more
+          hairlines: the global *apps and menus* (kept as their own buttons —
+          mail, calendar and to-do each carry a live badge, which is exactly what
+          a launcher menu would hide — and the ⚙, which belongs with them
+          because settings are the machine's, not a project's; every one of them
+          drags to any place in the run), then machine state.
           Machine state trails rather than leads: at rest it is one lamp, so it
-          costs the bar nothing where it sits, and parking it past the gear keeps
-          the controls contiguous instead of splitting them around a readout. Its
+          costs the bar nothing where it sits, and parking it past the controls
+          keeps them contiguous instead of splitting them around a readout. Its
           widest members (the 280px machines list, the VPN and Mobile panels) can
           live this close to the window edge because every menu in this cluster is
           right-anchored and grows inward (see `.header-status-menu-anchor`). */}
       <div className="header-right no-drag">
-        <MailIndicator />
-        <CalendarIndicator />
-        <TodoIndicator />
-        <InboxIndicator />
-        <span className="header-right-gap" aria-hidden="true" />
-        <LocalModelMenu />
-        {/* Settings belong to the machine, not to a project, so the gear stays
-            with the other global buttons rather than at the head of the project
-            strip, where it put the switcher's own controls on both sides of a
-            scrolling row. */}
-        {/* The ? opens an agent primed with the built-in help, beside the
-            gear whose menu holds the help pages. */}
-        <HelpAgentButton />
-        <SettingsMenu />
+        {orderedHeaderIds("apps", order)
+          .filter((id) => isHeaderPinned(pins, id, pinDefaults))
+          .map((id) => (
+          <HeaderSlot key={id} id={id}>
+            {APP_ICONS[id]}
+          </HeaderSlot>
+        ))}
         <span className="header-right-gap" aria-hidden="true" />
         <StatusCluster />
         {/* The clock sits between the cluster's chevron and the window

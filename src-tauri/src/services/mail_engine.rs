@@ -43,6 +43,99 @@ use crate::schema::mail::{
 };
 use crate::services::mail_sanitize::sanitize_attachment_name;
 
+/// Execute MOVE without losing the COPYUID code that uid_mv discards.
+async fn move_uid_chunk<S>(
+    session: &mut async_imap::Session<S>,
+    chunk: &str,
+    destination: &str,
+    limit: usize,
+) -> Result<Vec<(u32, u32)>, MailError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    use async_imap::imap_proto::{Response, ResponseCode, Status};
+    let mut pairs = Vec::new();
+    let deadline = tokio::time::Instant::now() + COMMAND_TIMEOUT;
+    let request = tokio::time::timeout_at(deadline,
+        session.run_command(format!("UID MOVE {chunk} {destination}")))
+        .await.map_err(|_| MailError::Timeout { op: "IMAP MOVE" })?
+        .map_err(classify_imap_error)?;
+    loop {
+        let response = tokio::time::timeout_at(deadline, session.read_response())
+            .await.map_err(|_| MailError::Timeout { op: "IMAP MOVE" })?
+            .map_err(|e| MailError::Protocol(format!("IMAP MOVE: {e}")))?
+            .ok_or_else(|| MailError::Protocol("IMAP MOVE connection closed".into()))?;
+        let code = match response.parsed() {
+            Response::Data { code, .. } | Response::Done { code, .. } => code,
+            _ => &None,
+        };
+        if let Some(ResponseCode::CopyUid(_, source, dest)) = code {
+            pairs.extend(move_uid_pairs(source, dest, limit)?);
+            if pairs.len() > limit {
+                return Err(MailError::Protocol("invalid IMAP MOVE UID mapping".into()));
+            }
+        }
+        if let Response::Done { tag, status, information, .. } = response.parsed() {
+            if tag != &request || status != &Status::Ok {
+                return Err(MailError::Protocol(format!("IMAP MOVE refused: {}",
+                    information.as_deref().unwrap_or("unexpected completion"))));
+            }
+            break;
+        }
+        if matches!(response.parsed(), Response::Data { status: Status::Bye, .. }) {
+            return Err(MailError::Protocol("IMAP MOVE connection closed".into()));
+        }
+    }
+    Ok(pairs)
+}
+
+/// Expand only bounded COPYUID sets, preserving their order for the UID pairing.
+fn move_uid_pairs(
+    source: &[async_imap::imap_proto::UidSetMember],
+    dest: &[async_imap::imap_proto::UidSetMember],
+    limit: usize,
+) -> Result<Vec<(u32, u32)>, MailError> {
+    use async_imap::imap_proto::UidSetMember;
+    let expand = |members: &[UidSetMember]| -> Result<Vec<u32>, MailError> {
+        let mut values = Vec::new();
+        for member in members {
+            let (start, end) = match member {
+                UidSetMember::Uid(uid) => (*uid, *uid),
+                UidSetMember::UidRange(range) => (*range.start(), *range.end()),
+            };
+            let count = u64::from(start.abs_diff(end)) + 1;
+            if start == 0 || end == 0 || count > limit.saturating_sub(values.len()) as u64 {
+                return Err(MailError::Protocol("invalid IMAP MOVE UID mapping".into()));
+            }
+            if start <= end {
+                values.extend(start..=end);
+            } else {
+                values.extend((end..=start).rev());
+            }
+        }
+        Ok(values)
+    };
+    let source = expand(source)?;
+    let dest = expand(dest)?;
+    if source.len() != dest.len() {
+        return Err(MailError::Protocol("invalid IMAP MOVE UID mapping".into()));
+    }
+    Ok(source.into_iter().zip(dest).collect())
+}
+
+fn validate_move_uids(uids: &[u32], pairs: &[(u32, u32)]) -> Result<(), MailError> {
+    use std::collections::HashSet;
+    let expected: HashSet<u32> = uids.iter().copied().collect();
+    let sources: HashSet<u32> = pairs.iter().map(|p| p.0).collect();
+    let destinations: HashSet<u32> = pairs.iter().map(|p| p.1).collect();
+    if sources != expected || sources.len() != pairs.len() || destinations.len() != pairs.len() {
+        return Err(MailError::Protocol(
+            "the server did not confirm destination UIDs for every moved message; check mail to refresh".into(),
+        ));
+    }
+    Ok(())
+}
+
 // ── Crypto provider ─────────────────────────────────────────────────────────
 
 /// Install the process-wide rustls `CryptoProvider`.
@@ -1100,7 +1193,7 @@ pub trait MailEngine: Send + Sync {
         folder_path: &str,
         uids: &[u32],
         dest_path: &str,
-    ) -> Result<(), MailError>;
+    ) -> Result<Vec<(u32, u32)>, MailError>;
     /// Delete messages off the server: `\Deleted`, then `UID EXPUNGE`.
     ///
     /// The *irreversible* half of deleting, reached only where a move to Trash
@@ -1998,13 +2091,17 @@ impl MailEngine for InProcessEngine {
         folder_path: &str,
         uids: &[u32],
         dest_path: &str,
-    ) -> Result<(), MailError> {
+    ) -> Result<Vec<(u32, u32)>, MailError> {
         vpn_gate(account)?;
         if uids.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
+        if dest_path.contains(['\r', '\n', '\0']) {
+            return Err(MailError::Protocol("invalid destination mailbox".into()));
+        }
+        let destination = format!("\"{}\"", dest_path.replace('\\', "\\\\").replace('"', "\\\""));
         let mut session = acquire(&account.imap, password, Acquire::Pooled).await?;
-        let out: Result<(), MailError> = async {
+        let out: Result<Vec<(u32, u32)>, MailError> = async {
             session.ensure_selected(folder_path).await?;
             // Chunked for the same reason `set_flags_bulk` is, and it was the one
             // bulk command here that was not: a UID set is part of a command *line*,
@@ -2012,13 +2109,17 @@ impl MailEngine for InProcessEngine {
             // precisely the call that reaches the cap. A chunk that fails leaves the
             // earlier chunks moved — recoverable, because repeating the move of an
             // already-moved message is a no-op, which an over-long line is not.
+            // async-imap's uid_mv discards COPYUID. Read it here: the source
+            // UID is mailbox-scoped and must never be reused in the destination.
+            let mut pairs = Vec::new();
             for chunk in uid_set_chunks(uids, MAX_UID_SET_CHARS) {
-                tokio::time::timeout(COMMAND_TIMEOUT, session.uid_mv(chunk, dest_path))
-                    .await
-                    .map_err(|_| MailError::Timeout { op: "IMAP MOVE" })?
-                    .map_err(classify_imap_error)?;
+                pairs.extend(move_uid_chunk(&mut session, &chunk, &destination, uids.len()).await?);
+                if pairs.len() > uids.len() {
+                    return Err(MailError::Protocol("invalid IMAP MOVE UID mapping".into()));
+                }
             }
-            Ok(())
+            validate_move_uids(uids, &pairs)?;
+            Ok(pairs)
         }
         .await;
         session.finish(out)
@@ -2341,6 +2442,51 @@ pub fn build_outgoing(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn move_uid_response_keeps_tagged_and_untagged_copyuid() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for tagged in [false, true] {
+            let (client, server) = tokio::io::duplex(4096);
+            let server = tokio::spawn(async move {
+                let mut server = BufReader::new(server);
+                let mut line = String::new();
+                server.read_line(&mut line).await.unwrap();
+                let tag = line.split_whitespace().next().unwrap().to_string();
+                server.get_mut().write_all(format!("{tag} OK logged in\r\n").as_bytes()).await.unwrap();
+                line.clear();
+                server.read_line(&mut line).await.unwrap();
+                let tag = line.split_whitespace().next().unwrap();
+                assert!(line.contains("UID MOVE 142,399 \"Archive\""));
+                let response = if tagged {
+                    format!("* 1 EXPUNGE\r\n{tag} OK [COPYUID 7 142,399 41:42] moved\r\n")
+                } else {
+                    format!("* OK [COPYUID 7 142,399 41:42] moved\r\n* 1 EXPUNGE\r\n{tag} OK moved\r\n")
+                };
+                server.get_mut().write_all(response.as_bytes()).await.unwrap();
+            });
+            let mut session = async_imap::Client::new(client).login("user", "password").await.unwrap();
+            let pairs = move_uid_chunk(&mut session, "142,399", "\"Archive\"", 2).await.unwrap();
+            assert_eq!(pairs, vec![(142, 41), (399, 42)]);
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn move_uids_follow_copyuid_order_and_reject_invalid_mappings() {
+        use async_imap::imap_proto::UidSetMember::{Uid, UidRange};
+        let pairs = move_uid_pairs(&[Uid(142), Uid(399)], &[UidRange(41..=42)], 2).unwrap();
+        assert_eq!(pairs, vec![(142, 41), (399, 42)]);
+        assert!(validate_move_uids(&[142, 399], &pairs).is_ok());
+        assert_eq!(move_uid_pairs(&[UidRange(std::ops::RangeInclusive::new(3, 1))], &[UidRange(7..=9)], 3).unwrap(),
+            vec![(3, 7), (2, 8), (1, 9)]);
+        assert!(move_uid_pairs(&[Uid(1)], &[UidRange(1..=u32::MAX)], 1).is_err());
+        assert!(move_uid_pairs(&[Uid(0)], &[Uid(1)], 1).is_err());
+        assert!(move_uid_pairs(&[Uid(1)], &[UidRange(1..=2)], 2).is_err());
+        assert!(validate_move_uids(&[1, 2], &[(1, 9)]).is_err());
+        assert!(validate_move_uids(&[1, 2], &[(1, 9), (2, 9)]).is_err());
+        assert!(validate_move_uids(&[1, 2], &[(1, 9), (3, 10)]).is_err());
+    }
 
     // ── UID sets ────────────────────────────────────────────────────────────
 

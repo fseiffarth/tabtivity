@@ -64,17 +64,6 @@ export function TodoGlyph({ className }: { className: string }) {
   );
 }
 
-/** A speech bubble with a spark — the chat assistant — for the phone's Tabby
- *  row (`mobile-web` `screens/Home`). On the shared 16-unit grid, y=2..14. */
-export function AssistantGlyph({ className }: { className: string }) {
-  return (
-    <Glyph className={className}>
-      <path d="M3.8 2h8.4A1.8 1.8 0 0 1 14 3.8v5.4a1.8 1.8 0 0 1-1.8 1.8H8l-3 3v-3H3.8A1.8 1.8 0 0 1 2 9.2V3.8A1.8 1.8 0 0 1 3.8 2Z" {...STROKE} />
-      <path d="M8 4.2v3.6M6.2 6h3.6" {...STROKE} />
-    </Glyph>
-  );
-}
-
 /** A tray — files the phone sent to this desktop (`InboxIndicator`). */
 export function InboxGlyph({ className }: { className: string }) {
   return (

@@ -104,6 +104,9 @@ pub struct WindowRegistry {
     /// (see [`DetachedBounds`]). Written just before a switch-away hides the
     /// popout; read just after switch-back re-shows it, to restore its monitor.
     pub detached_bounds: HashMap<String, DetachedBounds>,
+    /// Popouts that were minimized when a switch-away hid them, so the
+    /// switch-back shows them minimized again instead of restoring them.
+    pub detached_minimized: std::collections::HashSet<String>,
     /// Wayland popouts parked without unmapping their compositor-owned surfaces.
     /// Only the fallback now: a popout holding unsaved work (or one that never
     /// answered the retire request) is minimized instead of closed.

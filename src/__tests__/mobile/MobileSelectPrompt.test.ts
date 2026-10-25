@@ -42,6 +42,27 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     });
   });
 
+  it("reads Claude Code 2.1.304's cold-resume dialog with its cost line as the question", () => {
+    // Shown on `--resume` of a long-idle conversation (Pro/Max): the figures are
+    // what the answer costs, so they stay with the rows on the phone.
+    const body = "This conversation has been inactive for 3d 4h and is 183k tokens long. Resuming it will use about 12% of your 5-hour usage limit.";
+    const prompt = readSelectPrompt(lines(
+      "Resume this conversation?",
+      body,
+      "Your unsent message will still be there after you answer.",
+      "",
+      "❯ 1. Resume",
+      "  2. Start a new conversation",
+      "     Claude can look this one up if you refer to it later",
+      "",
+      "Enter to confirm · Esc to resume",
+    ), "Claude Code");
+    expect(prompt?.title).toBe("Resume this conversation?");
+    expect(prompt?.current).toBe(0);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Resume", "Start a new conversation"]);
+    expect(prompt?.options[1].description).toBe("Claude can look this one up if you refer to it later");
+  });
+
   it("reads a picker whose rows carry no second column", () => {
     const prompt = readSelectPrompt(lines("› 1. gpt-5-codex", "  2. gpt-5"));
     expect(prompt?.current).toBe(0);
@@ -61,7 +82,12 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
   });
 
   it("refuses rows that are not one contiguous run", () => {
-    expect(readSelectPrompt(lines("❯ 1. Opus", "", "  2. Sonnet"))).toBeNull();
+    // One blank row between rows numbered on at one column is Codex's
+    // sign-in menu; two, or a row at another column, end the run.
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "  2. Sonnet"))?.options.map((option) => option.label)).toEqual(["Opus", "Sonnet"]);
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "", "  2. Sonnet"))).toBeNull();
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "      2. Sonnet"))).toBeNull();
+    expect(readSelectPrompt(lines("❯ 1. Opus", "", "  3. Sonnet"))).toBeNull();
     expect(readSelectPrompt(lines("❯ 1. Opus", "some output", "  2. Sonnet"))).toBeNull();
     expect(readSelectPrompt(lines("❯ 1. Opus"))).toBeNull();
   });
@@ -233,6 +259,27 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     ]);
     // The highlight walked down: the same dialog, read the same way.
     expect(readSelectPrompt(lines("  1. Red", "     Warm and loud", "❯ 2. Green", "     Calm"))?.current).toBe(1);
+  });
+
+  it("keeps an agent's long option note whole", () => {
+    // 213 characters, off a live phone: the old 200 cap cut it at "moves to".
+    const prompt = readSelectPrompt(lines(
+      "☐ Teleport",
+      "",
+      "Add a \"Teleport here\" button to a cloud tab's Chat view?",
+      "",
+      "❯ 1. Add the button (Recommended)",
+      "     Types the printed `claude --teleport <id>` into the cloud tab's shell, so",
+      "     the session continues locally in that same tab and Chat shows its",
+      "     conversation. Labelled so it's clear the cloud run moves to this machine.",
+      "  2. Leave it",
+      "  3. Type something.",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ));
+    expect(prompt?.options[0].description).toBe(
+      "Types the printed `claude --teleport <id>` into the cloud tab's shell, so the session continues locally in that same tab and Chat shows its conversation. Labelled so it's clear the cloud run moves to this machine.",
+    );
   });
 
   it("keeps a question's preview panel out of its rows", () => {
@@ -933,6 +980,27 @@ describe(`${BRAND.display} Mobile input frame`, () => {
       `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop) \u00b7 Opus 5 \u00b7 ctx 93%`,
       "  \u23f5\u23f5 auto mode on (shift+tab to cycle)",
     )).toEqual(["● Done — the reading view now stops above the box."]);
+  });
+
+  it("finds the box over Claude Code's agent list, however many agents it lists", () => {
+    // Four background subagents put the box past the frame window counted
+    // from the screen's bottom: no box found, and the phone read the box and
+    // its footer as a dialog waiting for an answer.
+    const screen = lines(
+      "\u273b Waiting for 4 background agents to finish",
+      "",
+      `${"\u2500".repeat(40)} Project${BRAND.display} \u2500`,
+      "\u276f put the merged findings in a plan in docs/",
+      `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop*) \u00b7 Opus 5.5 \u00b7 ctx 94%`,
+      "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u25ef 1 agent",
+      "  \u25cf main",
+      "  \u25ef general-purpose  Screen Rust services/ code",
+      "  \u25ef general-purpose  Screen Rust commands/terminal",
+      "  \u25ef general-purpose  Screen frontend components",
+      "  \u25ef general-purpose  Screen frontend lib/stores",
+    );
+    expect(screen.slice(0, inputFrameStart(screen)).map((row) => row.text)).toEqual(["\u273b Waiting for 4 background agents to finish"]);
+    expect(sessionStatus(screen)).toMatchObject({ mode: "auto", model: "Opus 5.5" });
   });
 
   it("keeps a dialog the session is waiting on", () => {

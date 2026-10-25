@@ -18,6 +18,7 @@
  */
 
 import { storageKey } from "../../../src/lib/brand";
+import { readJson, writeJson } from "../../../src/lib/persist";
 import type { TextMarkMode } from "./anchors";
 import { MARK_COLORS, MARKER_FACTOR, PEN_STYLES, STAMP_SYMBOLS, type MarkColor, type PenStyle, type StampSymbol } from "./layer";
 
@@ -45,14 +46,17 @@ export const PALM_MODES: readonly PalmRejection[] = ["off", "normal", "strict"];
 export type PenPreset = { tool: "ink" | "box" | "text" | "stamp" | "textmark"; color: MarkColor; style: PenStyle; size: PenSize };
 const PRESET_TOOLS: readonly PenPreset["tool"][] = ["ink", "box", "text", "stamp", "textmark"];
 export const MAX_PRESETS = 4;
-/** What Reset presets restores: a red pen, a yellow marker, a blue arrow and
- * a fine black pen. */
+/** What Reset presets restores: a red pen, a yellow marker, a blue pen and
+ * a fine black pen. No arrow — an arrowhead is only ever picked by hand. */
 export const DEFAULT_PRESETS: PenPreset[] = [
   { tool: "ink", color: "red", style: "pen", size: 1 },
   { tool: "ink", color: "yellow", style: "marker", size: 1 },
-  { tool: "ink", color: "blue", style: "arrow", size: 1 },
+  { tool: "ink", color: "blue", style: "pen", size: 1 },
   { tool: "ink", color: "black", style: "pen", size: 0 },
 ];
+/** The defaults before the arrow left them: a stored list still equal to it
+ * was never the user's choice and reads as today's defaults. */
+const OLD_DEFAULT_PRESETS: PenPreset[] = DEFAULT_PRESETS.map((preset, i) => (i === 2 ? { ...preset, style: "arrow" } : preset));
 
 export type PenPrefs = {
   tool: PenTool;
@@ -233,6 +237,7 @@ export function parsePenPrefs(raw: unknown): PenPrefs {
       return [{ tool: e.tool as PenPreset["tool"], color: e.color as MarkColor, style: pick(e.style, PEN_STYLES, "pen"), size: pick(e.size, PEN_SIZES, 1) }];
     }).slice(-MAX_PRESETS)
     : defaults.presets;
+  const oldDefaults = presets.length === OLD_DEFAULT_PRESETS.length && presets.every((preset, i) => samePreset(preset, OLD_DEFAULT_PRESETS[i]));
   return {
     tool: pick(r.tool, PEN_TOOLS, defaults.tool),
     colors: {
@@ -242,7 +247,9 @@ export function parsePenPrefs(raw: unknown): PenPrefs {
       stamp: pick(colors.stamp, MARK_COLORS, defaults.colors.stamp),
       textmark: pick(colors.textmark, MARK_COLORS, defaults.colors.textmark),
     },
-    style: pick(r.style, PEN_STYLES, defaults.style),
+    // The arrow lasts for the visit it was picked in: a new one starts on
+    // the plain pen again.
+    style: r.style === "arrow" ? defaults.style : pick(r.style, PEN_STYLES, defaults.style),
     size: pick(r.size, PEN_SIZES, defaults.size),
     eraser: pick(r.eraser, ERASER_MODES, defaults.eraser),
     stamp: pick(r.stamp, STAMP_SYMBOLS, defaults.stamp),
@@ -250,7 +257,7 @@ export function parsePenPrefs(raw: unknown): PenPrefs {
     snap: typeof r.snap === "boolean" ? r.snap : defaults.snap,
     pressure: pick(r.pressure, PRESSURE_CURVES, defaults.pressure),
     palm: pick(r.palm, PALM_MODES, defaults.palm),
-    presets,
+    presets: oldDefaults ? defaults.presets : presets,
   };
 }
 
@@ -259,20 +266,12 @@ const PEN_PREFS_KEY = storageKey("markup.pen");
 type PrefStorage = Pick<Storage, "getItem" | "setItem">;
 
 export function readPenPrefs(storage?: PrefStorage): PenPrefs {
-  try {
-    const stored = (storage ?? localStorage).getItem(PEN_PREFS_KEY);
-    return stored ? parsePenPrefs(JSON.parse(stored)) : DEFAULT_PEN_PREFS;
-  } catch {
-    return DEFAULT_PEN_PREFS;
-  }
+  return readJson(PEN_PREFS_KEY, parsePenPrefs, DEFAULT_PEN_PREFS, storage);
 }
 
+/** A convenience only: the choices hold for this view. */
 export function writePenPrefs(prefs: PenPrefs, storage?: PrefStorage): void {
-  try {
-    (storage ?? localStorage).setItem(PEN_PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // A convenience only: the choices hold for this view.
-  }
+  writeJson(PEN_PREFS_KEY, prefs, storage);
 }
 
 /** A cursor that shows what the next stroke draws — a dot of the pen's colour

@@ -3,18 +3,9 @@ import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_ANCHORS } from "../layout/settingsUi";
 import { runInstallInTab } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
-import { translate, useI18nStore, useT } from "../../lib/i18n";
+import { useT, translateNow } from "../../lib/i18n";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
 import { useDialogs } from "../common/PromptDialogs";
-
-/** `translate` at the live language, for the callbacks below (the component's
- *  `t` captured by an awaiting callback would read a stale language). */
-function tr(
-  key: Parameters<typeof translate>[1],
-  params?: Parameters<typeof translate>[2],
-): string {
-  return translate(useI18nStore.getState().lang, key, params);
-}
 
 const DEFAULT_PORT = 8742;
 
@@ -51,12 +42,12 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   // console floats over — so the guide steps aside for the terminal it opened.
   const setUpInTerminal = async () => {
     const ok = await confirmAction({
-      title: tr("mobile.setUpInTerminal"),
-      body: tr("mobile.setUpConfirm", { command }),
-      confirmLabel: tr("mobile.setUpInTerminal"),
+      title: translateNow("mobile.setUpInTerminal"),
+      body: translateNow("mobile.setUpConfirm", { command }),
+      confirmLabel: translateNow("mobile.setUpInTerminal"),
     });
     if (!ok) return;
-    runInstallInTab(tr("mobile.guideSummary"), command, "default");
+    runInstallInTab(translateNow("mobile.guideSummary"), command, "default");
     onClose();
   };
 
@@ -80,7 +71,7 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="settings-title-row">
-            <h2>{t("mobile.setupTitle")} <UntestedTag id="mobile.setupTitle" /></h2>
+            <h2>{t("mobile.setupTitle")} <UntestedTag id="mobile.setupTitle" /> <UntestedTag id="headerPins.mobileNudge" /></h2>
             <button
               type="button"
               className="dialog-close-btn"

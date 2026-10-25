@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -50,7 +50,9 @@ import {
   SubwindowFilesSidebar,
 } from "../files/SubwindowFilesSidebar";
 import { useWindowFocused } from "../../hooks/useWindowFocused";
-import { subscribeTauri } from "../../hooks/useTauriListener";
+import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
+import { usePaneRects } from "./usePaneRects";
+import { useDividerDrag } from "./useDividerDrag";
 import { TabHoverCard } from "../tabs/TabHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
@@ -105,6 +107,7 @@ import {
   TabAgentModeMarks,
   TabSourceBadge,
   TabStatusMark,
+  TabContinueButton,
   TabTexLinkBadge,
   TabLocalityBadge,
   LocalityMenu,
@@ -120,13 +123,6 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 
-/** Pixel coordinates of a group body, relative to the detached center panel. */
-interface Rect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
 
 interface Props {
   scope: string;
@@ -286,14 +282,6 @@ export function DetachedCenterPanel({
   const bodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // The panel element, the coordinate origin for the split-preview overlay.
   const panelRef = useRef<HTMLDivElement>(null);
-  // Measured group-body rects (panel-relative px) feeding the split-preview
-  // overlay, which must paint ABOVE the per-group panes (opaque terminals) — so,
-  // like the main window, it lives at the panel level rather than in a body.
-  const [groupRects, setGroupRects] = useState<Record<string, Rect>>({});
-  // Whole-subwindow rects (tab bar + pane region, sidebar excluded), used by the
-  // focus frame so it wraps the current subwindow's tab header too — mirrors the
-  // main window's `groupFrameRects`.
-  const [groupFrameRects, setGroupFrameRects] = useState<Record<string, Rect>>({});
   // Minimum subwindow size (px) a divider drag may shrink a pane to, per axis.
   const minWidth = useSettingsStore((s) => s.settings?.min_subwindow_width) ?? DEFAULT_MIN_SUBWINDOW_PX;
   const minHeight = useSettingsStore((s) => s.settings?.min_subwindow_height) ?? DEFAULT_MIN_SUBWINDOW_PX;
@@ -478,81 +466,21 @@ export function DetachedCenterPanel({
   }, []);
 
   // ── Pane-region measurement (for the split-preview overlay) ───────────────
-  // Recompute every group body's rect (relative to the panel) so the overlay can
-  // paint the half/whole a split drop would carve out. Mirrors CenterPanel.measure.
-  const measure = useCallback(() => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    const base = panel.getBoundingClientRect();
-    const next: Record<string, Rect> = {};
-    const frames: Record<string, Rect> = {};
-    for (const [id, el] of bodyRefs.current) {
-      if (!el.isConnected) continue;
-      const r = el.getBoundingClientRect();
-      next[id] = { left: r.left - base.left, top: r.top - base.top, width: r.width, height: r.height };
-      // The enclosing subwindow box spans the tab header bar + body; clamp the
-      // right edge to the pane region's right (`r`, the measured element here)
-      // so a docked files sidebar in the same body is excluded from the frame.
-      const sub = el.closest(".subwindow");
-      if (sub) {
-        const sr = sub.getBoundingClientRect();
-        frames[id] = {
-          left: sr.left - base.left,
-          top: sr.top - base.top,
-          width: r.right - sr.left,
-          height: sr.height,
-        };
-      }
-    }
-    const sameRects = (
-      a: Record<string, Rect>,
-      b: Record<string, Rect>,
-    ): boolean => {
-      const keys = Object.keys(a);
-      if (keys.length !== Object.keys(b).length) return false;
-      for (const k of keys) {
-        const x = a[k];
-        const y = b[k];
-        if (!y || x.left !== y.left || x.top !== y.top || x.width !== y.width || x.height !== y.height) {
-          return false;
-        }
-      }
-      return true;
-    };
-    setGroupRects((prev) => (sameRects(next, prev) ? prev : next));
-    setGroupFrameRects((prev) => (sameRects(frames, prev) ? prev : frames));
-  }, []);
-
-  // Re-measure when the popout's tree changes (split added/removed/resized).
-  useLayoutEffect(() => {
-    measure();
-  }, [measure, tree]);
-
-  // Re-measure on panel/body resize and OS-window resize (WebKitGTK sometimes
-  // misses the latter via ResizeObserver — DetachedApp bridges it to 'resize').
-  useEffect(() => {
-    const panel = panelRef.current;
-    if (!panel || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => measure());
-    ro.observe(panel);
-    for (const el of bodyRefs.current.values()) ro.observe(el);
-    return () => ro.disconnect();
-  }, [measure, tree]);
-  useEffect(() => {
-    const onResize = () => measure();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [measure]);
+  // Measured group-body rects (panel-relative px) feeding the split-preview
+  // overlay, which must paint ABOVE the per-group panes (opaque terminals) — so,
+  // like the main window, it lives at the panel level rather than in a body.
+  // The frame rects (tab bar + pane region, sidebar excluded) are for the focus
+  // frame, so it wraps the current subwindow's tab header too.
+  const { groupRects, groupFrameRects } = usePaneRects(panelRef, bodyRefs, tree);
 
   // A split divider drag inside the popout. Mirrors CenterPanel's SplitView: the
   // new fraction is the pointer position within the split container, clamped so
   // neither side of the dragged pair shrinks below the min subwindow size. The
   // resize streams back to the main window via `onResize` (a "resize" edit), so
   // the host's `detachedGroupsByScope` record stays the source of truth.
-  // A mid-flight divider drag's teardown, so unmounting mid-gesture (the popout
-  // closing/docking) unbinds the window listeners instead of leaking them.
-  const dividerDragTeardown = useRef<(() => void) | null>(null);
-  useEffect(() => () => dividerDragTeardown.current?.(), []);
+  // Capture, window listeners and the engine-correct release (also torn down
+  // when the popout unmounts mid-gesture: closing/docking).
+  const beginDividerDrag = useDividerDrag();
   const onDividerPointerDown =
     (node: SplitNode, dividerIndex: number) => (e: React.PointerEvent) => {
       if (e.button !== 0) return;
@@ -560,8 +488,6 @@ export function DetachedCenterPanel({
       e.stopPropagation();
       const container = (e.currentTarget as HTMLElement).parentElement;
       if (!container) return;
-      const captureEl = e.target as HTMLElement;
-      captureEl.setPointerCapture?.(e.pointerId);
       const onMove = (ev: PointerEvent) => {
         const rect = container.getBoundingClientRect();
         const isRow = node.dir === "row";
@@ -575,20 +501,12 @@ export function DetachedCenterPanel({
           dividerFraction(node, dividerIndex, pos, total, isRow ? minWidth : minHeight),
         );
       };
-      const teardown = () => {
-        dividerDragTeardown.current = null;
-        unbindRelease();
-        window.removeEventListener("pointermove", onMove);
-        captureEl.releasePointerCapture?.(e.pointerId);
-      };
       // Every move already streamed its resize to the main window, so commit and
-      // abort tear down the same way; what matters is that the gesture ENDS on
+      // abort need nothing more; what matters is that the gesture ENDS on
       // WebKitGTK's `pointercancel`-instead-of-`pointerup` too — the bare
-      // `pointerup` listener this replaces left the divider glued to the cursor
+      // `pointerup` listener this replaced left the divider glued to the cursor
       // there (the exact split `CenterPanel` documents / dragPlatform encodes).
-      const unbindRelease = bindDragRelease({ onCommit: teardown, onAbort: teardown });
-      window.addEventListener("pointermove", onMove);
-      dividerDragTeardown.current = teardown;
+      beginDividerDrag(e, { onMove });
     };
 
   // #42: a tab/file dragged out of the MAIN window over this popout. We (1) answer
@@ -599,7 +517,6 @@ export function DetachedCenterPanel({
   // in-popout drag. The dock itself is the host's store mutation + re-seed.
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
-    let cancelled = false;
     const win = getCurrentWindow();
     const label = win.label;
     let active = false;
@@ -614,8 +531,7 @@ export function DetachedCenterPanel({
         frame = null;
       }
     };
-    const reg = (p: Promise<() => void>) =>
-      p.then((fn) => (cancelled ? fn() : unlisteners.push(fn))).catch(() => {});
+    const reg = (subscribe: () => Promise<() => void>) => unlisteners.push(subscribeTauri(subscribe));
 
     // Render the host-resolved target as our split-preview, and follow the ghost.
     const apply = (p: DetachedDropPreview) => {
@@ -634,7 +550,7 @@ export function DetachedCenterPanel({
     };
 
     // (1) Report our pane geometry (client px) when the host asks at drag start.
-    reg(
+    reg(() =>
       listen<DetachedPanesRequest>(DETACHED_PANES_REQUEST, (ev) => {
         if (ev.payload.label !== label) return;
         const panes: PaneRect[] = [];
@@ -654,7 +570,7 @@ export function DetachedCenterPanel({
     );
 
     // (2) Render the preview for the streamed target.
-    reg(
+    reg(() =>
       listen<DetachedDropPreview>(detachedDropPreviewEvent(label), (ev) => {
         const p = ev.payload;
         if (!p.active) {
@@ -686,7 +602,6 @@ export function DetachedCenterPanel({
     );
 
     return () => {
-      cancelled = true;
       for (const fn of unlisteners) fn();
       if (active) useDragStore.getState().end();
     };
@@ -767,9 +682,7 @@ export function DetachedCenterPanel({
     installPointerTracker();
     const label = getCurrentWindow().label;
     let cancelClaim: (() => void) | null = null;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void listen<DetachedDropProbe>(DETACHED_DROP_PROBE, (ev) => {
+    const unlisten = subscribeTauri(() => listen<DetachedDropProbe>(DETACHED_DROP_PROBE, (ev) => {
       const probe = ev.payload;
       if (probe.sourceLabel === label || probe.scope !== scope) return;
       cancelClaim?.();
@@ -794,13 +707,10 @@ export function DetachedCenterPanel({
         () => {},
         { since: probe.releasedAt },
       );
-    })
-      .then((fn) => (disposed ? fn() : (unlisten = fn)))
-      .catch(() => {});
+    }));
     return () => {
-      disposed = true;
       cancelClaim?.();
-      unlisten?.();
+      unlisten();
     };
   }, [scope, popoutId, hitTestLocal]);
 
@@ -1324,20 +1234,13 @@ export function DetachedCenterPanel({
   // When the OS last reported this window moved. Cheap and event-driven (the same
   // `onMoved` the popout already persists its geometry from, in `DetachedApp`).
   const lastWindowMoveAt = useRef(0);
-  useEffect(() => {
-    let un: (() => void) | undefined;
-    let disposed = false;
-    getCurrentWindow()
-      .onMoved(() => {
+  useTauriListener(
+    () =>
+      getCurrentWindow().onMoved(() => {
         lastWindowMoveAt.current = Date.now();
-      })
-      .then((fn) => (disposed ? fn() : (un = fn)))
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      un?.();
-    };
-  }, []);
+      }),
+    [],
+  );
 
   // #42: grab the popout's outer title bar to move/dock the WHOLE window. Mirrors
   // the group-bar handle, but anchored to the always-full-width title strip so it
@@ -1599,6 +1502,7 @@ export function DetachedCenterPanel({
                   <span className="tab-label">{tab.label}</span>
                   <TabMarkBadge tab={tab} inPopout />
                   <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
+                  <TabContinueButton tab={tab} stateClass={stateClass} />
                   {(tab.kind === "agent" || tab.kind === "local_agent") && tab.scheduleTargetId && (() => {
                     const enabled = (schedulesByTarget[scheduleCacheKey(scope, tab.scheduleTargetId)] ?? [])
                       .filter((schedule) => schedule.enabled);

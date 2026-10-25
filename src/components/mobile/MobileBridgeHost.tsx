@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
+  hostTabId,
   isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
@@ -14,8 +16,8 @@ import {
 } from "../../stores/tabs";
 import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
-import { ASSISTANT_SCOPE, assistantErrorCode, assistantNewChat, assistantOptions } from "../../lib/assistant";
-import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat } from "../../stores/assistantScope";
+import { ASSISTANT_SCOPE, type AssistantLaunch, type AssistantModelRow, assistantCurrentModel, assistantErrorCode, assistantModelRows, assistantNewChat, assistantOptions } from "../../lib/assistant";
+import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat, switchAssistantModel } from "../../stores/assistantScope";
 import { experimentalEnabled } from "../../lib/experimental";
 import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootOverlay";
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
@@ -25,6 +27,7 @@ import { agentTabState, agentTurnStartedAt, lastTabReadAt, noteUserInput, useAct
 import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
+import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
@@ -32,10 +35,10 @@ import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
 import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
-import type { AgentUsageReport } from "../../lib/agents/agentUsage";
+import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
-import { resolveProjectDirectory } from "../../types";
+import { phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
 import type { CalendarEvent, CalendarTask, ProjectEntry, Subtask, TaskColumn } from "../../types";
 import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
@@ -72,8 +75,9 @@ import { probeLocalModelPlacement } from "../tabs/localModelGroup";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import { readerAgent } from "../../lib/agents/agentReader";
-import { agentWorktreeChoices, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
-import { cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
+import { agentWorktreeChoices, CARRIES_CONVERSATION, sameDir, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
+import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
+import { cleanCloudSession, cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
 import { loginIdForCmd, signInLaunch } from "../../lib/agents/signInLaunch";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { readUse24h } from "../../lib/timeFormat";
@@ -124,24 +128,34 @@ interface CreateRequest {
   /** The agent tab (tmux name) whose CLI to sign in, in place of `agent_id`;
    *  only the sidecar sets it. */
   like_tab?: string;
+  /** A cloud tab's session to pull into a fresh worktree (Claude's
+   *  `--teleport <id>`), with `like_tab` naming that tab; only the sidecar
+   *  sets it. */
+  teleport?: string;
   /** A local-model agent: the opaque id `launch_options.local` listed, in
    *  place of `agent_id`. */
   local?: string;
   /** A chat of the assistant scope: the opaque launch id `launch_options`
    *  listed under `assistant.launches`, alone. */
   assistant?: string;
+  /** Start the agent on the stored provider API key (`TabEntry.apiKey`), as
+   *  the desktop "+"'s "<agent> (API)" row does. */
+  api_key?: boolean;
   idempotency_key: string;
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
 interface MobileCloudLaunch { agent_id: string; action: string; task: boolean }
 interface MobileSignInOption { agent_id: string; signed_in?: boolean; account?: string; alternate?: string; api_key?: boolean; api_budget_reached?: boolean }
+/** An agent the ＋ can start on a stored API key (`api_key_saved`); a flag
+ * only — no key, provider or amount crosses. */
+interface MobileApiKeyLaunch { agent_id: string; budget_reached?: boolean }
 /** The ＋ sheet's local-model group: the model the desktop's "+" drives and
  * the agents it offers for it. `ready` is false until the model sits on the
  * GPU (`probeLocalModelPlacement`) — a start then loads it first. */
 interface MobileLocalAgent { id: string; label: string; caution: boolean }
 interface MobileLocalLaunch { model: string; ready: boolean; agents: MobileLocalAgent[] }
 /** One row of `agent_logins` (`services::agent_auth::LoginStatus`). */
-interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean; api_budget_reached?: boolean }
+interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean; api_budget_reached?: boolean; api_key_saved?: boolean }
 interface TodoColumn { id: string; name: string; position: number; done: boolean; archived: boolean; overdue?: boolean; due_today?: boolean; color?: string }
 interface TodoSubtask { id: string; title: string; done: boolean }
 interface TodoTaskInput {
@@ -238,7 +252,7 @@ interface MobileAgentTranscript {
   unchanged?: boolean;
   entries: { kind: string; text: string; at?: string; cut?: boolean; subagent?: string; role?: string }[];
   truncated: boolean;
-  agentsEarlier?: boolean;
+  agentsEarlier?: number;
   /** Codex's context and rate-limit figures, passed through untouched. */
   usage?: { contextLeft?: number; session?: { used: number; resetsAt?: number }; week?: { used: number; resetsAt?: number } };
 }
@@ -283,11 +297,15 @@ type DesktopRequest =
   | { type: "agent_status"; request_id: string; project_id: string; tmux_session: string; refresh: boolean }
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
-  | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string; interrupt?: boolean }
   | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "tab_worktrees"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "move_worktree"; request_id: string; project_id: string; tmux_session: string; worktree: string }
+  | { type: "assistant_models"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "switch_assistant_model"; request_id: string; project_id: string; tmux_session: string; model: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
   | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
   | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
@@ -302,7 +320,7 @@ type DesktopResponse =
   | { status: "git_states"; states: MobileGitStateRow[] }
   | { status: "activated" }
   | { status: "created"; tmux_session: string }
-  | { status: "launch_options"; worktrees: MobileWorktree[]; cloud: MobileCloudLaunch[]; sign_in: MobileSignInOption[]; local?: MobileLocalLaunch }
+  | { status: "launch_options"; worktrees: MobileWorktree[]; cloud: MobileCloudLaunch[]; sign_in: MobileSignInOption[]; local?: MobileLocalLaunch; api_key?: MobileApiKeyLaunch[] }
   | { status: "todo"; board: TodoBoard }
   | { status: "alerts"; alerts: MobileAlerts }
   | { status: "calendar"; calendar: MobileCalendar }
@@ -318,6 +336,9 @@ type DesktopResponse =
   | { status: "seen" }
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
+  | { status: "tab_worktrees"; worktrees: MobileWorktree[]; current?: string; carries: boolean }
+  | { status: "assistant_models"; models: string[]; rows: AssistantModelRow[]; current?: string }
+  | { status: "worktree_moved"; moved: "carried" | "fresh" }
   | { status: "attached"; attachment: InboxAttachment }
   | { status: "markup_questions"; asks: MobileMarkupAsk[]; ticks: MarkupTick[] }
   | ({ status: "local_models" } & MobileLocalModelList)
@@ -389,21 +410,27 @@ async function agentChoices(): Promise<CatalogChoice[]> {
 }
 
 /** The one gate every bridge handler applies before it touches a project: the
- * per-project Mobile switch is on, and the project is none of the trust tiers
- * the sidecar deliberately never reaches (remote, sandboxed, VM). */
+ * per-project Mobile switch is on. Every project type has one and nothing else
+ * narrows it (`docs/mobile_every_project_type_plan.md`); what the phone can
+ * reach INSIDE a remote, container or VM project is the tabs' business
+ * (`phoneTabs`, `create`). */
 function mobileProject(projectId: string | undefined) {
   if (!projectId) return undefined;
   const project = useProjectsStore.getState().projects.find((entry) => entry.id === projectId);
-  if (
-    !project
-    || project.remote
-    || project.sandbox?.enabled
-    || project.vm?.enabled
-    || !project[MOBILE_ACCESS_KEY]
-  ) {
-    return undefined;
-  }
-  return project;
+  return project?.[MOBILE_ACCESS_KEY] ? project : undefined;
+}
+
+/** The scope's tabs the phone can list: all of a local project's, box's,
+ * root's, assistant's and remote project's (a host tab too: the sidecar
+ * attaches to it over the desktop's SSH master), and of a container or VM
+ * project only those with a local tmux session (`lib/projectTabHost`
+ * `phoneListsTab`). EVERY per-tab handler of this bridge reads its tabs
+ * through here, so a tab the phone cannot list is `tab_not_found` to all of
+ * them, as the sidecar's catalog does not list it. Create and reopen keep
+ * `phoneReachesTab`: a phone tab always starts on this machine. */
+function phoneTabs(scopeId: string): TabEntry[] {
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === scopeId);
+  return (useTabsStore.getState().tabsByScope[scopeId] ?? []).filter((tab) => phoneListsTab(project, tab, scopeId));
 }
 
 /** A scope the phone may reach, in the four facts a handler needs of it. A
@@ -491,7 +518,9 @@ function mobileScope(id: string | undefined): MobileScope | undefined {
   }
   const project = mobileProject(id);
   if (!project) return undefined;
-  return { id: project.id, name: project.name, cwd: resolveProjectDirectory(project), localFile: project.local_file, project };
+  // The folder the sidecar uses (`discovery::mobile_root`): a remote project's
+  // local mirror, none for a VM without one.
+  return { id: project.id, name: project.name, cwd: phoneProjectFolder(project), localFile: project.local_file, project };
 }
 
 /** Every scope the phone may reach right now: root behind its gate, the
@@ -567,10 +596,9 @@ function agentTurnScopes(): string[] {
 }
 
 function agentTurnSnapshot(): Map<string, MobileAgentState> {
-  const tabsByScope = useTabsStore.getState().tabsByScope;
   const snapshot = new Map<string, MobileAgentState>();
   for (const scopeId of agentTurnScopes()) {
-    for (const tab of tabsByScope[scopeId] ?? []) {
+    for (const tab of phoneTabs(scopeId)) {
       if (isAgentKind(tab.kind) && tab.tmuxSession) snapshot.set(tab.tmuxSession, mobileAgentState(`${scopeId}:${tab.key}`));
     }
   }
@@ -609,7 +637,7 @@ function isAgentKind(kind: TabEntry["kind"]): boolean {
 
 function projectAgentStatuses(projectId: string): AgentTabStatus[] {
   const activity = useActivityStore.getState();
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).flatMap((tab) => {
+  return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
     const ptyId = `${projectId}:${tab.key}`;
     const state = mobileAgentState(ptyId);
@@ -642,7 +670,7 @@ function projectAgentStatuses(projectId: string): AgentTabStatus[] {
  * — and their model, so a quiet card is tagged like a busy one. */
 function projectAgentTimings(projectId: string): AgentTabTiming[] {
   const activity = useActivityStore.getState();
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).flatMap((tab) => {
+  return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
     const ptyId = `${projectId}:${tab.key}`;
     if (mobileAgentState(ptyId) !== "idle") return [];
@@ -747,7 +775,7 @@ function mergePromptRows(recent: readonly { text: string; at: string }[], sent: 
  */
 function projectAgentPrompts(projectId: string): AgentTabPrompts[] {
   const models = useAgentModelsStore.getState();
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).flatMap((tab) => {
+  return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
     void models.refresh(projectId, tab);
     const prompts = tabPromptRows(projectId, tab);
@@ -784,7 +812,7 @@ function tabPromptRows(projectId: string, tab: TabEntry): AgentTabPrompt[] {
  * fresh: the store's 10s floor could still hold the turn before a quick one. */
 async function finishedTurnPrompt(tmuxSession: string): Promise<string | undefined> {
   const found = agentTurnScopes().flatMap((scopeId) =>
-    (useTabsStore.getState().tabsByScope[scopeId] ?? []).flatMap((tab) =>
+    phoneTabs(scopeId).flatMap((tab) =>
       isAgentKind(tab.kind) && tab.tmuxSession === tmuxSession ? [{ scopeId, tab }] : []))[0];
   if (!found) return undefined;
   await useAgentModelsStore.getState().refresh(found.scopeId, found.tab, true).catch(() => undefined);
@@ -824,7 +852,7 @@ const MAX_UPCOMING_SCHEDULES = 3;
 async function agentScheduleSummaries(projectId?: string): Promise<AgentTabSchedules[]> {
   const scope = mobileScope(projectId);
   if (!scope) return [];
-  const targets = (useTabsStore.getState().tabsByScope[scope.id] ?? []).flatMap((tab) =>
+  const targets = phoneTabs(scope.id).flatMap((tab) =>
     isAgentKind(tab.kind) && tab.tmuxSession && tab.scheduleTargetId
       ? [{ tmux: tab.tmuxSession, target: tab.scheduleTargetId }]
       : [],
@@ -847,6 +875,13 @@ async function agentScheduleSummaries(projectId?: string): Promise<AgentTabSched
   }));
 }
 
+/** Whether the phone may start a tab of `kind` in the scope: the project's
+ * verdict (`lib/projectTabHost.phoneCreateVerdict`) against the kind. */
+function phoneMayCreate(scope: MobileScope, kind: CreateRequest["kind"]): boolean {
+  const verdict = phoneCreateVerdict(scope.project);
+  return verdict === "all" || (verdict === "agents" && kind === "agent");
+}
+
 async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promise<DesktopResponse> {
   const scope = mobileScope(request.project_id);
   if (!scope) {
@@ -855,6 +890,13 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   // A chat of the assistant scope is its own thing: the phone names a launch,
   // never an agent, a folder or a mode.
   if (scope.id === ASSISTANT_SCOPE || request.assistant) return createAssistantChat(scope, request);
+  // The sidecar's `creatable` is the perimeter; this repeats it, because the
+  // bridge is reachable without going through it. A tab of a remote host, a
+  // container or a VM has no local tmux session to attach to, so only a remote
+  // project's agents (which run in the mirror) and a local scope's anything.
+  if (!phoneMayCreate(scope, request.kind)) {
+    return { status: "error", code: "not_attachable", message: "A new tab here would run where the phone cannot attach" };
+  }
   const cwd = scope.cwd;
   if (!cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   // The new tab must be in the *shown* scope to get a terminal at all, so the
@@ -867,7 +909,7 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
 
   let spec: Omit<TabEntry, "key">;
   if (request.local) {
-    if (request.kind !== "agent" || request.agent_id || request.mode || request.worktree || request.cloud || request.sign_in) {
+    if (request.kind !== "agent" || request.agent_id || request.mode || request.worktree || request.cloud || request.sign_in || request.teleport) {
       return { status: "error", code: "invalid_request", message: "A local-model agent names nothing else" };
     }
     const local = await localChoices(scope);
@@ -884,12 +926,38 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
     // the phone may start one earlier, so the load starts with it and the
     // first answer waits for it rather than crawling on a CPU copy.
     if (!local.ready) void loadOllamaModel(local.model, "gpu").catch(() => {});
+  } else if (request.teleport) {
+    // A cloud tab's session, pulled onto this machine in a worktree of its
+    // own: teleport checks out the session's branch, which in the project
+    // folder would move every other tab there onto it (or offer to stash
+    // their changes). Local projects only, as the desktop's worktree picker.
+    const session = cleanCloudSession(request.teleport);
+    const tab = phoneTabs(scope.id)
+      .find((entry) => entry.tmuxSession === request.like_tab && entry.kind === "agent" && entry.cloud);
+    if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
+    const item = AGENT_ITEMS.find((entry) => entry.cmd === tab.cmd);
+    const launch = item ? cloudLaunch(item.cmd, "open") : undefined;
+    if (!session || !item || !launch?.session || !scope.project || projectHostKind(scope.project) !== "local") {
+      return { status: "error", code: "unsupported_teleport", message: "This cloud session cannot be teleported here" };
+    }
+    let wt: GitWorktree;
+    try {
+      wt = await teleportWorktree(cwd, session);
+    } catch (error) {
+      return { status: "error", code: "worktree_failed", message: String(error) };
+    }
+    const cloudSpec = buildCloudTabSpec(item, launch, "", wt.path, t);
+    spec = {
+      ...cloudSpec,
+      label: t("newTabMenu.agentWorktreeLabel", { agent: cloudSpec.label, branch: worktreeName(wt.path) }),
+      args: launch.session(session),
+    };
   } else if (request.sign_in) {
     // Built-ins only, as for cloud: a custom agent's login is not ours to
     // guess. The CLI is the phone's pick, or the one the named tab runs.
     let item: StaticMenuItem | undefined;
     if (request.like_tab) {
-      const tab = (useTabsStore.getState().tabsByScope[scope.id] ?? [])
+      const tab = phoneTabs(scope.id)
         .find((entry) => entry.tmuxSession === request.like_tab && entry.kind === "agent");
       if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
       item = AGENT_ITEMS.find((entry) => entry.cmd === tab.cmd);
@@ -917,6 +985,20 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
     if (request.mode && !choice.public.modes.includes(request.mode)) {
       return { status: "error", code: "unsupported_mode", message: "Agent mode is unavailable" };
     }
+    // The desktop "+"'s "<agent> (API)" row: a built-in a stored key can run,
+    // pinned to the key; a plain request leaves the pick to Manage CLIs.
+    let item = choice.item;
+    if (request.api_key) {
+      if (request.mode || request.cloud) {
+        return { status: "error", code: "invalid_request", message: "An API-key agent names no mode or cloud session" };
+      }
+      const login = AGENT_ITEMS.includes(choice.item)
+        ? (await agentLoginRows()).get(loginIdForCmd(choice.item.cmd))
+        : undefined;
+      if (!login?.api_key_saved) return { status: "error", code: "api_key_unavailable", message: "No API key is stored for this agent" };
+      if (login.api_budget_reached) return { status: "error", code: "api_budget_reached", message: "The API key's monthly budget is spent" };
+      item = { ...choice.item, label: t("newTabMenu.apiKeyEntry", { label: choice.item.label }), apiKey: true };
+    }
     if (request.cloud) {
       // Built-ins only: a custom agent's own args are not ours to extend.
       const launch = scope.project && AGENT_ITEMS.includes(choice.item)
@@ -930,12 +1012,16 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
       const wt = (await worktreesOf(scope)).find((entry) => entry.id === request.worktree)?.worktree;
       if (!wt) return { status: "error", code: "worktree_not_found", message: "Worktree is unavailable" };
       spec = wt.is_main
-        ? buildStaticTabSpec(choice.item, cwd, scope.name, t)
-        : worktreeAgentSpec(choice.item, wt, scope.name, t);
+        ? buildStaticTabSpec(item, cwd, scope.name, t)
+        : worktreeAgentSpec(item, wt, scope.name, t);
     } else {
-      spec = buildStaticTabSpec(choice.item, cwd, scope.name, t);
+      spec = buildStaticTabSpec(item, cwd, scope.name, t);
     }
   }
+  // A remote project's agent runs in the mirror (`cwd`), as the window runs
+  // one by default; saved explicitly so a later default change cannot move it
+  // to the host (`headless::create_tab` stamps the same).
+  if (projectHostKind(scope.project) === "remote") spec = { ...spec, location: "local" };
   let created: TabEntry;
   try {
     created = await useTabsStore.getState().hydrateThenCreateInScope({
@@ -993,7 +1079,7 @@ async function createAssistantChat(scope: MobileScope, request: CreateRequest): 
   if (
     scope.id !== ASSISTANT_SCOPE || request.kind !== "agent" || !request.assistant
     || request.agent_id || request.mode || request.worktree || request.cloud || request.task
-    || request.sign_in || request.like_tab || request.local
+    || request.sign_in || request.like_tab || request.teleport || request.local
   ) {
     return invalid("A chat names its launch and nothing else");
   }
@@ -1024,6 +1110,22 @@ async function createAssistantChat(scope: MobileScope, request: CreateRequest): 
   return { status: "created", tmux_session: created.tmuxSession };
 }
 
+/** The linked worktree a cloud session is teleported into, named after the
+ * session so a retried request (or a second teleport of it) finds the one it
+ * made. Checked out detached at the project's HEAD: teleport switches it to
+ * the session's branch, and no placeholder branch is left behind. */
+async function teleportWorktree(projectDir: string, session: string): Promise<GitWorktree> {
+  const name = `teleport-${session.replace(/^session_/, "").slice(0, 24)}`;
+  const list = (await invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" })) ?? [];
+  const known = list.find((wt) => !wt.is_main && worktreeName(wt.path) === name);
+  if (known) return known;
+  await invoke<string>("git_worktree_add", { projectDir, site: "mirror", path: name, branch: "HEAD", newBranch: false, startPoint: null });
+  const made = ((await invoke<GitWorktree[]>("git_worktree_list", { projectDir, site: "mirror" })) ?? [])
+    .find((wt) => !wt.is_main && worktreeName(wt.path) === name);
+  if (!made) throw new Error("The worktree was not created");
+  return made;
+}
+
 /** A project scope's startable worktrees under their opaque ids — the same
  * list the desktop "+" asks from (`agentWorktreeChoices`: empty unless a
  * linked worktree exists). Box and root scopes have none. */
@@ -1037,6 +1139,12 @@ async function worktreesOf(scope: MobileScope): Promise<{ id: string; worktree: 
   } catch {
     return [];
   }
+  return withWorktreeIds(list);
+}
+
+/** `list` under the phone's opaque worktree ids — the ＋ sheet's and the ⎇
+ * chip's, one id per folder. */
+async function withWorktreeIds(list: GitWorktree[]): Promise<{ id: string; worktree: GitWorktree }[]> {
   const named = await Promise.all(list.map(async (worktree) => {
     try {
       return { id: await invoke<string>("mobile_opaque_id", { domain: "worktree", value: worktree.path }), worktree };
@@ -1074,15 +1182,37 @@ async function launchOptions(projectId: string): Promise<DesktopResponse> {
         })))
     : [];
   const local = await localChoices(scope);
+  const logins = await agentLoginRows();
+  const keyable = await apiKeyOptions(logins);
   return {
     status: "launch_options",
     worktrees,
     cloud,
-    sign_in: await signInOptions(),
+    sign_in: await signInOptions(logins),
     ...(local && local.choices.length > 0
       ? { local: { model: local.model, ready: local.ready, agents: local.choices.map((choice) => choice.public) } }
       : {}),
+    ...(keyable.length > 0 ? { api_key: keyable } : {}),
   };
+}
+
+/** `agent_logins` by login id. A login store that cannot be read leaves the
+ * states unknown, never the lists — or the ＋ sheet's whole answer — empty. */
+async function agentLoginRows(): Promise<Map<string, AgentLoginRow>> {
+  const logins = await invoke<AgentLoginRow[] | null>("agent_logins").catch(() => null);
+  return new Map((Array.isArray(logins) ? logins : []).map((row) => [row.id, row]));
+}
+
+/** The desktop "+"'s API section for the phone (`apiKeyMenuGroups`): every
+ * built-in a stored provider key can run, switched on in Manage CLIs or not. */
+async function apiKeyOptions(byId: Map<string, AgentLoginRow>): Promise<MobileApiKeyLaunch[]> {
+  return (await agentChoices())
+    .filter((choice) => AGENT_ITEMS.includes(choice.item))
+    .flatMap((choice) => {
+      const login = byId.get(loginIdForCmd(choice.item.cmd));
+      if (!login?.api_key_saved) return [];
+      return [{ agent_id: choice.public.id, ...(login.api_budget_reached ? { budget_reached: true } : {}) }];
+    });
 }
 
 /** One local-model agent under its opaque id; `driver` is the
@@ -1130,11 +1260,7 @@ async function localChoices(scope: MobileScope): Promise<{ model: string; ready:
 /** The agents the phone can open a sign-in tab for, each with the state of
  * its shared login where Tabtivity keeps one (`services::agent_auth`). Every
  * built-in qualifies: one without a login command signs in as it starts. */
-async function signInOptions(): Promise<MobileSignInOption[]> {
-  // A login store that cannot be read leaves the states unknown, never the
-  // list — or the ＋ sheet's whole answer — empty.
-  const logins = await invoke<AgentLoginRow[] | null>("agent_logins").catch(() => null);
-  const byId = new Map((Array.isArray(logins) ? logins : []).map((row) => [row.id, row]));
+async function signInOptions(byId: Map<string, AgentLoginRow>): Promise<MobileSignInOption[]> {
   return (await agentChoices())
     .filter((choice) => AGENT_ITEMS.includes(choice.item))
     .map((choice) => {
@@ -1216,15 +1342,18 @@ async function activate(projectId: string, tmuxSession?: string): Promise<Deskto
 function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string | null {
   const tab = mobileTargetTab(scope.id, tmuxSession);
   if (!tab) return "tab_not_found";
+  // A tab on a remote host (listed since the phone reaches it over the
+  // desktop's SSH master) is never wrapped here, drawn or not: its session,
+  // if any, runs on the host.
+  const project = scope.project;
+  if (project?.remote && effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) !== "local") return "session_gone";
   const ready = mobileTmuxReadiness(scope.id, tab.key);
   // Not drawn yet (a scope `enterScope` just restored): its first render
   // stamps the switch, which is on, and the spawn is wrapped.
   if (ready === undefined) return null;
   if (ready || (tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
-  const project = scope.project;
-  const localRunning = !project?.remote || effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) === "local";
   const localPersist = !IS_HOST_WINDOWS && useSettingsStore.getState().settings?.persist_local_sessions !== false;
-  if (!localRunning || !localPersist || tab.login) return "session_gone";
+  if (!localPersist || tab.login) return "session_gone";
   if (!isResumableAgentTab(tab)) return "tab_not_resumable";
   if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") return "agent_busy";
   // One render takes both: the stamp turns the tmux name on and the relaunch
@@ -1235,7 +1364,7 @@ function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string |
 }
 
 function scheduleTargetTab(projectId: string, tmuxSession: string) {
-  return (useTabsStore.getState().tabsByScope[projectId] ?? []).find((entry) =>
+  return phoneTabs(projectId).find((entry) =>
     (entry.kind === "agent" || entry.kind === "local_agent")
       && (entry.tmuxSession === tmuxSession || entry.tmuxAttach === tmuxSession),
   );
@@ -1270,7 +1399,7 @@ async function renameAgentTab(projectId: string, tmuxSession: string, label: str
  * would refuse half the rows. The tmux name is the identity either way: it is
  * what the catalog published this tab from. */
 function mobileTargetTab(scope: string, tmuxSession: string) {
-  return (useTabsStore.getState().tabsByScope[scope] ?? []).find((entry) =>
+  return phoneTabs(scope).find((entry) =>
     entry.tmuxSession === tmuxSession || entry.tmuxAttach === tmuxSession,
   );
 }
@@ -1304,13 +1433,20 @@ async function closeMobileTab(projectId: string, tmuxSession: string): Promise<D
   return { status: "closed" };
 }
 
+/** The scope's closed agent tabs the phone could attach to again: one that ran
+ * on a remote host or in a container is reopened from the desktop. */
+function closedPhoneTabs(scope: MobileScope) {
+  return (useClosedAgentTabsStore.getState().byScope[scope.id] ?? [])
+    .filter((closed) => phoneReachesTab(scope.project, closed.tab, scope.id));
+}
+
 /** The scope's closed agent tabs for the phone's "Recently closed" row — the
  * desktop's own list (`stores/agents/closedAgentTabs`), so a tab closed on
  * either surface can be reopened from both. Label and agent only. */
 function closedAgentTabRows(projectId?: string): ClosedAgentTabRow[] {
   const scope = mobileScope(projectId);
   if (!scope) return [];
-  return (useClosedAgentTabsStore.getState().byScope[scope.id] ?? []).map((closed) => ({
+  return closedPhoneTabs(scope).map((closed) => ({
     id: closed.id,
     label: closed.tab.label,
     agent: closed.tab.cmd,
@@ -1327,8 +1463,18 @@ async function reopenMobileTab(projectId: string, closedId?: string): Promise<De
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // The sidecar's `creatable` again: a reopen starts an agent where the window
+  // would, so it follows the create verdict AND the closed tab's own locality
+  // (a closed host-side tab stays closed, untouched).
+  const notAttachable: DesktopResponse = { status: "error", code: "not_attachable", message: "That tab would run where the phone cannot attach" };
+  if (!phoneMayCreate(scope, "agent")) return notAttachable;
+  const closed = useClosedAgentTabsStore.getState().byScope[scope.id] ?? [];
+  const wanted = closedId === undefined ? closedPhoneTabs(scope)[0] : closed.find((entry) => entry.id === closedId);
+  if (wanted && !phoneReachesTab(scope.project, wanted.tab, scope.id)) return notAttachable;
+  // No id names the newest tab the phone lists, never a host-side one behind it.
+  if (closedId === undefined && !wanted) return { status: "error", code: "nothing_to_reopen", message: "There is no closed tab to reopen" };
   await enterScope(scope);
-  const entry = reopenClosedAgentTab(scope.id, closedId);
+  const entry = reopenClosedAgentTab(scope.id, wanted?.id ?? closedId);
   if (!entry) return { status: "error", code: "nothing_to_reopen", message: "There is no closed tab to reopen" };
   if (!entry.tmuxSession) {
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
@@ -1574,6 +1720,7 @@ async function agentStatusFor(
       projectId: scope.id,
     }).catch(() => null),
   ]);
+  const raw = mobileUsageText(usage.raw);
   return {
     status: "agent_status",
     report: {
@@ -1585,22 +1732,15 @@ async function agentStatusFor(
       usage: {
         label: usage.label,
         supported: usage.supported,
-        // The panel goes as printed, unless the CLI printed a path of this
-        // machine into it — then the phone is told that, not the path.
-        raw: usage.raw && !namesLocalPath(usage.raw) ? usage.raw : undefined,
-        error: usage.raw && namesLocalPath(usage.raw)
+        // Path-bearing rows go, while the rest of the panel stays readable.
+        raw,
+        error: usage.raw && !raw
           ? "cli_output_withheld"
           : usage.code ?? (usage.error ? "cli_error" : undefined),
         cached: usage.cached,
       },
     },
   };
-}
-
-/** Whether a CLI's text names a place on this machine — a home directory, a
- * temp or system path, a Windows drive — which the phone must not be shown. */
-function namesLocalPath(text: string): boolean {
-  return /(^|[\s("'`])(?:~\/|\/(?:home|Users|tmp|var|etc|opt|usr|root|mnt|media|private)\/|[A-Za-z]:\\)/.test(text);
 }
 
 async function taskId(task: CalendarTask) {
@@ -2352,6 +2492,7 @@ async function holdTabPrompt(projectId: string, tmuxSession: string, message: st
   if (!text || isSessionCommand(text)) return { status: "error", code: "invalid_prompt", message: "Only prompts are held" };
   const { id } = await queuePromptForTab(scope.id, tab.scheduleTargetId, text, { phoneDevice });
   holdPhonePrompt(id);
+  noteInputFrom(`${scope.id}:${tab.key}`, "phone");
   return { status: "held", held_id: id };
 }
 
@@ -2507,6 +2648,128 @@ async function undoTabClear(projectId: string, tmuxSession: string): Promise<Des
   }
 }
 
+/** An agent tab the phone's ⎇ chip may move between worktrees, with the
+ * folders it can go to under their opaque ids (`worktreeMoveDir`,
+ * `agentSwitchChoices` — the desktop Reader's chip asks the same), or the
+ * refusal to answer with. */
+async function movableTab(projectId: string, tmuxSession: string): Promise<
+  | { scope: MobileScope; tab: TabEntry; choices: { id: string; worktree: GitWorktree }[] }
+  | DesktopResponse
+> {
+  const scope = mobileScope(projectId);
+  if (!scope) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  const tab = scheduleTargetTab(scope.id, tmuxSession);
+  if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
+  const dir = worktreeMoveDir(tab, scope.project, false);
+  if (!dir) return { status: "error", code: "not_movable", message: "This agent cannot move to another worktree" };
+  return { scope, tab, choices: await withWorktreeIds(await agentSwitchChoicesIn(dir)) };
+}
+
+/** The phone's ⎇ chip opened: where this agent tab can move, which of those
+ * it is in, and whether its CLI takes the conversation along. */
+async function tabWorktrees(projectId: string, tmuxSession: string): Promise<DesktopResponse> {
+  const found = await movableTab(projectId, tmuxSession);
+  if ("status" in found) return found;
+  const current = found.choices.find(({ worktree }) => sameDir(worktree.path, found.tab.cwd))?.id;
+  return {
+    status: "tab_worktrees",
+    worktrees: found.choices.map(({ id, worktree }) => ({
+      id,
+      label: worktree.is_main ? "" : worktreeName(worktree.path),
+      ...(worktree.branch ? { branch: worktree.branch } : {}),
+      main: worktree.is_main,
+    })),
+    ...(current ? { current } : {}),
+    carries: CARRIES_CONVERSATION.has(found.tab.cmd),
+  };
+}
+
+/** The phone picked a worktree on the ⎇ chip's sheet: the same move as the
+ * desktop Reader's (`switchAgentWorktree`). Refused while the agent works or
+ * waits on a question, as the desktop chip is disabled then — the restart
+ * would end the turn. */
+async function moveTabWorktree(
+  projectId: string,
+  tmuxSession: string,
+  worktreeId: string,
+  t: ReturnType<typeof useT>,
+): Promise<DesktopResponse> {
+  const found = await movableTab(projectId, tmuxSession);
+  if ("status" in found) return found;
+  const { scope, tab, choices } = found;
+  const to = choices.find(({ id }) => id === worktreeId)?.worktree;
+  if (!to) return { status: "error", code: "worktree_not_found", message: "That worktree is not there any more" };
+  if (!sameDir(to.path, tab.cwd) && agentTabState(`${scope.id}:${tab.key}`) !== "idle") {
+    return { status: "error", code: "tab_busy", message: "The agent is at work or waiting for an answer" };
+  }
+  const result = await moveAgentToWorktree(scope.id, tab, choices.map(({ worktree }) => worktree), to, t);
+  if (result === "unchanged") return { status: "worktree_moved", moved: "carried" };
+  if (result === "failed") {
+    return { status: "error", code: "move_failed", message: "The conversation could not be moved; the agent restarted in its old folder" };
+  }
+  return { status: "worktree_moved", moved: result };
+}
+
+/** A Tabby chat the phone's model chip may switch, with the models its CLI can
+ * run (`assistantModelRows` — the desktop Reader's chip lists the same), or
+ * the refusal to answer with. Any other tab's `/model` is its CLI's own. */
+async function assistantChat(projectId: string, tmuxSession: string): Promise<
+  | { scope: MobileScope; tab: TabEntry; launch: AssistantLaunch; rows: AssistantModelRow[]; models: string[] }
+  | DesktopResponse
+> {
+  const scope = mobileScope(projectId);
+  if (!scope) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  const tab = scheduleTargetTab(scope.id, tmuxSession);
+  if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
+  const launch = scope.id === ASSISTANT_SCOPE ? tab.assistant : undefined;
+  if (!launch) return { status: "error", code: "not_assistant_chat", message: "Only a Tabby chat switches its model here" };
+  const options = await assistantOptions().catch(() => null);
+  if (!options) return { status: "error", code: "desktop_unavailable", message: "The model list could not be read" };
+  const cli = options.clis.find((candidate) => candidate.id === launch.cli);
+  // Only names a CLI would take as an argument leave this window, each with
+  // the words Claude's picker gave it, bounded.
+  const rows = (cli ? await assistantModelRows(cli, options) : [])
+    .filter((row) => row.id.length <= 128 && SAFE_MODEL.test(row.id))
+    .slice(0, 64)
+    .map((row) => ({
+      id: row.id,
+      label: row.label.slice(0, 120),
+      ...(row.description ? { description: row.description.slice(0, 240) } : {}),
+    }));
+  return { scope, tab, launch, rows, models: rows.map((row) => row.id) };
+}
+
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/u;
+
+/** The phone's model chip opened on a Tabby chat. */
+async function tabAssistantModels(projectId: string, tmuxSession: string): Promise<DesktopResponse> {
+  const found = await assistantChat(projectId, tmuxSession);
+  if ("status" in found) return found;
+  const current = assistantCurrentModel(found.launch);
+  return { status: "assistant_models", models: found.models, rows: found.rows, ...(current ? { current } : {}) };
+}
+
+/** The phone picked a model for a Tabby chat: the desktop Reader's pick
+ * (`switchAssistantModel`), refused while the chat works as its chip is
+ * disabled then — the restart would end the turn. */
+async function switchTabAssistantModel(projectId: string, tmuxSession: string, model: string): Promise<DesktopResponse> {
+  const found = await assistantChat(projectId, tmuxSession);
+  if ("status" in found) return found;
+  if (!found.models.includes(model)) return { status: "error", code: "model_not_found", message: "That model is not offered any more" };
+  if (assistantCurrentModel(found.launch) === model) return { status: "seen" };
+  if (agentTabState(`${found.scope.id}:${found.tab.key}`) !== "idle") {
+    return { status: "error", code: "tab_busy", message: "The chat is at work or waiting for an answer" };
+  }
+  if (!(await switchAssistantModel(found.tab.key, model))) {
+    return { status: "error", code: "switch_failed", message: "The chat could not be switched" };
+  }
+  return { status: "seen" };
+}
+
 /** The phone typed into this agent tab. It types into a tmux client of its own,
  * so not one byte of it passes through this window — and the classifier only
  * ever calls output "working" or "done" when the session was COMMANDED this
@@ -2514,14 +2777,21 @@ async function undoTabClear(projectId: string, tmuxSession: string): Promise<Des
  * from reading as a finished turn). Without this report a tab driven entirely
  * from the phone produced status for nobody: the pills stayed blank on the very
  * surface that asked for the work. Throttled sidecar-side to the leading edge of
- * each burst of typing, so a held key is one report, not forty. */
-function markTabInput(projectId: string, tmuxSession: string): DesktopResponse {
+ * each burst of typing, so a held key is one report, not forty. `interrupt`: a
+ * bare Esc or Ctrl+C, always reported — a question dismissed on the phone ends
+ * Claude's turn with no `Stop`, and without it the tab read as working until
+ * the next hook, holding every phone prompt behind it. */
+function markTabInput(projectId: string, tmuxSession: string, interrupt = false): DesktopResponse {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
-  if (tab) noteUserInput(`${scope.id}:${tab.key}`);
+  if (tab) {
+    noteUserInput(`${scope.id}:${tab.key}`, interrupt);
+    // `tabtivity-send` from this tab now puts files on the phone.
+    noteInputFrom(`${scope.id}:${tab.key}`, "phone");
+  }
   return { status: "seen" };
 }
 
@@ -2544,6 +2814,10 @@ async function attachDesktopImage(projectId: string, imageId: string): Promise<D
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // A scope with no folder on this machine (a VM project without a mirror, the
+  // assistant) has no inbox: an empty path would be written relative to the
+  // app's own working directory.
+  if (!scope.cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   try {
     const attachment = await invoke<InboxAttachment>("mobile_attach_desktop_image", {
       projectDir: scope.cwd,
@@ -2625,7 +2899,7 @@ async function agentTranscriptFor(
     // never read (the backend's `unsupported`, decided by the same list) hands
     // Focus to the terminal; a tab that has no session id *yet* — every tab
     // the phone just created, until the agent's hook records one — keeps
-    // Focus reading the screen until the session reads.
+    // Focus on its loading row until the session reads.
     const reason = TRANSCRIPT_AGENTS.has(agent) ? "no_session" : "unsupported";
     return { status: "agent_transcript", transcript: { available: false, reason, entries: [], truncated: false } };
   }
@@ -2644,6 +2918,8 @@ async function agentTranscriptFor(
     limit: limit ?? null,
     // A local-model tab's agent runs in the scope's local-model home.
     localModel: tab.kind === "local_agent",
+    // A tab on a remote project's host keeps its conversation there.
+    remoteHost: hostTabId(tab, scope.project),
   }).catch((): MobileAgentTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
   return { status: "agent_transcript", transcript };
 }
@@ -2699,11 +2975,15 @@ async function handleRequest(
     case "agent_status": return agentStatusFor(request.project_id, request.tmux_session, request.refresh);
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
-    case "tab_input": return markTabInput(request.project_id, request.tmux_session);
+    case "tab_input": return markTabInput(request.project_id, request.tmux_session, request.interrupt === true);
     case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
+    case "tab_worktrees": return tabWorktrees(request.project_id, request.tmux_session);
+    case "move_worktree": return moveTabWorktree(request.project_id, request.tmux_session, request.worktree, t);
+    case "assistant_models": return tabAssistantModels(request.project_id, request.tmux_session);
+    case "switch_assistant_model": return switchTabAssistantModel(request.project_id, request.tmux_session, request.model);
     case "desktop_images": return desktopImagesFor(request.project_id);
     case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);
     case "markup_questions": return markupQuestionsFor(request.project_id, request.tmux_session, request.path ?? undefined);
@@ -2740,7 +3020,7 @@ const mutationQueues = new Map<string, Promise<unknown>>();
  * `MobileMutationList.test.ts` holds the two in step (exported for it). */
 export function mutationDomain(type: DesktopRequest["type"]): string | null {
   switch (type) {
-    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": return "tabs";
+    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "switch_assistant_model": return "tabs";
     case "todo_mutate": case "alert_resolve": case "calendar_mutate": return "board";
     case "mail_mark": case "mail_reply": return "mail";
     // A markup answer queues its prompt as a phone hold does.
@@ -2798,9 +3078,8 @@ export function MobileBridgeHost() {
   }, [mobileHostOn]);
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
     refreshRootFacts();
-    void listen<DesktopRequest>(MOBILE_DESKTOP_EVENT, (event) => {
+    const unlisten = subscribeTauri(() => listen<DesktopRequest>(MOBILE_DESKTOP_EVENT, (event) => {
       const request = event.payload;
       const run = async () => {
         let response: DesktopResponse;
@@ -2819,13 +3098,10 @@ export function MobileBridgeHost() {
       const domain = mutationDomain(request.type);
       if (domain) void enqueueMutation(domain, run);
       else void run();
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
+    }));
     return () => {
       disposed = true;
-      unlisten?.();
+      unlisten();
     };
   }, []);
   return null;

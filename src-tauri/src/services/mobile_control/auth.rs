@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -254,10 +255,14 @@ pub fn scope_device_list(requested: &[String], paired: &[AdminDevice]) -> Result
     Ok(out)
 }
 
+// The deadlines of everything held in memory here are `Instant`s: a wall clock
+// set back (or stepped by NTP) would otherwise keep a session, a nonce or a
+// ticket alive past its window. The unix `expires_at` values the phone is told
+// (and a challenge's signed payload carries) are display only.
 #[derive(Clone)]
 struct PairCode {
     hash: [u8; 32],
-    expires_at: u64,
+    deadline: Instant,
     attempts: u8,
 }
 
@@ -265,7 +270,7 @@ struct PairCode {
 struct Challenge {
     device_id: String,
     payload: String,
-    expires_at: u64,
+    deadline: Instant,
 }
 
 /// A URL the phone asked to open outside the PWA, where its `SameSite=Strict`
@@ -275,20 +280,25 @@ struct Challenge {
 struct OpenTicket {
     session: String,
     target: String,
-    expires_at: u64,
+    deadline: Instant,
 }
 
 #[derive(Clone)]
 struct Session {
     device_id: String,
-    created_at: u64,
-    expires_at: u64,
+    created: Instant,
+    deadline: Instant,
 }
 
 /// Where a session touched at `t` expires: the idle window from now, never
 /// past the cap counted from its login.
-fn session_deadline(created_at: u64, t: u64) -> u64 {
-    (t + SESSION_IDLE).min(created_at + SESSION_MAX)
+fn session_deadline(created: Instant, t: Instant) -> Instant {
+    (t + Duration::from_secs(SESSION_IDLE)).min(created + Duration::from_secs(SESSION_MAX))
+}
+
+/// `ttl` seconds from `t`.
+fn after(t: Instant, ttl: u64) -> Instant {
+    t + Duration::from_secs(ttl)
 }
 
 pub struct AuthStore {
@@ -305,7 +315,7 @@ pub struct AuthStore {
     action_challenges: HashMap<String, Challenge>,
     sessions: HashMap<String, Session>,
     tickets: HashMap<String, OpenTicket>,
-    attempts: HashMap<String, VecDeque<u64>>,
+    attempts: HashMap<String, VecDeque<Instant>>,
     /// Web Push subscriptions, held here so revocation drops them in the same
     /// call (`push.rs`).
     push: PushStore,
@@ -374,21 +384,21 @@ impl AuthStore {
 
     /// Expired challenges and sessions are otherwise only ever removed when the
     /// exact entry is presented again, so an abandoned login leaked one forever.
-    fn sweep_expired(&mut self, t: u64) {
-        self.challenges.retain(|_, c| c.expires_at >= t);
-        self.action_challenges.retain(|_, c| c.expires_at >= t);
-        self.sessions.retain(|_, s| s.expires_at >= t);
-        self.tickets.retain(|_, x| x.expires_at >= t);
+    fn sweep_expired(&mut self, t: Instant) {
+        self.challenges.retain(|_, c| c.deadline >= t);
+        self.action_challenges.retain(|_, c| c.deadline >= t);
+        self.sessions.retain(|_, s| s.deadline >= t);
+        self.tickets.retain(|_, x| x.deadline >= t);
     }
 
     /// Per-scope sliding window. A single global window meant 30 forged
     /// `pair` posts a minute locked the real phone out of `login` permanently,
     /// with no way back in because the same flood also ate each new code.
     fn rate_limit(&mut self, scope: &str, budget: usize) -> Result<(), String> {
-        let t = now();
+        let t = Instant::now();
         self.sweep_expired(t);
         self.attempts.retain(|_, queue| {
-            while queue.front().is_some_and(|v| t.saturating_sub(*v) > 60) {
+            while queue.front().is_some_and(|v| t.saturating_duration_since(*v) > Duration::from_secs(60)) {
                 queue.pop_front();
             }
             !queue.is_empty()
@@ -434,7 +444,7 @@ impl AuthStore {
         let expires_at = now() + PAIR_TTL;
         self.pairing = Some(PairCode {
             hash: self.keyed(b"pair", code.as_bytes()),
-            expires_at,
+            deadline: after(Instant::now(), PAIR_TTL),
             attempts: 0,
         });
         Ok((code, expires_at))
@@ -450,7 +460,7 @@ impl AuthStore {
         // server — the invite the admin helper left in the control dir.
         let mut invite_used = false;
         match self.pairing.as_mut() {
-            Some(pairing) if pairing.expires_at < now() => {
+            Some(pairing) if pairing.deadline < Instant::now() => {
                 self.pairing = None;
                 return Err("invalid_pairing_code".into());
             }
@@ -547,7 +557,7 @@ impl AuthStore {
             Challenge {
                 device_id: device_id.into(),
                 payload: payload.clone(),
-                expires_at,
+                deadline: after(Instant::now(), CHALLENGE_TTL),
             },
         );
         Ok((nonce, payload, expires_at))
@@ -562,7 +572,7 @@ impl AuthStore {
         let known = self.devices.devices.iter().any(|d| d.id == device_id);
         self.rate_limit(&auth_scope(device_id, known), AUTH_ATTEMPT_BUDGET)?;
         let challenge = self.challenges.remove(nonce).ok_or("invalid_challenge")?;
-        if challenge.device_id != device_id || challenge.expires_at < now() {
+        if challenge.device_id != device_id || challenge.deadline < Instant::now() {
             return Err("invalid_challenge".into());
         }
         let device = self
@@ -585,14 +595,16 @@ impl AuthStore {
             .map_err(|_| "invalid_signature")?;
         device.last_seen_at = Some(now());
         let token = random_id::<32>()?;
-        let created_at = now();
-        let expires_at = session_deadline(created_at, created_at);
+        let created = Instant::now();
+        let deadline = session_deadline(created, created);
+        // What the phone is told: the same window, in its own wall-clock terms.
+        let expires_at = now() + deadline.saturating_duration_since(created).as_secs();
         self.sessions.insert(
             token.clone(),
             Session {
                 device_id: device_id.into(),
-                created_at,
-                expires_at,
+                created,
+                deadline,
             },
         );
         self.save_devices()?;
@@ -604,23 +616,31 @@ impl AuthStore {
     /// bridge's periodic re-check uses this: a tick is not the phone speaking.
     pub fn authenticate(&mut self, token: &str) -> Option<String> {
         let session = self.sessions.get(token)?.clone();
-        if session.expires_at < now() {
+        if session.deadline < Instant::now() {
             self.sessions.remove(token);
             return None;
         }
         Some(session.device_id)
     }
 
+    /// Whether any phone holds an unexpired session — what the host
+    /// liveness refresher (`host_live`) waits for: with no phone signed in,
+    /// nobody reads a remote host's tabs, so their masters are left alone.
+    pub fn has_live_session(&self) -> bool {
+        let t = Instant::now();
+        self.sessions.values().any(|s| s.deadline >= t)
+    }
+
     /// `authenticate`, and the session slides: every authenticated HTTP request
     /// and every frame the phone sends over its terminal socket lands here.
     pub fn touch(&mut self, token: &str) -> Option<String> {
-        let t = now();
+        let t = Instant::now();
         let session = self.sessions.get_mut(token)?;
-        if session.expires_at < t {
+        if session.deadline < t {
             self.sessions.remove(token);
             return None;
         }
-        session.expires_at = session_deadline(session.created_at, t);
+        session.deadline = session_deadline(session.created, t);
         Some(session.device_id.clone())
     }
 
@@ -631,13 +651,13 @@ impl AuthStore {
     /// as arriving from outside the site: the strict cookie stays behind.
     pub fn open_ticket(&mut self, token: &str, target: &str) -> Result<String, String> {
         self.authenticate(token).ok_or("authentication_required")?;
-        let t = now();
+        let t = Instant::now();
         self.sweep_expired(t);
         if self.tickets.len() >= MAX_OPEN_TICKETS {
             if let Some(oldest) = self
                 .tickets
                 .iter()
-                .min_by_key(|(_, x)| x.expires_at)
+                .min_by_key(|(_, x)| x.deadline)
                 .map(|(key, _)| key.clone())
             {
                 self.tickets.remove(&oldest);
@@ -649,7 +669,7 @@ impl AuthStore {
             OpenTicket {
                 session: token.into(),
                 target: target.into(),
-                expires_at: t + OPEN_TICKET_TTL,
+                deadline: after(t, OPEN_TICKET_TTL),
             },
         );
         Ok(ticket)
@@ -660,7 +680,7 @@ impl AuthStore {
     /// session: a browser tab re-reading a PDF is not the phone speaking.
     pub fn redeem_ticket(&mut self, ticket: &str, target: &str) -> Option<String> {
         let entry = self.tickets.get(ticket)?;
-        if entry.expires_at < now() {
+        if entry.deadline < Instant::now() {
             self.tickets.remove(ticket);
             return None;
         }
@@ -676,7 +696,7 @@ impl AuthStore {
     }
 
     pub fn devices(&self) -> Vec<AdminDevice> {
-        let t = now();
+        let t = Instant::now();
         self.devices
             .devices
             .iter()
@@ -685,7 +705,7 @@ impl AuthStore {
                 name: d.name.clone(),
                 created_at: d.created_at,
                 last_seen_at: d.last_seen_at,
-                online: self.sessions.values().any(|s| s.device_id == d.id && s.expires_at >= t),
+                online: self.sessions.values().any(|s| s.device_id == d.id && s.deadline >= t),
                 hidden_sections: d.hidden_sections.clone(),
             })
             .collect()
@@ -728,14 +748,15 @@ impl AuthStore {
             return Err("unknown_device".into());
         }
         let t = now();
-        self.action_challenges.retain(|_, c| c.expires_at >= t);
+        let held = Instant::now();
+        self.action_challenges.retain(|_, c| c.deadline >= held);
         if self.action_challenges.values().filter(|c| c.device_id == device_id).count() >= 4 || self.action_challenges.len() >= 256 {
             return Err("rate_limited".into());
         }
         let nonce = random_id::<24>()?;
         let expires_at = t + CHALLENGE_TTL;
         let payload = crate::services::server::vault::Vault::action_payload(&self.origin, device_id, action, &nonce, expires_at);
-        self.action_challenges.insert(nonce.clone(), Challenge { device_id: device_id.into(), payload, expires_at });
+        self.action_challenges.insert(nonce.clone(), Challenge { device_id: device_id.into(), payload, deadline: after(held, CHALLENGE_TTL) });
         Ok((nonce, expires_at))
     }
 
@@ -743,7 +764,7 @@ impl AuthStore {
     /// over the payload made for this device and this action.
     pub fn verify_action(&mut self, device_id: &str, action: &str, nonce: &str, signature: &str) -> Result<(), String> {
         let challenge = self.action_challenges.remove(nonce).ok_or("invalid_challenge")?;
-        if challenge.device_id != device_id || challenge.expires_at < now() || !challenge.payload.contains(&format!("\n{action}\n{nonce}\n")) {
+        if challenge.device_id != device_id || challenge.deadline < Instant::now() || !challenge.payload.contains(&format!("\n{action}\n{nonce}\n")) {
             return Err("invalid_challenge".into());
         }
         let device = self.devices.devices.iter().find(|d| d.id == device_id).ok_or("unknown_device")?;
@@ -949,6 +970,11 @@ impl AuthStore {
 mod tests {
     use super::*;
 
+    /// A deadline `secs` seconds in the past.
+    fn ago(secs: u64) -> Instant {
+        Instant::now().checked_sub(Duration::from_secs(secs)).expect("a monotonic clock older than a second")
+    }
+
     #[test]
     fn an_invite_file_enrols_once_and_wears_out_like_a_code() {
         let dir = tempfile::tempdir().unwrap();
@@ -1093,7 +1119,7 @@ mod tests {
         assert!(auth.redeem_ticket(&ticket, "/api/v1/x?f=2").is_none());
         assert!(auth.redeem_ticket("forged", "/api/v1/x?f=1").is_none());
 
-        auth.tickets.get_mut(&ticket).expect("held").expires_at = now() - 1;
+        auth.tickets.get_mut(&ticket).expect("held").deadline = ago(1);
         assert!(auth.redeem_ticket(&ticket, "/api/v1/x?f=1").is_none());
 
         let ticket = auth.open_ticket(&token, "/api/v1/x?f=1").expect("ticket");
@@ -1205,26 +1231,45 @@ mod tests {
     fn a_session_slides_with_every_touch_and_stops_at_the_cap() {
         let (_dir, mut auth) = store();
         let (device, token) = paired_login(&mut auth);
-        let t = now();
+        let t = Instant::now();
+        let idle = Duration::from_secs(SESSION_IDLE);
+        let slack = Duration::from_secs(2);
         // A fresh login expires one idle window out, not twelve hours.
-        let first = auth.sessions[&token].expires_at;
-        assert!(first >= t + SESSION_IDLE - 1 && first <= t + SESSION_IDLE + 1);
+        let first = auth.sessions[&token].deadline;
+        assert!(first + slack >= t + idle && first <= t + idle + slack);
         // Pretend the phone has been quiet for most of the window, then speaks.
-        auth.sessions.get_mut(&token).unwrap().expires_at = t + 30;
+        auth.sessions.get_mut(&token).unwrap().deadline = t + Duration::from_secs(30);
         assert_eq!(auth.touch(&token).as_deref(), Some(device.as_str()));
-        assert!(auth.sessions[&token].expires_at >= t + SESSION_IDLE - 1);
+        assert!(auth.sessions[&token].deadline + slack >= t + idle);
         // A plain check does not slide it.
-        auth.sessions.get_mut(&token).unwrap().expires_at = t + 30;
+        auth.sessions.get_mut(&token).unwrap().deadline = t + Duration::from_secs(30);
         assert_eq!(auth.authenticate(&token).as_deref(), Some(device.as_str()));
-        assert_eq!(auth.sessions[&token].expires_at, t + 30);
+        assert_eq!(auth.sessions[&token].deadline, t + Duration::from_secs(30));
         // Near the cap a touch cannot push past it.
-        auth.sessions.get_mut(&token).unwrap().created_at = t - SESSION_MAX + 60;
+        auth.sessions.get_mut(&token).unwrap().created = t - Duration::from_secs(SESSION_MAX - 60);
         auth.touch(&token).expect("still live");
-        assert_eq!(auth.sessions[&token].expires_at, t + 60);
+        let deadline = auth.sessions[&token].deadline;
+        assert!(deadline <= t + Duration::from_secs(61) && deadline + slack >= t + Duration::from_secs(60), "{deadline:?}");
         // Past its deadline the token is gone, touched or not.
-        auth.sessions.get_mut(&token).unwrap().expires_at = t - 1;
+        auth.sessions.get_mut(&token).unwrap().deadline = ago(1);
         assert!(auth.touch(&token).is_none());
         assert!(auth.authenticate(&token).is_none());
+    }
+
+    /// The host refresher's gate: a signed-in phone counts until its session
+    /// expires, and a logout ends it at once.
+    #[test]
+    fn a_live_session_is_one_that_has_not_expired() {
+        let (_dir, mut auth) = store();
+        assert!(!auth.has_live_session(), "no phone signed in");
+        let (_device, token) = paired_login(&mut auth);
+        assert!(auth.has_live_session());
+        auth.sessions.get_mut(&token).unwrap().deadline = ago(1);
+        assert!(!auth.has_live_session(), "expired, though not yet swept");
+        auth.sessions.get_mut(&token).unwrap().deadline = Instant::now() + Duration::from_secs(60);
+        assert!(auth.has_live_session());
+        auth.logout(&token);
+        assert!(!auth.has_live_session());
     }
 
     /// The desktop's picker reads the paired phones with no host running:
@@ -1356,7 +1401,7 @@ mod tests {
         }
         assert_eq!(auth.challenges.len(), 5);
         for challenge in auth.challenges.values_mut() {
-            challenge.expires_at = 0;
+            challenge.deadline = ago(1);
         }
         auth.challenge(&device).expect("challenge");
         assert_eq!(auth.challenges.len(), 1);

@@ -35,7 +35,16 @@ describe("loadPdf", () => {
     getDocument.mockReturnValueOnce(t);
     await expect(loadPdf(new Uint8Array([1, 2, 3]))).resolves.toBe(doc);
     expect(t.destroy).not.toHaveBeenCalled();
-    expect(getDocument).toHaveBeenCalledWith({ data: new Uint8Array([1, 2, 3]) });
+    expect(getDocument).toHaveBeenCalledWith({
+      data: new Uint8Array([1, 2, 3]),
+      disableFontFace: true,
+    });
+  });
+
+  it("never lets WebKit parse a PDF's embedded fonts", async () => {
+    getDocument.mockReturnValueOnce(task(Promise.resolve({ numPages: 1 })));
+    await loadPdf(new Uint8Array([1]));
+    expect(getDocument.mock.lastCall?.[0]).toMatchObject({ disableFontFace: true });
   });
 
   it("destroys the task of a load that rejects, and rethrows the same error", async () => {
@@ -63,7 +72,11 @@ describe("loadPdf on a caller's worker", () => {
     const worker = { id: "w" };
     getDocument.mockReturnValueOnce(task(Promise.resolve({ numPages: 1 })));
     await loadPdf(new Uint8Array([1]), worker as never);
-    expect(getDocument).toHaveBeenLastCalledWith({ data: new Uint8Array([1]), worker });
+    expect(getDocument).toHaveBeenLastCalledWith({
+      data: new Uint8Array([1]),
+      worker,
+      disableFontFace: true,
+    });
   });
 });
 

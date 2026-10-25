@@ -134,6 +134,9 @@ export function readSignIn(lines: readonly SignInLineLike[]): SignIn | null {
   }
   if (!found) return null;
   const { url } = found;
+  // A link the CLI's own page window cuts off is not the link: its query
+  // ends where the window does (`readSignInPage` reads the rest).
+  if (cutByPage(rows[found.end + 1])) return null;
   if (rows.slice(found.end + 1).some((row) => SIGNED_IN.test(row))) return null;
   // What the CLI printed around its link: the lines that introduce it, the
   // rest of its own line ("… and enter code ABCD-1234") and whatever it asks
@@ -142,6 +145,130 @@ export function readSignIn(lines: readonly SignInLineLike[]): SignIn | null {
     .concat(rows[found.index].replace(URL_START, " "), rows.slice(found.end + 1))
     .join("\n");
   return signInFor(url, around);
+}
+
+/** The page of a vendor cloud session a cloud tab's CLI printed (`claude
+ * --cloud "<task>"` prints `View: https://claude.ai/code/session_…` and
+ * exits), or `null`. Any https link counts — the tab's own launch printed it —
+ * and the newest one in the bottom window wins. */
+export function readCloudLink(lines: readonly SignInLineLike[]): { url: string; site: string } | null {
+  const from = Math.max(0, lines.length - SEARCH_WINDOW);
+  const rows = lines.slice(from).map((line) => line.text);
+  let found: URL | null = null;
+  for (let index = 0; index < rows.length; index += 1) {
+    const hit = urlAt(rows, index);
+    if (!hit) continue;
+    found = httpsUrl(hit.url) ?? found;
+    index = hit.end;
+  }
+  return found ? { url: found.href, site: found.host } : null;
+}
+
+/** The `--teleport <session>` a cloud tab's CLI printed for taking its
+ * session over (`Resume with: claude --teleport session_…`): the session id,
+ * or `null`. The id is held to what may stand on a command line — the
+ * desktop and the sidecar check it again. */
+const TELEPORT_HINT = /--teleport\s+([A-Za-z0-9][A-Za-z0-9_-]{0,127})(?![A-Za-z0-9_-])/u;
+
+export function readCloudSession(lines: readonly SignInLineLike[]): string | null {
+  const from = Math.max(0, lines.length - SEARCH_WINDOW);
+  for (let index = lines.length - 1; index >= from; index -= 1) {
+    const hit = TELEPORT_HINT.exec(lines[index].text);
+    if (hit) return hit[1];
+  }
+  return null;
+}
+
+/** The note under a page a CLI scrolls inside its own window, one line per
+ * Shift+↓/↑: Antigravity's sign-in page in a pane too short for its link
+ * (`(1–20 of 34 lines)` at 42×24). The rows straight above it are lines 1 to
+ * 20 of the page; the link's `state=` and the paste prompt are further down. */
+const PAGE_NOTE = /^\((\d{1,4})\s*[–-]\s*(\d{1,4}) of (\d{1,4}) lines\)$/u;
+/** The longest page assembled; the cap only bounds a misread. */
+const MAX_PAGE = 400;
+const PAGE_DOWN = "\u001b[1;2B";
+const PAGE_UP = "\u001b[1;2A";
+
+interface PageWindow { first: number; last: number; total: number; rows: string[] }
+
+function pageNote(text: string | undefined): { first: number; last: number; total: number } | null {
+  const note = PAGE_NOTE.exec((text ?? "").trim());
+  if (!note) return null;
+  const [first, last, total] = note.slice(1).map(Number);
+  if (first < 1 || last < first || total < last || total > MAX_PAGE) return null;
+  return { first, last, total };
+}
+
+/** Whether the row under a link is a page note saying more lines follow. */
+function cutByPage(below: string | undefined): boolean {
+  const note = pageNote(below);
+  return note !== null && note.last < note.total;
+}
+
+/** The lowest page window on screen: its note, and the rows it shows. */
+function pageWindow(lines: readonly SignInLineLike[]): PageWindow | null {
+  const rows = lines.slice(Math.max(0, lines.length - SEARCH_WINDOW)).map((line) => line.text);
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const note = pageNote(rows[index]);
+    if (!note) continue;
+    const count = note.last - note.first + 1;
+    return count <= index ? { ...note, rows: rows.slice(index - count, index) } : null;
+  }
+  return null;
+}
+
+/** A paged sign-in page as the frames have shown it so far. */
+export interface SignInPage {
+  /** The page's lines by number (index 0 is line 1); a hole is one no frame
+   * has shown yet. */
+  lines: (string | undefined)[];
+  /** The lines the window on screen shows. */
+  first: number;
+  last: number;
+}
+
+/**
+ * The paged sign-in page on screen, merged into what earlier frames showed of
+ * it (`known`), or `null` once no page is on screen. A page is only started
+ * where a sign-in link is cut by its window; a page whose lines disagree with
+ * `known` is a new one (a retry printed a new link) and starts over.
+ */
+export function readSignInPage(lines: readonly SignInLineLike[], known: SignInPage | null): SignInPage | null {
+  const view = pageWindow(lines);
+  if (!view) return null;
+  const continues = known !== null && known.lines.length === view.total
+    && view.rows.every((row, at) => [undefined, row].includes(known.lines[view.first - 1 + at]));
+  if (!continues) {
+    const cut = view.rows.some((_, at) => {
+      const hit = urlAt(view.rows, at);
+      const url = hit && hit.end === view.rows.length - 1 ? httpsUrl(hit.url) : null;
+      return url !== null && isSignInUrl(url);
+    });
+    if (!cut || view.last === view.total) return null;
+  }
+  const seen = continues ? known.lines : Array.from({ length: view.total }, (): string | undefined => undefined);
+  const fresh = view.rows.some((_, at) => seen[view.first - 1 + at] === undefined);
+  if (continues && !fresh && known.first === view.first && known.last === view.last) return known;
+  const merged = [...seen];
+  view.rows.forEach((row, at) => { merged[view.first - 1 + at] = row; });
+  return { lines: merged, first: view.first, last: view.last };
+}
+
+/** The Shift+↓/↑ presses toward the page's unseen lines, at most a window's
+ * height at once, so the next window still meets this one and no line is
+ * skipped; none once every line has been seen. */
+export function signInPageKeys(page: SignInPage): string[] {
+  const hole = page.lines.findIndex((line) => line === undefined) + 1;
+  if (hole === 0) return [];
+  const size = page.last - page.first + 1;
+  const [room, key] = hole < page.first ? [page.first - 1, PAGE_UP] : [page.lines.length - page.last, PAGE_DOWN];
+  return Array.from({ length: Math.min(size, room) }, () => key);
+}
+
+/** The sign-in a paged page holds, once every line of it has been seen. */
+export function readPagedSignIn(page: SignInPage): SignIn | null {
+  if (page.lines.some((line) => line === undefined)) return null;
+  return readSignIn(page.lines.map((text) => ({ text: text ?? "" })));
 }
 
 /** The flow a sign-in link is in, from the link and what the CLI printed

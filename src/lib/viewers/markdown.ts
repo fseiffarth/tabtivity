@@ -16,7 +16,8 @@
  * escape-first invariant. Keep this invariant if extending.
  */
 
-import { escapeHtml, highlight, type Lang } from "./highlight";
+import { highlight, type Lang } from "./highlight";
+import { escapeHtml } from "../textSafety";
 
 /** An href as the URL parser will read it: leading and trailing C0 controls
  *  and spaces dropped, ASCII tab, LF and CR removed anywhere (WHATWG URL). A

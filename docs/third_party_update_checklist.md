@@ -268,6 +268,82 @@ Claude's `/fast` — different thing.
   2.1.302 starts `-p` with no mode in `default` only on third-party
   providers, and caps *prompt and agent* hooks at 12 running per event;
   Tabtivity registers `command` hooks only, so neither reaches it.
+  Re-checked against 2.1.306 (2026-10-21, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.303 run of the same dump: keys
+  identical on all 18 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's own `sed` extractions (session_id, permission_mode,
+  source, hook_event_name, reason, transcript_path) matching `jq` on every
+  one; transcript record types and counts identical; `-p --resume` of a
+  `plan` session still reports the default; `--help` differs only in wording
+  (`--resume` now also takes a session *name*; Tabtivity passes UUIDs);
+  notification-type and permission-mode strings unchanged — the extra
+  `auto mode on` hits are plugin-policy prose, not the mode label). 2.1.305
+  re-lays out `/usage`'s "What's contributing" rows as `52%  <advice>`
+  (was `52% of your usage …`): `parseUsageReport` still yields the three
+  meters with every reset resolved and keeps the rows as notes (pinned in
+  `MobileUsageReport.test.ts`). 2.1.304 adds a "Resume this conversation?"
+  dialog (numbered Resume / Start a new conversation) on `--resume` of a
+  long-idle conversation, only where the server-side `tengu_amber_tally` config
+  says a resume costs at least `minPercent` (5) of the 5-hour limit — not
+  reproduced live on this account. It comes up after `SessionStart` and fires
+  no hook, so `stores/activity` reads it off the tail past the post-resume
+  silence (`looksLikeColdResumeDialogStripped`); both parsers are pinned by
+  fixtures built from the bundle's strings, not a capture. The resume start's
+  `seconds_since_last_response`, `context_tokens`, `estimated_cache_write_usd`
+  and `prompt_cache_likely_expired` are now read: the hook writes `<uid>.resume`
+  before `.src`, `agent-session-roll` carries it, and an expired cache shows a
+  chip in the Chat facts row until the first prompt. A custom statusline
+  opening `user@host:path (branch*)` is read for its path and branch
+  (`statusLine.ts` `PATH`). 2.1.304–306 otherwise touch mods, sandbox, Remote
+  Control and `-p` login in cloud sessions — nothing Tabtivity reads.
+  Re-checked against 2.1.308 (2026-10-22, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.306 run of the same dump: keys
+  identical on all 12 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on every one, the
+  resume start's four cost fields included; transcript record types and
+  counts identical; `-p --resume` of a `plan` session still reports the
+  default; `/usage` three meters, every reset resolved; `--help` identical;
+  notification-type, mode-label and cold-resume dialog strings count the
+  same). 2.1.307 writes real `usage` and `stop_reason` into subagent
+  transcripts (it wrote placeholders for streamed responses): checked live,
+  `<session>/subagents/agent-<id>.jsonl` still, repeated lines share
+  `message.id` + `requestId`, so `token_stats`' largest-value dedupe counts
+  each message once — subagent token counts just get truer. 2.1.308 is
+  "bug fixes" only; 2.1.307 otherwise touches OTel, MCP retries, cloud and
+  self-hosted runners, VS Code — nothing Tabtivity reads.
+  Re-checked against 2.1.309 (2026-10-23, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.308 run of the same dump: keys
+  identical on all 19 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on every one, the
+  resume start's four cost fields included; transcript record types
+  identical; `-p --resume` of a `plan` session still reports the default;
+  `/usage` three meters, every reset resolved; `--help` identical;
+  notification-type, mode-label and cold-resume dialog strings count the
+  same). 2.1.309 gives `sed -i` the standard Bash prompt instead of a
+  simulated edit preview, which the decision lamp reads like any Bash
+  prompt; its ctrl+enter, `/rename`-after-`--resume` and emoji-cut
+  transcript fixes touch nothing Tabtivity sends (it never sends
+  ctrl+enter) and only make such transcript lines parse; the rest is
+  sandbox, MCP, IDE, cloud and Slack — nothing Tabtivity reads.
+  Re-checked against 2.1.310 (2026-10-24, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.309 run of the same dump: keys
+  identical on all 17 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on every one, the
+  resume start's four cost fields included; transcript record types and
+  counts identical; `-p --resume` of a `plan` session still reports the
+  default; `/usage` three meters, every reset resolved; `--help` identical;
+  the notification-type list byte-identical, mode-label and cold-resume
+  dialog strings count the same). 2.1.310's file-read prompt for a symlink
+  leading outside the working directory was captured live in a scratch tmux
+  pane: `Read file` / `This will read <target>` / `(outside working
+  directory) via a symlink` above the dashed rules, then the usual `Do you
+  want to proceed?` with `❯ 1. Yes`. The desktop lamp lights, the phone
+  dialog takes the title and its three options (context: the `Read(…)` row),
+  and the Notification hook carried `permission_prompt`. Its auto-mode
+  outside-read dialog (four options, unchanged) only gains an explainer
+  sentence; the rest is gateways, compaction, Windows hooks Tabtivity does
+  not register (`PreToolUse`/`PermissionRequest`), sandbox wording, mods,
+  VS Code, cloud sessions, Claude Tag — nothing Tabtivity reads.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
@@ -382,6 +458,19 @@ aliases, and anything about where or how credentials are stored.
 
 ### 1.2 Codex
 
+API keys: `services/agent_api_keys.rs` selects a launch-only custom Codex
+provider with `env_key=OPENAI_API_KEY`, `wire_api="responses"`,
+`requires_openai_auth=false`, `supports_websockets=false` and a loopback base
+URL. The proxy forwards `/v1/responses` and `/v1/responses/compact` to
+`api.openai.com`, never a raw key to Codex. Verify against a fake upstream:
+`C2_PROBE_CODEX=<executable> cargo test -p tabtivity --no-default-features --lib codex_cli_talks_to_the_proxy -- --ignored`.
+Verified 2026-10-22 against Codex 0.163.0 with a fake loopback Responses
+endpoint: the temporary provider authenticates with the supplied token and
+displays the streamed answer, including with an existing saved API login
+(the saved file is unchanged); `exec resume` switches an existing conversation
+from the built-in OpenAI provider to the proxy token. The in-app interactive
+tab and resume/fork remain tagged for live verification.
+
 **Where** `services/agent_session.rs` (`resolve_codex_session`,
 `register_codex_hook`, `codex_hook_state`), `services/codex_bind.rs`,
 `src/lib/agents/codexHooks.ts`, `commands/ollama.rs` (`non_thinking_args`,
@@ -396,6 +485,42 @@ aliases, and anything about where or how credentials are stored.
 
 **Assumes**
 
+- **0.164.0 (2026-10-23), live but outside Tabtivity** — the standalone
+  install's musl build (`codex-code-mode-host` still beside `codex`) run in a
+  private tmux with its own `CODEX_HOME` and a local Ollama model, inside a
+  fenced agent tab, `--no-daemon`. `--version` prints `codex-cli 0.164.0`;
+  `resume [SESSION_ID]` (help now points at `--last` for the most recent),
+  `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m`, `-c`,
+  `--dangerously-bypass-hook-trust` stand. New subcommands `queue`,
+  `archive`/`unarchive`/`delete`, `migrate-rollouts` (legacy sessions →
+  paginated thread history, only with `--apply`) and `doctor`; new sessions
+  still write `sessions/<Y>/<M>/<D>/rollout-*.jsonl` with `session_meta`
+  first (`session_id`, `cwd`), `turn_context.model`, user prompts as
+  `response_item` user messages and `event_msg` `token_count` totals. Fed to
+  the parsers as captured (100 columns): the approval menu (same three labels,
+  `›` on row 1, `Environment: local` / `Reason: …` over the `$ <command>`
+  title `readSelectPrompt` takes; `looksLikeDecisionPrompt` true), the
+  title frames `[ ! ]`/`[ . ] Action Required | <dir>`, both `/model` steps
+  (unchanged; reasoning footer `enter default · s session · esc back`) and
+  the mode line (tmux's backtab and CSI-u Shift+Tab toggle the silent default
+  and `Plan mode`, read as `working` / `plan`). The "Hooks need review" menu
+  and the hooks page (`t trust all · enter review · esc close`, then `enter
+  details · esc close`) are as on 0.163.0. Hook payloads unchanged (Stop
+  with `stop_hook_active` and `last_assistant_message`; SessionEnd `reason`
+  `other` at an `exec` exit). Writer lock: a second `exec resume` exits 1 with
+  "already has an active writer"; after the TUI is SIGKILLed the same resume
+  succeeds and the lock file is gone. **Trust hash:** read off the codex-rs
+  source (`hooks::engine::discovery::hook_hash`, `config::version_for_toml`)
+  and reproduced byte for byte against the hashes 0.164.0 wrote:
+  `sha256:` + hex SHA-256 of the compact, key-sorted JSON
+  `{"event_name":<snake_case event>,"hooks":[{"async":false,"command":…,
+  "timeout":<normalized>,"type":"command"}],"matcher":…}` — `matcher` only
+  for events that keep one (not `Stop`/`UserPromptSubmit`), the timeout
+  defaulted to 600 (`SessionEnd` 1, clamped to 1–3). The config path is only
+  in the state key, never in the hash, so the hash of one home's hook is the
+  hash of the same hook in every home. Manage CLIs' **Trust in every agent
+  home** (`trust_codex_hooks`) writes it into each scope's config; until then
+  `/hooks` in one tab trusted only that tab's home and the notice stayed.
 - **0.163.0 (2026-10-16), live but outside Tabtivity** — the GitHub
   release's musl build plus its `codex-code-mode-host`, run in a private tmux
   with its own `CODEX_HOME` and a local Ollama model, inside a fenced agent
@@ -568,7 +693,7 @@ aliases, and anything about where or how credentials are stored.
   duplicate guard independent of hook trust; duplicates use the documented
   `codex resume` picker (no id). Never delete Codex's writer locks to force a
   resume. Verify this lifecycle again when its thread store changes (last
-  checked live on 0.163.0, with the CLI itself: a SIGKILLed writer releases
+  checked live on 0.164.0, with the CLI itself: a SIGKILLed writer releases
   the lock).
 - Session rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`
   whose **first line** is `{"type":"session_meta","payload":{"session_id","cwd",…}}`.
@@ -590,9 +715,11 @@ aliases, and anything about where or how credentials are stored.
   (`CODEX_HOOK_EVENTS`; 0.154.0 names those events and no `Notification`, read
   off the binary's strings, not live — so a Codex approval wait is still read
   off its screen). Their payloads carry `session_id` and `hook_event_name`
-  like Claude's (verified live on 0.161.0, 0.162.1 and 0.163.0). Trust state is read from
+  like Claude's (verified live on 0.161.0, 0.162.1, 0.163.0 and 0.164.0). Trust state is read from
   `[hooks.state."…"]` tables (`trusted_hash`, enabled flag), each hook by
-  position, so the new blocks need the same one-time `/hooks` trust.
+  position, so the new blocks need the same one-time `/hooks` trust — in every
+  agent home, which Manage CLIs' Trust in every agent home does at once
+  (`trust_codex_hooks`, the hash as under 0.164.0 above).
   Text-appended per event, never reserialized.
 - Local models: `codex --oss -c oss_provider="ollama" -m <model>` as the
   fallback when `ollama launch codex` cannot be used; reasoning is turned off
@@ -601,7 +728,7 @@ aliases, and anything about where or how credentials are stored.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.163.0):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.164.0):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -626,7 +753,7 @@ aliases, and anything about where or how credentials are stored.
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
   Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
-  0.161.0, 0.162.1 and 0.163.0, where Shift+Tab toggles only the silent default and plan (the
+  0.161.0, 0.162.1, 0.163.0 and 0.164.0, where Shift+Tab toggles only the silent default and plan (the
   other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
@@ -635,7 +762,7 @@ aliases, and anything about where or how credentials are stored.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0, 0.162.1 and 0.163.0, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0, 0.162.1, 0.163.0 and 0.164.0, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 
@@ -695,8 +822,8 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Agent | Resume flag | Warm-up | Install |
 |-------|-------------|---------|---------|
 | Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh` |
-| OpenCode | `--continue` | `run` | `curl … opencode.ai/install` / `npm i -g opencode-ai` |
-| Copilot | `--continue` | `-p` | `npm i -g @github/copilot` |
+| OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` / `npm i -g @opencode/cli` |
+| Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
 | Antigravity (`agy`) | `--continue` | — | `curl … antigravity.google/cli/install.sh` |
@@ -709,7 +836,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Kiro, Cline, OpenClaw, OpenHands, Plandex, SWE-agent, mini-SWE-agent, Mentat, gpt-engineer, Qoder | — | — | see `AGENTS` |
 
 Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
-(`agy --version` → `1.3.3`, the same bare shape as 1.2.9) and Muse (`muse --version` →
+(`agy --version` → `1.4.5`, the same bare shape as 1.2.9) and Muse (`muse --version` →
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
@@ -720,6 +847,11 @@ and still defaults the login to `$XDG_CONFIG_HOME` or `~/.config/muse/auth.json`
 Copilot's row is 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
+Re-checked live on **1.0.102 and 1.0.103** (2026-10-24) for the Reader, Diffs
+and Resume (next section): `-p`, `--session-id`, `--resume`, `--continue`,
+`--connect`, `login --device-code` all unchanged; `--version` still prints
+`GitHub Copilot CLI 1.0.102.`; the 102→103 event schema differs only by an
+added `instruction.update` event and a compaction progress field.
 
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
@@ -749,15 +881,62 @@ layout: a `/login` with `storeTokenPlaintext` on writes the token to
 `~/.copilot/config.json` under `authTokens` (earlier 1.0.88 runtimes:
 `copilotTokens`; 0.0.x: `copilot_tokens`), keyed
 `"<host>:<login>"`, beside `lastLoggedInUser`; Copilot reads
-`COPILOT_GITHUB_TOKEN` before any stored login. Checked against 1.0.88. If a
+`COPILOT_GITHUB_TOKEN` before any stored login. Checked against 1.0.88; the
+`authTokens` / `storeTokenPlaintext` markers are in the 1.0.102 and 1.0.103
+runtimes too (`strings … runtime.node`, 2026-10-24). If a
 release moves the token, fenced tabs go back to asking for a login each time
 (nothing breaks). Check with `strings` on
 `~/.cache/copilot/pkg/linux-x64/<ver>/prebuilds/linux-x64/runtime.node | grep
 -E 'authTokens|storeTokenPlaintext'` and
 `cargo test --manifest-path src-tauri/Cargo.toml copilot_auth`.
 
+**Copilot's session store and the Reader** (`services/copilot_session.rs`,
+`agent_changes` `Store::Copilot`, `agent_chats`, the hook in `agent_hint.rs`;
+desktop only). Run `python3 scripts/copilot-events-probe.py` after an update:
+it drives `copilot -p` against a local stub model (BYOK, isolated HOME, no
+login, no quota) and fails on any of the following, which is what the code
+assumes (1.0.102 and 1.0.103 both pass, 2026-10-24):
+
+- `--session-id <uuid>` creates the session on first use and resumes it after
+  (a `session.resume` record in the same `events.jsonl`), so every Copilot tab
+  is spawned with its own tab uuid instead of `--continue`; the log appears
+  with the first prompt, not at start. `~/.copilot/session-state/<uuid>/` holds
+  `events.jsonl` and `workspace.yaml` (`cwd: <path>`, plain or quoted).
+- `user.message.data.content`, `assistant.message.data.{content,model,
+  toolRequests}`, `session.model_change.data.{newModel,reasoningEffort}`,
+  `session.usage_info.data.currentTokens`; a subagent's events carry
+  `data.parentToolCallId` and are left out of the chat. `bash` and `task`
+  `tool.execution_start` give the running-shell and subagent cards until their
+  `tool.execution_complete`.
+- Diffs: `tool.execution_complete` with `success`, `fileEdits[{path,kind:
+  create|edit|delete}]` and `result.detailedContent`, a git-style diff with one
+  `diff --git a/<path-without-leading-slash> b/…` section per file, in
+  `fileEdits` order. Claude-family models edit with `create`/`edit`, GPT-family
+  ones with the freeform `apply_patch` (several files per call); both record
+  the same way. Shell-made changes are not in any of it.
+- The `sessionStart` hook (`~/.copilot/hooks/*.json`) gets `{sessionId, source:
+  new|resume, cwd, initialPrompt, timestamp}` — once per session, with its
+  first prompt. The hint script records `sessionId` under the tab's key, so a
+  `/new` or an in-CLI `/resume` is followed on the next spawn. A `copilot` run
+  nested under a Copilot tab inherits the tab's variables and would move the
+  record: probes unset `TABTIVITY_TAB_UID` (and the old-prefix one).
+- Screen (1.0.103 drawn through xterm from a pty capture, alt screen, a
+  `[Current] Sessions Issues Pull requests Gists` tab row on top): echoed
+  prompt `❯ text  HH:MM`, a boxed `❯` input between two rules, the footer
+  `← open sidebar · Interactive · Manual Approval · …` with the model at its
+  right end; while working the footer's first cell is a cycling glyph, the verb
+  and `esc esc edit prompt` (`agentBusy.BUSY_HINT`); an approval is a rounded
+  box with `Do you want to run this command?` and `❯ 1. Yes / 2. … / 3. No, and
+  tell Copilot what to do differently`, read by the generic dialog reader. The
+  composer's Ctrl-A Ctrl-K, bracketed paste and Enter work as they do for the
+  other CLIs. The footer's model and mode are not read off the screen (the
+  facts row takes the model from the log).
+- A cached update is used when `COPILOT_AUTO_UPDATE` is not `false`
+  (`agent_install` sets it for installs), so a probe HOME that auto-updates runs
+  a newer release than `--version` prints.
+
 **OpenCode's session plugin** (`services/opencode_session.rs`) assumes, of
-the plugin API (`@opencode-ai/plugin` 1.18.32 types, not run live): a
+the V1 plugin API (`@opencode-ai/plugin` 1.18.32 types, not run live): a
 `file://` entry in `opencode.json` `plugin` is imported as a module whose
 exported functions are plugins; the `chat.message` hook gets `{sessionID}`
 for every prompt, a `task` subagent's too; `session.*` events carry
@@ -765,6 +944,67 @@ for every prompt, a `task` subagent's too; `session.*` events carry
 session. If a release breaks one, tabs record nothing and fall back to
 `--continue` / a fresh start (no error). Check: prompt in two OpenCode tabs
 of one folder, then `cat <state_dir>/live_sessions/<project>/<uid>` per tab.
+
+**OpenCode 2 (2026-10-22).** The standalone binary installed in the fenced
+project home (not a verified host-wide installation) answers
+`opencode v2.1.2`; `--help`, `mini --help`, `auth export --help` and
+`debug paths` were run, without starting an agent or Tabtivity. The matching
+`agent_versions::VERIFIED` row covers those CLI checks only. The
+[V2 migration guide](https://opencode.ai/v2/docs/migrate-v1/) and
+[plugin migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1)
+were reviewed. V2 uses a shared background service by default: local host
+launches probe the version before spawning and add `--standalone` so each
+tab's environment, MCP grants and session claim belong to its own server.
+Saved `--mini` and root `--model`/`--agent` launches use `mini` (the full V2
+TUI no longer accepts those model/agent flags). Explicit `--server` is kept;
+remote/container binaries are not inferred from the host version.
+Re-checked against 2.1.3 (2026-10-23, the install home's binary beside the
+2.1.2 one, each in a scratch `HOME` with `OPENCODE_DISABLE_AUTOUPDATE=1`, no
+agent turn): `--help`, `mini`, `run`, `session`, `serve`, `auth` and `auth
+export --help` identical; `debug paths` the same layout; a fresh database
+from `session list --standalone` has a byte-identical schema (`session_v2`,
+`session_message` …); the binary strings the plugin, Reader and phone
+parsers lean on (`session.hook`, `OPENCODE_DISABLE_AUTOUPDATE`, `Ask
+anything`, `Type your own answer`, the question hints) count the same.
+`v2.1.2...v2.1.3` (66 commits, no GitHub release) leaves `packages/plugin`
+and the TUI's routes untouched; the session, plugin-host and V1-migration
+changes are type-only refactors, plus relative V1 session directories now
+resolved to the project worktree during migration; the rest is providers,
+voice, desktop, console and a Windows-only service port move.
+A tmux capture at 120×40 (stub provider on a dead local port) showed the full
+TUI's session screen read as before, but its start screen — the composer
+centred under the logo, its `┃` 23 columns in, and `home.footer`'s
+right-aligned version row under the box's footer (2.1.2 the same) — had the
+desktop Chat calling a fresh tab stray ("The terminal shows something the
+chat can't display"); `openCodeFrame` now steps over that version row and
+`openCodeComposer`/the placeholder allow the bar. A release that moves the
+version row or adds rows under it brings that notice back on fresh tabs.
+
+The session plugin now default-exports `{id, server, setup}`: V1 ≥1.18.29
+calls `server`, V2 calls `setup`, which registers `session.hook("prompt")`
+and checks `session.get({sessionID}).parentID` before recording. Native
+`plugins` arrays take precedence over legacy `plugin`, so registration uses
+the same active array. Reader queries support V2's `session_v2` and
+`session_message` (typed user text / assistant content, durable `seq` order)
+alongside V1 sessions, through a temporary view on a read-only connection.
+V2 completed tools carry `FileDiff` metadata (`file`, `patch`, `status`),
+read directly by Changes. Conversation exports keep V2 tables, blank session
+permissions and continue dropping credential/account tables. Integration is
+not live verified; the Reader carries `agents.opencode.v2`.
+
+Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
+run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
+install -g @opencode/cli`, as both link `opencode`), and the update check
+reads npm `@opencode/cli`: `opencode.ai/install` refuses 2.x and npm
+`opencode-ai` is V1 only. Before that a V1 install offered "upgrade major"
+inside the fence, whose installer wrote 2.x into the scope's agent home,
+behind the install home on PATH, so a restart ran V1 again; fenced spawns
+now set `OPENCODE_DISABLE_AUTOUPDATE=1` (honoured by 1.19 and 2.1, also for
+that offer). Still open: V2 migrates legacy `auth.json` once, then stores
+credentials in SQLite. Sharing the whole database would leak sessions
+between scopes, so later V2 sign-ins/refreshes are not shared by
+`agent_auth` and may have to be repeated per scope. Track that and the
+structured model/form APIs in `todo/group-s-agents.md`.
 
 **OpenCode's minimal interface** is read by the phone since 2026-09-18
 (`mobile-web/src/terminal/openCodeMini.ts`, verified against 1.18.31 by live
@@ -805,7 +1045,23 @@ three-stop gauge moved by →, Enter applying both, `/effort`, the sign-in
 menu and OAuth link page, each byte-identical to 1.2.14's but the banner's
 version (the captures are in `MobileAntigravity.test.ts`), and `--continue`
 reopening the last conversation, whose store is still
-`~/.gemini/antigravity-cli/conversations/<id>.db`). That run signs in with no
+`~/.gemini/antigravity-cli/conversations/<id>.db`; 1.4.5 on 2026-10-22, the
+same setup beside the 1.3.0 binary the updater left behind: first-run
+screens, idle footer, gauge shape, Enter's `Model set to … (High)`,
+`/effort`, sign-in menu and link page unchanged; `--version` still bare.
+What moved: the catalog gained `Gemini 4 Argon` (low/medium/high), and
+`/model` now opens with the highlight on the `(current)` row, so its gauge is
+the session's model's — Gemini 3.1 Pro's two stops, which the reader takes
+(captures in `MobileAntigravity.test.ts`). `--help` differs only in `--mode`
+gaining `auto` — Tabtivity passes no mode. A second `--continue` while the
+first is open still resumes, under a `⚠ Conversation already open` notice
+(1.3.0 has it too; `presence/<id>.lock` marks the open one). The link page
+pages itself in a short pane — `(1–20 of 34 lines)` at 42×24 cuts the URL
+before `state=` (1.3.0 the same); at 80×24 it fits whole. The phone refuses a
+link cut by that note and pages with Shift+↓/↑ (`ESC[1;2B`/`ESC[1;2A`, one
+line each, the logo scrolling too) until every line was on screen
+(`readSignInPage` in `signIn.ts`); a release that renames the note or its
+keys leaves a narrow phone tab without the link again). That run signs in with no
 account: a private `HOME`, `"modelProvider": "gemini"` in
 `~/.gemini/antigravity-cli/settings.json`, a dummy `GEMINI_API_KEY` and
 `GOOGLE_GEMINI_BASE_URL` at a dead local port — the UI draws fully, turns
@@ -842,10 +1098,16 @@ descriptor defines user input as type 14, field 19 → field 2; answers as
 type 15, field 20 → field 1; completion status 3; timestamps at field 5 →
 field 1. Re-check these against the binary descriptor and database schema on
 update. Thinking and tools are omitted. Versions include the WAL's timestamp.
+1.4.5 (2026-10-22) checked by a live turn: `GOOGLE_GEMINI_BASE_URL` at a local
+stub answering `POST /v1beta/models/<id>:streamGenerateContent?alt=sse` with
+one SSE `candidates` chunk gives a real answer step, and every field above
+decodes from the stored rows (schema of both databases unchanged). That stub
+is the way to see type 15 without an account.
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an
-*opportunity*, not a break. Copilot has been alt-screen unconditionally since 1.0.12 (its
+*opportunity*, not a break. The desktop Reader reads Copilot from its event log
+and its screen (next section). Copilot has been alt-screen unconditionally since 1.0.12 (its
 `--alt-screen` flag was removed). Copilot 1.0.81–1.0.82 also offered to restore
 interrupted sessions at startup, a prompt a restored tab would open on; 1.0.83
 turned it off by default. Vibe 2.25.4 still has `-c/--continue` and
@@ -1129,7 +1391,7 @@ in-place-rewritten mirror (§1.1).
 
 **Assumes** `pkexec openvpn --config --daemon --writepid --log --management
 --verb --mute --connect-retry-max --connect-timeout --persist-tun
---auth-nocache` and, depending on the config, `--auth-user-pass` (file) or
+--persist-key --mlock` (no `--auth-nocache`: the hourly rekey needs the account) and, depending on the config, `--auth-user-pass` (file) or
 `--askpass`; the management-interface protocol (`>PASSWORD:`, `>STATE:`, <!-- privacy-check: ok — OpenVPN management-protocol tokens, not a credential -->
 `>HOLD:` lines) for status and teardown; `openvpn.exe` on Windows; config
 directives `auth-user-pass` / encrypted key detection by text.
@@ -1353,7 +1615,7 @@ not written.
 | Dependency | Pinned / floor | Why it is load-bearing |
 |------------|----------------|------------------------|
 | WebKitGTK | 2.52 observed | no renderer-pid API (watchdog probes instead); scrollbar built once; DMABUF off (flicker + SIGBUS) |
-| Tauri / wry / plugins | `^2` | IPC fallback path evaluates PDF bytes as script — keep the custom protocol |
+| Tauri / wry / plugins | `^2` | IPC fallback path evaluates PDF bytes as script — keep the custom protocol. On macOS, wry's `WryWebViewUIDelegate` answers media-capture requests with *Grant* when no handler is set (0.57); since the mic entitlement for dictation (browser plan §5.2, 2026-10-23) the app-level deny in `lib.rs` (`with_macos_permission_deny`) is what keeps browsed pages off the microphone — check it still reaches `request_media_capture_permission` in the new wry's `src/wkwebview/class/wry_web_view_ui_delegate.rs` |
 | `@tauri-apps/api` internals (browser client) | 2.12 | `src/lib/transport/wsInternals.ts` re-implements `window.__TAURI_INTERNALS__` (`invoke`, `transformCallback`, `unregisterCallback`, `convertFileSrc`, `metadata`) and `__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener`, plus the wire shapes of `plugin:event\|*`, `plugin:dialog\|open/save/message` (`buttonsToRust`), `plugin:notification\|*` command names, `plugin:window\|*`. On an API or plugin-dialog/-notification bump: diff `core.js`, `event.js`, `window.js` and both plugins' `dist-js/index.js` against the shim (most of a release's diff is doc comments: strip them first); `WebTransport.test.ts` covers the shapes it knows and drives the installed `core`/`event`/`window`/`webview` and both plugins' JS through the shim, so a renamed command or argument key fails there |
 | `tauri-runtime-wry` | patched 2.12.1 (`src-tauri/patches/`, root `Cargo.toml` `[patch.crates-io]`) | `Context.main_thread` behind an `Arc`, or off-thread `AppHandle` clones race tao's Linux `Rc` and corrupt the heap. On a tauri bump: re-copy the new version and re-apply the `TABTIVITY PATCH` hunks (since 2.12 also `make_event_handler`, which moves fields out of `main_thread` and must clone them from the `Arc`); move `src-tauri/Cargo.toml`'s Windows `webview2-com` and `windows` to the versions the new wry uses (only the Windows clippy cross-check sees a mismatch); or drop the patch once upstream fixes it |
 | `@xterm/xterm` + addons | `^6.0`, webgl `^0.19` (no canvas addon since 6) | key encodings (`ESC [ Z`, CSI-u) the mobile bridge relies on; Alt+arrow word jumps re-added by `altArrowWordJump` (6 dropped them); scrollbar is xterm's own `.xterm-scrollable-element` slider, styled in `base.css` / phone `style.css`; mobile reads internal `_core._bufferService.buffers.normal.lines.onTrim` (`readableHistory.scrollbackTrimEvent`). On a bump run `TerminalXtermContract`, `TerminalRealXterm` and `MobileTerminalXtermTrim`: the only tests on the real package (the rest mock it) |
@@ -1386,7 +1648,49 @@ A GitHub API or release-naming change breaks the update banner.
 
 ---
 
-## 21. Quick routine after any update
+## 21. Voice: whisper.cpp, the model catalog, cpal, speech-dispatcher
+
+**Where** `services/voice/` (`models.rs`, `stt.rs`, `capture.rs`; read-aloud
+in step 2c), `Cargo.toml`'s voice block, `ci-cd.yml` (`GGML_NATIVE`, the apt
+lists), `tauri.conf.json` (deb `depends`/`recommends`).
+Plan: `docs/desktop_voice_plan.md`.
+
+**Assumes**
+- `whisper-rs` =0.16.0 / `whisper-rs-sys` 0.15.0 (whisper.cpp 1.8.3):
+  `FullParams` setters leak and panic on a NUL (built once per session),
+  the raw `set_abort_callback` + user data (its `set_abort_callback_safe`
+  casts the boxed closure to the wrong type and aborts every run in
+  0.16.0 — re-check before switching back), `no_speech_probability`, `get_lang_id` /
+  `get_lang_str`, `WhisperVadContext::segments_from_samples`. Its build runs
+  bindgen (libclang required; Windows needs `LIBCLANG_PATH` if clang-sys
+  misses it) and forwards `GGML_*` to cmake; `GGML_NATIVE=OFF` means x86_64
+  AVX/AVX2/FMA/F16C/BMI2, which `voice::cpu::REQUIRED` must match.
+- The catalog pins each model by Hugging Face repo **and commit** with its
+  SHA-256 and exact size (`ggerganov/whisper.cpp`, `ggml-org/whisper-vad`).
+  A new model is a new row, never a moved commit under an old one.
+- `cpal` =0.18.2, ALSA host only on Linux (its `pulseaudio` host drops input
+  in 0.18.2); errors classified by `ErrorKind`, Windows privacy denial as a
+  `BackendError` carrying `E_ACCESSDENIED`.
+- `tts` =0.26.3 on Windows/macOS only (never on Linux, where it links
+  libspeechd): `Tts::default`, `speak`, `stop`, `is_speaking` (polled for
+  the end of a chunk), `voices`/`set_voice` (never macOS's `voice()`, which
+  is `unimplemented!()`), `normal_rate`/`min_rate`/`max_rate`.
+- speech-dispatcher's SSIP (0.12.0~rc2, `ssip.rs`): `SET self CLIENT_NAME`,
+  `NOTIFICATION END/CANCEL on`, `SSML_MODE off`, `PRIORITY text`, `LANGUAGE`,
+  `RATE` −100…100, `SPEAK` → `230`, dot-stuffed data, `225-<id>`, `CANCEL
+  self` → `210`, events `701`/`702`/`703` naming the id; the socket at
+  `$XDG_RUNTIME_DIR/speech-dispatcher/speechd.sock` or `SPEECHD_ADDRESS`
+  `unix_socket:`, `speech-dispatcher --spawn` when nothing listens.
+
+**Verify** `cargo test -p tabtivity --lib -- services::voice`; a clean
+`cargo build` with the new pins on Linux, then the CI Windows/macOS jobs;
+for a new catalog row, `sha256sum` and `stat -c %s` of the downloaded file
+against the row, at the commit the URL names; dictate one sentence in a
+frozen dev build.
+
+---
+
+## 22. Quick routine after any update
 
 ```sh
 rustup update && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

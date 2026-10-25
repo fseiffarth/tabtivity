@@ -10,6 +10,7 @@ import {
   GIT_DOT_BACKGROUND_EVERY,
   GIT_DOT_TICK_MS,
   gitDotProbedAt,
+  remoteGitDotStep,
   useGitDirtyStore,
 } from "../../stores/gitDirty";
 
@@ -153,5 +154,21 @@ describe("gitDotProbedAt — the watcher's probes count for the switcher's timer
     expect(
       gitDotsDue(["watched", "bar-read"], new Set(["watched", "bar-read"]), gitDotProbedAt, now + GIT_DOT_TICK_MS, GIT_DOT_TICK_MS),
     ).toEqual(["watched", "bar-read"]);
+  });
+});
+
+describe("remoteGitDotStep — a remote dot follows its SSH lamp", () => {
+  it("drops to unknown whenever the host is not connected (VPN dropped, torn down, connecting, failed)", () => {
+    for (const ssh of ["off", "connecting", "error"] as const) {
+      expect(remoteGitDotStep("connected", ssh)).toBe("unknown");
+      expect(remoteGitDotStep(undefined, ssh)).toBe("unknown");
+    }
+  });
+
+  it("re-reads once on (re)connecting, then leaves the dot to the Files view", () => {
+    expect(remoteGitDotStep(undefined, "connected")).toBe("probe");
+    expect(remoteGitDotStep("off", "connected")).toBe("probe");
+    expect(remoteGitDotStep("connecting", "connected")).toBe("probe");
+    expect(remoteGitDotStep("connected", "connected")).toBeNull();
   });
 });

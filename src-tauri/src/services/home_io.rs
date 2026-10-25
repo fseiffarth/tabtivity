@@ -58,6 +58,20 @@ fn components(rel: &str) -> Option<Vec<&str>> {
     Some(parts)
 }
 
+/// The home `depth` components above `path` (as far up as there are any) and
+/// the way down to `path` from it. On unix the home is canonicalized: it is
+/// Tabtivity's, and a link in its own prefix (a symlinked temp dir) is not the
+/// agent's doing.
+fn split_below(path: &Path, depth: usize) -> Option<(PathBuf, String)> {
+    let home = path.ancestors().take(depth + 1).last()?;
+    let rel = path.strip_prefix(home).ok()?.to_str()?.to_string();
+    #[cfg(unix)]
+    let home = std::fs::canonicalize(home).ok()?;
+    #[cfg(not(unix))]
+    let home = home.to_path_buf();
+    Some((home, rel))
+}
+
 #[cfg(unix)]
 fn cstr(name: &OsStr) -> io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
@@ -95,6 +109,14 @@ impl HomeDir {
             dir = dir.subdir_in(part, create).ok()?;
         }
         Some(dir)
+    }
+
+    /// `path`, a directory `depth` components below the agent home it is in,
+    /// opened by handle without creating anything. The home is Tabtivity's
+    /// and resolved once by name; a link at any component below it is refused.
+    pub fn open_below(path: &Path, depth: usize) -> Option<Self> {
+        let (home, rel) = split_below(path, depth)?;
+        Self::open_in(&home, &rel, false)
     }
 
     #[cfg(unix)]
@@ -208,15 +230,26 @@ impl HomeDir {
     /// acted on through the handle, so a listing of the wrong directory
     /// yields names that fail there.
     pub fn names(&self) -> Vec<String> {
+        self.entry_names().0
+    }
+
+    /// [`HomeDir::names`] and how many entries were left out because their
+    /// name is not UTF-8, for a caller that must account for every entry.
+    pub fn entry_names(&self) -> (Vec<String>, usize) {
         let Ok(entries) = std::fs::read_dir(&self.path) else {
-            return Vec::new();
+            return (Vec::new(), 0);
         };
+        let mut odd = 0;
         let mut names: Vec<String> = entries
             .flatten()
-            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter_map(|e| {
+                let name = e.file_name().to_str().map(str::to_string);
+                odd += usize::from(name.is_none());
+                name
+            })
             .collect();
         names.sort();
-        names
+        (names, odd)
     }
 
     /// Open the child directory `name` without creating it: `None` when
@@ -382,6 +415,12 @@ impl HomeFile {
         let (name, dirs) = parts.split_last()?;
         let dir = HomeDir::open_in(home, &dirs.join("/"), create)?;
         Some(HomeFile { dir, name: OsString::from(name) })
+    }
+
+    /// [`HomeDir::open_below`] for a file `depth` components below its home.
+    pub fn open_below(path: &Path, depth: usize) -> Option<Self> {
+        let (home, rel) = split_below(path, depth)?;
+        Self::open_in(&home, &rel, false)
     }
 
     /// The directory the file is in.
@@ -665,15 +704,29 @@ impl HomeFile {
         Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name to move the file aside to"))
     }
 
+    /// Move the name into `dir`, under the same name — another directory of
+    /// the same home (an agent session filed under another folder,
+    /// `services::agent_relocate`). Both ends are handles, so a link swapped
+    /// in on either side is moved or refused, never followed, and an entry
+    /// already at the name in `dir` is never replaced (as
+    /// [`HomeFile::rename_aside`]).
+    pub fn move_into(&self, dir: &HomeDir) -> io::Result<()> {
+        self.rename_noreplace_into(dir, &self.name)
+    }
+
+    fn rename_noreplace(&self, to: &std::ffi::OsStr) -> io::Result<()> {
+        self.rename_noreplace_into(&self.dir, to)
+    }
+
     #[cfg(unix)]
-    fn rename_noreplace(&self, to: &OsStr) -> io::Result<()> {
+    fn rename_noreplace_into(&self, dir: &HomeDir, to: &OsStr) -> io::Result<()> {
         let (from_c, to_c) = (cstr(&self.name)?, cstr(to)?);
         #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
-        let fd = self.dir.fd.as_raw_fd();
+        let (fd, to_fd) = (self.dir.fd.as_raw_fd(), dir.fd.as_raw_fd());
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         {
-            // SAFETY: valid C strings and descriptor.
-            if unsafe { libc::renameat2(fd, from_c.as_ptr(), fd, to_c.as_ptr(), libc::RENAME_NOREPLACE) } == 0 {
+            // SAFETY: valid C strings and descriptors.
+            if unsafe { libc::renameat2(fd, from_c.as_ptr(), to_fd, to_c.as_ptr(), libc::RENAME_NOREPLACE) } == 0 {
                 return Ok(());
             }
             let e = io::Error::last_os_error();
@@ -683,8 +736,8 @@ impl HomeFile {
         }
         #[cfg(target_os = "macos")]
         {
-            // SAFETY: valid C strings and descriptor.
-            if unsafe { libc::renameatx_np(fd, from_c.as_ptr(), fd, to_c.as_ptr(), libc::RENAME_EXCL) } == 0 {
+            // SAFETY: valid C strings and descriptors.
+            if unsafe { libc::renameatx_np(fd, from_c.as_ptr(), to_fd, to_c.as_ptr(), libc::RENAME_EXCL) } == 0 {
                 return Ok(());
             }
             let e = io::Error::last_os_error();
@@ -692,7 +745,7 @@ impl HomeFile {
                 return Err(e);
             }
         }
-        self.link_aside(&from_c, &to_c)
+        self.link_aside(dir, &from_c, &to_c)
     }
 
     /// The no-replace move on a filesystem without an atomic flag for it
@@ -703,20 +756,20 @@ impl HomeFile {
     /// was replaced in between, the newcomer stays where it is and the file
     /// that was there is the one at `to`.
     #[cfg(unix)]
-    fn link_aside(&self, from: &std::ffi::CStr, to: &std::ffi::CStr) -> io::Result<()> {
-        let fd = self.dir.fd.as_raw_fd();
-        // SAFETY: valid C strings and descriptor; flags 0 links a symlink
+    fn link_aside(&self, dir: &HomeDir, from: &std::ffi::CStr, to: &std::ffi::CStr) -> io::Result<()> {
+        let (fd, to_fd) = (self.dir.fd.as_raw_fd(), dir.fd.as_raw_fd());
+        // SAFETY: valid C strings and descriptors; flags 0 links a symlink
         // itself, never what it points at.
-        if unsafe { libc::linkat(fd, from.as_ptr(), fd, to.as_ptr(), 0) } != 0 {
+        if unsafe { libc::linkat(fd, from.as_ptr(), to_fd, to.as_ptr(), 0) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        let id = |name: &std::ffi::CStr| {
+        let id = |at: libc::c_int, name: &std::ffi::CStr| {
             let mut st: libc::stat = unsafe { std::mem::zeroed() };
             // SAFETY: valid C string, descriptor and out-pointer.
-            let r = unsafe { libc::fstatat(fd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+            let r = unsafe { libc::fstatat(at, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
             (r == 0).then_some((st.st_dev, st.st_ino))
         };
-        if id(from).is_none_or(|a| Some(a) != id(to)) {
+        if id(fd, from).is_none_or(|a| Some(a) != id(to_fd, to)) {
             return Ok(());
         }
         // SAFETY: valid C string and descriptor.
@@ -724,15 +777,15 @@ impl HomeFile {
             let e = io::Error::last_os_error();
             // Not left under two names: drop the link just made.
             // SAFETY: valid C string and descriptor.
-            unsafe { libc::unlinkat(fd, to.as_ptr(), 0) };
+            unsafe { libc::unlinkat(to_fd, to.as_ptr(), 0) };
             return Err(e);
         }
         Ok(())
     }
 
     #[cfg(not(unix))]
-    fn rename_noreplace(&self, to: &std::ffi::OsStr) -> io::Result<()> {
-        let target = self.dir.path.join(to);
+    fn rename_noreplace_into(&self, dir: &HomeDir, to: &std::ffi::OsStr) -> io::Result<()> {
+        let target = dir.path.join(to);
         if std::fs::symlink_metadata(&target).is_ok() {
             return Err(io::Error::from(io::ErrorKind::AlreadyExists));
         }
@@ -1256,19 +1309,19 @@ mod tests {
         let file = HomeFile::open_existing(&home, ".vibe/.env").unwrap();
         let c = |s: &str| std::ffi::CString::new(s).unwrap();
 
-        let err = file.link_aside(&c(".env"), &c(".env.old")).unwrap_err();
+        let err = file.link_aside(file.dir(), &c(".env"), &c(".env.old")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read_to_string(home.join(".vibe/.env")).unwrap(), "mine");
         assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old")).unwrap(), "older");
 
-        file.link_aside(&c(".env"), &c(".env.old.1")).unwrap();
+        file.link_aside(file.dir(), &c(".env"), &c(".env.old.1")).unwrap();
         assert!(!home.join(".vibe/.env").exists());
         assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old.1")).unwrap(), "mine");
 
         let victim = tmp.path().join("victim");
         std::fs::write(&victim, "keep").unwrap();
         std::os::unix::fs::symlink(&victim, home.join(".vibe/.env")).unwrap();
-        file.link_aside(&c(".env"), &c(".env.old.2")).unwrap();
+        file.link_aside(file.dir(), &c(".env"), &c(".env.old.2")).unwrap();
         assert!(std::fs::symlink_metadata(home.join(".vibe/.env")).is_err());
         assert!(std::fs::symlink_metadata(home.join(".vibe/.env.old.2")).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");

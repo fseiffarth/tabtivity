@@ -9,13 +9,14 @@ import type { InternalViewer } from "../lib/viewers/fileUtils";
 import type { AutocompleteMode } from "../types";
 import type { LoginTarget } from "../lib/remote/loginTarget";
 import { forgetPty } from "../lib/agents/promptCount";
+import { forgetTypedLine } from "../lib/agents/typedClear";
 import { forgetPromptTrail } from "./agents/promptTrail";
-import { BOX_SCOPE_PREFIX, splitPtyId } from "../lib/terminal/ptyId";
+import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
 import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
 import { useLinkRoutingStore } from "./linkRouting";
 import { bumpUsage } from "./usage";
-import { translate, useI18nStore } from "../lib/i18n";
+import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { newTmuxSessionName } from "../lib/terminal/tmuxSession";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
@@ -218,13 +219,9 @@ export function workerRunnable(h: LocalityHost): boolean {
   return !!h.shared_fs || h.sync_code !== false;
 }
 
-/**
- * The scope that belongs to no project: the root control terminal's, and the
- * scope every tab opened outside a project lands in. Its working directory is
- * `~/tabtivity/root` (`root_work_dir`), which the side panel browses as the app's
- * unfiled/scratch area.
- */
-export const ROOT_SCOPE = "root";
+// The scope that belongs to no project (the root control terminal's, and where
+// every tab opened outside a project lands) is defined in `lib/terminal/ptyId`.
+export { ROOT_SCOPE };
 
 export const FILES_TAB_CMD = tabCommand("files");
 
@@ -957,6 +954,12 @@ export interface TabEntry {
   // Runtime only: a restored Host session waits for an explicit Resume before
   // anything is spawned (see TabPane's HostSessionHold).
   hostSessionPaused?: boolean;
+  // The tab's pick between its CLI's own login and the user's stored API key
+  // (`PtyOptions::api_key`): `true` from the ＋ menu's API section, `false`
+  // from its plain rows, unset (the phone, scheduled agents, older tabs) for
+  // the Manage CLIs switch. Persisted, so a resumed tab keeps its billing;
+  // the backend drops it from an adopted or imported layout.
+  apiKey?: boolean;
   // Idempotency key of the request that created this tab, for the callers that
   // create one without a click behind them: a Mobile create (a keyed hash — it
   // contains no client token) whose timed-out retry must resolve to this exact
@@ -1033,6 +1036,10 @@ export interface GroupNode {
   // and width — so it persists with the layout, travels with a detach, and is
   // freed when the group (subwindow) is dropped.
   filesFolder?: string;
+  // Emptied by closing its last tab while `close_subwindow_on_last_tab` is off:
+  // the subwindow stays standing, empty with its +, instead of collapsing away.
+  // Session-only (never persisted); dropped once a tab lands in the group.
+  keepEmpty?: boolean;
 }
 
 export type LayoutNode = SplitNode | GroupNode;
@@ -1229,6 +1236,8 @@ export interface SavedTabEntry {
   cloud?: boolean;
   // Persisted Host session marker (see TabEntry.hostSession).
   hostSession?: boolean;
+  // Persisted login-or-key pick (see TabEntry.apiKey).
+  apiKey?: boolean;
   // Persisted local-model launch line (see TabEntry.localLaunch).
   localLaunch?: LocalLaunch;
   // Persisted Tabby chat launch (see TabEntry.assistant).
@@ -1293,6 +1302,7 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     mark: t.mark,
     todoId: t.todoId,
     hostSession: t.hostSession || undefined,
+    apiKey: t.apiKey,
     localLaunch: t.localLaunch,
     assistant: t.assistant,
     signIn: t.signIn || undefined,
@@ -1566,7 +1576,10 @@ interface TabsStore {
   // Respawn a tab's PTY in place with `args` — same tab, key and position.
   // The caller ends a tmux session the tab owns first, or the respawn would
   // just reattach to it ("Undo clear", `stores/agents/agentClearUndo`).
-  relaunchTabInScope: (scope: string, key: string, args: string[]) => void;
+  // `patch` changes the tab's label and Tabby launch on the way (a chat's model
+  // switch, `switchAssistantModel`), or its folder (an agent moved to another
+  // worktree, `switchAgentWorktree`).
+  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Partial<Pick<TabEntry, "label" | "assistant" | "cwd">>) => void;
   // Swap the built-in viewer an embed tab renders its file with, in place — same
   // tab, same key, same position in the layout. `viewer` is persisted, so a tab
   // saved under a viewer choice the app has since revised comes back under the
@@ -2067,7 +2080,11 @@ export function orderedTabKeys(node: LayoutNode | null): string[] {
  *  returns the input unchanged if the key isn't present. Used by the detached
  *  subtree mutators, which (post-split) operate on a LayoutNode, not a single
  *  group. */
-export function removeKeyFromTree(node: LayoutNode, key: string): LayoutNode | null {
+export function removeKeyFromTree(
+  node: LayoutNode,
+  key: string,
+  keepEmpty = false,
+): LayoutNode | null {
   const found = findGroupOfTab(node, key);
   if (!found) return node;
   const removed = mapGroup(node, found.group.id, (g) => {
@@ -2076,6 +2093,7 @@ export function removeKeyFromTree(node: LayoutNode, key: string): LayoutNode | n
       ...g,
       tabKeys,
       activeKey: g.activeKey === key ? (tabKeys[0] ?? null) : g.activeKey,
+      ...(keepEmpty && tabKeys.length === 0 ? { keepEmpty: true } : {}),
     };
   });
   return collapse(removed);
@@ -2225,11 +2243,29 @@ function firstGroup(node: LayoutNode): GroupNode {
   return cur;
 }
 
+/** Whether closing a group's last tab leaves the subwindow standing — the
+ *  `close_subwindow_on_last_tab` setting, off (keep it) unless set. */
+function keepEmptiedSubwindow(): boolean {
+  return useSettingsStore.getState().settings?.close_subwindow_on_last_tab !== true;
+}
+
+/** An empty group the collapse drops: one without the `keepEmpty` mark. */
+function isDroppableGroup(node: LayoutNode): boolean {
+  return node.type === "group" && node.tabKeys.length === 0 && !node.keepEmpty;
+}
+
+/** A group emptied so the collapse drops it (merged, moved, detached, hidden
+ *  away) — never left standing as an empty subwindow. */
+function vacated(g: GroupNode): GroupNode {
+  return { ...g, tabKeys: [], activeKey: null, keepEmpty: false };
+}
+
 /**
  * Collapse a tree bottom-up:
  *  - a split with a single remaining child is replaced by that child;
  *  - empty groups inside a split are dropped (a lone empty root group is kept
- *    so an empty scope still has a root container, but callers may pass null).
+ *    so an empty scope still has a root container, but callers may pass null),
+ *    except one marked `keepEmpty`.
  * Returns the new (possibly null) root.
  */
 function collapse(node: LayoutNode | null): LayoutNode | null {
@@ -2243,7 +2279,7 @@ function collapse(node: LayoutNode | null): LayoutNode | null {
   node.children.forEach((child, i) => {
     const c = collapse(child);
     if (!c) return;
-    if (c.type === "group" && c.tabKeys.length === 0) return; // drop empty group
+    if (isDroppableGroup(c)) return; // drop empty group
     children.push(c);
     sizes.push(node.sizes[i] ?? 1);
   });
@@ -2283,13 +2319,15 @@ function pruneCollapseCollect(
       node.activeKey && tabKeys.includes(node.activeKey)
         ? node.activeKey
         : (tabKeys[0] ?? null);
+    // A kept-empty subwindow that got a tab again is an ordinary group.
+    const unmark = !!node.keepEmpty && tabKeys.length > 0;
     // Identity is preserved when nothing was pruned: `layout` must not change
     // for a write that only touched a tab payload (performance plan §3.1) — a
     // fresh tree per write re-rendered every group on a viewer's scroll pause.
     const next: GroupNode =
-      tabKeys.length === node.tabKeys.length && activeKey === node.activeKey
+      tabKeys.length === node.tabKeys.length && activeKey === node.activeKey && !unmark
         ? node
-        : { ...node, tabKeys, activeKey };
+        : { ...node, tabKeys, activeKey, ...(unmark ? { keepEmpty: false } : {}) };
     groupsOut.push(next);
     return next;
   }
@@ -2306,7 +2344,7 @@ function pruneCollapseCollect(
       same = false;
       return;
     }
-    if (c.type === "group" && c.tabKeys.length === 0) {
+    if (isDroppableGroup(c)) {
       same = false;
       return; // drop empty group
     }
@@ -2508,8 +2546,10 @@ let layoutPersistFailureReported = false;
  */
 function forgetClosedTab(scope: string, key: string): void {
   useLinkRoutingStore.getState().purgeForTab(key);
-  forgetPty(`${scope}:${key}`);
-  forgetPromptTrail(`${scope}:${key}`);
+  const ptyId = `${scope}:${key}`;
+  forgetPty(ptyId);
+  forgetPromptTrail(ptyId);
+  forgetTypedLine(ptyId);
 }
 
 /** Persist a scope's tabs+layout+focus into the per-scope maps, mirroring the
@@ -3366,13 +3406,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       get().removeTabInScope(owner, key);
       return;
     }
-    // Discard any session-only link routes that pointed FROM this tab (#50).
-    useLinkRoutingStore.getState().purgeForTab(key);
     bumpUsage(get().scope, METRIC.TAB_CLOSED);
-    // The PTY is gone; drop its half-typed-prompt state so a recycled id can
-    // never inherit it.
-    forgetPty(`${get().scope}:${key}`);
-    forgetPromptTrail(`${get().scope}:${key}`);
+    forgetClosedTab(get().scope, key);
     set((s) => {
       const { tabs, layout, focusedGroupId } = currentScopeState(s);
       const nextTabs = tabs.filter((t) => t.key !== key);
@@ -3389,9 +3424,11 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           g.activeKey === key
             ? (tabKeys[Math.min(found.index, tabKeys.length - 1)] ?? null)
             : g.activeKey;
-        return { ...g, tabKeys, activeKey };
+        const keepEmpty = tabKeys.length === 0 && keepEmptiedSubwindow();
+        return { ...g, tabKeys, activeKey, ...(keepEmpty ? { keepEmpty } : {}) };
       });
-      // collapse() in writeScope drops the emptied group + lone splits.
+      // collapse() in writeScope drops the emptied group + lone splits, unless
+      // the setting keeps the emptied subwindow standing.
       return writeScope(s, s.scope, nextTabs, next, focusedGroupId);
     });
   },
@@ -3415,10 +3452,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         invoke("pty_kill", { id: `${scope}:${key}` }).catch(() => {});
       }
     }
-    useLinkRoutingStore.getState().purgeForTab(key);
     bumpUsage(scope, METRIC.TAB_CLOSED);
-    forgetPty(`${scope}:${key}`);
-    forgetPromptTrail(`${scope}:${key}`);
+    forgetClosedTab(scope, key);
     const emptiesPopout =
       !!detached && orderedTabKeys(detached.subtree).length === 1;
     set((s) => {
@@ -3429,7 +3464,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         s,
         scope,
         nextTabs,
-        layout ? removeKeyFromTree(layout, key) : null,
+        layout ? removeKeyFromTree(layout, key, keepEmptiedSubwindow()) : null,
         s.focusedGroupByScope[scope] ?? null,
       );
       if (!detached) return base;
@@ -3469,11 +3504,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // Discard the closing tabs' link routes (#50) and prompt state.
       group.tabKeys.forEach((k) => forgetClosedTab(s.scope, k));
       const nextTabs = tabs.filter((t) => !removing.has(t.key));
-      const next = mapGroup(layout, groupId, (g) => ({
-        ...g,
-        tabKeys: [],
-        activeKey: null,
-      }));
+      const next = mapGroup(layout, groupId, vacated);
       return writeScope(s, s.scope, nextTabs, next, focusedGroupId);
     });
   },
@@ -3502,14 +3533,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       }
       invoke("attach_subwindow", { registryId: entry.label }).catch(() => {});
     }
-    // Discard any session-only link routes from the closing tabs (#50), and the
-    // half-typed-prompt state a recycled id must never inherit.
-    const purge = useLinkRoutingStore.getState().purgeForTab;
-    for (const t of tabs) {
-      purge(t.key);
-      forgetPty(`${target}:${t.key}`);
-      forgetPromptTrail(`${target}:${t.key}`);
-    }
+    for (const t of tabs) forgetClosedTab(target, t.key);
     set((s) => {
       // Empty the scope entirely: no tabs, no layout, no detached/hidden records
       // (a hidden group's keys would otherwise dangle against dropped payloads).
@@ -3537,12 +3561,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const tabs = state.tabsByScope[scope] ?? [];
     const detached = state.detachedGroupsByScope[scope] ?? [];
 
-    const purge = useLinkRoutingStore.getState().purgeForTab;
-    for (const tab of tabs) {
-      purge(tab.key);
-      forgetPty(`${scope}:${tab.key}`);
-      forgetPromptTrail(`${scope}:${tab.key}`);
-    }
+    for (const tab of tabs) forgetClosedTab(scope, tab.key);
 
     set((s) => {
       const without = <T,>(record: Record<string, T>): Record<string, T> => {
@@ -3630,12 +3649,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  relaunchTabInScope: (scope, key, args) => {
+  relaunchTabInScope: (scope, key, args, patch) => {
     set((s) => {
       const { tabs, layout, focusedGroupId } = scopeState(s, scope);
       if (!tabs.some((t) => t.key === key)) return {};
       const nextTabs = tabs.map((t) =>
-        t.key === key ? { ...t, args, relaunchSeq: (t.relaunchSeq ?? 0) + 1 } : t,
+        t.key === key ? { ...t, ...patch, args, relaunchSeq: (t.relaunchSeq ?? 0) + 1 } : t,
       );
       return writeScope(s, scope, nextTabs, layout, focusedGroupId);
     });
@@ -3827,11 +3846,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         tabKeys: [...g.tabKeys, ...moved],
         activeKey: g.activeKey ?? moved[0] ?? null,
       }));
-      next = mapGroup(next, sourceGroupId, (g) => ({
-        ...g,
-        tabKeys: [],
-        activeKey: null,
-      }));
+      next = mapGroup(next, sourceGroupId, vacated);
       return writeScope(s, scope, tabs, next, targetGroupId);
     });
   },
@@ -3854,7 +3869,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           tabKeys.splice(at, 0, ...source.tabKeys);
           return { ...g, tabKeys, activeKey: source.activeKey ?? g.activeKey };
         });
-        next = mapGroup(next, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }));
+        next = mapGroup(next, groupId, vacated);
         return writeScope(s, scope, tabs, next, targetGroupId);
       }
       // Lift the group node out (its sibling split unwraps), then re-inject the
@@ -4028,6 +4043,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const group = findGroup(layout, groupId);
     const split = group ? null : findSplit(layout, groupId);
     if (!group && !split) return null;
+    // A kept-empty subwindow has nothing to pop out.
+    if (group && group.tabKeys.length === 0) return null;
     // Refuse to detach the only group: the in-window layout must keep a body —
     // except on restart respawn (`allowLastGroup`), where the popout legitimately
     // becomes the scope's only window and the main center is left empty.
@@ -4055,7 +4072,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const stripped = !layout
         ? null
         : group
-          ? mapGroup(layout, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }))
+          ? mapGroup(layout, groupId, vacated)
           : removeNodeById(layout, groupId);
       // Re-pick focus off the detached subtree onto a surviving group.
       const nextFocus = focus && detachedGroupIds.has(focus) ? null : focus;
@@ -4240,6 +4257,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const group = findGroup(layout, groupId);
     const split = group ? null : findSplit(layout, groupId);
     if (!group && !split) return;
+    // A kept-empty subwindow has nothing to park.
+    if (group && group.tabKeys.length === 0) return;
     // Unlike detachGroup we DO allow hiding the only group: hiding everything
     // leaves the scope empty (the +-placeholder), a valid resting state.
 
@@ -4260,7 +4279,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const stripped = !layout
         ? null
         : group
-          ? mapGroup(layout, groupId, (g) => ({ ...g, tabKeys: [], activeKey: null }))
+          ? mapGroup(layout, groupId, vacated)
           : removeNodeById(layout, groupId);
       const nextFocus = focus && hiddenGroupIds.has(focus) ? null : focus;
       const base = writeScope(s, scope, tabs, stripped, nextFocus);
@@ -5265,11 +5284,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     }
     if (doomedByScope.size === 0) return;
     for (const [scope, keys] of doomedByScope) {
-      for (const key of keys) {
-        useLinkRoutingStore.getState().purgeForTab(key);
-        forgetPty(`${scope}:${key}`);
-        forgetPromptTrail(`${scope}:${key}`);
-      }
+      for (const key of keys) forgetClosedTab(scope, key);
     }
     set((s) => {
       // Fold scope by scope: `writeScope` derives its maps from the state it is
@@ -5578,7 +5593,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           layoutPersistFailureReported = true;
           console.warn("tab layout save failed", error);
           set({
-            layoutPersistNotice: translate(useI18nStore.getState().lang, "appShell.layoutSaveFailedToast"),
+            layoutPersistNotice: translateNow("appShell.layoutSaveFailedToast"),
           });
         }
       }
@@ -5921,6 +5936,13 @@ function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((k, i) => k === b[i]);
 }
 
+/** A run tab saved before `pyTabLabel` dropped its typed ▶ still carries
+ *  "▶︎ file.py", which WebKitGTK draws as the colour emoji in the tab and its
+ *  hover card. Restore it as the plain file name. */
+export function withoutLegacyRunGlyph(label: string): string {
+  return label.replace(/^▶[︎️]?\s+/u, "");
+}
+
 /** The live entry a saved tab restores as — THE one place a `SavedTabEntry`
  * becomes a `TabEntry`: `loadFromLayout` maps every saved tab through it,
  * and `adoptSyncOutcome` a tab another client of this backend created
@@ -6009,7 +6031,7 @@ function restoreSavedTab(
     // The shared-set identity survives the re-mint: it is how the next
     // sync tells this tab from a new one.
     id: t.id,
-    label: t.label,
+    label: withoutLegacyRunGlyph(t.label),
     cmd: t.cmd,
     args,
     env,
@@ -6062,6 +6084,12 @@ function restoreSavedTab(
     hostBoundUid: t.hostBoundUid,
     mobileRequestHash: t.mobileRequestHash,
     localLaunch,
+    // The login-or-key pick: only a boolean is taken from disk.
+    ...(typeof t.apiKey !== "boolean"
+      ? {}
+      : {
+          apiKey: t.apiKey,
+        }),
     // The launch of a Tabby chat; in any other scope the block is ignored (a
     // project's layout file is attacker-controlled).
     ...(ctx.scope === ASSISTANT_SCOPE ? { assistant: readAssistantLaunch(t.assistant) } : {}),
@@ -6694,6 +6722,38 @@ export function localTabCwd(
   if (override) return override.replace(/[/\\]+$/, "");
   if (!opts.projectDirectory) return opts.fallback;
   return `${opts.projectDirectory.replace(/[/\\]+$/, "")}/mirror`;
+}
+
+/** The host shape {@link hostTabId} and {@link hostTabCwd} read. */
+type TabHostProject = {
+  remote?: { remote_path: string };
+  compute_hosts?: readonly { id: string; remote_path: string }[];
+  vm?: { enabled?: boolean };
+};
+
+/**
+ * The host a PTY tab of a remote `project` runs on — `"primary"` or a worker
+ * id — or `null` for a tab that runs locally (or a local project). A worker id
+ * the project no longer has falls back to the primary, as the backend does.
+ */
+export function hostTabId(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
+  if (!project?.remote) return null;
+  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
+  if (!hostId || hostId === "primary") return hostId;
+  return project.compute_hosts?.some((h) => h.id === hostId) ? hostId : "primary";
+}
+
+/**
+ * The folder a PTY tab that runs ON a host starts in: that host's `remote_path`
+ * (`ssh_exec::wrap_pty_options` cds into the project root there), or `null` for
+ * a tab that runs locally. Its spawn cwd is only the local state folder the
+ * backend resolves to the host, so it is no path to show.
+ */
+export function hostTabCwd(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
+  const hostId = hostTabId(tab, project);
+  if (!hostId || !project) return null;
+  const worker = hostId === "primary" ? undefined : project.compute_hosts?.find((h) => h.id === hostId);
+  return (worker ?? project.remote)?.remote_path || null;
 }
 
 /**

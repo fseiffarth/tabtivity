@@ -41,8 +41,9 @@ pub const GLOBAL_INBOX_DIR: &str = "inbox";
 /// One file the phone may send. A phone photo is a few MiB; a short video
 /// clip fits; a movie does not belong in an agent prompt.
 pub const MAX_INBOX_FILE: usize = 24 * 1024 * 1024;
-/// What one inbox may hold in total before uploads are refused — the inbox is
-/// never pruned by Tabtivity, so the cap is what keeps a forgotten one bounded.
+/// What one inbox may hold in total before uploads are refused. `drop_sweep`
+/// deletes a project inbox's files after 90 days and never empties the global
+/// one, so the cap is what bounds a busy inbox between sweeps.
 pub const MAX_INBOX_TOTAL: u64 = 1024 * 1024 * 1024;
 /// Characters kept of the phone's file name, stem and extension together.
 const MAX_NAME: usize = 80;
@@ -349,6 +350,28 @@ pub fn read(root: &Path, name: &str) -> Result<(Vec<u8>, &'static str), OutboxEr
 pub fn kind(root: &Path, name: &str) -> Option<&'static str> {
     let dir = outbox::drop_dir(root, INBOX_DIR).ok()??;
     outbox::probe_as(&dir, name, valid_stored_name).map(|(_, _, kind)| kind)
+}
+
+/// The background sweep of a project inbox (`drop_sweep`): every file a leaf
+/// [`store`] could have written, last written before `cutoff`, goes. Links,
+/// folders and names the inbox never writes stay. Returns how many went.
+pub fn sweep(root: &Path, cutoff: SystemTime) -> Result<usize, OutboxError> {
+    let Some(dir) = outbox::drop_dir(root, INBOX_DIR)? else {
+        return Ok(0);
+    };
+    let entries = dir.entries().map_err(|e| match e {
+        FilesError::Io(e) => OutboxError::Io(e),
+        _ => OutboxError::Unavailable,
+    })?;
+    Ok(entries
+        .iter()
+        .filter(|(name, is_dir)| !is_dir && valid_stored_name(name))
+        .filter(|(name, _)| {
+            dir.open_file(name)
+                .is_some_and(|(_, meta)| meta.modified().is_ok_and(|modified| modified < cutoff))
+        })
+        .filter(|(name, _)| dir.remove_file(name).is_ok())
+        .count())
 }
 
 /// One file waiting in the global inbox, as the desktop lists it.
@@ -716,5 +739,40 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("secret.txt"), inbox.join("link.txt")).unwrap();
         assert_eq!(describe(dir.path(), &["link.txt"]), Ok(Vec::new()));
         assert_eq!(read(dir.path(), "link.txt"), Err(OutboxError::NotFound));
+    }
+
+    #[test]
+    fn the_sweep_takes_only_old_files_the_inbox_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let day = Duration::from_secs(86_400);
+        let inbox = root.join(INBOX_DIR);
+        let old = store(root, "old.png", b"old").unwrap();
+        let new = store(root, "new.png", b"new").unwrap();
+        fs::write(inbox.join(".hidden"), b"x").unwrap();
+        fs::create_dir(inbox.join("folder")).unwrap();
+        for name in [old.name.as_str(), ".hidden"] {
+            let file = fs::File::options().write(true).open(inbox.join(name)).unwrap();
+            file.set_modified(SystemTime::now() - day * 91).unwrap();
+        }
+
+        assert_eq!(sweep(root, SystemTime::now() - day * 90), Ok(1));
+        assert!(!inbox.join(&old.name).exists());
+        assert!(inbox.join(&new.name).exists() && inbox.join(".hidden").exists() && inbox.join("folder").is_dir());
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(sweep(empty.path(), SystemTime::now()), Ok(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_never_unlinks_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        let inbox = dir.path().join(INBOX_DIR);
+        fs::create_dir_all(&inbox).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), inbox.join("link.txt")).unwrap();
+        assert_eq!(sweep(dir.path(), SystemTime::now() + Duration::from_secs(60)), Ok(0));
+        assert!(outside.path().join("secret.txt").exists() && inbox.join("link.txt").symlink_metadata().is_ok());
     }
 }

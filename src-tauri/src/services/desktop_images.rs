@@ -185,9 +185,10 @@ struct Found {
 }
 
 /// Every attachable image directly inside `folders`: a regular image file,
-/// non-empty, no larger than the inbox takes. Symlinks are followed only as
-/// far as `metadata` does — the copy later reads whatever the link points at,
-/// which is the user's own file to point anywhere.
+/// non-empty, no larger than the inbox takes. A link is never listed: these
+/// folders (Downloads, Desktop, Pictures) are where a hostile page, an
+/// archive or a fenced agent can drop an entry, and the copy would otherwise
+/// put whatever picture-named file the link points at in front of the phone.
 fn scan(folders: &[ImageFolder]) -> Vec<Found> {
     let mut found = Vec::new();
     for (index, folder) in folders.iter().enumerate() {
@@ -199,7 +200,7 @@ fn scan(folders: &[ImageFolder]) -> Vec<Found> {
             if !is_image(&path) {
                 continue;
             }
-            let Ok(meta) = fs::metadata(&path) else {
+            let Ok(meta) = fs::symlink_metadata(&path) else {
                 continue;
             };
             if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_INBOX_FILE as u64 {
@@ -253,6 +254,47 @@ pub fn resolve(folders: &[ImageFolder], id: &str) -> Option<PathBuf> {
         .into_iter()
         .find(|file| image_id(&file.path) == id)
         .map(|file| file.path)
+}
+
+/// Whether `bytes` open like one of [`IMAGE_EXTENSIONS`]' formats.
+fn has_image_magic(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+        || bytes.starts_with(b"BM")
+}
+
+/// The bytes of the file at `path`, read the way the host reads a file
+/// somebody else can swap: no link at the leaf, no blocking on a FIFO, the
+/// regular-file and size checks made on the *opened* handle, and only picture
+/// bytes (a renamed document is not an image).
+fn read_image(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = crate::services::home_io::open_regular(path)?;
+    let len = file.metadata().ok()?.len();
+    if len == 0 || len > MAX_INBOX_FILE as u64 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(MAX_INBOX_FILE as u64 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_INBOX_FILE || !has_image_magic(&bytes) {
+        return None;
+    }
+    Some(bytes)
+}
+
+/// The file name and bytes behind an id — [`resolve`] then a checked read.
+/// What an attach copies into the inbox.
+pub fn read_listed(folders: &[ImageFolder], id: &str) -> Option<(String, Vec<u8>)> {
+    let path = resolve(folders, id)?;
+    let bytes = read_image(&path)?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "image".into());
+    Some((name, bytes))
 }
 
 #[cfg(test)]
@@ -360,5 +402,69 @@ mod tests {
         }
         let folders = vec![ImageFolder::new("Pictures", dir.path().to_path_buf())];
         assert_eq!(list(&folders, SystemTime::now()).len(), MAX_LISTED);
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n-----";
+
+    #[test]
+    fn an_attach_copies_a_real_picture_and_nothing_renamed() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = touch(dir.path(), "shot.png", PNG, Duration::from_secs(5));
+        let fake = touch(dir.path(), "notes.png", b"just words", Duration::from_secs(5));
+        let folders = vec![ImageFolder::new("Pictures", dir.path().to_path_buf())];
+        assert_eq!(read_listed(&folders, &image_id(&png)), Some(("shot.png".to_string(), PNG.to_vec())));
+        assert_eq!(read_listed(&folders, &image_id(&fake)), None);
+        assert_eq!(read_listed(&folders, CLIPBOARD_ID), None);
+    }
+
+    #[test]
+    fn image_magic_covers_the_listed_formats() {
+        assert!(has_image_magic(PNG));
+        assert!(has_image_magic(&[0xFF, 0xD8, 0xFF, 0xE0]));
+        assert!(has_image_magic(b"GIF89a.."));
+        assert!(has_image_magic(b"RIFF\0\0\0\0WEBPVP8 "));
+        assert!(has_image_magic(b"BM\0\0"));
+        assert!(!has_image_magic(b"%PDF-1.7"));
+        assert!(!has_image_magic(b""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_neither_listed_nor_resolved_nor_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        let secret = dir.path().join("secret");
+        fs::create_dir_all(&pics).unwrap();
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("key.png"), PNG).unwrap();
+        let real = touch(&pics, "real.png", PNG, Duration::from_secs(5));
+        let link = pics.join("link.png");
+        std::os::unix::fs::symlink(secret.join("key.png"), &link).unwrap();
+        let dev = pics.join("dev.png");
+        std::os::unix::fs::symlink("/dev/zero", &dev).unwrap();
+        let folders = vec![ImageFolder::new("Pictures", pics.clone())];
+
+        let listed = list(&folders, SystemTime::now());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "real.png");
+        assert_eq!(resolve(&folders, &image_id(&link)), None);
+        assert_eq!(resolve(&folders, &image_id(&dev)), None);
+        assert_eq!(resolve(&folders, &image_id(&real)), Some(real.clone()));
+        // Swapped in after the listing: the copy still refuses the link.
+        assert_eq!(read_image(&link), None);
+        assert_eq!(read_image(&dev), None);
+        assert!(read_image(&real).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_picture_neither_lists_nor_blocks_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.png");
+        crate::services::home_io::mkfifo(&fifo);
+        let folders = vec![ImageFolder::new("Pictures", dir.path().to_path_buf())];
+        assert!(list(&folders, SystemTime::now()).is_empty());
+        let read = crate::services::home_io::within_deadline(move || read_image(&fifo));
+        assert_eq!(read, None);
     }
 }

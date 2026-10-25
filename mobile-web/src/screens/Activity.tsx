@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
-import { lastPrompt } from "../agentPrompts";
-import { getActivity, type ActivityTab } from "../api";
+import { draftPreview, lastPrompt } from "../agentPrompts";
+import { readDrafts } from "../drafts";
+import { ApiError, getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
-import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass } from "../components/AgentModeMarks";
-import { tabColorCss } from "../tabColors";
+import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass, lastWorkedAt } from "../components/AgentModeMarks";
+import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { isUntested } from "../../../src/lib/untested";
+import { ageLabel } from "../terminal/fileLabels";
+import { useVisiblePoll } from "../visiblePoll";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -36,31 +40,19 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
   native: "mobile.activity.sortStatus",
 };
 
-/** "3m ago" from a desktop timestamp — a rough age, since the two clocks are
- * not the same clock and the reading is a minute old at worst. Home's Needs
- * you says its rows' ages in the same words. */
-export function ago(at: number, now: number, t: Translate): string {
-  const minutes = Math.max(0, Math.round((now - at) / 60_000));
-  if (minutes < 1) return t("mobile.activity.justNow");
-  if (minutes < 90) return t("mobile.activity.minutesAgo", { count: minutes });
-  const hours = Math.round(minutes / 60);
-  if (hours < 36) return t("mobile.activity.hoursAgo", { count: hours });
-  return t("mobile.activity.daysAgo", { count: Math.round(hours / 24) });
-}
-
 /** The reading the current sort is ordering by, said on the row so the order
  * explains itself: what a tab is doing now, or when it last did it. */
 function timing(tab: ActivityTab, sort: AgentSort, now: number, t: Translate): string {
-  if (sort === "lastDone") return tab.done_at === undefined ? "" : t("mobile.activity.finished", { ago: ago(tab.done_at, now, t) });
+  if (sort === "lastDone") return tab.done_at === undefined ? "" : t("mobile.activity.finished", { ago: ageLabel((now - tab.done_at) / 1000, t) });
   if (tab.agent_status === "working") return t("mobile.activity.workingNow");
   // Under `lastWorking` a tab that is neither asking nor working sits in the
   // tier ordered by its last finished turn, so that is the reading its row
   // shows. A question is ordered by nothing timed, and its last output is when
   // it stopped to ask — which is the reading worth having on it.
   if (sort === "lastWorking" && tab.agent_status !== "question" && tab.done_at !== undefined) {
-    return t("mobile.activity.finished", { ago: ago(tab.done_at, now, t) });
+    return t("mobile.activity.finished", { ago: ageLabel((now - tab.done_at) / 1000, t) });
   }
-  return tab.working_at === undefined ? "" : t("mobile.activity.worked", { ago: ago(tab.working_at, now, t) });
+  return tab.working_at === undefined ? "" : t("mobile.activity.worked", { ago: ageLabel((now - tab.working_at) / 1000, t) });
 }
 
 /** Sorted here, by the reader's choice — by last working (the default), by
@@ -77,52 +69,51 @@ export function Activity({ open, onConnection }: {
   /** Until the first answer, an empty list is "still loading", not "nothing". */
   const [loaded, setLoaded] = useState(false);
   const [desktop, setDesktop] = useState(true);
+  const [aiOff, setAiOff] = useState(false);
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
   const [sort, setSort] = useState<AgentSort>(() => readChoice("agentsSort", isAgentSort, DEFAULT_AGENT_SORT));
   const chooseSort = (next: AgentSort) => { setSort(next); writeChoice("agentsSort", next); };
   /** Taken at each poll rather than at render, so the ages on the rows move
    * with the list and not with every re-render in between. */
   const [now, setNow] = useState(() => Date.now());
+  /** Messages typed on this phone and not sent, by tab (`drafts.ts`), re-read
+   * with every poll: a tab holding one rises under the working ones and its
+   * row shows the draft where the last prompt would be. */
+  const drafts = useMemo(() => {
+    const stored = readDrafts();
+    return Object.fromEntries(tabs.flatMap((tab) => {
+      const preview = draftPreview(stored[tab.id]);
+      return preview ? [[tab.id, preview]] : [];
+    })) as Record<string, string>;
+  }, [tabs]);
   const sorted = useMemo(() => sortAgentTabs(tabs, sort, (tab) => ({
     decision: tab.agent_status === "question",
     working: tab.agent_status === "working",
+    drafted: tab.id in drafts,
     workingAt: tab.working_at,
-    doneAt: tab.done_at,
-  })), [sort, tabs]);
-  useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
-    const load = () => {
-      if (document.visibilityState !== "visible") return;
-      void getActivity(controller.signal)
-        .then((body) => {
-          if (disposed) return;
-          setTabs(body.tabs);
-          setNow(Date.now());
-          setDesktop(body.desktop_available);
-          setOffline(null);
-          onConnection(null);
-          setLoaded(true);
-        })
-        // Keep the last good list rather than blanking it: one dropped packet on
-        // a flaky link should not wipe the screen the reader is looking at.
-        .catch((error: unknown) => {
-          if (disposed || controller.signal.aborted) return;
-          const reason = classifyUnavailable(error);
-          setOffline(reason);
-          onConnection(reason);
-        });
-    };
-    load();
-    const timer = window.setInterval(load, POLL_MS);
-    document.addEventListener("visibilitychange", load);
-    return () => {
-      disposed = true;
-      controller.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", load);
-    };
-  }, [onConnection]);
+    doneAt: lastWorkedAt(tab),
+  })), [drafts, sort, tabs]);
+  useVisiblePoll((signal) => getActivity(signal)
+    .then((body) => {
+      if (signal.aborted) return;
+      // An answer with no list is a failed one: keep the last good list.
+      if (!Array.isArray(body.tabs)) throw new ApiError(200, "malformed_response");
+      setTabs(body.tabs);
+      setNow(Date.now());
+      setDesktop(body.desktop_available);
+      setAiOff(body.ai_off === true);
+      setOffline(null);
+      onConnection(null);
+      setLoaded(true);
+    })
+    // Keep the last good list rather than blanking it: one dropped packet on
+    // a flaky link should not wipe the screen the reader is looking at.
+    .catch((error: unknown) => {
+      if (signal.aborted) return;
+      const reason = classifyUnavailable(error);
+      setOffline(reason);
+      onConnection(reason);
+    }), POLL_MS);
   return <>
     {offline && <p className="error connection-error">
       <strong>{describeUnavailable(offline).title}</strong>
@@ -131,6 +122,7 @@ export function Activity({ open, onConnection }: {
     </p>}
     {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.activity.loading")}</p>}
     {loaded && !desktop && <p className="notice">{t("mobile.activity.desktopUnavailable")}</p>}
+    {loaded && aiOff && <p className="notice" role="status">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</p>}
     {loaded && desktop && tabs.length === 0 && <p className="projects-empty">{t("mobile.activity.empty")}</p>}
     {tabs.length > 1 && <label className="activity-sort">
       <select aria-label={t("mobile.activity.sortAria")} value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
@@ -143,7 +135,9 @@ export function Activity({ open, onConnection }: {
       // list is read to decide which tab to open, and "claude 2 · Paper ·
       // worked 3m ago" says everything about that except the thing it was
       // asked. Two lines at most, then ellipsized — the card stays a card.
-      const asked = lastPrompt(tab);
+      // An unsent draft is what the reader was about to say there, so it
+      // takes the line — with no time, having gone nowhere yet.
+      const asked = drafts[tab.id] ? { text: drafts[tab.id] } : lastPrompt(tab);
       return <button
         // The tab's colour (#264) carries onto this list too, and this is the
         // list it earns most: a flat cross-project row of look-alike "claude"
@@ -154,7 +148,7 @@ export function Activity({ open, onConnection }: {
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}
         onClick={() => open(tab.project_id, tab)}
       >
-        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}</small>}</span>
+        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}{drafts[tab.id] && isUntested("mobile.project.draftLine") && <em> · {t("mobile.focus.untested")}</em>}</small>}</span>
         <span className="card-trailing"><AgentModeMarks tab={tab} /><SubagentCount tab={tab} /><TurnDuration tab={tab} finished={false} />{tab.agent_status && <AgentStatusPill status={tab.agent_status} />}<span>›</span></span>
       </button>;
     })}</section>

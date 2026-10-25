@@ -1,6 +1,6 @@
 import { useBoxesStore, BOX_SCOPE_PREFIX } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
-import { translate, useI18nStore } from "../i18n";
+import { translateNow } from "../i18n";
 import { PROMPTCHART_TAB_CMD, ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory } from "../../types";
 import { ASSISTANT_SCOPE } from "../assistant";
@@ -67,7 +67,7 @@ export async function openPromptChartTab(scope: string): Promise<void> {
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   tabs.ensureTab(
     {
-      label: translate(useI18nStore.getState().lang, "promptChart.heading"),
+      label: translateNow("promptChart.heading"),
       cmd: PROMPTCHART_TAB_CMD,
       // Empty resolves to ~/tabtivity/root on the backend, as the root shell's does.
       cwd: project ? resolveProjectDirectory(project) : "",

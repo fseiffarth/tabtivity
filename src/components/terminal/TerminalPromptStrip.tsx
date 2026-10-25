@@ -12,17 +12,11 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { TerminalReaderChats } from "./TerminalReaderChats";
 import { chatsOffered } from "../../lib/agents/agentChats";
+import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 
-/**
- * The strip docked between an agent pane's tab bar and its terminal: the last
- * prompt of the tab, one line, with ‹ › to step back through the earlier ones
- * and a drop-down over the terminal's top for the whole text and the list.
- *
- * Agent TUIs repaint, fold and clear their own scrollback, so the prompt that
- * started a long turn is often nowhere on screen; the strip keeps it without
- * asking the CLI (`lib/agents/prompt/trail`). A fixed one-line height, so
- * showing or opening it never refits the terminal; the drop-down floats over.
- */
+/** Prompt history under a terminal; readable agents use the same controls
+ * as a top toolbar with resource/action slots and Chat / Diffs / Terminal tabs.
+ * Popups remain local to the pane and never resize the running terminal. */
 
 /** Scopes whose history this window already asked for. */
 const historyAsked = new Set<string>();
@@ -53,7 +47,11 @@ export function TerminalPromptStrip({
   background,
   foreground,
   onReturnFocus,
+  chatShown = false,
   reader,
+  topBar = false,
+  navigationSlot,
+  actionSlot,
 }: {
   ptyId: string;
   scope: string;
@@ -63,12 +61,20 @@ export function TerminalPromptStrip({
   foreground: string;
   /** Hand the keyboard back to the terminal (the drop-down closed). */
   onReturnFocus: () => void;
+  /** The Reader covers the terminal: the prompt part is left out. */
+  chatShown?: boolean;
+  /** Desktop Reader navigation lives above the pane, leaving the composer full width. */
+  topBar?: boolean;
+  navigationSlot?: (slot: HTMLSpanElement | null) => void;
+  actionSlot?: (slot: HTMLSpanElement | null) => void;
   /** The Reader switch (`TerminalReaderView`), for an agent whose stored
    * conversation Tabtivity reads; absent for any other. `changes` is the
    * Diffs switch (`TerminalReaderChanges`), beside the chat or the terminal;
    * `cwd`, the pane's resolved folder, is whose earlier chats the Resume menu
    * lists (`TerminalReaderChats`). */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void }; cwd?: string };
+  /** `onHost`: the tab runs on a remote project's host, whose copy of the
+   * conversation the chat reads. */
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void }; cwd?: string; onHost?: boolean };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -134,11 +140,19 @@ export function TerminalPromptStrip({
       .catch(() => navigator.clipboard?.writeText(current.text).then(done))
       .catch(() => {});
   };
+  /** Over the chat: the picked prompt into its text box (at the caret), to
+   * send again or edit; the box takes the keyboard. */
+  const reuse = () => {
+    if (!current) return;
+    setOpen(false);
+    if (!insertIntoReader(ptyId, current.text)) onReturnFocus();
+  };
   const onPanelKey = (e: KeyboardEvent) => {
     const step: Record<string, number> = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1, PageUp: -5, PageDown: 5 };
     if (e.key in step) pick(index + step[e.key]);
     else if (e.key === "Home") pick(0);
     else if (e.key === "End") pick(trail.length - 1);
+    else if (e.key === "Enter" && chatShown) reuse();
     else if (e.key === "Escape" || e.key === "Enter") close();
     else if (e.key === "c" && (e.ctrlKey || e.metaKey)) copy();
     else return;
@@ -149,63 +163,93 @@ export function TerminalPromptStrip({
   // the user is typing the next prompt with.
   const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
+  // Nothing to put under a chat that has no switches (Tabby, docked columns).
+  if (chatShown && !markupLink && !reader) return null;
+
   return (
-    <div className="prompt-strip" style={{ background, color: foreground }}>
-      <span className="prompt-strip-label">
-        {t("terminal.promptStrip.label")}
-        <UntestedTag id="terminal.promptStrip" />
-      </span>
-      <button
-        type="button"
-        className="prompt-strip-text"
-        onMouseDown={keepFocus}
-        onClick={() => (open ? close() : setOpen(true))}
-        disabled={!current}
-        title={current?.text}
-      >
-        {current ? oneLine(current.text) : t("terminal.promptStrip.none")}
-      </button>
-      {current && (
-        <>
-          {current.source === "typed" && (
-            <span className="prompt-strip-typed" title={t("terminal.promptStrip.typedHint")}>≈</span>
-          )}
-          <span className="prompt-strip-time">{clockTime(current.at, use24h)}</span>
-          <span className="prompt-strip-nav">
+    <div
+      className={`prompt-strip${chatShown ? " chat" : ""}${topBar ? " reader-topbar" : ""}`}
+      style={chatShown || topBar ? undefined : { background, color: foreground }}
+    >
+      {!chatShown && !topBar && <>
+        <span className="prompt-strip-label">
+          {t("terminal.promptStrip.label")}
+          <UntestedTag id="terminal.promptStrip" />
+        </span>
+        <button
+          type="button"
+          className="prompt-strip-text"
+          onMouseDown={keepFocus}
+          onClick={() => (open ? close() : setOpen(true))}
+          disabled={!current}
+          title={current?.text}
+        >
+          {current ? oneLine(current.text) : t("terminal.promptStrip.none")}
+        </button>
+        {current && (
+          <>
+            {current.source === "typed" && (
+              <span className="prompt-strip-typed" title={t("terminal.promptStrip.typedHint")}>≈</span>
+            )}
+            <span className="prompt-strip-time">{clockTime(current.at, use24h)}</span>
+            <span className="prompt-strip-nav">
+              <button
+                type="button"
+                className="prompt-strip-btn"
+                onMouseDown={keepFocus}
+                onClick={() => pick(index - 1)}
+                disabled={index <= 0}
+                aria-label={t("terminal.promptStrip.older")}
+                title={t("terminal.promptStrip.older")}
+              >
+                ‹
+              </button>
+              <span className="prompt-strip-count">{t("terminal.promptStrip.count", { n: index + 1, total: trail.length })}</span>
+              <button
+                type="button"
+                className="prompt-strip-btn"
+                onMouseDown={keepFocus}
+                onClick={() => pick(index + 1)}
+                disabled={index >= trail.length - 1}
+                aria-label={t("terminal.promptStrip.newer")}
+                title={t("terminal.promptStrip.newer")}
+              >
+                ›
+              </button>
+            </span>
             <button
               type="button"
               className="prompt-strip-btn"
               onMouseDown={keepFocus}
-              onClick={() => pick(index - 1)}
-              disabled={index <= 0}
-              aria-label={t("terminal.promptStrip.older")}
-              title={t("terminal.promptStrip.older")}
+              onClick={copy}
+              aria-label={t("terminal.promptStrip.copy")}
+              title={t(copied ? "terminal.promptStrip.copied" : "terminal.promptStrip.copy")}
             >
-              ‹
+              {copied ? "✓" : "⧉"}
             </button>
-            <span className="prompt-strip-count">{t("terminal.promptStrip.count", { n: index + 1, total: trail.length })}</span>
-            <button
-              type="button"
-              className="prompt-strip-btn"
-              onMouseDown={keepFocus}
-              onClick={() => pick(index + 1)}
-              disabled={index >= trail.length - 1}
-              aria-label={t("terminal.promptStrip.newer")}
-              title={t("terminal.promptStrip.newer")}
-            >
-              ›
-            </button>
-          </span>
+          </>
+        )}
+      </>}
+      <span className="prompt-strip-actions">
+        {/* First of the switches, not in the prompt part: the list is offered
+            over the chat too, and the row is the same in both modes. */}
+        {/* Over the chat a labelled pill like Resume beside it; under the
+            terminal the prompt text sits right beside it, so a caret will do. */}
+        {(current || topBar) && (chatShown || topBar) && (
           <button
             type="button"
-            className="prompt-strip-btn"
+            className={open ? "prompt-strip-reader active" : "prompt-strip-reader"}
             onMouseDown={keepFocus}
-            onClick={copy}
-            aria-label={t("terminal.promptStrip.copy")}
-            title={t(copied ? "terminal.promptStrip.copied" : "terminal.promptStrip.copy")}
+            onClick={() => (open ? close() : setOpen(true))}
+            disabled={!current}
+            aria-expanded={open}
+            title={t(open ? "terminal.promptStrip.collapse" : "terminal.promptStrip.expand")}
           >
-            {copied ? "✓" : "⧉"}
+            {t("terminal.promptStrip.history")}
+            <span className={open ? "reader-chats-caret open" : "reader-chats-caret"} aria-hidden="true">▴</span>
           </button>
+        )}
+        {current && !chatShown && !topBar && (
           <button
             type="button"
             className="prompt-strip-btn"
@@ -215,52 +259,93 @@ export function TerminalPromptStrip({
             aria-label={t(open ? "terminal.promptStrip.collapse" : "terminal.promptStrip.expand")}
             title={t(open ? "terminal.promptStrip.collapse" : "terminal.promptStrip.expand")}
           >
-            {open ? "▴" : "▾"}
+            {open ? "▾" : "▴"}
           </button>
-        </>
-      )}
-      {markupLink && (
-        <button
-          type="button"
-          className="prompt-strip-reader prompt-strip-markup"
-          onMouseDown={keepFocus}
-          onClick={() => useTabsStore.getState().setActive(markupLink.tabKey)}
-          title={`${t("terminal.promptStrip.markupHint")} — ${markupLink.name}`}
-        >
-          <span>{t("terminal.promptStrip.markup", { name: markupLink.name })}</span>
-          <UntestedTag id="desktop.markup.link" />
-        </button>
-      )}
-      {reader && chatsOffered(scope, tab) && (
-        <TerminalReaderChats ptyId={ptyId} scope={scope} tab={tab} cwd={reader.cwd} onReturnFocus={onReturnFocus} />
-      )}
-      {reader?.changes && (
-        <button
-          type="button"
-          className={reader.changes.open ? "prompt-strip-reader active" : "prompt-strip-reader"}
-          onMouseDown={keepFocus}
-          onClick={reader.changes.onToggle}
-          aria-pressed={reader.changes.open}
-          title={t(reader.changes.open ? "terminal.reader.changesHideHint" : "terminal.reader.changesHint")}
-        >
-          {t("terminal.reader.changes")}
-          <UntestedTag id="terminal.reader.changes" />
-        </button>
-      )}
-      {reader && (
-        <button
-          type="button"
-          className={reader.open ? "prompt-strip-reader active" : "prompt-strip-reader"}
-          onMouseDown={keepFocus}
-          onClick={reader.onToggle}
-          aria-pressed={reader.open}
-          title={t(reader.open ? "terminal.reader.showTerminalHint" : "terminal.reader.showReaderHint")}
-        >
-          {t(reader.open ? "terminal.reader.showTerminal" : "terminal.reader.showReader")}
-          <UntestedTag id="terminal.reader" />
-          {tab?.kind === "local_agent" && <UntestedTag id="terminal.reader.localOpenCode" />}
-        </button>
-      )}
+        )}
+        {markupLink && (
+          <button
+            type="button"
+            className="prompt-strip-reader prompt-strip-markup"
+            onMouseDown={keepFocus}
+            onClick={() => useTabsStore.getState().setActive(markupLink.tabKey)}
+            title={`${t("terminal.promptStrip.markupHint")} — ${markupLink.name}`}
+          >
+            <span>{t("terminal.promptStrip.markup", { name: markupLink.name })}</span>
+            <UntestedTag id="desktop.markup.link" />
+          </button>
+        )}
+        {reader && chatsOffered(scope, tab) && (
+          <TerminalReaderChats ptyId={ptyId} scope={scope} tab={tab} cwd={reader.cwd} onReturnFocus={onReturnFocus} />
+        )}
+        {topBar && <>
+          <span className="reader-topbar-navigation" ref={navigationSlot} />
+          <span className="reader-topbar-actions" ref={actionSlot} />
+        </>}
+        {topBar && reader ? (
+          <div className="reader-view-tabs" role="tablist" aria-label={t("terminal.reader.views")} onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+            const at = tabs.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (at + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+            tabs[next]?.focus();
+            tabs[next]?.click();
+          }}>
+            <button type="button" role="tab" aria-selected={reader.open && !reader.changes?.open}
+              tabIndex={reader.open && !reader.changes?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (!reader.open) reader.onToggle(); }}>
+              {t("terminal.reader.showReader")}
+            </button>
+            {reader.changes && <button type="button" role="tab" aria-selected={reader.changes.open}
+              tabIndex={reader.changes.open ? 0 : -1}
+              onClick={() => { if (!reader.changes?.open) reader.changes?.onToggle(); }}>
+              {t("terminal.reader.changes")}
+            </button>}
+            <button type="button" role="tab" aria-selected={!reader.open && !reader.changes?.open}
+              tabIndex={!reader.open && !reader.changes?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.open) reader.onToggle(); }}>
+              {t("terminal.reader.showTerminal")}
+            </button>
+            <UntestedTag id="terminal.reader.topbar" />
+            {reader.onHost && <UntestedTag id="terminal.reader.hostTab" />}
+          </div>
+        ) : <>
+        {reader?.changes && (
+          <button
+            type="button"
+            className={reader.changes.open ? "prompt-strip-reader active" : "prompt-strip-reader"}
+            onMouseDown={keepFocus}
+            onClick={reader.changes.onToggle}
+            aria-pressed={reader.changes.open}
+            title={t(reader.changes.open ? "terminal.reader.changesHideHint" : "terminal.reader.changesHint")}
+          >
+            {t("terminal.reader.changes")}
+            <UntestedTag id="terminal.reader.changes" />
+          </button>
+        )}
+        {reader && (
+          <button
+            type="button"
+            className={reader.open ? "prompt-strip-reader active" : "prompt-strip-reader"}
+            onMouseDown={keepFocus}
+            onClick={reader.onToggle}
+            aria-pressed={reader.open}
+            title={t(reader.open ? "terminal.reader.showTerminalHint" : "terminal.reader.showReaderHint")}
+          >
+            {/* Both labels laid over each other, the other one hidden: the
+                switch keeps its width, so it never shifts under the pointer. */}
+            <span className="prompt-strip-mode">
+              <span aria-hidden={reader.open}>{t("terminal.reader.showReader")}</span>
+              <span aria-hidden={!reader.open}>{t("terminal.reader.showTerminal")}</span>
+            </span>
+            <UntestedTag id="terminal.reader" />
+            {tab?.kind === "local_agent" && <UntestedTag id="terminal.reader.localOpenCode" />}
+            {tab?.cmd === "agy" && <UntestedTag id="terminal.reader.antigravity" />}
+          </button>
+        )}
+        </>}
+      </span>
       {open && current && (
         <div
           ref={panelRef}
@@ -283,6 +368,7 @@ export function TerminalPromptStrip({
                     aria-selected={i === index}
                     className="prompt-strip-row"
                     onClick={() => pick(i)}
+                    onDoubleClick={chatShown ? reuse : undefined}
                     title={entry.text}
                   >
                     <span className="prompt-strip-row-time">{clockTime(entry.at, use24h)}</span>
@@ -292,7 +378,9 @@ export function TerminalPromptStrip({
                 ))}
             </ol>
           )}
-          <div className="prompt-strip-keys">{t("terminal.promptStrip.keys", { modifier: modifierLabel() })}</div>
+          <div className="prompt-strip-keys">
+            {t(chatShown ? "terminal.promptStrip.keysChat" : "terminal.promptStrip.keys", { modifier: modifierLabel() })}
+          </div>
         </div>
       )}
     </div>

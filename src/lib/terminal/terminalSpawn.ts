@@ -2,6 +2,7 @@ import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type Ta
 import { envName } from "../brand";
 import type { LoginTarget } from "../remote/loginTarget";
 import { ASSISTANT_SCOPE, assistantPromptTarget, type AssistantLaunch } from "../assistant";
+import { projectIdOfScope } from "./ptyId";
 
 /**
  * The kind a `TerminalView` acts as: its declared `kind` prop, else a
@@ -39,6 +40,7 @@ export interface TerminalSpawnInputs {
   tmuxAttach?: string | null;
   hostBoundUid?: string | null;
   hostSession?: boolean;
+  apiKey?: boolean | null;
   assistant?: AssistantLaunch | null;
   kind?: string;
   scheduleTargetId?: string;
@@ -70,6 +72,7 @@ export function terminalSpawnKey(p: TerminalSpawnInputs): string {
     p.tmuxAttach ?? null,
     p.hostBoundUid ?? null,
     !!p.hostSession,
+    p.apiKey ?? null,
     p.assistant ?? null,
     p.kind ?? null,
     p.scheduleTargetId ?? null,
@@ -117,7 +120,7 @@ export function tabTerminalSpawn(
     login: tab.login ?? null,
     cwd: derived.terminalCwd,
     localOnly: location === "local",
-    projectId: scope === "root" ? null : scope,
+    projectId: projectIdOfScope(scope),
     // Multi-host: the worker id (or "primary") this tab runs on, so the
     // backend resolves the right host's RemoteSpec (null for a local tab).
     remoteHostId: remoteHostIdOf(location),
@@ -128,6 +131,7 @@ export function tabTerminalSpawn(
     tmuxAttach: tab.login ? null : (tab.tmuxAttach ?? null),
     hostBoundUid: tab.hostBoundUid ?? null,
     hostSession: !!tab.hostSession,
+    apiKey: tab.apiKey ?? null,
     assistant,
     kind: tab.kind,
     // Tabby chats take no schedule (the backend refuses one for the scope).

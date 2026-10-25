@@ -19,7 +19,8 @@ function fakeClaude(queue: string[], options: { history?: string; hint?: boolean
     return [
       "✻ Whisking… (5s · thinking)",
       RULE,
-      ...lines.map((line, index) => `${index ? "  " : "❯ "}${line}`),
+      // 2.1.310 draws the live box's space after the `❯` as a no-break space.
+      ...lines.map((line, index) => `${index ? "  " : "❯\u00a0"}${line}`),
       RULE,
       "  ⏵⏵ auto mode on (shift+tab to cycle)",
     ];
@@ -44,6 +45,12 @@ describe("queuePull", () => {
     expect(inputBoxLines(["❯ 1. Yes", "  2. No"])).toBeNull();
     expect(queuedHintShown([RULE, `❯ ${HINT}, Enter to send them immediately:`, RULE])).toBe(true);
     expect(queuedHintShown([RULE, "❯ ", RULE])).toBe(false);
+  });
+
+  it("reads the box as 2.1.310 draws it, a no-break space after the ❯", () => {
+    expect(inputBoxLines([RULE, "❯\u00a0one", "\u00a0\u00a0two", RULE])).toEqual(["one", "two"]);
+    expect(queuedHintShown([RULE, `❯\u00a0${HINT}`, RULE])).toBe(true);
+    expect(queuedHintShown([RULE, "❯\u00a0", RULE])).toBe(false);
   });
 
   it("takes every queued prompt back and empties Claude's box", async () => {

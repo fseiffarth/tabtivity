@@ -1,12 +1,16 @@
 #!/bin/sh
-# Tabtivity-owned, dependency-free project → phone transport.
+# Tabtivity-owned, dependency-free project → phone transport, and the
+# desktop's pointer: a file goes to the screen the user last typed into this
+# tab from (`agent_turn::note_input_from`), or where --phone/--desktop says.
 set -eu
 export LC_ALL=C
 fail() { printf 'tabtivity-send: %s\n' "$2" >&2; exit "$1"; }
-usage() { printf '%s\n' 'tabtivity-send FILE...' 'command | tabtivity-send -n NAME' 'tabtivity-send --clear' 'tabtivity-send --help'; }
+usage() { printf '%s\n' 'tabtivity-send [--phone|--desktop] FILE...' 'command | tabtivity-send -n NAME' 'tabtivity-send --clear' 'tabtivity-send --help'; }
 [ "$#" -gt 0 ] || { usage; exit 2; }
 [ "$1" != --help ] || { usage; exit 0; }
 mode=files
+route=
+case "$1" in --phone|--desktop) route=${1#--}; shift; [ "$#" -gt 0 ] || fail 2 'Name at least one file.' ;; esac
 case "$1" in
     --clear) [ "$#" -eq 1 ] || fail 2 'Use --clear alone.'; mode=clear ;;
     -n) [ "$#" -eq 2 ] || fail 2 'Use -n NAME for stdin.'; mode=stdin; label=$2 ;;
@@ -24,6 +28,47 @@ outbox=$root/.tabtivity/outbox
 tab=${TABTIVITY_TAB_UID:-}
 case "$tab" in *[!A-Za-z0-9-]*) tab= ;; esac
 [ "${#tab}" -le 64 ] || tab=
+# Where the user last typed into this tab, which Tabtivity records beside the
+# tab's turn record (the live-sessions folder sits beside this script's, and
+# a fence or container mounts the project's own slice of it there). Unknown —
+# no tab, nothing typed since it started, a record this sandbox cannot see —
+# goes to both screens.
+if [ -z "$route" ]; then
+    route=both
+    from=$(dirname -- "$0")/../live_sessions/$tab.from
+    if [ -n "$tab" ] && [ -f "$from" ] && [ ! -L "$from" ]; then
+        case $(head -c 16 "$from") in phone*) route=phone ;; desktop*) route=desktop ;; esac
+    fi
+fi
+nl='
+'
+# Where a sent file lives in the project, root-relative, for its origin
+# marker: the phone then opens the project file itself, and its marks are the
+# files drawer's. Empty for a file outside the project, an outbox file sent
+# again, or a path the marker could not hold. It is also the path the desktop
+# chat shows a file by: it looks names up under the tab's project.
+origin_of() {
+    origin_dir=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 0
+    case "$origin_dir/" in "$root"/*) ;; *) return 0 ;; esac
+    origin_rel=${origin_dir#"$root"}
+    origin_rel=${origin_rel#/}
+    origin_rel=${origin_rel:+$origin_rel/}${1##*/}
+    case "$origin_rel" in .tabtivity/*|*"$nl"*) return 0 ;; esac
+    printf '%s' "$origin_rel"
+}
+# The desktop has nothing to copy: the agent names the project file in its
+# reply and the chat draws it. Piped bytes have no file to name, so -n goes
+# to the phone wherever the user is.
+if [ "$mode" = files ] && [ "$route" = desktop ]; then
+    for source in "$@"; do
+        [ -f "$source" ] || fail 4 'Only regular files can be sent.'
+        [ -n "$(origin_of "$source")" ] || fail 4 'The desktop shows project files only; copy it into the project first.'
+    done
+    for source in "$@"; do
+        printf '→ desktop: name %s in your reply; the desktop chat shows it\n' "$(origin_of "$source")"
+    done
+    exit 0
+fi
 mkdir -p "$outbox" || fail 3 'Cannot create the project outbox.'
 lock=$outbox/.send-lock
 mkdir "$lock" 2>/dev/null || fail 5 'Another send or clear is in progress; retry shortly.'
@@ -48,21 +93,6 @@ fi
 # Stage a bounded copy in a private directory. Only complete files become
 # visible; hard-link publication never overwrites, including concurrent sends.
 stage=$(mktemp -d "$outbox/.send-XXXXXXXX") || fail 3 'Cannot stage the file.'
-nl='
-'
-# Where a sent file lives in the project, root-relative, for its origin
-# marker: the phone then opens the project file itself, and its marks are the
-# files drawer's. Empty for a file outside the project, an outbox file sent
-# again, or a path the marker could not hold.
-origin_of() {
-    origin_dir=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 0
-    case "$origin_dir/" in "$root"/*) ;; *) return 0 ;; esac
-    origin_rel=${origin_dir#"$root"}
-    origin_rel=${origin_rel#/}
-    origin_rel=${origin_rel:+$origin_rel/}${1##*/}
-    case "$origin_rel" in .tabtivity/*|*"$nl"*) return 0 ;; esac
-    printf '%s' "$origin_rel"
-}
 send_one() {
     name=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | sed 's/^\.*//')
     [ -n "$name" ] || name=file
@@ -150,6 +180,9 @@ else
     for source in "$@"; do
         [ -f "$source" ] || fail 4 'Only regular files can be sent.'
         head -c 25165825 < "$source" > "$stage/data" || fail 4 'Cannot read the file.'
-        send_one "${source##*/}" "$(origin_of "$source")"
+        rel=$(origin_of "$source")
+        send_one "${source##*/}" "$rel"
+        # Nobody typed into the tab yet: the desktop gets the pointer too.
+        [ "$route" != both ] || [ -z "$rel" ] || printf '→ desktop: name %s in your reply; the desktop chat shows it\n' "$rel"
     done
 fi

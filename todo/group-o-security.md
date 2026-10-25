@@ -1034,6 +1034,10 @@ table). Code-read findings; only #862 was reproduced (scratch repo, git 2.53).
       along with its last `new Function` (none in `build/` or `legacy/build/`
       workers), so there is no eval path to switch off. Re-check on a pdf.js
       bump.
+    - **CSP part done 2026-10-24 (not live; needs a rebuild):** the desktop CSP
+      now carries `object-src 'none'; base-uri 'none'; form-action 'none'`
+      (the HTML preview no longer uses a `<base>`: it has its own CSP `<meta>`
+      and absolute fragment links). `script-src blob:` stays (pdf.js worker).
 
 870. **Any fenced agent could plant code the next local-model tab runs.**
     Threat model gap 7. `agent_fence::local_model_mounts` bound all of
@@ -1581,3 +1585,14 @@ checkout; `npm ci --ignore-scripts`; Windows/macOS runners pinned to
     - Drop `continue-on-error` from the Windows/macOS clippy steps once green.
     - Windows Authenticode (SignPath for open source, or Azure Trusted
       Signing) and Apple notarization for the `.exe` and `.dmg`.
+
+- **Fence network isolation: Landlock TCP-bind restriction (tracked hardening,
+  threat-model recheck gap 50, D7).** The agent fence shares the host's network
+  namespace, so a fenced agent can bind any loopback port. Step 10 added the
+  client-side owner checks (`services::loopback_owner`: Ollama, the API proxy's
+  remembered port, the phone sign-in relay); the real fix is to deny
+  `bind`/`connect` for fenced processes outside the ports Tabtivity hands them
+  (Landlock ABI v4 `LANDLOCK_ACCESS_NET_BIND_TCP`, kernel ≥ 6.7), with the
+  checks kept as the fallback on older kernels. `--unshare-net` with a
+  forwarder was rejected: it changes every MCP lane and the proxy. Not
+  implemented.

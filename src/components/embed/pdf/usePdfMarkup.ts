@@ -26,6 +26,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../../hooks/useTauriListener";
 import { fileMtime } from "../fileAccess";
 import { useT } from "../../../lib/i18n";
 import { holdPhonePrompt } from "../../../lib/agents/phoneHolds";
@@ -339,6 +340,10 @@ export function usePdfMarkup({
   const [failure, setFailure] = useState<string | null>(null);
   const [round, setRound] = useState<Round | null>(null);
   const [roundTick, setRoundTick] = useState(0);
+  /** The tab the round's last prompt went to. The picker may move on while the
+   *  round is out; the pill, the undo's settle and note and **Make these
+   *  changes** stay with this tab. */
+  const [roundTargetId, setRoundTargetId] = useState<string | null>(null);
   /** The file changed on disk and its new pages wait for Reload. */
   const [pdfStale, setPdfStale] = useState(false);
   /** Reloaded since the agent last finished: Reload steps back to secondary. */
@@ -406,6 +411,7 @@ export function usePdfMarkup({
       setScratchLayer(null);
       setNote(null);
       setRound(null);
+      setRoundTargetId(null);
       setChanged(false);
       // Nothing to write back until the first change.
       skipSave.current = true;
@@ -483,19 +489,31 @@ export function usePdfMarkup({
   }, [active, targets, chosen]);
   const target = targets.find((entry) => entry.scheduleTargetId === chosen) ?? null;
   const targetPty = target?.ptyId ?? null;
-  const showTarget = useCallback(() => {
-    if (!projectId || !targetPty?.startsWith(`${projectId}:`)) return;
-    useTabsStore.getState().setActive(targetPty.slice(projectId.length + 1));
-  }, [projectId, targetPty]);
+  const showTab = useCallback(
+    (ptyId: string | null) => {
+      if (!projectId || !ptyId?.startsWith(`${projectId}:`)) return;
+      useTabsStore.getState().setActive(ptyId.slice(projectId.length + 1));
+    },
+    [projectId],
+  );
+  const showTarget = useCallback(() => showTab(targetPty), [showTab, targetPty]);
+  /** The tab the round is with — the one the last prompt of the round went to
+   *  (the picked tab until one went out); null once it closed. */
+  const roundTarget = round && roundTargetId ? targets.find((entry) => entry.scheduleTargetId === roundTargetId) ?? null : target;
+  const roundPty = roundTarget?.ptyId ?? null;
+  const showRoundTarget = useCallback(() => showTab(roundPty), [showTab, roundPty]);
   const tabAgent = useActivityStore((s) => (target ? agentTabStateOf(s, target.ptyId) : "idle"));
+  const roundTabAgent = useActivityStore((s) => (roundTarget ? agentTabStateOf(s, roundTarget.ptyId) : "idle"));
   const modelsByTab = useAgentModelsStore((s) => s.byTab);
   const screenModels = useAgentModelsStore((s) => s.screenByTab);
   const targetTab = target && projectId ? tabs?.find((tab) => `${projectId}:${tab.key}` === target.ptyId) : undefined;
+  const roundTab = roundTarget && projectId ? tabs?.find((tab) => `${projectId}:${tab.key}` === roundTarget.ptyId) : undefined;
   /** The target's model as the tab bar says it — the strip's model chip. */
   const targetModelTag = targetTab && projectId ? agentTabModelTag(projectId, targetTab, modelsByTab, screenModels)?.trim() : undefined;
-  /** Who the pill says is at work: the target's model by its first word, as
-   *  the reader view's working row says it (`Opus is working…`). */
-  const targetModel = targetModelTag?.split(/\s+/)[0];
+  /** Who the pill says is at work: the round's tab's model by its first word,
+   *  as the reader view's working row says it (`Opus is working…`). */
+  const roundModelTag = roundTab && projectId ? agentTabModelTag(projectId, roundTab, modelsByTab, screenModels)?.trim() : undefined;
+  const targetModel = roundModelTag?.split(/\s+/)[0];
 
   // ── The agent's questions (`markup_ask`) ─────────────────────────────────
   const targetId = target?.scheduleTargetId ?? null;
@@ -516,19 +534,7 @@ export function usePdfMarkup({
   const listening = asksKey !== null || idleKey !== null || (active && projectId !== null && targets.length > 0);
   useEffect(() => {
     if (!listening) return;
-    let live = true;
-    let unlisten: (() => void) | null = null;
-    void listen(MARKUP_MCP_CHANGED, () => setAsksChanged((n) => n + 1)).then(
-      (stop) => {
-        if (live) unlisten = stop;
-        else stop();
-      },
-      () => {},
-    );
-    return () => {
-      live = false;
-      unlisten?.();
-    };
+    return subscribeTauri(() => listen(MARKUP_MCP_CHANGED, () => setAsksChanged((n) => n + 1)));
   }, [listening]);
   // Read while the pane is on screen — a change heard while hidden is caught
   // up on show — and never while an answer is on its way: the card it is
@@ -592,7 +598,9 @@ export function usePdfMarkup({
   /** Marking for one tab while another asks about this file. */
   const askElsewhere = active && askOther ? targets.find((entry) => entry.scheduleTargetId === askOther) ?? null : null;
   // An open ask is the agent asking: the round's pill says so.
-  const agent = asks.length > 0 && tabAgent === "idle" ? "question" : tabAgent;
+  const chipAgent = asks.length > 0 && tabAgent === "idle" ? "question" : tabAgent;
+  const roundAsking = asks.length > 0 && roundTarget?.scheduleTargetId === targetId;
+  const agent = roundAsking && roundTabAgent === "idle" ? "question" : roundTabAgent;
 
   // ── The round: what the agent does with the last Submit ──────────────────
   const layer = scratchLayer ?? history.present;
@@ -600,7 +608,10 @@ export function usePdfMarkup({
   useEffect(() => {
     if (!round) {
       // Opened again over sent marks: the pill shows once the agent works.
-      if (active && sentShown && agent !== "idle") setRound(followRound(agent, Date.now()));
+      if (active && sentShown && agent !== "idle") {
+        setRoundTargetId(targetId);
+        setRound(followRound(agent, Date.now()));
+      }
       return;
     }
     const now = Date.now();
@@ -614,6 +625,7 @@ export function usePdfMarkup({
     if (wait === null) return;
     const timer = window.setTimeout(() => setRoundTick((tick) => tick + 1), wait);
     return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [round, agent, active, sentShown, roundTick]);
 
   // ── The target tab's own dialog ──────────────────────────────────────────
@@ -621,16 +633,16 @@ export function usePdfMarkup({
    *  prompt, the CLI's question picker) and no `markup_ask` card: the tab and
    *  when the wait began. Such a dialog is answered only in the tab — the pill
    *  shows its question line and leads there (`showTarget`). */
-  const targetLabel = targetTab ? agentTabLabel(targetTab) : "";
-  const dialogWait = active && visible && targetPty && round?.phase === "question" && asks.length === 0 && tabAgent === "question"
-    ? `${targetPty}\n${round.since}`
+  const roundLabel = roundTab ? agentTabLabel(roundTab) : "";
+  const dialogWait = active && visible && roundPty && round?.phase === "question" && !roundAsking && roundTabAgent === "question"
+    ? `${roundPty}\n${round.since}`
     : null;
   const [tabDialog, setTabDialog] = useState<{ wait: string; line: string } | null>(null);
   useEffect(() => {
-    if (!dialogWait || !targetPty) return;
+    if (!dialogWait || !roundPty) return;
     let live = true;
     const read = () => {
-      void readTabDialogLine(targetPty, targetLabel).then(
+      void readTabDialogLine(roundPty, roundLabel).then(
         (line) => {
           if (live && line) setTabDialog({ wait: dialogWait, line });
         },
@@ -645,7 +657,7 @@ export function usePdfMarkup({
       live = false;
       window.clearTimeout(again);
     };
-  }, [dialogWait, targetPty, targetLabel]);
+  }, [dialogWait, roundPty, roundLabel]);
   const dialogLine = dialogWait && tabDialog?.wait === dialogWait ? tabDialog.line : undefined;
 
   const roundRef = useRef(round);
@@ -689,6 +701,7 @@ export function usePdfMarkup({
       setQuestionFocus(null);
       setReloaded(false);
       setAutoReloaded(false);
+      setRoundTargetId(target.scheduleTargetId);
       setRound(startRound(queued, Date.now(), roundRef.current?.applied ?? false, roundRef.current?.undo));
       setAnswering(null);
       return true;
@@ -1021,6 +1034,7 @@ export function usePdfMarkup({
     setNoUndo(fellBack);
     setUndoNote(null);
     setUndoPreview(null);
+    setRoundTargetId(target.scheduleTargetId);
     setRound(startRound(queued, Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
     setSending(false);
   }, [projectId, target, sending, note, history.present, pageCount, path, doc, t]);
@@ -1105,9 +1119,9 @@ export function usePdfMarkup({
     }
     // The files went back, whatever else happened since: the agent is told.
     let told = false;
-    if (target) {
+    if (roundTarget) {
       try {
-        const { id: scheduled } = await queuePromptForTab(projectId, target.scheduleTargetId, markupUndoNote(done.files.map((file) => file.path), done.more));
+        const { id: scheduled } = await queuePromptForTab(projectId, roundTarget.scheduleTargetId, markupUndoNote(done.files.map((file) => file.path), done.more));
         holdPhonePrompt(scheduled);
         told = true;
       } catch {
@@ -1118,7 +1132,7 @@ export function usePdfMarkup({
     undoBusyRef.current = false;
     setUndoBusy(false);
     return true;
-  }, [projectId, target, undoPreview, undoFailed, t]);
+  }, [projectId, roundTarget, undoPreview, undoFailed, t]);
   const roundUndo: MarkupRoundUndo = {
     offered: canUndo(round) && asks.length === 0,
     busy: undoBusy,
@@ -1134,12 +1148,12 @@ export function usePdfMarkup({
    *  default instruction edits nothing until told) — one click tells it to go
    *  ahead, worded in Settings → PDF markup (`pdf_markup_apply`). */
   const apply = useCallback(async () => {
-    if (!projectId || !target || sending) return;
+    if (!projectId || !roundTarget || sending) return;
     setFailure(null);
     const text = pdfMarkupPrompt(useSettingsStore.getState().settings?.pdf_markup_apply) ?? DEFAULT_PDF_MARKUP_APPLY;
-    const queued = agentTabStateOf(useActivityStore.getState(), target.ptyId) === "working";
+    const queued = agentTabStateOf(useActivityStore.getState(), roundTarget.ptyId) === "working";
     try {
-      const { id } = await queuePromptForTab(projectId, target.scheduleTargetId, text);
+      const { id } = await queuePromptForTab(projectId, roundTarget.scheduleTargetId, text);
       holdPhonePrompt(id);
     } catch (error) {
       const code = markupErrorCode(error);
@@ -1150,8 +1164,9 @@ export function usePdfMarkup({
     setAutoReloaded(false);
     // Why the Submit got no undo is past: this round makes the changes.
     setNoUndo(null);
+    setRoundTargetId(roundTarget.scheduleTargetId);
     setRound(startRound(queued, Date.now(), true));
-  }, [projectId, target, sending, t]);
+  }, [projectId, roundTarget, sending, t]);
 
   /** About to load the file's new pages under the layer: the sent marks stay
    *  on show so the reader can check the agent's changes against them and
@@ -1244,7 +1259,7 @@ export function usePdfMarkup({
     canClearAll: !isEmpty(history.present) || (showSent && hasSent(history.present)),
     /** **Make these changes** fits: the agent is done with a Submit's marks
      *  and asks nothing more. */
-    canApply: target !== null && canApply(round) && asks.length === 0,
+    canApply: roundTarget !== null && canApply(round) && asks.length === 0,
     apply,
     roundUndo,
     hasUnsent: !isEmpty(history.present),
@@ -1256,15 +1271,21 @@ export function usePdfMarkup({
     /** The target's tab entry, for its model chip (`PdfMarkupModel`). */
     targetTab,
     targetModelTag,
+    /** The tab the round is with — the picked one until a round goes out. */
+    roundTarget,
     targetModel,
     chooseTarget: setChosen,
     /** Bring the target agent tab to the front; the tab's prompt strip leads
      *  back here while a round is on (`stores/viewers/markupLinks`). */
     showTarget,
+    /** The same for the tab the round is with. */
+    showRoundTarget,
     /** The target tab waits on a dialog of its own: the question line it
      *  shows, once read (`readTabDialogLine`); null while it waits on none. */
     tabDialog: dialogWait ? { line: dialogLine } : null,
     agent,
+    /** The picked tab's state, for its model chip. */
+    chipAgent,
     questions,
     ticks: tickState,
     askWaiting,

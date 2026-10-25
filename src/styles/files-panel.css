@@ -88,19 +88,7 @@
   right: -3px;
 }
 
-/* Side-flip button in the header — shares the pin's box. Its icon is inline
-   line-art in currentColor (a frame, the panel filled on its present edge, an
-   arrow at the other one), so it honours `color`: the resting tone is the
-   header's secondary text and hover lights it accent — the pin, drawn the same
-   way since it stopped being the 📌 emoji, does the same. Same opacity step as
-   the pin, so the pair dims and wakes together. */
-.side-panel-flip {
-  font-size: 14px;
-}
-.side-panel-flip svg {
-  display: block;
-}
-.side-panel-flip:hover,
+/* The pin-slot buttons light accent on hover. */
 .side-panel-pin:hover {
   color: var(--accent);
 }
@@ -203,6 +191,20 @@
   pointer-events: none;
   z-index: 21;
   animation: side-panel-drop-banner 0.18s ease-out;
+}
+/* The AI switch's note on an agent pane (`TerminalView`): the drop banner's
+   look in the danger colour, shrunk to a pill in the top-right corner — it
+   stands for as long as AI is off, so it must not cover the agent's rows. */
+.terminal-ai-off-banner {
+  left: auto;
+  top: 6px;
+  right: 8px;
+  max-width: 60%;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  background: var(--danger);
+  opacity: 0.92;
+  animation: none;
 }
 
 /* One-shot confirmation when the drop lands. */
@@ -782,6 +784,12 @@
   background: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
+/* The IDE button shares the Mobile button's shape and takes the row's
+   right-push (`margin-left: auto`); the Mobile button then sits beside it. */
+.side-panel-ide-btn ~ .side-panel-mobile-btn {
+  margin-left: 2px;
+}
+
 .side-panel-mobile-btn-icon {
   width: 13px;
   height: 13px;
@@ -852,6 +860,44 @@
   font-size: var(--text-xs);
   padding: 1px 6px;
   height: 20px;
+}
+
+/* A view tab: the rail's glyph beside its label, so the panel's switcher and the
+   edge rail read as one set. */
+.toolbar-btn--tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.toolbar-btn--tab svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+/* The two toolbar rows: views (tabs above) and actions. The action row is the
+   quieter one — smaller, icon-only buttons — and vanishes when a scope has no
+   action to offer. */
+.side-panel-actions {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  gap: 2px;
+}
+.side-panel-actions:empty {
+  display: none;
+}
+.side-panel-actions .toolbar-btn--sm {
+  height: 18px;
+  min-width: 18px;
+  padding: 0 4px;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.side-panel-actions .toolbar-btn--sm svg {
+  width: 11px;
+  height: 11px;
 }
 
 /* The Git button carries the colour of its next available action: red for Add,

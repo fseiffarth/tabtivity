@@ -35,6 +35,8 @@ export interface LayerBackend {
   get(key: string): Promise<unknown>;
   put(key: string, value: unknown): Promise<void>;
   delete(key: string): Promise<void>;
+  /** Every record. Optional: only the app's own store is ever emptied whole. */
+  clear?(): Promise<void>;
 }
 
 const DB = NAMES.mobileMarkupDb;
@@ -89,6 +91,9 @@ export const indexedDbBackend: LayerBackend = {
   },
   async delete(key) {
     await promised((await open()).transaction(STORE, "readwrite").objectStore(STORE).delete(key));
+  },
+  async clear() {
+    await promised((await open()).transaction(STORE, "readwrite").objectStore(STORE).clear());
   },
 };
 
@@ -185,6 +190,18 @@ export async function clearLayer(key: string, backend: LayerBackend = indexedDbB
   try {
     await backend.delete(key);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every saved layer, unsent marks and the PDF's words in them, gone — this
+ * device was unpaired (`forgetDeviceData`). `false` when the storage would
+ * not say. */
+export async function forgetLayers(backend: LayerBackend = indexedDbBackend): Promise<boolean> {
+  try {
+    await backend.clear?.();
+    return backend.clear !== undefined;
   } catch {
     return false;
   }

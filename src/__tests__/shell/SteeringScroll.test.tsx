@@ -157,6 +157,26 @@ describe("terminalScroll", () => {
     releaseTerminalScroll();
     expect(wheels).toEqual([]);
   });
+
+  it("scrolls Diffs when selected, and ignores the hidden Chat when returning to Terminal", () => {
+    const { term, wheels } = fakeTerm({ tracking: true, buffer: "alternate", rows: 40 });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.appendChild(term.element);
+    host.insertAdjacentHTML("beforeend", '<div class="terminal-reader" hidden><div class="terminal-reader-list"></div></div><aside class="terminal-changes"><div class="terminal-changes-list"></div></aside>');
+    const chat = host.querySelector<HTMLElement>(".terminal-reader-list")!;
+    const diff = host.querySelector<HTMLElement>(".terminal-changes-list")!;
+    Object.defineProperty(diff, "clientHeight", { value: 500 });
+    diff.scrollTop = 1000;
+    register("p:t", term);
+    expect(scrollTerminal("p:t", -0.5)).toBe(true);
+    expect(diff.scrollTop).toBe(775);
+    expect(chat.scrollTop).toBe(0);
+    expect(wheels).toEqual([]);
+    host.querySelector(".terminal-changes")!.remove();
+    scrollTerminal("p:t", -0.5);
+    expect(wheels).toEqual([-1, -1, -1, -1]);
+  });
 });
 
 describe("steering scroll level", () => {

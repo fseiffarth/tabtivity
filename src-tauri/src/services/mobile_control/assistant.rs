@@ -152,6 +152,7 @@ fn fixture_cli(id: &str, local: bool, installed: bool, ready: bool) -> CliOption
         installed,
         signed_in: (!local).then_some(ready),
         ready,
+        models: Vec::new(),
     }
 }
 

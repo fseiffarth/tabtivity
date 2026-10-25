@@ -15,7 +15,7 @@ import { stripFormatControls } from "./textSafety";
 import { selectUrgentMail } from "./todoBoard";
 
 /**
- * **The alert feed behind the side panel's opt-in "Alerts" group.**
+ * **The alert feed behind the header bell's "Alerts" list.**
  *
  * One merged, time-ordered list of the three things that can need the user
  * *now*: mail they themselves marked Urgent, calendar entries about to start,
@@ -186,8 +186,8 @@ export interface AlertInput {
  * exactly one input.
  */
 export interface AlertGateInput {
-  /** `files_alerts` — the file viewer's Alerts group *is* this key (the header's
-   *  🔔 writes it), so it is the group's visibility rather than a preference
+  /** `files_alerts` — the header bell's Alerts list *is* this key (the 🔔
+   *  writes it), so it is the list's visibility rather than a preference
    *  above one. */
   visible: boolean;
   /**

@@ -65,9 +65,9 @@ describe("pen prefs", () => {
 
   it("parses a stored record field by field and falls back on the rest", () => {
     expect(parsePenPrefs(null)).toEqual(DEFAULT_PEN_PREFS);
-    expect(parsePenPrefs({ tool: "laser", size: 7, style: "arrow", colors: { ink: "pink", box: "red" }, eraser: "area" })).toEqual({
+    expect(parsePenPrefs({ tool: "laser", size: 7, style: "dashed", colors: { ink: "pink", box: "red" }, eraser: "area" })).toEqual({
       ...DEFAULT_PEN_PREFS,
-      style: "arrow",
+      style: "dashed",
       colors: { ...DEFAULT_PEN_PREFS.colors, box: "red" },
       eraser: "area",
     });
@@ -77,6 +77,16 @@ describe("pen prefs", () => {
     writePenPrefs(mine, storage);
     expect(readPenPrefs(storage)).toEqual(mine);
     expect(readPenPrefs({ getItem: () => "{not json", setItem: () => {} })).toEqual(DEFAULT_PEN_PREFS);
+  });
+
+  it("never starts on the arrow: a stored arrow style and the old default arrow preset read as the plain pen", () => {
+    expect(parsePenPrefs({ style: "arrow" }).style).toBe("pen");
+    expect(DEFAULT_PEN_PREFS.presets.some((preset) => preset.style === "arrow")).toBe(false);
+    const old = DEFAULT_PEN_PREFS.presets.map((preset, i) => (i === 2 ? { ...preset, style: "arrow" } : preset));
+    expect(parsePenPrefs({ presets: old }).presets).toEqual(DEFAULT_PEN_PREFS.presets);
+    // An arrow preset the user saved is theirs and stays.
+    const mine = [{ tool: "ink", color: "red", style: "arrow", size: 2 }];
+    expect(parsePenPrefs({ presets: mine }).presets).toEqual(mine);
   });
 
   it("sizes strokes by page width, size and style, and steps the size or the eraser's reach", () => {

@@ -281,6 +281,17 @@ describe("the Reader's path links", () => {
     await waitFor(() => expect(document.body.querySelector(".link-open-hint")).toBeNull());
   });
 
+  it("opens the file in a new subwindow on Ctrl+click", async () => {
+    render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
+    const link = await screen.findByText("docs/plan.md");
+    fireEvent.mouseOver(link);
+    expect(document.body.querySelector(".link-open-hint")?.textContent).toContain("Ctrl+click: in a new subwindow");
+    await act(async () => { fireEvent.click(link, { ctrlKey: true }); });
+    expect(openFileEntry).toHaveBeenCalledWith(expect.objectContaining({
+      entry: expect.objectContaining({ path: "/p/docs/plan.md" }), newSubwindow: true,
+    }));
+  });
+
   it("asks nothing for a remote project's chat", async () => {
     useProjectsStore.setState({ projects: [{ id: "p", name: "P", directory: "/p", local_file: "/p/project.json", remote: { host: "h" } } as unknown as ProjectEntry] });
     render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);

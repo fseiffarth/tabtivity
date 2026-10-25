@@ -69,7 +69,7 @@ describe("ollamaActivity", () => {
     await flush();
     const pull = h.handlers.get("ollama-pull-progress")!;
     pull({ payload: { model: "m", status: "pulling", completed: 1, total: 4 } });
-    expect(useOllamaActivityStore.getState().downloads).toEqual({ m: { pct: 25 } });
+    expect(useOllamaActivityStore.getState().downloads).toEqual({ m: { pct: 25, status: "pulling" } });
     pull({ payload: { model: "m", status: "paused", completed: 1, total: 4 } });
     expect(useOllamaActivityStore.getState().downloads).toEqual({});
     expect(useOllamaActivityStore.getState().paused).toEqual(["m"]);
@@ -101,12 +101,12 @@ describe("ollamaActivity", () => {
     // An unknown total stays null the same way.
     pull({ payload: { model: "n", status: "pulling", completed: 1, total: 0 } });
     const withN = useOllamaActivityStore.getState().downloads;
-    expect(withN).toEqual({ m: { pct: 25 }, n: { pct: null } });
+    expect(withN).toEqual({ m: { pct: 25, status: "pulling" }, n: { pct: null, status: "pulling" } });
     pull({ payload: { model: "n", status: "pulling", completed: 2, total: 0 } });
     expect(useOllamaActivityStore.getState().downloads).toBe(withN);
     // 26%: a real step, a new object.
     pull({ payload: { model: "m", status: "pulling", completed: 260, total: 1000 } });
-    expect(useOllamaActivityStore.getState().downloads).toEqual({ m: { pct: 26 }, n: { pct: null } });
+    expect(useOllamaActivityStore.getState().downloads).toEqual({ m: { pct: 26, status: "pulling" }, n: { pct: null, status: "pulling" } });
     unsub();
     dispose();
   });
@@ -123,7 +123,7 @@ describe("ollamaActivity", () => {
 
   it("resets for tests", async () => {
     initLocalModelEvents();
-    useOllamaActivityStore.setState({ installed: true, paused: ["x"], downloads: { y: { pct: 1 } } });
+    useOllamaActivityStore.setState({ installed: true, paused: ["x"], downloads: { y: { pct: 1, status: "pulling" } } });
     __resetOllamaActivityForTests();
     const s = useOllamaActivityStore.getState();
     expect(s.installed).toBe(false);

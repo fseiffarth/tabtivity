@@ -162,6 +162,19 @@ interface AgentPromptsStore {
   refreshLoaded: () => Promise<void>;
 }
 
+/** Per project: bumped each time a write stores a list, so a `list` that left
+ *  before it cannot paint its older answer over it. */
+const writeEpoch = new Map<string, number>();
+
+function storePrompts(
+  set: (fn: (state: AgentPromptsStore) => Partial<AgentPromptsStore>) => void,
+  projectId: string,
+  prompts: ProjectAgentPrompt[],
+): void {
+  writeEpoch.set(projectId, (writeEpoch.get(projectId) ?? 0) + 1);
+  set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
+}
+
 export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
   byProject: {},
   historyByProject: {},
@@ -170,8 +183,10 @@ export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
 
   load: async (projectId) => {
     set((state) => ({ loading: { ...state.loading, [projectId]: true } }));
+    const epoch = writeEpoch.get(projectId) ?? 0;
     try {
       const prompts = await invoke<ProjectAgentPrompt[]>("agent_prompts_list", { projectId });
+      if ((writeEpoch.get(projectId) ?? 0) !== epoch) return get().byProject[projectId] ?? prompts;
       set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
       return prompts;
     } finally {
@@ -202,13 +217,13 @@ export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
         phone_device: prompt.phoneDevice ?? null,
       },
     });
-    set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
+    storePrompts(set, projectId, prompts);
     return prompts;
   },
 
   remove: async (projectId, promptId) => {
     const prompts = await invoke<ProjectAgentPrompt[]>("agent_prompt_delete", { projectId, promptId });
-    set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
+    storePrompts(set, projectId, prompts);
     return prompts;
   },
 
@@ -227,7 +242,7 @@ export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
     set((state) => ({ byProject: { ...state.byProject, [projectId]: staged } }));
     try {
       const prompts = await invoke<ProjectAgentPrompt[]>("agent_prompt_reorder", { projectId, ids });
-      set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
+      storePrompts(set, projectId, prompts);
       return prompts;
     } catch (cause) {
       set((state) => ({ byProject: { ...state.byProject, [projectId]: before } }));
@@ -241,7 +256,7 @@ export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
       promptId,
       sent: sentPayload(sent),
     });
-    set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
+    storePrompts(set, projectId, prompts);
     await get().loadHistory(projectId).catch(() => []);
     return prompts;
   },

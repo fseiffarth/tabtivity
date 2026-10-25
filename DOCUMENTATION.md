@@ -90,7 +90,7 @@ desktop state.
 ```bash
 # Tauri system dependencies (Debian / Ubuntu)
 sudo apt install libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev \
-    libayatana-appindicator3-dev librsvg2-dev
+    libayatana-appindicator3-dev librsvg2-dev libasound2-dev cmake
 
 # Install JS dependencies
 npm install
@@ -1277,6 +1277,19 @@ agent runs (Part C, C1). Claude takes the bearer token without its custom-key
 dialog; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude tab
 runs without Remote Control. A project's CLI config can still point the CLI at
 another host, which then receives only the token — worthless off this machine.
+The "+" menu's **API key** section (`components/tabs/apiKeyGroup.ts`) opens a
+tab on the key ("Claude (API)") beside the Agents group's plain rows, which
+always open one on the CLI's own login: the tab's pick (`TabEntry.apiKey` →
+`PtyOptions::api_key`, persisted, dropped from an adopted or imported layout)
+outranks `agent_api_key_clis`, which now decides only for launches without a
+menu pick (the phone's plain agents, scheduled agents, overlay dock). The
+section lists CLIs with a key saved (`agent_logins`' `api_key_saved`,
+`agent_api_keys::keyable_clis`, which looks up only providers with a monthly
+limit set). The phone's ＋ sheet has the same **API key** group: the bridge
+lists those CLIs in `launch-options`' `api_key` (opaque agent id and a
+`budget_reached` flag, nothing more), and a pick sends `api_key: true`, which
+the bridge turns into the same `apiKey: true` tab; a spent budget or no saved
+key is refused before a tab is made. It needs the window (no headless start).
 
 **Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
 `services/api_prices.rs`, Part C, C3; tokens since #2389). Saving a key requires

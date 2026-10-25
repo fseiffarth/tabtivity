@@ -1218,8 +1218,18 @@
 }
 .settings-navigation-links .settings-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; white-space: normal; }
 .settings-navigation-links [aria-current] { color: var(--accent); border-color: var(--accent); }
-/* Under a searched entry: which of its settings matched. */
+/* Under a search result: where it is (its page, and the folds on the way). */
 .settings-navigation-hit { font-size: var(--text-xs); font-weight: 400; color: var(--text-secondary); }
+/* The setting a picked search result went to: an accent outline that fades.
+   Outline, not box-shadow — a blurred shadow must never animate (WebKitGTK). */
+.settings-search-flash { outline: 2px solid transparent; outline-offset: 2px; animation: settings-search-flash 1.8s ease-out; }
+@keyframes settings-search-flash {
+  0%, 45% { outline-color: var(--accent); }
+  100% { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-search-flash { animation: none; outline-color: var(--accent); }
+}
 .settings-navigation-links .settings-empty { padding: 4px; }
 .settings-navigation-compact { display: none; }
 .settings-panel-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
@@ -1828,6 +1838,10 @@
 .ollama-ghost-btn.danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 12%, var(--control-bg));
   color: var(--danger);
+}
+.ollama-ghost-btn.primary {
+  color: var(--success);
+  font-weight: 600;
 }
 .ollama-ghost-btn:disabled {
   opacity: 0.5;
@@ -2913,6 +2927,8 @@
 
 /* Settings groups: closed rows with a one-line summary, in one frame. */
 .agents-groups {
+  /* Keep the rows scrollable in dialog-scroll instead of shrinking and clipping. */
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

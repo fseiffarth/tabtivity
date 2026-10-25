@@ -13,9 +13,62 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    dev builds included: the dev-only overlay from `target/mobile-pwa/` let any
    agent plant the app every paired phone runs, and is gone (threat recheck
    2026-10-08, gap 20; `dev_builds.md`).
-2. **Trust tiers** — only a *local* project that is neither a container nor a
-   VM is ever a phone scope (`discovery::mobile_local`, and its desktop twin
-   `MobileBridgeHost` `mobileProject`). No switch can widen this.
+2. **Which folder a project type gives the phone** — no project type is
+   barred (the old trust tiers are gone, 2026-10-21): the switch below is the
+   whole consent, for a local, remote, container and VM project and for every
+   box member alike. The type decides only *what the phone reaches*
+   (`discovery::mobile_root`, `project_host`; desktop twin
+   `lib/projectTabHost.ts`, used by `MobileBridgeHost`):
+   - local and container: the entry's `directory` (a container mounts the host
+     folder at the same path);
+   - remote: the local mirror (`mirror` key, else
+     `remote_sync::default_mirror_dir_in`), never `directory`, which holds only
+     `project.json`/`sync.json`; a tab saved with `cwd = directory` is read as
+     running in the mirror;
+   - VM: the opted-in `mirror` only; without one the project is listed with no
+     folder (`folder: false`).
+
+   **Locality rule.** The phone attaches through a tmux session on this
+   machine, so on a remote, VM or container project only tabs that run here are
+   listed (`runs_on_this_machine`, the window's `effectiveTabLocation` table;
+   the fixture `tabLocality.fixture.json` pins both). `create` is `all` (local),
+   `agents` (remote with a mirror; the agent runs `local_only` in the mirror and
+   is saved `location: "local"`) or `none` (container, VM, mirror-less remote):
+   a refused create/reopen answers `not_attachable`, in the sidecar and the
+   bridge. The scheduler's headless relaunch follows the same placement
+   (`launch_place`, via `headless::restart_options`): a remote project's local
+   agent restarts in the mirror, a container project's agent as it always did
+   (`launch_prep` puts it in the container); a remote-host or VM agent is not
+   restarted without a window (there is no pool to reach it; it failed before
+   too). Tabs in a container or in a VM reach the phone in a later version.
+   The desktop's phone button and Settings → Mobile rows say this per type
+   (`mobile.hostReach.*`, pill `mobile-every-project-type`).
+
+   **Remote-host tabs** (`docs/mobile_remote_host_tabs_plan.md`). A remote
+   (not VM) project's tab that runs on its host — `location` `"remote"`,
+   `"host:<id>"` (a worker its record still names) or a location-less shell —
+   is listed too (`discovery::host_of_tab`, one rule with the refresher's
+   targets): a resumable agent, or a shell behind `shell_tabs`, carrying its
+   scope's tmux name, only while `remote.persist_sessions` is not `false`;
+   never on Windows. It is read off the session file with no mirror and no
+   cwd check, and `PublicTab.on_host` is the only new fact the phone gets. The
+   phone reaches it **only through the desktop's ControlMaster** for that
+   host, by its literal socket path (`ssh_exec::host_mux_args`:
+   `ControlMaster=no`, `ProxyCommand=false`, `BatchMode=yes`, `-e none`): it
+   never dials and never prompts, so a host tab is available only while the
+   desktop holds that master (or `ControlPersist` after). Liveness comes from
+   `host_live`'s background refresher, never from a request; with no window
+   it trusts the socket file alone (probing would keep the master alive), and
+   the terminal upgrade re-checks with `ssh -O check` (`409 host_offline`; an
+   open terminal whose host goes away closes with `host_offline`). What would
+   act on this machine answers `409 tab_on_host`: inbox upload, desktop
+   images, Mark up Submit, sign-in and its callback, activate-with-tab, and —
+   with no window only — schedule writes, held prompts, a stored prompt's
+   send-now and undo-clear. Transcript, readings, worktrees and git skip a
+   host tab (nothing local describes it). A close with no window drops the
+   record only (the host session runs on, as after a desktop close), and the
+   closed tab is not offered under "Recently closed" there (`reopen_tab`
+   could not start it).
 3. **The scope's switch** — `tabtivity_mobile_access` (`MOBILE_ACCESS_KEY`) on
    the project entry in `projects.json` or the box in `boxes.json`. Absent or
    false = off. A box's switch is the one consent for the box's `box:<id>`
@@ -53,8 +106,8 @@ cooldown. `agent_tab_ref` (the push lookup, not a phone request) is the one
 unfiltered catalog read.
 
 The desktop never decides access by which phone asked: it only ever sees raw
-ids the sidecar mapped, and `mobileScope` repeats the switch and trust tiers
-only. The one exception is bookkeeping, not access: a request that makes a
+ids the sidecar mapped, and `mobileScope` repeats the switch and the folder
+rule only. The one exception is bookkeeping, not access: a request that makes a
 rule in `agent_tasks.json` (`ScheduleMutate`, `PromptMutate` send,
 `HoldPrompt`, `MarkupAnswer`) carries the asking phone's `device_id`, and the
 rule records it as `phone_device` (see *What a phone leaves behind*).

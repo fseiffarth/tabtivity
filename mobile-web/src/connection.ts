@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
+import { type TranslationKey, translateNow } from "../../src/lib/i18n";
 
 /**
  * Why Tabtivity Mobile could not reach the workspace, at the granularity the
@@ -89,7 +89,7 @@ export interface UnavailableCopy {
  */
 export function describeUnavailable(reason: UnavailableReason): UnavailableCopy {
   const [title, hint] = UNAVAILABLE_KEYS[reason];
-  return { title: tr(title), hint: tr(hint) };
+  return { title: translateNow(title), hint: translateNow(hint) };
 }
 
 /** The title and hint of each reason. With Tailscale off, the desktop's 100.x
@@ -107,13 +107,6 @@ const UNAVAILABLE_KEYS: Record<UnavailableReason, [TranslationKey, TranslationKe
   storage_blocked: ["mobile.unavailable.storageBlockedTitle", "mobile.unavailable.storageBlockedHint"],
   server_error: ["mobile.unavailable.serverErrorTitle", "mobile.unavailable.serverErrorHint"],
 };
-
-/** In the language the phone is set to, read when the copy is asked for —
- * these are plain functions called from render, so the next render after a
- * language switch reads the new one. */
-function tr(key: TranslationKey): string {
-  return translate(useI18nStore.getState().lang, key);
-}
 
 /**
  * The raw shape of the failure, for a bug report. Kept next to the human copy
@@ -147,6 +140,9 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   replaced: "mobile.failure.replaced",
   session_busy: "mobile.failure.sessionBusy",
   session_gone: "mobile.failure.sessionGone",
+  // A tab on a remote project's host whose desktop SSH connection is gone:
+  // the terminal upgrade's 409 and the closing reason alike.
+  host_offline: "mobile.failure.hostOffline",
   // The sidecar's own refusals (`host.rs`).
   desktop_unavailable: "mobile.unavailable.desktopDownTitle",
   launch_pending: "mobile.failure.launchPending",
@@ -205,6 +201,18 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   launch_failed: "mobile.failure.launchFailed",
   unknown_agent: "mobile.failure.unknownAgent",
   unsupported_sign_in: "mobile.failure.unsupportedSignIn",
+  // A cloud session's teleport (`POST /api/v1/tabs/{id}/teleport`).
+  cloud_tab_required: "mobile.failure.cloudTabRequired",
+  unsupported_teleport: "mobile.failure.unsupportedTeleport",
+  worktree_failed: "mobile.failure.worktreeFailed",
+  api_key_unavailable: "mobile.failure.apiKeyUnavailable",
+  api_budget_reached: "mobile.failure.apiBudgetReached",
+  // A project type whose tabs the phone cannot attach to yet (`create` in the
+  // detail payload: `agents` or `none`).
+  not_attachable: "mobile.failure.notAttachable",
+  // Something that acts on this machine (inbox, Mark up, sign-in, and with no
+  // window schedules and held prompts) aimed at a tab on the remote host.
+  tab_on_host: "mobile.failure.tabOnHost",
   unsupported_mode: "mobile.failure.unsupportedMode",
   persist_failed: "mobile.failure.persistFailed",
   calendar_unavailable: "mobile.failure.calendarUnavailable",
@@ -268,7 +276,7 @@ export function describeFailure(source: unknown): string {
     if (reason !== "server_error") return describeUnavailable(reason).title;
   }
   const code = failureCode(source);
-  return tr((code && FAILURE_TEXT[code]) || GENERIC_FAILURE);
+  return translateNow((code && FAILURE_TEXT[code]) || GENERIC_FAILURE);
 }
 
 /** Every code the table knows, for the test that checks each reads as prose. */
@@ -284,7 +292,7 @@ export function knownFailureCodes(): string[] {
  */
 export function localFailureText(reason: unknown): string {
   if (reason instanceof Error && reason.message && !isCode(reason.message)) return reason.message;
-  return tr("mobile.failure.generic");
+  return translateNow("mobile.failure.generic");
 }
 
 /**
