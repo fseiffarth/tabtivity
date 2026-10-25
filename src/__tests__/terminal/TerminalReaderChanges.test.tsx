@@ -12,7 +12,6 @@ import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStr
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
-import { rememberedChanges } from "../../lib/agents/agentReader";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1", launchedAt: 1000 };
 const changes = {
@@ -26,9 +25,9 @@ const changes = {
   ],
 };
 
-function reader(host: HTMLElement) {
+function reader(host: HTMLElement, changesOpen = false, onShowChat?: () => void) {
   return render(
-    <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />,
+    <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused changesOpen={changesOpen} onShowChat={onShowChat} />,
   );
 }
 
@@ -44,7 +43,7 @@ describe("the Reader's Changes panel", () => {
       return Promise.resolve([]);
     });
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
-    useAgentReaderStore.setState({ byAgent: {}, changesByAgent: {} });
+    useAgentReaderStore.setState({ byAgent: {} });
     useAgentClearUndoStore.setState({ cleared: {}, marks: {} });
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -59,8 +58,7 @@ describe("the Reader's Changes panel", () => {
   });
 
   it("opens a full-width Diffs tab, newest first, with split and unified views", async () => {
-    useAgentReaderStore.getState().setChanges("claude", true);
-    reader(host);
+    reader(host, true);
     const panel = await waitFor(() => {
       const found = host.querySelector<HTMLElement>(".terminal-changes");
       expect(found?.querySelectorAll(".terminal-changes-card").length).toBe(3);
@@ -93,8 +91,7 @@ describe("the Reader's Changes panel", () => {
   });
 
   it("narrows to one file, folds a diff, and opens the file", async () => {
-    useAgentReaderStore.getState().setChanges("claude", true);
-    reader(host);
+    reader(host, true);
     const files = await screen.findByRole("listbox", { name: "Changed files" });
     fireEvent.click(within(files).getByTitle("/p/docs/b.md"));
     const panel = host.querySelector<HTMLElement>(".terminal-changes")!;
@@ -123,8 +120,7 @@ describe("the Reader's Changes panel", () => {
     });
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      useAgentReaderStore.getState().setChanges("claude", true);
-      reader(host);
+      reader(host, true);
       await waitFor(() => expect(host.querySelectorAll(".terminal-changes-card").length).toBe(3));
       current = {
         ...changes,
@@ -153,15 +149,14 @@ describe("the Reader's Changes panel", () => {
     invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_changes"
       ? { available: true, version: "c0", truncated: false, changes: [] }
       : { available: true, version: "v1", truncated: false, entries: [] }));
-    useAgentReaderStore.getState().setChanges("claude", true);
-    reader(host);
+    const onShowChat = vi.fn();
+    reader(host, true, onShowChat);
     await screen.findByText("No file changes in this conversation yet.");
     fireEvent.click(screen.getByRole("button", { name: "Hide the diffs" }));
-    await waitFor(() => expect(host.querySelector(".terminal-changes")).toBeNull());
-    expect(rememberedChanges()).toEqual({ claude: false });
+    expect(onShowChat).toHaveBeenCalledTimes(1);
   });
 
-  it("is switched from the prompt strip, chat shown or not, remembered per agent CLI", () => {
+  it("is switched from the prompt strip, chat shown or not", () => {
     const onToggle = vi.fn();
     const strip = (readerOpen: boolean) => (
       <TerminalPromptStrip
@@ -180,7 +175,5 @@ describe("the Reader's Changes panel", () => {
     rerender(strip(true));
     fireEvent.click(screen.getByRole("button", { name: /Diffs/ }));
     expect(onToggle).toHaveBeenCalledTimes(2);
-    useAgentReaderStore.getState().setChanges("codex", true);
-    expect(rememberedChanges()).toEqual({ codex: true });
   });
 });

@@ -60,7 +60,7 @@ import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
-import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
+import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
@@ -2286,15 +2286,24 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerAvailable = readerOffered(readerTab);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
-  const changesOn = useReaderChangesOpen(readerAgent);
-  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || (changesOn && changesOffered(readerAgent)));
   const readerTopBar = readerAvailable && !readerAlways;
+  /** This pane's Diffs tab: the pane's own, unlike the Chat/Terminal choice
+   * (per CLI) — a full-pane view must not take over every pane of the CLI,
+   * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
+  const [changesPicked, setChangesPicked] = useState(false);
+  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent);
+  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
   const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
-    useAgentReaderStore.getState().setChanges(readerAgent, false);
+    setChangesPicked(false);
     useAgentReaderStore.getState().set(readerAgent, on);
     if (!on) setTimeout(() => termRef.current?.focus(), 0);
+  };
+  /** Leave Diffs (or the terminal) for this pane's chat. */
+  const showReaderChat = () => {
+    setChangesPicked(false);
+    if (!readerPreferred) useAgentReaderStore.getState().set(readerAgent, true);
   };
 
   // Take keyboard focus only when this pane is the focused one (and opened);
@@ -2442,8 +2451,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           open: readerOn,
           onToggle: () => setReader(!readerOn),
           changes: changesOffered(readerAgent) ? { open: changesOn, onToggle: () => {
-            useAgentReaderStore.getState().set(readerAgent, true);
-            useAgentReaderStore.getState().setChanges(readerAgent, !changesOn);
+            if (changesOn) showReaderChat();
+            else setChangesPicked(true);
           } } : undefined,
           cwd,
         } : undefined}
@@ -2472,6 +2481,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         visible={visible && readerOn}
         focused={focused && readerOn && !changesOn}
         shown={readerOn}
+        changesOpen={changesOn}
+        onShowChat={showReaderChat}
         navigationSlot={readerNavigationSlot}
         actionSlot={readerActionSlot}
       />

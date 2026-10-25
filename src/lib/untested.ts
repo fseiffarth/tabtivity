@@ -31,7 +31,7 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
-  "terminal.reader.topbar": { area: "agents", what: "Desktop agent pane · top toolbar with Chat / full-width Diffs / Terminal tabs; populated Subagents, Workspaces and Files menus; Commit available from Chat; full-width composer and draft preserved when switching views" },
+  "terminal.reader.topbar": { area: "agents", what: "Desktop agent pane · top toolbar with Chat / full-width Diffs / Terminal tabs; populated Subagents, Workspaces (Claude workflow runs) and Files menus; Commit available from Chat; full-width composer and draft preserved when switching views" },
   "desktop.tooltips": { area: "common", what: "Theme-aware hover and keyboard hints replace native title tooltips throughout the desktop and browser client, including popout windows" },
   "sidePanel.hiddenRename": { area: "shell", what: "Side panel Hidden list · one row per hidden subwindow named \"Hidden <n>\" (tooltip lists its tabs, a click restores it); ✎ renames it inline and the name survives a restart; a restored subwindow opens beside the focused one" },
   "sidePanel.aiSwitch": { area: "shell", what: "Edge rail ⏻ AI switch: off blocks typing to agents, new agent tabs (they wait and start on resume), schedules/auto-continue/cron, completions, mail AI and the phone; survives a restart; on again resumes" },

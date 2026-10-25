@@ -5,15 +5,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 const invoke = vi.fn();
 const send = vi.fn();
 const openFile = vi.fn();
-const move = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
 vi.mock("../../lib/shortcuts/steeringAgent", () => ({ sendSteeringPrompt: (...args: unknown[]) => send(...args), clearAgentTab: vi.fn(() => Promise.resolve(true)) }));
 vi.mock("../../components/files/openFileEntry", () => ({ openFileEntry: (...args: unknown[]) => openFile(...args) }));
-vi.mock("../../stores/agents/agentWorktreeSwitch", async (original) => ({
-  ...await original<typeof import("../../stores/agents/agentWorktreeSwitch")>(),
-  moveAgentToWorktree: (...args: unknown[]) => move(...args),
-}));
 
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
@@ -27,7 +22,6 @@ import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import { clearPathLinkCache } from "../../lib/terminal/pathLinks";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { COMMIT_PROMPTS } from "../../../mobile-web/src/terminal/commitPrompts";
-import { NAMES } from "../../lib/brand";
 import type { ProjectEntry } from "../../types";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
 
@@ -37,15 +31,17 @@ function Pane({ host }: { host: HTMLElement }) {
   const [navigationSlot, setNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [actionSlot, setActionSlot] = useState<HTMLSpanElement | null>(null);
   const open = useAgentReaderStore((state) => state.byAgent.claude ?? true);
-  const changes = useAgentReaderStore((state) => state.changesByAgent.claude ?? false);
+  const [changes, setChanges] = useState(false);
+  const showChat = () => { setChanges(false); useAgentReaderStore.getState().set("claude", true); };
   return <>
     <TerminalPromptStrip ptyId="p:a" scope="p" tabKey="a" background="#000" foreground="#fff"
       onReturnFocus={() => {}} topBar chatShown={open}
       navigationSlot={setNavigationSlot} actionSlot={setActionSlot}
-      reader={{ open, onToggle: () => useAgentReaderStore.getState().set("claude", !open), cwd: tab.cwd,
-        changes: { open: changes, onToggle: () => useAgentReaderStore.getState().setChanges("claude", !changes) } }} />
+      reader={{ open: open || changes, onToggle: () => { setChanges(false); useAgentReaderStore.getState().set("claude", !(open || changes)); }, cwd: tab.cwd,
+        changes: { open: changes, onToggle: () => (changes ? showChat() : setChanges(true)) } }} />
     <TerminalReaderView host={host} ptyId="p:a" scope="p" tabKey="a" cwd={tab.cwd}
-      visible={open} focused={open && !changes} shown={open} navigationSlot={navigationSlot} actionSlot={actionSlot} />
+      visible={open || changes} focused={open && !changes} shown={open || changes} changesOpen={changes} onShowChat={showChat}
+      navigationSlot={navigationSlot} actionSlot={actionSlot} />
   </>;
 }
 
@@ -65,10 +61,9 @@ describe("desktop conversation toolbar", () => {
       return Promise.resolve([]);
     });
     send.mockResolvedValue(undefined);
-    move.mockResolvedValue("carried");
     useTabsStore.setState({ scope: "p", tabsByScope: { p: [tab] } });
     useAgentPromptsStore.setState({ historyByProject: { p: [] } });
-    useAgentReaderStore.setState({ byAgent: { claude: true }, changesByAgent: {} });
+    useAgentReaderStore.setState({ byAgent: { claude: true } });
     useAgentClearUndoStore.setState({ cleared: {}, marks: {} });
     useProjectsStore.setState({ projects: [{ id: "p", name: "P", directory: "/project", local_file: "/project/project.json" } as ProjectEntry] });
     setReaderDraft("p", "a", "");
@@ -127,16 +122,25 @@ describe("desktop conversation toolbar", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Files (1)" }));
     fireEvent.click(screen.getByRole("option", { name: "src/result.ts" }));
     expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ entry: expect.objectContaining({ path: "/project/src/result.ts" }) }));
+    // Terminal reads no conversation: its menus would go stale, so they go.
+    fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
+    expect(screen.queryByRole("button", { name: "Files (1)" })).toBeNull();
   });
 
-  it("offers linked workspaces through the existing worktree move", async () => {
-    const choices = [{ path: "/project", is_main: true, branch: "develop" }, { path: `/project/${NAMES.worktreesDir}/feature`, is_main: false, branch: "feature" }];
-    const original = invoke.getMockImplementation()!;
-    invoke.mockImplementation((command: string, args?: unknown) => command === "git_worktree_list" ? Promise.resolve(choices) : original(command, args));
+  it("lists the conversation's workflow runs as Workspaces, apart from its subagents", async () => {
+    entries.push(
+      { kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" },
+      { kind: "agent", text: "Audit the repo", role: "workflow", subagent: "run", workflow: true, at: "2026-10-25T09:02:00Z" },
+    );
     render(<Pane host={host} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Workspaces (2)" }));
-    await act(async () => fireEvent.click(screen.getByRole("option", { name: "feature" })));
-    expect(move).toHaveBeenCalledWith("p", expect.objectContaining({ key: "a" }), choices, choices[1], expect.any(Function));
+    expect(await screen.findByRole("button", { name: /^Subagents \(1\)/ })).toBeTruthy();
+    const workspaces = screen.getByRole("button", { name: /^Workspaces \(1\)/ });
+    expect(workspaces.closest(".reader-topbar-navigation")).not.toBeNull();
+    fireEvent.click(workspaces);
+    const list = screen.getByRole("navigation", { name: "Claude workflow runs in this conversation" });
+    expect(within(list).queryByRole("button", { name: /Review parser/ })).toBeNull();
+    fireEvent.click(within(list).getByRole("button", { name: /Audit the repo/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({ subagent: "run" })));
   });
 
   it("keeps subagent navigation above the views and returns from Diffs to its chat", async () => {
