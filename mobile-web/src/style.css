@@ -1390,6 +1390,10 @@ span.files-close { background:transparent; }
 .files-strip { display:flex; gap:10px; overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:4px; scrollbar-width:none; }
 .files-strip > .files-tile { flex:0 0 96px; }
 .files-stale { opacity:.45; }
+/* A remote project's side switch above the search box: the terminal view
+   switch, as wide as the box, its two sides alike. */
+.files-side-switch { margin:0 4px; }
+.files-side-switch button { flex:1 1 0; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }

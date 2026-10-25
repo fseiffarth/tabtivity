@@ -417,6 +417,18 @@ pub async fn open_pooled_session(
     open_any(user, host, port, password, true).await
 }
 
+/// Open an SFTP session over an existing ControlMaster: `args` is
+/// `ssh_exec::host_mux_sftp_args`, which cannot dial or prompt, so there is no
+/// auth to choose. The child is killed when it is dropped — it is only a mux
+/// client, and the master it rides is the desktop's.
+pub async fn open_mux_session(args: Vec<String>) -> Result<(Sftp, Child), String> {
+    let mut cmd = ssh_command("ssh");
+    cmd.args(&args).kill_on_drop(true);
+    spawn_sftp(cmd, None, None, "sftp over the desktop's connection failed")
+        .await
+        .map_err(|(error, _)| error)
+}
+
 /// Wait for the ssh child to exit after the `Sftp` client has been dropped, so we
 /// don't leave a zombie. Best-effort — a stuck child is not worth failing on.
 async fn reap(mut child: Child) {

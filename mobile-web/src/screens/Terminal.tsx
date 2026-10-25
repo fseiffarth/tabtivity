@@ -1345,6 +1345,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The project's name while the desktop's "Project files on the phone"
    * switch is on for it (`detail.files`) — null while off, or unknown. */
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
+  /** Which sides the drawer's library has (`detail.files`, `detail.host_files`). */
+  const [filesSides, setFilesSides] = useState({ here: true, host: false });
   /** The files drawer, the project screen's own, opened here by a right→left
    * swipe over the output. */
   const [filesOpen, setFilesOpen] = useState(false);
@@ -4024,7 +4026,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     const read = () => {
       if (document.visibilityState !== "visible") return;
       api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(project)}`, { signal: controller.signal })
-        .then((detail) => setFilesLabel(detail.files ? detail.project.label : null))
+        .then((detail) => {
+          setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
+          setFilesSides({ here: !!detail.files, host: !!detail.host_files });
+        })
         .catch(() => {});
     };
     read();
@@ -5113,7 +5118,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
+      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} here={filesSides.here} host={filesSides.host}
         markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, pickModel: markupFor.pickModel, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
     </BackNest></div>}
 

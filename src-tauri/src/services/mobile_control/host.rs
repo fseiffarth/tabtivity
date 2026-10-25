@@ -37,6 +37,7 @@ use super::{
     files,
     git_overview,
     headless,
+    host_files,
     host_live,
     inbox,
     local_models,
@@ -108,6 +109,9 @@ struct HostState {
     /// Each project's worktrees as its tab cards name them, for
     /// `git_overview::SPOT_TTL`.
     worktree_spots: Arc<Mutex<git_overview::SpotCache>>,
+    /// The remote side of the 📁 library: one SFTP session per host over the
+    /// desktop's master, while the phone browses (`host_files`).
+    host_files: Arc<host_files::HostFiles>,
 }
 
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
@@ -1287,6 +1291,9 @@ async fn project(
                 // switch, and a project with a folder rather than a box, the
                 // root console or a project the phone has no folder of.
                 "files": is_git_project(project) && files::files_open(&state.config.state_dir),
+                // Whether the 📁 has a remote side too (`host_files`): the same
+                // switch, and a remote project's primary host. Never which host.
+                "host_files": has_host_files(project) && files::files_open(&state.config.state_dir),
                 // Whether the scope has a folder at all, and what the phone may
                 // create in it (`all`, `agents` or `none`): the phone words the
                 // reason and offers only what these allow, never a project type.
@@ -6618,10 +6625,63 @@ fn files_scope(
     Ok((project.root.clone(), project.raw_id.clone()))
 }
 
+/// Whether a scope has a remote side the 📁 library may show: a remote (not
+/// VM) project whose primary host has an absolute `remote_path`. Never on
+/// Windows, which holds no ControlMaster to ride.
+fn has_host_files(project: &super::discovery::ResolvedProject) -> bool {
+    !cfg!(target_os = "windows")
+        && project.public.kind == ScopeKind::Project
+        && project.host == super::discovery::ProjectHost::Remote
+        && project.primary_host.as_ref().is_some_and(|spec| host_files::root_of(spec).is_some())
+}
+
+/// Whether a file-browser request asks for the remote side (`?on=host`).
+fn on_host_side(query: &HashMap<String, String>) -> bool {
+    query.get("on").is_some_and(|side| side == "host")
+}
+
+/// What a remote-side request reads by: the host, its master's socket as the
+/// refresher last found it, and the project's raw id.
+type HostFilesScope = (crate::schema::project::RemoteSpec, Option<PathBuf>, String);
+
+/// The [`HostFilesScope`] of a remote-side request — behind the same switch as
+/// the local side; a scope with no remote side is `files_unavailable`.
+fn host_files_scope(
+    state: &HostState,
+    phone: &Phone,
+    project_id: &str,
+) -> Result<HostFilesScope, (StatusCode, Json<serde_json::Value>)> {
+    if !files::files_open(&state.config.state_dir) {
+        return Err(api_error(StatusCode::NOT_FOUND, "files_off"));
+    }
+    let catalog = catalog(state, phone)?;
+    let Some(project) = catalog.project(project_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
+    };
+    let Some(spec) = project.primary_host.clone().filter(|_| has_host_files(project)) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "files_unavailable"));
+    };
+    let known = state.catalog.lock_ok().host_control_path(&spec);
+    Ok((spec, known, project.raw_id.clone()))
+}
+
+/// [`files_rel`] for a remote-side token.
+fn host_files_rel(
+    state: &HostState,
+    raw_id: &str,
+    token: Option<&String>,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let Some(token) = token else {
+        return Ok(String::new());
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    host_files::unseal(&key, raw_id, token).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "file_not_found"))
+}
+
 fn files_error(error: files::FilesError) -> (StatusCode, Json<serde_json::Value>) {
     api_error(
         match error {
-            files::FilesError::Unavailable => StatusCode::CONFLICT,
+            files::FilesError::Unavailable | files::FilesError::HostOffline => StatusCode::CONFLICT,
             files::FilesError::NotFound => StatusCode::NOT_FOUND,
             files::FilesError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             files::FilesError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -6649,6 +6709,9 @@ fn files_rel(
 /// is the project root. No path appears in the answer. `uploads` says whether
 /// **Upload here** may write into this folder (`project_files_upload`): the
 /// switch is on and no segment of the folder starts with a dot.
+///
+/// `&on=host` lists the remote side instead: the project's tree on its
+/// primary host (`host_files`), with host-side tokens and never `uploads`.
 async fn project_files_list(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -6659,6 +6722,26 @@ async fn project_files_list(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if on_host_side(&query) {
+        let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error,
+        };
+        let rel = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
+        let key = state.auth.lock_ok().host_key().to_vec();
+        return match state.host_files.list(&spec, known, rel, key, raw_id).await {
+            // Read-only: Upload here never writes to the host.
+            Ok(listing) => {
+                let mut answer = json!(listing);
+                answer["uploads"] = json!(false);
+                (StatusCode::OK, Json(answer))
+            }
+            Err(error) => files_error(error),
+        };
+    }
     let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
         Ok(scope) => scope,
         Err(error) => return error,
@@ -6687,6 +6770,7 @@ async fn project_files_list(
 /// files and folders whose names hold every word, each with the sealed trail
 /// of folders above it (`files::search`). Read-only, like the listing; no
 /// path appears in the answer, only the leaf names the drawer would show.
+/// `&on=host` searches the remote side by a bounded walk (`host_files`).
 async fn project_files_search(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -6697,11 +6781,25 @@ async fn project_files_search(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    let q = query.get("q").cloned().unwrap_or_default();
+    if on_host_side(&query) {
+        let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error,
+        };
+        if q.len() > files::MAX_QUERY {
+            return api_error(StatusCode::BAD_REQUEST, "query_too_long");
+        }
+        let key = state.auth.lock_ok().host_key().to_vec();
+        return match state.host_files.search(&spec, known, q, key, raw_id).await {
+            Ok(found) => (StatusCode::OK, Json(json!(found))),
+            Err(error) => files_error(error),
+        };
+    }
     let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
         Ok(scope) => scope,
         Err(error) => return error,
     };
-    let q = query.get("q").cloned().unwrap_or_default();
     if q.len() > files::MAX_QUERY {
         return api_error(StatusCode::BAD_REQUEST, "query_too_long");
     }
@@ -6719,7 +6817,8 @@ async fn project_files_search(
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
 /// inert text), for the same viewer. Read-only; the browser's one write is
-/// `project_files_upload`, which only adds new files.
+/// `project_files_upload`, which only adds new files. `&on=host` reads a
+/// remote-side token's file from the host (`host_files`).
 async fn project_files_raw(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -6731,21 +6830,36 @@ async fn project_files_raw(
         Ok(phone) => phone,
         Err(error) => return error.into_response(),
     };
-    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
-        Ok(scope) => scope,
-        Err(error) => return error.into_response(),
+    let no_token = || api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
+    let read = if on_host_side(&query) {
+        let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error.into_response(),
+        };
+        let Some(token) = query.get("f") else { return no_token() };
+        let rel = match host_files_rel(&state, &raw_id, Some(token)) {
+            Ok(rel) => rel,
+            Err(error) => return error.into_response(),
+        };
+        let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
+        (leaf, state.host_files.read(&spec, known, rel).await)
+    } else {
+        let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error.into_response(),
+        };
+        let Some(token) = query.get("f") else { return no_token() };
+        let rel = match files_rel(&state, &raw_id, Some(token)) {
+            Ok(rel) => rel,
+            Err(error) => return error.into_response(),
+        };
+        let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
+        let read = tokio::task::spawn_blocking(move || files::read(&root, &rel))
+            .await
+            .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+        (leaf, read)
     };
-    let Some(token) = query.get("f") else {
-        return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
-    };
-    let rel = match files_rel(&state, &raw_id, Some(token)) {
-        Ok(rel) => rel,
-        Err(error) => return error.into_response(),
-    };
-    let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
-    let read = tokio::task::spawn_blocking(move || files::read(&root, &rel))
-        .await
-        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    let (leaf, read) = read;
     let download = query.get("download").is_some_and(|v| v == "1");
     match read {
         Ok((bytes, kind)) => Response::builder()
@@ -7363,6 +7477,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
         web: web.clone(),
         git_overview: Arc::default(),
         worktree_spots: Arc::default(),
+        host_files: Arc::default(),
     };
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     // The user-content origin (plan §3.5): ticketed files on the next port,
@@ -7691,6 +7806,7 @@ mod tests {
                     },
                     git_overview: Arc::default(),
                     worktree_spots: Arc::default(),
+                    host_files: Arc::default(),
                 },
             }
         }
@@ -11794,6 +11910,66 @@ mod tests {
         assert_eq!(json(&body)["hits"], json!([]));
         let (status, _, _) = host.send(get_as(&format!("{base}/search?q=notes"), "not-a-session")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// The 📁's remote side: offered for a remote project (with no mirror on
+    /// disk too) and only behind the files switch, never naming the host;
+    /// with no master to ride every remote-side route says `host_offline`,
+    /// never dials; a local project has no remote side; a local token is no
+    /// remote-side token.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_offline() {
+        let host = host_tab_fixture(true);
+        let cookie = host.pair_device(&signing_key(72)).await.0;
+        let (p, _) = project_and_tab(&host, &cookie).await;
+        let base = format!("/api/v1/projects/{p}/files");
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+        assert_eq!((json(&detail)["files"].as_bool(), json(&detail)["host_files"].as_bool()), (Some(false), Some(false)), "switch off: {detail}");
+        let (status, _, body) = host.send(get_as(&format!("{base}?on=host"), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("files_off")), "{body}");
+
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+        assert_eq!((json(&detail)["files"].as_bool(), json(&detail)["host_files"].as_bool()), (Some(false), Some(true)), "{detail}");
+        for raw in ["primary.example", "/srv/aurora", "alice"] {
+            assert!(!detail.contains(raw), "{raw} crossed: {detail}");
+        }
+        // The refresher's socket is not there: offline, without `ssh -G` or a dial.
+        let local_token = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "a.txt").unwrap();
+        for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host")] {
+            let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+            assert_eq!((status, json(&body)["error"].clone()), (StatusCode::CONFLICT, json!("host_offline")), "{uri}: {body}");
+        }
+        let (status, _, body) = host.send(get_as(&format!("{base}/raw?f={local_token}&on=host"), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("file_not_found")), "a local token: {body}");
+        let host_token = host_files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "a.txt").unwrap();
+        let (status, _, body) = host.send(get_as(&format!("{base}/raw?f={host_token}&on=host"), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::CONFLICT, json!("host_offline")), "{body}");
+        // No mirror: the local side still has nothing.
+        let (status, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("files_unavailable")), "{body}");
+    }
+
+    /// A local project has no remote side to ask for.
+    #[tokio::test]
+    async fn a_local_project_has_no_remote_side_of_the_files() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(73)).await.0;
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (p, _) = project_and_tab(&host, &cookie).await;
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+        assert_eq!((json(&detail)["files"].as_bool(), json(&detail)["host_files"].as_bool()), (Some(true), Some(false)), "{detail}");
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{p}/files?on=host"), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("files_unavailable")), "{body}");
     }
 
     #[tokio::test]

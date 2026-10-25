@@ -1009,6 +1009,17 @@ pub fn host_mux_args(
     Ok(args)
 }
 
+/// [`host_mux_args`] for the host's SFTP subsystem (`-s … -- sftp`): the
+/// phone's read-only view of a remote project's tree (`mobile_control::
+/// host_files`), over the same master and just as unable to dial.
+pub fn host_mux_sftp_args(spec: &RemoteSpec, control_path: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut args = host_mux_args(spec, control_path, false, "sftp")?;
+    // `… <target> -- sftp`: `-s` goes in front of the target, with the options.
+    let target_at = args.len() - 3;
+    args.insert(target_at, "-s".to_string());
+    Ok(args)
+}
+
 /// `control_path` as the one `-o ControlPath=` value it may be: absolute, and
 /// with nothing ssh would read as more than a path — a `%` token it would
 /// expand, whitespace that would split the option, a control character.
@@ -2118,6 +2129,20 @@ mod tests {
     fn socket_path() -> std::path::PathBuf {
         let root = if cfg!(windows) { std::path::PathBuf::from(r"C:\") } else { std::path::PathBuf::from("/") };
         root.join("run").join("ssh-control").join("cm-0123abcd")
+    }
+
+    /// The SFTP lane is the same no-dial argv with the subsystem asked for:
+    /// `-s` among the options, the target, then `-- sftp`.
+    #[test]
+    fn host_mux_sftp_args_ask_for_the_subsystem_over_the_same_master() {
+        let s = spec(Some("alice"), "host.example", Some(2222), "/srv/p");
+        let path = socket_path();
+        let args = host_mux_sftp_args(&s, &path).unwrap();
+        assert_eq!(&args[args.len() - 4..], ["-s", "alice@host.example", "--", "sftp"]);
+        let mut plain = host_mux_args(&s, &path, false, "sftp").unwrap();
+        plain.insert(plain.len() - 3, "-s".to_string());
+        assert_eq!(args, plain);
+        assert!(args.contains(&"ControlMaster=no".to_string()) && args.contains(&"ProxyCommand=false".to_string()));
     }
 
     #[test]

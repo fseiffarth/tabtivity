@@ -3,8 +3,8 @@ import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
-import { isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
+import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
+import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS, tabColorCss } from "../tabColors";
@@ -64,22 +64,24 @@ export function FileGlyph({ kind, color }: { kind: string; color?: string }) {
 /** What a grid tile's cover is drawn from. `place` is the folder the entry
  * sits in (`placeOf`), so a cover can be keyed by project, place, name, size
  * and time; `thumbs` is the view menu's Thumbnails switch; `color` a folder's
- * colour (`tabColorCss`), none for a file or an uncoloured folder. */
+ * colour (`tabColorCss`), none for a file or an uncoloured folder; `side` the
+ * library's side, `host` for a remote project's tree on its host. */
 export interface LibraryCoverProps {
   projectId: string;
   entry: ProjectFileEntry;
   place: string;
   thumbs: boolean;
   color?: string;
+  side?: FilesSide;
 }
 
 /** A grid tile's cover: the large kind icon, tinted in a folder's colour, and
  * over it a picture or PDF's thumbnail (`thumbs.ts`) once the phone made one —
  * faded in; a missing or failed one leaves the icon. The one place a tile's
  * picture is decided. */
-export function LibraryCover({ projectId, entry, place, thumbs, color }: LibraryCoverProps) {
+export function LibraryCover({ projectId, entry, place, thumbs, color, side }: LibraryCoverProps) {
   const cover = useRef<HTMLSpanElement>(null);
-  const thumb = useThumb(cover, projectId, entry, place, thumbs);
+  const thumb = useThumb(cover, projectId, entry, place, thumbs, side);
   const [loaded, setLoaded] = useState<string | null>(null);
   return <span ref={cover} className={`files-tile-cover files-tile-cover-${glyphOf(entry.kind)}`}
     style={color ? { background: `${color}29`, borderColor: `${color}80` } : undefined}>
@@ -135,6 +137,7 @@ function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.er
   if (reason instanceof ApiError) {
     if (reason.code === "files_off") return "mobile.files.off";
     if (reason.code === "file_not_found") return "mobile.files.gone";
+    if (reason.code === "host_offline") return "mobile.files.hostOffline";
   }
   return fallback;
 }
@@ -276,8 +279,16 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * library there: a folder is walked into, a file opens with the library
  * standing in its folder — and the results are still there when the viewer
  * closes.
+ *
+ * A remote project's library has two sides (`side`): this computer's folder
+ * (its mirror) and the project's tree on its host, read over the desktop's
+ * connection to it (`host_files.rs`). The root's switch (`onSide`) picks one;
+ * each side keeps its own trail, favorites, recents and colours
+ * (`filesPlaceId`). The host's side only reads: no Upload here, no Mark up,
+ * and its PDFs become no cards on the project screen. With the desktop not
+ * connected to the host it says so.
  */
-export function FilesLibrary({ projectId, label, onClose, markup, showTab, linked }: {
+export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide }: {
   projectId: string;
   /** The project's name: the root's title. */
   label: string;
@@ -292,10 +303,21 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
   showTab?: MarkupNewTab["show"];
   /** The agent tab a file's card sends its marks to (`MarkupNewTab`). */
   linked?: MarkupNewTab["linked"];
+  /** Which tree the library shows: this computer's, or (`host`) the remote
+   * project's on its host. */
+  side?: FilesSide;
+  /** Both sides are there: the root shows the switch, which calls this. */
+  onSide?: (side: FilesSide) => void;
 }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
-  const [trail, setTrail] = useState<Crumb[]>(() => [{ name: label }, ...readFilesPlace(projectId)]);
+  const onHost = side === "host";
+  /** What the phone keeps for this side: the trail, favorites, recents, colours. */
+  const placeId = filesPlaceId(projectId, side);
+  // The host's side only reads: nothing there is marked up.
+  const markup = onHost ? undefined : markupOffer;
+  const showTab = onHost ? undefined : showTabOffer;
+  const [trail, setTrail] = useState<Crumb[]>(() => [{ name: label }, ...readFilesPlace(placeId)]);
   /** Still standing on the remembered trail, not yet listed once: a folder
    * that is gone (or a token a re-keyed host no longer opens) steps back. */
   const restored = useRef(trail.length > 1);
@@ -311,17 +333,17 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
   const [view, setViewState] = useState<LibraryView>(() => readLibraryView());
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const searching = query.trim() !== "";
-  const [favorites, setFavorites] = useState(() => readFavorites(projectId));
-  const [recents, setRecents] = useState(() => readRecents(projectId));
-  const [colors, setColors] = useState(() => readFolderColors(projectId));
+  const [favorites, setFavorites] = useState(() => readFavorites(placeId));
+  const [recents, setRecents] = useState(() => readRecents(placeId));
+  const [colors, setColors] = useState(() => readFolderColors(placeId));
   useEffect(() => {
     const offs = [
-      onFavorites(() => setFavorites(readFavorites(projectId))),
-      onRecents(() => setRecents(readRecents(projectId))),
-      onFolderColors(() => setColors(readFolderColors(projectId))),
+      onFavorites(() => setFavorites(readFavorites(placeId))),
+      onRecents(() => setRecents(readRecents(placeId))),
+      onFolderColors(() => setColors(readFolderColors(placeId))),
     ];
     return () => offs.forEach((off) => off());
-  }, [projectId]);
+  }, [placeId]);
   const searchBox = useRef<HTMLInputElement>(null);
   const [searchFocused, setSearchFocused] = useState(false);
   /** Recent files stand in for the listing while the empty search box has focus. */
@@ -332,7 +354,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
   const [savedFailure, setSavedFailure] = useState<TranslationKey | null>(null);
   /** The file in the viewer was opened by **Mark up**: the viewer starts marking. */
   const [markOnOpen, setMarkOnOpen] = useState(false);
-  const scope = useMemo<ViewerScope>(() => ({ files: projectId }), [projectId]);
+  const scope = useMemo<ViewerScope>(() => (onHost ? { files: projectId, on: "host" } : { files: projectId }), [projectId, onHost]);
   const sharing = useOutboxShare(scope);
   const here = trail[trail.length - 1];
   const atRoot = trail.length === 1;
@@ -396,7 +418,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
       setFailure(null);
     }
     listed.current = folder;
-    void listProjectFiles(projectId, here.token, controller.signal).then(
+    void listProjectFiles(projectId, here.token, controller.signal, side).then(
       (next) => {
         if (controller.signal.aborted) return;
         restored.current = false;
@@ -419,7 +441,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
       },
     );
     return () => controller.abort();
-  }, [projectId, here.token, reload]);
+  }, [projectId, here.token, reload, side]);
 
   useEffect(() => {
     // The last results stay up while the next search is out, so typing does
@@ -432,7 +454,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void searchProjectFiles(projectId, words, controller.signal).then(
+      void searchProjectFiles(projectId, words, controller.signal, side).then(
         (next) => {
           if (controller.signal.aborted) return;
           setFound(next);
@@ -442,11 +464,11 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
       );
     }, SEARCH_DEBOUNCE_MS);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [projectId, query]);
+  }, [projectId, query, side]);
 
   useEffect(() => {
-    rememberFilesPlace(projectId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
-  }, [projectId, trail]);
+    rememberFilesPlace(placeId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
+  }, [placeId, trail]);
 
   const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view), [listing, atRoot, view]);
 
@@ -500,10 +522,10 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
    * token, size and time. The viewer keeps showing it — swapping `fileOpen`
    * would remount the viewer (its key) and lose the markup's view. */
   const refresh = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
-    const fresh = await listProjectFiles(projectId, here.token);
+    const fresh = await listProjectFiles(projectId, here.token, undefined, side);
     const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
     return entry ? asViewerFile(entry) : null;
-  }, [projectId, here.token]);
+  }, [projectId, here.token, side]);
 
   /** Opens an entry of the folder at `at` (the trail as it stands, or as a
    * search hit's sets it). Every open goes through here; a file becomes the
@@ -515,12 +537,13 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     }
     // A PDF too: the browser's own PDF viewer has no Save or Share, so the
     // viewer's head carries them and its Open button hands the file over.
-    // It also becomes a card among the project screen's tabs.
-    if (entry.kind === "application/pdf") {
+    // It also becomes a card among the project screen's tabs — this
+    // computer's only: a card opens by this side's token.
+    if (entry.kind === "application/pdf" && !onHost) {
       const { token, name, kind, size, modified } = entry;
       openFileTab(projectId, { token, name, kind, size, modified, folder: at[at.length - 1].token, place: placeOf(at) });
     }
-    recordRecent(projectId, { token: entry.token, name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, trail: crumbsOf(at) });
+    recordRecent(placeId, { token: entry.token, name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, trail: crumbsOf(at) });
     setTrail(at);
     setMarkOnOpen(mark);
     setFileOpen(asViewerFile(entry));
@@ -547,7 +570,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
       return next;
     });
     setSavedFailure(null);
-    void listProjectFiles(projectId, item.trail[item.trail.length - 1]?.token).then(
+    void listProjectFiles(projectId, item.trail[item.trail.length - 1]?.token, undefined, side).then(
       (listing) => {
         const entry = listing.entries.find((candidate) => candidate.name === item.name && (candidate.kind === "dir") === (item.kind === "dir"));
         // A folder past the listing's cap may hold it unlisted: the kept token still opens it.
@@ -603,8 +626,8 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     const actions: ItemAction[] = [{ key: "open", label: t("mobile.files.item.open"), run: () => saved ? openSaved(saved) : hit ? openHit(hit) : open(entry) }];
     if (file && shareAs(file)) actions.push({ key: "share", label: t("mobile.files.item.share"), run: () => void sharing.share(file) });
     const item: FilesSaved = saved?.item ?? { kind: entry.kind, name: entry.name, token: entry.token, trail: crumbsOf(at) };
-    const starred = isFavorite(projectId, item);
-    actions.push({ key: "favorite", label: t(starred ? "mobile.files.item.unfavorite" : "mobile.files.item.favorite"), run: () => { toggleFavorite(projectId, item); } });
+    const starred = isFavorite(placeId, item);
+    actions.push({ key: "favorite", label: t(starred ? "mobile.files.item.unfavorite" : "mobile.files.item.favorite"), run: () => { toggleFavorite(placeId, item); } });
     if (entry.kind === "dir") actions.push({ key: "color", label: t("mobile.files.item.color"), run: () => setSheet({ kind: "color", place: savedPlace(item), name: entry.name }) });
     if (hit) actions.push({ key: "show", label: t("mobile.files.item.show"), run: () => showHit(hit) });
     if (saved) actions.push({ key: "show", label: t("mobile.files.item.show"), run: () => showSaved(saved) });
@@ -682,7 +705,7 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     const thumbs = view.thumbs && saved?.from !== "favorite";
     return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("files-tile", folded, saved)}>
       <button className="files-tile-open" onClick={() => tap(entry, hit, saved)} aria-label={openLabel(entry)}>
-        <LibraryCover projectId={projectId} entry={entry} place={placeOf(at)} thumbs={thumbs} color={colorOf(entry, at)} />
+        <LibraryCover projectId={projectId} entry={entry} place={placeOf(at)} thumbs={thumbs} color={colorOf(entry, at)} side={side} />
         <strong>{entry.name}</strong>
         {above && hitPlace(above)}
         {meta && <small>{meta}</small>}
@@ -775,12 +798,12 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
         <header><button className="sheet-close" onClick={close} aria-label={t("common.close")}>✕</button><h2>{t("mobile.files.item.color")}</h2><span className="sheet-close" aria-hidden="true" /></header>
         <p className="sheet-note">{t("mobile.files.color.note", { name })}</p>
         <div className="tab-color-grid" role="group" aria-label={t("mobile.files.item.color")}>
-          <button type="button" className={`tab-color-chip none${current ? "" : " is-current"}`} aria-pressed={!current} onClick={() => setFolderColor(projectId, place, null)}>
+          <button type="button" className={`tab-color-chip none${current ? "" : " is-current"}`} aria-pressed={!current} onClick={() => setFolderColor(placeId, place, null)}>
             <span className="tab-color-chip-dot none" aria-hidden="true" />
             {t("tabColor.none")}
           </button>
           {TAB_COLOR_IDS.map((id) => <button key={id} type="button" className={`tab-color-chip${current === id ? " is-current" : ""}`} aria-pressed={current === id}
-            onClick={() => setFolderColor(projectId, place, id)}>
+            onClick={() => setFolderColor(placeId, place, id)}>
             <span className="tab-color-chip-dot" style={{ background: TAB_COLORS[id] }} aria-hidden="true" />
             {TAB_COLOR_LABELS[id] ? t(TAB_COLOR_LABELS[id]) : id}
           </button>)}
@@ -803,8 +826,8 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
         options={[{ key: "remove", label: t("mobile.files.saved.remove"), current: false }]}
         onPick={() => {
           setSheet(null);
-          if (favorite) removeFavorite(projectId, saved.item);
-          else removeRecent(projectId, saved.item);
+          if (favorite) removeFavorite(placeId, saved.item);
+          else removeRecent(placeId, saved.item);
         }} />;
     }
     if (shown.kind === "path") {
@@ -835,7 +858,8 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
     || isUntested("mobile.files.sort") || isUntested("mobile.files.pathMenu") || isUntested("mobile.files.counts")
     || isUntested("mobile.files.thumbs") || isUntested("mobile.files.favorites") || isUntested("mobile.files.recent")
     || isUntested("mobile.files.colors") || isUntested("mobile.files.share") || isUntested("mobile.files.sections")
-    || isUntested("mobile.files.remember") || isUntested("mobile.files.search") || isUntested("mobile.files.upload");
+    || isUntested("mobile.files.remember") || isUntested("mobile.files.search") || isUntested("mobile.files.upload")
+    || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
   return <section ref={host} className="files-library" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")}>
     <header className="files-library-head">
@@ -854,6 +878,10 @@ export function FilesLibrary({ projectId, label, onClose, markup, showTab, linke
       </button>
     </header>
     <div className="files-library-body">
+      {atRoot && onSide && <div className="terminal-view-switch files-side-switch" role="group" aria-label={t("mobile.files.side.label")}>
+        <button className={onHost ? "" : "selected"} aria-pressed={!onHost} onClick={() => onSide("here")}>{t("mobile.files.side.here")}</button>
+        <button className={onHost ? "selected" : ""} aria-pressed={onHost} onClick={() => onSide("host")}>{t("mobile.files.side.host")}</button>
+      </div>}
       <input ref={searchBox} className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
         placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
         onChange={(event) => setQuery(event.target.value)} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} />

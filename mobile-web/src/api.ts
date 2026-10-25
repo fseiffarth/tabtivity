@@ -157,6 +157,10 @@ export interface ClosedTabRow { id: string; label: string; agent: string; closed
  * (the desktop's switch is on, and it is a project, not a box or root). */
 export interface ProjectDetail {
   project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  /** Whether the file browser also has a remote side: a remote project's tree
+   * on its host, read over the desktop's connection (`?on=host`). The host is
+   * never named. Absent (an older desktop) is none. */
+  host_files?: boolean;
   /** Whether the host has a folder to give the phone for this project (a remote
    * project before its first sync, a VM without a mirror: no). Without one the
    * project screen hides the files, Git and send-a-file entries and says why.
@@ -1187,11 +1191,19 @@ export function outboxFileUrl(scope: OutboxScope, name: string, download = false
   return `${outboxBase(scope)}/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
 }
 
+/** Which side of the file browser: this computer's folder, or (`host`) a
+ * remote project's tree on its host. */
+export type FilesSide = "here" | "host";
+
 /** Where the full-screen viewer reads a file from: one project's outbox (by
  * its tab or the project), `files` — the project's own tree through the
- * read-only file browser, where a file is fetched by its sealed `ref` — or
- * `inbox`, what the phone sent into a tab's project inbox (by the tab). */
-export type ViewerScope = OutboxScope | { files: string } | { inbox: string };
+ * read-only file browser, where a file is fetched by its sealed `ref`, on the
+ * remote side with `on: "host"` — or `inbox`, what the phone sent into a
+ * tab's project inbox (by the tab). */
+export type ViewerScope = OutboxScope | { files: string; on?: "host" } | { inbox: string };
+
+/** The query a file-browser request names its side by: none for this computer. */
+const sideQuery = (side: FilesSide | undefined) => side === "host" ? "on=host" : "";
 
 /** The URL a file the phone sent into a tab's project inbox loads from (its
  * leaf, out of the phone's own `@` reference) — same origin, so an `<img>`
@@ -1213,7 +1225,7 @@ export async function describeInbox(tabId: string, names: readonly string[], sig
 export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = false): string {
   if ("inbox" in scope) return inboxFileUrl(scope.inbox, file.name, download);
   if ("files" in scope) {
-    return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}`;
+    return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}${scope.on === "host" ? "&on=host" : ""}`;
   }
   return outboxFileUrl(scope, file.name, download);
 }
@@ -1261,12 +1273,14 @@ export interface ProjectFileEntry {
  * the way down starts with a dot. An older desktop omits it (no uploads). */
 export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
 
-/** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the
- * project; no `dir` is the project's root. Answers only while the desktop's
- * "Project files on the phone" switch is on (`files_off` else). */
-export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
-  const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
-  return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
+/** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
+ * the project; no `dir` is the project's root. Answers only while the
+ * desktop's "Project files on the phone" switch is on (`files_off` else). The
+ * remote side (`side` `host`) answers `host_offline` while the desktop holds
+ * no connection to the host. */
+export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileListing> {
+  const query = [dir ? `dir=${encodeURIComponent(dir)}` : "", sideQuery(side)].filter(Boolean).join("&");
+  return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query ? `?${query}` : ""}`, { signal });
 }
 
 /** A file or folder whose name matched a search: its row, and the sealed
@@ -1279,8 +1293,9 @@ export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean 
  * and folders whose names hold every word, any case, the closest first. In a
  * git repo what git ignores is not searched. Behind the same switch as the
  * listing. */
-export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
-  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileSearch> {
+  const on = sideQuery(side);
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal });
 }
 
 /** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the

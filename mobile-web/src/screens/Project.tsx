@@ -208,6 +208,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * which means it has one. */
   const folderless = detail?.folder === false;
   const filesOffered = !!detail?.files && !assistantScope && !folderless;
+  /** The files drawer's remote side: a remote project's tree on its host,
+   * read over the desktop's connection (`detail.host_files`). This
+   * computer's file cards stay `filesOffered`'s. */
+  const hostFilesOffered = !!detail?.host_files && !assistantScope;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project" && !folderless;
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
    * host with none (Windows) nothing can be opened, scheduled or sent to from
@@ -225,7 +229,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const fabOffered = !detail || creates || !folderless;
   /** Whether the drawer has anything to hold, once the host has answered:
    * no ☰ and no swipe else. */
-  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || gitOffered);
+  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || gitOffered);
   /** What a right→left swipe over a card (`data-swipe-close`) does, read at
    * the swipe: the listener below outlives the render that installed it, and
    * would otherwise close against that render's list. Set further down, once
@@ -701,7 +705,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         the files, Git and send-a-file entries are gone, and the reader should
         not have to wonder why. */}
     {detail && (HOST_NOTE[detail.project.host ?? "local"] || folderless) && <p className="notice">{[
-      HOST_NOTE[detail.project.host ?? "local"], folderless ? NO_FOLDER_NOTE[detail.project.host ?? "local"] : undefined,
+      HOST_NOTE[detail.project.host ?? "local"],
+      folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[detail.project.host ?? "local"]) : undefined,
     ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
     {projectInbox.view}
@@ -844,7 +849,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         closing the file comes back to the list it was opened from. */}
     {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
     {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setDrawerOpen(false)}
-      browse={filesOffered} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
+      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
         {outbox.length > 0 && <button
           role="menuitem"
           aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}

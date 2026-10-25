@@ -510,6 +510,10 @@ pub struct ResolvedProject {
     pub folder: bool,
     /// What the phone may create here ([`CreateVerdict`]).
     pub create: CreateVerdict,
+    /// A remote (not VM) project's primary host, as its record names it: the
+    /// remote side of the 📁 library (`host_files`). Raw; never crosses the
+    /// browser API.
+    pub primary_host: Option<RemoteSpec>,
 }
 
 impl ResolvedProject {
@@ -661,6 +665,13 @@ impl CatalogCache {
     /// A cache whose loads read the refresher's host snapshot from `live`.
     pub fn with_host_live(live: SharedHostLive) -> Self {
         Self { host_live: Some(live), ..Self::default() }
+    }
+
+    /// The literal socket of the desktop's master for `spec`'s host as the
+    /// refresher's last round found it; `None` when that host was not probed
+    /// or not reached. Never touches a socket.
+    pub fn host_control_path(&self, spec: &RemoteSpec) -> Option<PathBuf> {
+        self.host_live.as_ref()?.lock_ok().reach(spec).map(|reach| reach.control_path.clone())
     }
 
     /// Serves a snapshot up to `CATALOG_TTL` old.
@@ -1739,6 +1750,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         host: ProjectHost::Local,
         folder: true,
         create: CreateVerdict::All,
+        primary_host: None,
     }
 }
 
@@ -1980,6 +1992,7 @@ fn resolve_scope(
         host: source.host,
         folder,
         create: create_verdict(source.host, folder),
+        primary_host: source.hosts.and_then(|hosts| hosts.primary),
     })
 }
 

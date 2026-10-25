@@ -1,4 +1,5 @@
 import { storageKey } from "../../src/lib/brand";
+import type { FilesSide } from "./api";
 
 /**
  * The folder the files library (`FilesLibrary`) was last standing in, per
@@ -70,6 +71,47 @@ export function rememberFilesPlace(projectId: string, trail: FilesCrumb[], stora
   } catch {
     // A private browser may refuse storage; the drawer still walks, it only
     // opens at the root next time.
+  }
+}
+
+/** The id a project's remote side (`FilesSide` `host`) is kept under — its
+ * trail here, its favorites, recents and folder colours — so the two sides'
+ * sealed tokens and places never mix. */
+export function filesPlaceId(projectId: string, side: FilesSide): string {
+  return side === "host" ? `${projectId}\u0000host` : projectId;
+}
+
+const SIDE_KEY = storageKey("mobile.filesSide");
+
+/** The projects whose library was last put away on its remote side, oldest
+ * first; every other one opens on this computer's. */
+function hostSides(storage: FilesPlaceStorage): string[] {
+  const parsed: unknown = JSON.parse(storage.getItem(SIDE_KEY) ?? "[]");
+  return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
+}
+
+/** The side `projectId`'s library was last put away on. */
+export function readFilesSide(projectId: string, storage?: FilesPlaceStorage): FilesSide {
+  try {
+    return hostSides(storage ?? localStorage).includes(projectId) ? "host" : "here";
+  } catch {
+    return "here";
+  }
+}
+
+/** Remember the side `projectId`'s library stands on. */
+export function rememberFilesSide(projectId: string, side: FilesSide, storage?: FilesPlaceStorage): void {
+  try {
+    const store = storage ?? localStorage;
+    let ids: string[];
+    try { ids = hostSides(store); } catch { ids = []; }
+    ids = ids.filter((id) => id !== projectId);
+    if (side === "host") ids.push(projectId);
+    ids = ids.slice(-PROJECT_CAP);
+    if (ids.length) store.setItem(SIDE_KEY, JSON.stringify(ids));
+    else store.removeItem(SIDE_KEY);
+  } catch {
+    // Refused storage: the library opens on this computer's side next time.
   }
 }
 
