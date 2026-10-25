@@ -152,7 +152,16 @@ pub fn write_in(root: &Path, name: &str, expected: &str, next: &str) -> Result<W
     if current != expected {
         return Ok(WriteOutcome::Changed { current });
     }
-    crate::storage::write_private_atomic(&path, next.as_bytes())?;
+    // A tracked repo file keeps the mode it has (the staging write is
+    // owner-only otherwise).
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(&path).map_err(|e| e.to_string())?.permissions().mode() & 0o7777
+    };
+    #[cfg(not(unix))]
+    let mode = 0o600;
+    crate::storage::write_private_atomic_mode(&path, next.as_bytes(), mode)?;
     Ok(WriteOutcome::Written)
 }
 
@@ -233,6 +242,17 @@ mod tests {
         assert_eq!(read_in(dir.path(), "group-a.md").unwrap(), "- [x] a\n");
         let leftovers: Vec<_> = fs::read_dir(dir.path().join("todo")).unwrap().flatten().collect();
         assert_eq!(leftovers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_keeps_the_tracked_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = checkout(&[("group-a.md", "- [ ] a\n")]);
+        let path = dir.path().join("todo").join("group-a.md");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_in(dir.path(), "group-a.md", "- [ ] a\n", "- [x] a\n").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
     }
 
     /// Each write stages under a fresh name: an entry at one fixed staging

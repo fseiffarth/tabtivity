@@ -130,7 +130,14 @@ where
     // that did. A missing file has none, so its first patch always writes.
     let (mut value, on_disk) = if path.exists() {
         let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        // An empty file (a crash mid-write of an older, non-atomic writer)
+        // holds nothing to lose: it starts from `default` like a missing one,
+        // instead of failing every later patch of that store.
+        let value = if content.trim().is_empty() {
+            default
+        } else {
+            serde_json::from_str(&content).map_err(|e| e.to_string())?
+        };
         (value, Some(content))
     } else {
         (default, None)
@@ -1283,6 +1290,21 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+    }
+
+    #[test]
+    fn patch_json_starts_an_empty_file_from_the_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("data.json");
+        std::fs::write(&path, b"").unwrap();
+
+        patch_json(&path, Vec::<u32>::new(), |values| {
+            values.push(7);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(read_json::<Vec<u32>>(&path).unwrap(), vec![7]);
     }
 
     /// A private patch lands a whole, owner-only file — a protected DACL on
