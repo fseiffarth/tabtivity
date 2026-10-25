@@ -225,9 +225,6 @@ const TRANSCRIPT_POLL = 5_000;
  * agent writes an answer to its transcript as it prints it, so a change on
  * screen is the earliest sign that the file has moved. */
 const TRANSCRIPT_SETTLE = 1_200;
-/** How long a fresh tab's Focus chat waits on its CLI to start (or to record
- * the session a prompt from here began) before it shows the screen instead. */
-const STARTING_GRACE = 30_000;
 /** Turns fetched at first, and added per "Show earlier turns" tap. */
 const TRANSCRIPT_STEP = 120;
 
@@ -467,12 +464,13 @@ const ReadableRow = memo(function ReadableRow({ line, plain }: { line: ReadableL
  * caught up on, not one that is talking: read-aloud leaves those to the eye. */
 const MAX_SPOKEN_AT_ONCE = 3;
 
-/** A block of session lines. On an agent tab they read as a chat: the
- * agent's turns on the left as printed, each prompt the user submitted as a
- * bubble on the right — the TUI's own echo of it, see `chatTurns`. A shell has
- * no turns and paints flat. Memoized on the `lines` reference: a frozen
- * history chunk and the open chunk keep theirs, so the per-frame rebuild of
- * the live tail costs nothing for however much history is on screen. */
+/** A block of screen lines: a shell's Focus output, or the screen a dialog an
+ * agent waits on was drawn onto. On an agent tab they lay out as a chat: the
+ * agent's turns on the left as printed, a prompt echo as a bubble on the
+ * right, see `chatTurns`. A shell has no turns and paints flat. Memoized on
+ * the `lines` reference: a frozen history chunk and the open chunk keep
+ * theirs, so the per-frame rebuild of the live tail costs nothing for however
+ * much history is on screen. */
 const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLabel, columns = 0 }: {
   lines: readonly ReadableLine[];
   chat: boolean;
@@ -703,13 +701,14 @@ function viewAgentOf(tab: TabRow): string {
 
 /** The view a tab opens in: the reader's last choice for its agent, else Focus
  * on an agent tab — the stored session is the one reading of it that holds
- * whole turns — and Terminal on a shell. A Focus nobody chose hands over to
- * Terminal once the session turns out not to read (see `viewChosen`). */
+ * whole turns — and Terminal on a shell. Focus hands over to Terminal once the
+ * agent turns out to have no stored session to read (`unsupported`). */
 function initialView(tab: TabRow): TerminalViewChoice {
   return readTerminalView(viewAgentOf(tab)) ?? (tab.kind === "agent" ? "focus" : "terminal");
 }
 
-/** Why an agent tab's stored session is not shown, for the dimmed toggle. */
+/** Why an agent tab's stored session is not shown: the chat's own row, and
+ * the dimmed Chat entry of an agent with none. */
 function noSessionReason(transcript: SessionTranscript | null): TranslationKey {
   if (!transcript) return "mobile.focus.sessionLoading";
   switch (transcript.reason) {
@@ -972,12 +971,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   // choice — without making it their choice.
   const subagentTab = useRef(subagent && tab.kind === "agent" ? tab.id : null);
   const [view, setView] = useState<TerminalViewChoice>(() => subagentTab.current === tab.id ? "focus" : initialView(tab));
-  /** Whether `view` is the reader's own choice. Only a default Focus falls
-   * back to Terminal when the stored session does not read; a Focus the
-   * reader picked stays, reading the screen instead. */
-  const viewChosen = useRef(readTerminalView(viewAgentOf(tab)) !== null);
   const chooseView = (next: TerminalViewChoice) => {
-    viewChosen.current = true;
     setView(next);
     writeTerminalView(viewAgentOf(tab), next);
   };
@@ -1334,7 +1328,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const agentAtWork = tab.kind === "agent" && (liveBusy || tab.agent_status === "working");
   // Once the turn is over the button works again; the note goes with it.
   useEffect(() => { if (clearRefused && !liveBusy) setClearRefused(false); }, [clearRefused, liveBusy]);
-  const [focusSource, setFocusSource] = useState<"session" | "screen">("session");
   const [readAloud, setReadAloud] = useState(() => readFlag("focusReadAloud"));
   const [voiceRemote, setVoiceRemote] = useState(() => readFlag("voiceRemote"));
   /** Only a phone with an on-device recognizer for the dictation language has
@@ -1435,7 +1428,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   useEffect(() => {
     setView(subagentTab.current === tab.id ? "focus" : initialView(tab));
     setDiffsOpen(false);
-    viewChosen.current = readTerminalView(viewAgentOf(tab)) !== null;
     // The draft is the tab's, not the screen's: this tab's own half-typed
     // message, which is nothing at all for most of them (`drafts.ts`).
     const lifted = liftedDraft(readDraft(tab.id));
@@ -1452,7 +1444,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setClearRefused(false);
     setUndoable(false);
     setUndoNote("");
-    setFocusSource("session");
     setFocusMenu(false);
     setTranscriptLimit(TRANSCRIPT_STEP);
     setLines([]);
@@ -2226,13 +2217,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     };
     // The stored session mounts the reading view over a full-screen program
     // too, so its availability re-runs this as well.
-  }, [view, altScreen, focusSource, transcript?.available]);
-  // A default Focus on an agent whose transcript is never read (`unsupported`)
-  // would only re-read the screen: open Terminal instead, without writing
-  // that as the reader's choice. Every other reason is a session on its way —
-  // a tab the phone just created has no session id until its hook records
-  // one, a read can fail once, Codex binds its rollout late — so Focus stays,
-  // reading the screen meanwhile, and paints the stored session the moment it
+  }, [view, altScreen, transcript?.available]);
+  // Focus on an agent tab is its stored session and nothing else, so an agent
+  // whose transcript is never read (`unsupported`) opens Terminal instead,
+  // without writing that as the reader's choice. Every other reason is a
+  // session on its way — a tab the phone just created has no session id until
+  // its hook records one, a read can fail once, Codex binds its rollout late —
+  // so Focus stays on a loading row and paints the session the moment it
   // reads. It used to leave for Terminal on any of these, and since that was
   // not the reader's choice either, nothing ever brought it back.
   /** Whether the composer has the keyboard. While it does, nothing swaps the
@@ -2261,15 +2252,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     transcriptHeld.current = false;
     return current && sameTranscript(current, next) ? current : next;
   });
+  /** An agent with no stored session to read: its Chat entry is dimmed and
+   * its Focus hands over to Terminal. A just-sent prompt is still a useful
+   * Reader conversation when Codex has not produced a readable rollout yet —
+   * its local bubble stays on screen rather than vanishing mid-turn. */
+  const chatUnavailable = tab.kind === "agent" && transcript?.available === false && transcript.reason === "unsupported"
+    && (!CODEX_AGENT.test(tab.agent_label ?? tab.label) || pending.length === 0);
   useEffect(() => {
-    // A just-sent prompt is still a useful Reader conversation when Codex has
-    // not produced a readable rollout yet. Keep its local bubble on screen
-    // instead of swapping to the terminal and making it vanish mid-turn.
-    if (!viewChosen.current && !composerTyping && view === "focus" && transcript?.available === false && transcript.reason === "unsupported"
-      && (!CODEX_AGENT.test(tab.agent_label ?? tab.label) || pending.length === 0)) setView("terminal");
-  }, [view, transcript, pending, tab.agent_label, tab.label, composerTyping]);
-  /** Whether Focus is reading the stored session rather than the screen. */
-  const sessionFocus = tab.kind === "agent" && view === "focus" && focusSource === "session";
+    if (!composerTyping && view === "focus" && chatUnavailable) setView("terminal");
+  }, [view, chatUnavailable, composerTyping]);
+  /** Whether Focus is reading an agent's stored session: every agent tab's
+   * Focus — a shell's reads its screen. */
+  const sessionFocus = tab.kind === "agent" && view === "focus";
   /** Whether `transcript` is the session as it stands: a read answered since
    * Focus last opened. Terminal view reads none, so what it holds is the
    * session of when the reader left Focus — or nothing at all. */
@@ -2345,37 +2339,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     [tab.kind, tab.agent_label, tab.label, liveScreen],
   );
   const cliReady = liveFrameStart < liveScreen.length;
-  /** Whether the screen already holds a conversation: a prompt echo above
-   * the input box, or more history than a CLI's banner fills. */
-  const promptOnScreen = useMemo(() => {
-    const label = tab.agent_label ?? tab.label;
-    const echo = (line: ReadableLine) => isLiveEcho(line, label);
-    return earlier.chunks.length > 0 || earlier.open.some(echo) || (altScreen && lines.some(echo))
-      || liveScreen.slice(0, liveFrameStart).some(echo);
-  }, [tab.agent_label, tab.label, earlier, altScreen, lines, liveScreen, liveFrameStart]);
-  const [startGaveUp, setStartGaveUp] = useState(false);
-  useEffect(() => setStartGaveUp(false), [tab.id]);
-  /** Nothing drawn yet: no history, and every live row blank. */
-  const screenBlank = earlier.chunks.length === 0 && earlier.open.length === 0 && liveScreen.every((line) => !line.text.trim());
-  /** A fresh tab whose session has nothing to read yet: the CLI is starting
-   * and has recorded no session (or, before the first read answers, has drawn
-   * nothing at all). Its screen is only the CLI's banner, so Focus shows the
-   * session chat — a loading row while the CLI starts, then the empty chat —
-   * rather than painting that banner as a conversation. A screen that already
-   * holds a conversation (the session read lost) keeps the screen, and so
-   * does one that waited past `STARTING_GRACE` (`startGaveUp`). */
-  const preSessionWait = sessionFocus && !startGaveUp && !cloudTab
-    && (transcript === null ? screenBlank : !transcript.available && (transcript.reason === "no_session" || transcript.reason === "no_transcript"))
-    && (!promptOnScreen || pending.length > 0);
-  /** The stored session is what Focus paints: available, and not switched
-   * away from — or a fresh tab's, before it holds anything (`preSessionWait`).
-   * Until the first read answers on a tab with a conversation on screen, the
-   * screen is shown, so the view never opens blank. */
-  // Codex can report a fresh session before it has a rollout to read, then
-  // temporarily report `no_transcript` while it binds that rollout. A prompt
-  // sent from this phone remains part of the Reader during that hand-off.
-  const sessionShown = sessionFocus && (transcript?.available === true || preSessionWait
-    || (pending.length > 0 && CODEX_AGENT.test(tab.agent_label ?? tab.label)));
+  /** A session with nothing to read yet: the first read has not answered, or
+   * the CLI has recorded no session (or no transcript) so far — a fresh tab
+   * starting, Codex binding its rollout late, a prompt from here not yet
+   * recorded. The chat shows a loading row while the CLI starts, then the
+   * empty chat; the screen is one tap away in Terminal. A cloud tab never
+   * records one (`cloudTab`). */
+  const sessionWaiting = sessionFocus && !cloudTab
+    && (transcript === null || (!transcript.available && (transcript.reason === "no_session" || transcript.reason === "no_transcript")));
   /** The session chat's entries: the stored ones, with each prompt sent
    * from here held in its place (`withPending`). */
   /** The new chat's records while the one cleared from here is still what the
@@ -2522,7 +2493,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     return stopSpeaking;
   }, [tab.id]);
   useEffect(() => {
-    if (!sessionShown || !transcript) return;
+    if (!sessionFocus || !transcript) return;
     const turns = transcriptTurns(transcript.entries);
     const seen = spokenKeys.current;
     spokenKeys.current = new Set(turns.map((turn) => turn.key));
@@ -2533,18 +2504,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (fresh.length === 0 || fresh.length > MAX_SPOKEN_AT_ONCE) return;
     const code = t("mobile.speech.code");
     for (const turn of fresh) speak(turn.key, spokenText(turn.text, code), speechTag());
-  }, [sessionShown, transcript, readAloud, listening, t]);
+  }, [sessionFocus, transcript, readAloud, listening, t]);
   useEffect(() => {
-    if (listening || !sessionShown) stopSpeaking();
-  }, [listening, sessionShown]);
+    if (listening || !sessionFocus) stopSpeaking();
+  }, [listening, sessionFocus]);
   // A new turn in the stored session, or a file the agent sent into the
   // Focus chat, scrolls the view to it, as new screen output does, unless
   // the reader has scrolled up to read.
   useLayoutEffect(() => {
-    if (!sessionShown || !atBottom) return;
+    if (!sessionFocus || !atBottom) return;
     const stream = readableHost.current;
     if (stream && typeof stream.scrollTo === "function") stream.scrollTo({ top: stream.scrollHeight });
-  }, [sessionShown, transcript, pending, chatPosts, atBottom, subToken, subTranscript]);
+  }, [sessionFocus, transcript, pending, chatPosts, atBottom, subToken, subTranscript]);
   /** Reads the outbox now and every `OUTBOX_POLL` while the page is visible;
    * coming back to the page reads it at once. A listing that could not be
    * fetched keeps what was shown — the next poll retries. */
@@ -4122,7 +4093,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const filesSwipe = filesLabel !== null && view === "focus";
   /** Where the output is up for a swipe to read; `readableHost` is mounted
    * with it. */
-  const readableShown = view === "focus" && (!altScreen || sessionShown);
+  const readableShown = view === "focus" && (!altScreen || sessionFocus);
   useEffect(() => {
     const stream = readableHost.current;
     if (filesOpen || !stream) return;
@@ -4146,7 +4117,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * drawing right now. Shown under the stored session while it holds a
    * choice the session is waiting on, which the transcript cannot carry. */
   const liveTail = useMemo(() => {
-    if (!sessionShown) return [];
+    if (!sessionFocus) return [];
     // Codex's hooks page replaces the input box, whose `›` its highlighted
     // row reads as: it is read off the whole screen.
     if (readCodexHooksPage(liveScreen, agentLabel)) return liveScreen;
@@ -4159,7 +4130,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     let start = 0;
     screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
     return screen.slice(start);
-  }, [sessionShown, altScreen, liveScreen, painted, agentLabel]);
+  }, [sessionFocus, altScreen, liveScreen, painted, agentLabel]);
   /** The choice the session is waiting on, read off the live screen. On the
    * phone it is answered by tapping a row, so what is kept is the dialog
    * itself — its rows, and where on the tail they start — not just that there
@@ -4186,19 +4157,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
   const unreadQuestion = useMemo(
-    () => sessionShown && !liveQuestion && dialogFooterShown(liveScreen),
-    [sessionShown, liveQuestion, liveScreen],
+    () => sessionFocus && !liveQuestion && dialogFooterShown(liveScreen),
+    [sessionFocus, liveQuestion, liveScreen],
   );
-  /** A fresh tab's chat waits on the CLI — still starting, or answered from
-   * here with no session recorded yet. A question on screen waits on the
-   * reader instead, so it never runs the clock. Past `STARTING_GRACE` the
-   * screen is shown: an error the CLI printed reaches the reader. */
-  const startWaiting = preSessionWait && !liveQuestion && (!cliReady || promptOnScreen);
-  useEffect(() => {
-    if (!startWaiting) return;
-    const timer = window.setTimeout(() => setStartGaveUp(true), STARTING_GRACE);
-    return () => window.clearTimeout(timer);
-  }, [startWaiting]);
   /** The agent as the markup view's round pill reads it: the live screen
    * only — `tab.agent_status` is the snapshot taken when this tab was
    * opened, and would read "working" forever for a tab opened mid-turn. */
@@ -4332,8 +4293,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * tool calls looked finished. The live screen's interrupt hint says it is
    * not; a choice on screen is waiting on the reader instead. */
   const sessionWork = useMemo(
-    () => (sessionShown && !liveQuestion ? agentWork(liveScreen) : null),
-    [sessionShown, liveQuestion, liveScreen],
+    () => (sessionFocus && !liveQuestion ? agentWork(liveScreen) : null),
+    [sessionFocus, liveQuestion, liveScreen],
   );
   const sessionBusy = sessionWork !== null;
   /** What the working row says beside the dots: the elapsed time and the
@@ -4388,18 +4349,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
     [markupTarget, workingModel, markupDialog, tab.local_model, markupPickModel, tab.id],
   );
-  /** The screen's lines as the reading view shows them: the revealed history,
-   * the open chunk, then the live tail. */
-  const screenStream = useMemo(
-    () => [...visibleChunks.flatMap((chunk) => chunk.lines), ...earlier.open, ...painted],
-    [visibleChunks, earlier.open, painted],
-  );
   /** A shell's Focus has no messages to hold for a menu (`useMessageMenu`), so
    * it copies what the reading view shows: the revealed history, the open
    * chunk, then the live tail. */
   const copyReadable = async () => {
     try {
-      await navigator.clipboard.writeText(readableText(screenStream));
+      await navigator.clipboard.writeText(readableText([...visibleChunks.flatMap((chunk) => chunk.lines), ...earlier.open, ...painted]));
       setCopied(true);
       window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1_500);
@@ -4407,8 +4362,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       setCopied(false);
     }
   };
+  /** A cloud tab's page and Teleport, as its CLI printed them: the
+   * conversation runs on the vendor's site, and the tab records no session
+   * the chat could read. */
+  const cloudChat = cloudLink && <>
+    <div className="sign-in-open readable-cloud-link">
+      <a className="button primary" href={cloudLink.url} target="_blank" rel="noopener noreferrer">
+        <strong>{t("mobile.focus.cloudOpen")}{isUntested("mobile.focus.cloudLink") && <em> · {t("mobile.focus.untested")}</em>}</strong>
+        <small>{cloudLink.site}</small>
+      </a>
+      {cloudSession && openTab && <button disabled={teleporting || !connected} onClick={() => void teleport()}>{t("mobile.focus.cloudTeleport")}{isUntested("mobile.focus.cloudTeleport") && <em> · {t("mobile.focus.untested")}</em>}</button>}
+    </div>
+    {cloudSession && openTab && <div className="readable-notice">{teleportError || t("mobile.focus.cloudTeleportNote")}</div>}
+  </>;
   // New turns push the prompt up as surely as a scroll does.
-  useLayoutEffect(checkPinnedPrompt, [checkPinnedPrompt, view, sessionShown, sessionEntries, screenStream, openStep, subagentListOpen, sentListOpen]);
+  useLayoutEffect(checkPinnedPrompt, [checkPinnedPrompt, view, sessionFocus, sessionEntries, openStep, subagentListOpen, sentListOpen]);
   const jumpToLatest = () => {
     const stream = readableHost.current;
     if (!stream) return;
@@ -4689,10 +4657,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       >{t(diffsShown ? "terminal.reader.changes" : view === "terminal" ? "mobile.focus.terminal" : focusLabel)}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
     {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
-        {/* Chat / Diffs / Terminal, in the desktop's order. */}
+        {/* Chat / Diffs / Terminal, in the desktop's order. Chat is the stored
+            session only: dimmed, saying why, for an agent with none. */}
         {([["focus", focusLabel], ...(diffsOffered ? [["diffs", "terminal.reader.changes"] as const] : []), ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => {
           const checked = choice === "diffs" ? diffsShown : view === choice && !diffsShown;
-          return <button key={choice} role="menuitemradio" aria-checked={checked} onClick={() => {
+          const off = choice === "focus" && chatUnavailable;
+          const googleUntested = choice === "focus" && chat && (antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession");
+          return <button key={choice} role="menuitemradio" aria-checked={checked} aria-disabled={off ? "true" : undefined} className={off ? "unavailable" : undefined} onClick={() => {
+            if (off) return;
             setFocusMenu(false);
             if (choice === "diffs") {
               setDiffsOpen(true);
@@ -4702,34 +4674,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             if (view !== choice) chooseView(choice);
           }}>
             <span>
-              <strong>{t(label)}{choice === "diffs" && isUntested("mobile.focus.diffs") && <em>{t("mobile.focus.untested")}</em>}</strong>
+              <strong>{t(label)}{((choice === "diffs" && isUntested("mobile.focus.diffs")) || googleUntested) && <em>{t("mobile.focus.untested")}</em>}</strong>
               {choice === "diffs" && <small>{t("mobile.focus.diffsHint")}</small>}
+              {off && <small>{t(noSessionReason(transcript))}</small>}
             </span>
             {checked && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
           </button>;
         })}
         {chat && view === "focus" && !diffsShown && <>
         <hr className="focus-menu-rule" />
-        {/* Dimmed when the stored session cannot be read (an agent whose
-            transcript Tabtivity does not read, no session id yet); the row then
-            says which, rather than doing nothing. */}
-        <button role="menuitemradio" aria-checked={sessionShown} aria-disabled={transcript?.available ? undefined : "true"} className={transcript?.available ? undefined : "unavailable"} onClick={() => {
-          if (!transcript?.available) return;
-          setFocusSource("session");
-          setFocusMenu(false);
-        }}>
-          <span><strong>{t("mobile.focus.session")} {(isUntested("mobile.focus.session") || ((antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession"))) && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
-          {sessionShown && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
-        </button>
-        <button role="menuitemradio" aria-checked={!sessionShown} onClick={() => {
-          setFocusSource("screen");
-          setFocusMenu(false);
-        }}>
-          <span><strong>{t("mobile.focus.screen")}</strong><small>{t("mobile.focus.screenHint")}</small></span>
-          {!sessionShown && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
-        </button>
-        {/* Spoken from the stored session only: its answers arrive whole, where
-            the screen's are still being drawn. */}
+        {/* Spoken from the stored session: its answers arrive whole. */}
         <button role="menuitemcheckbox" aria-checked={readAloud && speechAvailable} aria-disabled={speechAvailable ? undefined : "true"} className={speechAvailable ? undefined : "unavailable"} onClick={() => {
           if (!speechAvailable) return;
           // The tap is the gesture a browser wants before a page may speak.
@@ -4770,8 +4724,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         subagentTitle={openStep?.task || openStep?.role} visible onClose={() => setDiffsOpen(false)} />}
       {/* The stored session does not depend on the screen, so a full-screen
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
-      {view === "focus" && altScreen && !sessionShown && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span>{openCode && !transcript?.available && <span>{t("mobile.focus.openCodeMini")}</span>}{tab.kind === "agent" && transcript?.available && <button onClick={() => setFocusSource("session")}>{t("mobile.focus.sessionHint")}</button>}<button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
-      {view === "focus" && (!altScreen || sessionShown) && <>
+      {view === "focus" && altScreen && !sessionFocus && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span><button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
+      {view === "focus" && (!altScreen || sessionFocus) && <>
         <section ref={readableHost} className="readable-output" aria-label={t("mobile.focus.output")} aria-live="polite"
           onScroll={(event) => {
             const stream = event.currentTarget;
@@ -4780,7 +4734,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           }}>
           {/* The sticky strip over the chat: the session's subagents and the
               files it carried, each a chip that opens its list. */}
-          {sessionShown && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0) && <div className="chat-index">
+          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0) && <div className="chat-index">
             {(sessionAgents.length > 0 || agentsEarlier) &&
             <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
               <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => { setSentListOpen(false); setSubagentListOpen((open) => !open); }}>
@@ -4802,22 +4756,33 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             </nav>}
             {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} files={chatFiles} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openSentFile} />}
           </div>}
-          {sessionShown && openStep
+          {sessionFocus && openStep
             ? subagentView
-            : sessionShown
-            ? ((transcript || preSessionWait) && sessionEntries.length === 0 && !liveQuestion && !unreadQuestion && !sessionBusy
+            : sessionFocus
+            ? (sessionEntries.length === 0 && !liveQuestion && !unreadQuestion && !sessionBusy
               ? (undoing
                 ? <div className="readable-empty" role="status" aria-busy="true"><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span><strong>{t("mobile.transcript.undoing")}</strong></div>
                 // A fresh tab while its CLI starts: the banner it draws is not
-                // a conversation. The screen stays one tap away.
-                : preSessionWait && (!cliReady || !transcript)
+                // a conversation. The screen stays one tap away in Terminal —
+                // shown, not remembered as the reader's choice.
+                : sessionWaiting && (!cliReady || !transcript)
                 ? <div className="readable-empty" role="status" aria-busy="true" data-testid="session-starting">
                     <span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>
-                    <strong>{cliReady ? t("mobile.focus.sessionLoading") : t("mobile.focus.starting", { agent: agentLabel })}{isUntested("mobile.focus.starting") && <em> · {t("mobile.focus.untested")}</em>}</strong>
-                    <button onClick={() => setStartGaveUp(true)}>{t("mobile.focus.startingScreen")}</button>
+                    <strong>{cliReady ? t("mobile.focus.sessionLoading") : t("mobile.focus.starting", { agent: agentLabel })}{(isUntested("mobile.focus.starting") || (transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet"))) && <em> · {t("mobile.focus.untested")}</em>}</strong>
+                    <button onClick={() => setView("terminal")}>{t("mobile.transcript.toTerminal")}</button>
                   </div>
-                : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span></div>)
+                // No session to wait for: a cloud tab (its page is the
+                // conversation), or a read the desktop could not answer.
+                : transcript && !transcript.available && !sessionWaiting
+                ? <div className="readable-empty" data-testid="session-unavailable">
+                    {cloudChat || <strong>{t(noSessionReason(transcript))}</strong>}
+                    <button onClick={() => setView("terminal")}>{t("mobile.transcript.toTerminal")}</button>
+                  </div>
+                // Still no session to read once the CLI is up: what it printed
+                // stays one tap away, for a session that never records one.
+                : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span>{transcript?.available === false && <button onClick={() => setView("terminal")}>{t("mobile.transcript.toTerminal")}</button>}</div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
+                  {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
                   <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
@@ -4860,30 +4825,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
-            : <div className={chat ? "readable-lines chat" : "readable-lines"}>
+            // A shell's Focus: its screen, flat, the history in memoized chunks.
+            : <div className="readable-lines">
                 {clipped && <div className="readable-notice">{t("mobile.focus.truncated")}</div>}
-                {cloudLink && <div className="sign-in-open readable-cloud-link">
-                  <a className="button primary" href={cloudLink.url} target="_blank" rel="noopener noreferrer">
-                    <strong>{t("mobile.focus.cloudOpen")}{isUntested("mobile.focus.cloudLink") && <em> · {t("mobile.focus.untested")}</em>}</strong>
-                    <small>{cloudLink.site}</small>
-                  </a>
-                  {cloudSession && openTab && <button disabled={teleporting || !connected} onClick={() => void teleport()}>{t("mobile.focus.cloudTeleport")}{isUntested("mobile.focus.cloudTeleport") && <em> · {t("mobile.focus.untested")}</em>}</button>}
-                </div>}
-                {cloudLink && cloudSession && openTab && <div className="readable-notice">{teleportError || t("mobile.focus.cloudTeleportNote")}</div>}
                 {hiddenLines > 0 && <button className="readable-earlier" onClick={showEarlier}>{t("mobile.focus.earlierOutput", { count: hiddenLines.toLocaleString() })}</button>}
                 {hiddenLines === 0 && earlier.dropped && <div className="readable-notice">{t("mobile.focus.truncated")}</div>}
-                {/* An agent's output is laid out as ONE stream: grouped piece by
-                    piece, a turn that ran from the history into the live
-                    screen was cut in two where they met — and that seam moved
-                    every time rows scrolled into the history. A shell has no
-                    turns, so it keeps the memoized chunks. */}
-                {chat
-                  ? <ReadableTurns lines={screenStream} chat agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />
-                  : <>
-                    {visibleChunks.map((chunk) => <ReadableTurns key={chunk.id} lines={chunk.lines} chat={false} promptLabel={t("mobile.transcript.prompt")} />)}
-                    <ReadableTurns lines={earlier.open} chat={false} promptLabel={t("mobile.transcript.prompt")} />
-                    <ReadableTurns lines={painted} chat={false} promptLabel={t("mobile.transcript.prompt")} />
-                  </>}
+                {visibleChunks.map((chunk) => <ReadableTurns key={chunk.id} lines={chunk.lines} chat={false} promptLabel={t("mobile.transcript.prompt")} />)}
+                <ReadableTurns lines={earlier.open} chat={false} promptLabel={t("mobile.transcript.prompt")} />
+                <ReadableTurns lines={painted} chat={false} promptLabel={t("mobile.transcript.prompt")} />
               </div>}
         </section>
         {!openStep && pinnedPrompt && <button className="readable-pinned-prompt" style={pinnedTop ? { top: pinnedTop + 6 } : undefined} aria-label={t("mobile.focus.lastPrompt")}
@@ -4892,8 +4841,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {pinnedTime && <small className="transcript-time">{pinnedTime}</small>}
           {isUntested("mobile.focus.pinnedPrompt") && <em>{t("mobile.focus.untested")}</em>}
         </button>}
-        {/* A chat copies message by message and picks its source under the
-            Focus button, so nothing floats over its newest lines. */}
+        {/* A chat copies message by message, so nothing floats over its
+            newest lines. */}
         {!chat && lines.length > 0 && <div className="readable-tools">
           <button onClick={() => void copyReadable()} aria-label={t("mobile.focus.copySession")}>{t(copied ? "mobile.focus.copied" : "mobile.focus.copy")}</button>
         </div>}
@@ -4914,7 +4863,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         <button onPointerDown={(event) => event.preventDefault()} onClick={cancelEdit}>{t("mobile.composer.editCancel")}</button>
       </div>}
       {clearRefused && liveBusy && <div className="voice-feedback" role="status">{t("mobile.composer.clearBusy")}{isUntested("mobile.composer.clearBusy") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
-      {lastSent && !sessionShown && <div className="last-sent"><span>{t("mobile.composer.lastSent")}</span><p>{lastSent}</p></div>}
+      {lastSent && !sessionFocus && <div className="last-sent"><span>{t("mobile.composer.lastSent")}</span><p>{lastSent}</p></div>}
       {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{t(upload.failure)}</span><button onClick={() => dismissUpload(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}>✕</button></div>)}
       {/* What goes with the next message, as pictures beside the draft —
           never as `@` text in it (`withAttachments` adds the references on
