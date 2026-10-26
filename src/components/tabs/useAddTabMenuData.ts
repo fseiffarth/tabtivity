@@ -10,7 +10,7 @@ import {
   enabledInstalledAgentBins,
   rootAllowedAgentBins,
   type BuiltInAgentStatus,
-} from "./newTabItems";
+} from "../../lib/tabs/newTabItems";
 import { listLocalDrivers, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { AGENT_REGISTRY_CHANGED_EVENT } from "../../lib/agents/agentRegistry";
 import { ROOT_SCOPE } from "../../stores/tabs";

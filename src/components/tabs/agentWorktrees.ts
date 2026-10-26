@@ -36,8 +36,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { useDialogs } from "../common/PromptDialogs";
 import type { TabEntry } from "../../stores/tabs";
-import type { StaticMenuItem } from "./newTabItems";
-import { buildCloudTabSpec, buildStaticTabSpec } from "./newTabItems";
+import type { StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { buildCloudTabSpec, buildStaticTabSpec } from "../../lib/tabs/newTabItems";
 import {
   agentWorktreeChoices,
   isAgentMenuKind,

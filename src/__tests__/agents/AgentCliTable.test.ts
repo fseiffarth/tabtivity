@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { AGENT_BINS, AGENT_CLI_ROWS, RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { SESSION_ID_ARG } from "../../lib/agents/agentCliTable";
 import { cmdToKind, useTabsStore } from "../../stores/tabs";
-import { AGENT_ITEMS } from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { agentLabel } from "../../lib/usageMetrics";
 
 describe("the generated agent CLI table", () => {

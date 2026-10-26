@@ -1,7 +1,7 @@
 import { buildPreface } from "../agentPrefaces";
 import type { TabEntry } from "../../../stores/tabs";
 import type { CustomAgent, Settings } from "../../../types";
-import { AGENT_ITEMS, buildStaticTabSpec, customAgentToItem, type StaticMenuItem } from "../../../components/tabs/newTabItems";
+import { AGENT_ITEMS, buildStaticTabSpec, customAgentToItem, type StaticMenuItem } from "../../tabs/newTabItems";
 import type { TranslationKey } from "../../i18n";
 
 /**

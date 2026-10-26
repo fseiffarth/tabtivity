@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { screenModelTag, shortModelName, textScreenModelTag, textScreenModeMarks, transcriptModelTag, type AgentModeMarks } from "../../lib/agents/agentModel";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { envName } from "../../lib/brand";
-import { AGENT_ITEMS } from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { adoptTranscriptPrompts, adoptTypedPrompt, type TranscriptPrompt } from "../../lib/agents/prompt/adopt";
 import { lastPromptEcho } from "../../lib/agents/prompt/echo";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";

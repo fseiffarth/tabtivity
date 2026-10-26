@@ -13,7 +13,7 @@ import {
   enabledInstalledAgentBins,
   type BuiltInAgentStatus,
   type StaticMenuItem,
-} from "../tabs/newTabItems";
+} from "../../lib/tabs/newTabItems";
 
 /**
  * The header's help button (`HelpAgentButton`): an agent that answers

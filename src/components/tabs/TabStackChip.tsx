@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { TabEntry } from "../../stores/tabs";
-import { TAB_ACCENT } from "./newTabItems";
+import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { tabColorCss } from "../../lib/theme/tabColors";
 import { TabStatusMark, statusMarkSlots } from "./TabLocalityBadges";
 import { UntestedTag } from "../common/UntestedTag";

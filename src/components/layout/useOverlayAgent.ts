@@ -12,7 +12,7 @@ import { OVERLAY_AGENT_EVENT, type OverlayAgentDetail } from "../../lib/shortcut
 import type { SteeringApp } from "../../lib/shortcuts/steeringRegion";
 import { onTerminalExit, onTerminalReady } from "../../lib/terminal/terminalBus";
 import { useT } from "../../lib/i18n";
-import { AGENT_ITEMS, agentShortcutSlots, buildStaticTabSpec } from "../tabs/newTabItems";
+import { AGENT_ITEMS, agentShortcutSlots, buildStaticTabSpec } from "../../lib/tabs/newTabItems";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
 
 // ── Has a docked tab's program exited? ─────────────────────────────────────

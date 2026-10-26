@@ -71,7 +71,7 @@ import {
   enabledInstalledAgentBins,
   type BuiltInAgentStatus,
   type StaticMenuItem,
-} from "../tabs/newTabItems";
+} from "../../lib/tabs/newTabItems";
 import { worktreeAgentSpec } from "../tabs/agentWorktrees";
 import { probeLocalModelPlacement } from "../tabs/localModelGroup";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";

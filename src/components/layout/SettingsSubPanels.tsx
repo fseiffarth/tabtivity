@@ -72,7 +72,7 @@ import {
   enabledInstalledAgentBins,
   moveInAgentOrder,
   sortByAgentOrder,
-} from "../tabs/newTabItems";
+} from "../../lib/tabs/newTabItems";
 import { AGENT_TAB_ACTIONS, chordLabel, modifierLabel, resolveChord } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { ErrorNote } from "../common/ErrorNote";

@@ -5,13 +5,8 @@
  */
 import { describe, it, expect } from "vitest";
 import { newTabRequestFor } from "../../lib/shortcuts/newTabChord";
-import {
-  agentMenuEntries,
-  agentShortcutSlots,
-  effectiveAgentOrder,
-  moveInAgentOrder,
-  sortByAgentOrder,
-} from "../../components/tabs/newTabItems";
+import { agentShortcutSlots, effectiveAgentOrder, moveInAgentOrder, sortByAgentOrder } from "../../lib/tabs/newTabItems";
+import { agentMenuEntries } from "../../components/tabs/agentMenuEntries";
 import type { CustomAgent } from "../../types";
 
 const key = (init: KeyboardEventInit) => new KeyboardEvent("keydown", init);

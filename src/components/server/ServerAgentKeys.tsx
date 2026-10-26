@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
-import { AGENT_ITEMS } from "../tabs/newTabItems";
+import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { loginIdForCmd } from "../../lib/agents/signInLaunch";
 import { UntestedTag } from "../common/UntestedTag";
 import { PasswordInput } from "../common/PasswordInput";

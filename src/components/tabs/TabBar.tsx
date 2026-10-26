@@ -24,19 +24,8 @@ import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
-import {
-  AGENT_ITEMS,
-  SHELL_ITEMS,
-  TAB_ACCENT,
-  agentMenuEntries,
-  agentShortcutSlots,
-  buildStaticTabSpec,
-  compactAgentMenuEntries,
-  isFileTabKind,
-  itemLabel,
-  onOwnLogin,
-  type StaticMenuItem,
-} from "./newTabItems";
+import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";

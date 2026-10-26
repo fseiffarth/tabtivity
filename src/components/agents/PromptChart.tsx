@@ -69,7 +69,7 @@ import { usePromptChartDrag } from "./usePromptChartDrag";
 import { usePromptChartUsage } from "./usePromptChartUsage";
 import { PromptDraftBoard, type DraftBoardHandle } from "./PromptDraftBoard";
 import { draftSequence } from "../../lib/agents/prompt/drafts";
-import { AGENT_ITEMS, EMPTY_CUSTOM_AGENTS } from "../tabs/newTabItems";
+import { AGENT_ITEMS, EMPTY_CUSTOM_AGENTS } from "../../lib/tabs/newTabItems";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
 import { ArrowLeftIcon, ArrowRightIcon } from "../common/icons/Icon";
 import { storageKey } from "../../lib/brand";

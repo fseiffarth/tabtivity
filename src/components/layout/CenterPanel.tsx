@@ -47,7 +47,7 @@ import { useScrollSyncStore } from "../../stores/viewers/scrollSync";
 import { useWindowMoveStore } from "../../stores/drag/windowMove";
 import { useDetachAnimStore } from "../../stores/drag/detachAnim";
 import { useTabLandStore } from "../../stores/drag/tabLand";
-import { TAB_ACCENT } from "../tabs/newTabItems";
+import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { commitDrop } from "../tabs/commitDrop";
 import {
   startDetachedDropSession,

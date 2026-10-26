@@ -5,13 +5,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { cleanCloudTask, cloudLaunch, cloudLaunchesFor, MAX_CLOUD_TASK } from "../../lib/agents/cloudSessions";
-import {
-  AGENT_ITEMS,
-  CLOUD_SESSION_KEY,
-  agentMenuEntries,
-  buildCloudTabSpec,
-  compactAgentMenuEntries,
-} from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS, buildCloudTabSpec } from "../../lib/tabs/newTabItems";
+import { CLOUD_SESSION_KEY, agentMenuEntries, compactAgentMenuEntries } from "../../components/tabs/agentMenuEntries";
 import { isRestorableTab } from "../../stores/tabs";
 import { envName } from "../../lib/brand";
 

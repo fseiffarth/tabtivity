@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AGENT_CLI_ROWS } from "../../lib/agents/agentClis";
 import type { TranslationKey } from "../../lib/i18n";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
-import { AGENT_ITEMS, TAB_ACCENT, type StaticMenuItem } from "./newTabItems";
+import { AGENT_ITEMS, TAB_ACCENT, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 
 /** The `agent_logins` fields the API section reads (`agent_auth::LoginStatus`). */
 interface KeyLoginRow {

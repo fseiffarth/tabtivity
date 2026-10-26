@@ -16,7 +16,7 @@ import { lastPtyOutputAt, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { useFileSourcesStore } from "../../stores/viewers/fileSources";
 import type { InternalViewer } from "../../lib/viewers/fileUtils";
-import { TAB_ACCENT } from "./newTabItems";
+import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { describeTabCost, tabCost } from "../../lib/tabCost";
 import { UntestedTag } from "../common/UntestedTag";

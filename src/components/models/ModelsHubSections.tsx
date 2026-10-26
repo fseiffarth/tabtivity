@@ -18,7 +18,7 @@ import {
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
-import { DEFAULT_COMPACT_AGENT_IDS } from "../tabs/newTabItems";
+import { DEFAULT_COMPACT_AGENT_IDS } from "../../lib/tabs/newTabItems";
 import { useAutoloadNotice, type HubAgentInfo, type ModelsHub } from "./useModelsHub";
 
 /**

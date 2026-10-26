@@ -1,6 +1,6 @@
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
-import { AGENT_ITEMS, buildStaticTabSpec } from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS, buildStaticTabSpec } from "../tabs/newTabItems";
 import { translateNow } from "../i18n";
 
 /**

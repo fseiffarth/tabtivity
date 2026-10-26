@@ -4,7 +4,7 @@ import { loadOllamaModel, ollamaGpuStatus, type LocalDriverInfo } from "../../li
 import type { TranslationKey } from "../../lib/i18n";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
-import { TAB_ACCENT } from "./newTabItems";
+import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 
 /**
  * Where the "tabs" local model sits right now, as far as the "+" menu cares:
