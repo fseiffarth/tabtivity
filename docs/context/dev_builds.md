@@ -62,9 +62,19 @@ change was not run live.
   `--fresh`/`reset` go back to a clean desktop; host-only (`/dev/kvm`). A host
   run writes the "(VM)" desktop entry (app grid and desktop icon), which runs
   an installed copy of the script under the VM folder, never the checkout's.
-  With a VM already there, a call asks: keep it (a stopped one boots with the
-  package installed over it; a running one gets the app started inside it via
-  the QEMU guest agent socket `qga.sock`), or delete it and start a new VM.
+  With a VM already there a call only UPDATES Tabtivity in it (no question, no
+  new VM, no base rebuild, state kept): a stopped VM boots with the package
+  installed over it; a running one gets the package copied in through the QEMU
+  guest agent socket `qga.sock` (`qga_exec --put`, 1 MiB per guest-exec,
+  SHA-256 checked), installed as root by the same `install.sh` the boot disc
+  carries, and the app quit and started again as `tester`. A silent agent is
+  reported ("Nothing was changed"), never waited on; `status` asks the running
+  guest what it has. `fresh-vm.sh current` installs the newest package built in
+  the checkout (`target/release/bundle/{deb,appimage}`, from
+  `APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:bundle`; the frozen dev build is a
+  bare binary, so it is no source); the script never builds. The install stamp
+  is file name plus the head of the SHA-256, so a rebuild at the same version
+  is installed again (`apt-get --reinstall`) and the identical file is not.
   The guest login is `tester` / `tester`. Bake and desktop use the same
   standard VGA so the GPU and NIC PCI slots stay stable; boot output is
   saved in `<VM folder>/serial.log` (cloud images direct it to the serial

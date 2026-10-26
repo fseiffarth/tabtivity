@@ -8,35 +8,49 @@
 # Run it on the host, outside an agent fence (it needs /dev/kvm). It never
 # touches libvirt, the running Tabtivity or its state.
 #
-#   scripts/fresh-vm.sh [--fresh] [<version|latest|file.deb|file.AppImage>]
-#       the one call: builds the base image if there is none yet (once,
-#       ~15 min: Ubuntu 24.04 + minimal GNOME, auto-login as `tester`,
-#       password `tester`, no setup wizard, no screen lock), installs that
-#       Tabtivity (default: latest) over whatever version the VM has, up or
-#       down, and opens the VM in a window: the desktop logs in and starts
-#       Tabtivity by itself (it is pinned to the dock too). --fresh starts
-#       from a clean desktop first: a brand-new user's first run.
+#   scripts/fresh-vm.sh [--fresh] [<version|latest|current|file.deb|file.AppImage>]
+#       the one call. With a VM already there it ONLY UPDATES Tabtivity inside
+#       it: no question, no new VM, no base rebuild, the VM's state (accounts,
+#       settings, logins, open tabs' files) kept; up or down in version.
+#         VM stopped: it boots with the package installed before the desktop
+#                     appears (a disc the guest installs at boot).
+#         VM running: the package is copied into the running guest through the
+#                     QEMU guest agent (checked against its SHA-256), installed
+#                     there as root with the same install.sh the boot disc
+#                     carries, the running app is quit and started again as
+#                     `tester`. Nothing is silently skipped: when the guest
+#                     agent does not answer (VM still booting, a base without
+#                     the agent, a VM started by an older script) the call says
+#                     so and what to do (close the VM window, run again: the
+#                     boot path installs without the agent).
+#       Only without a VM is one built: from the base image, which is baked
+#       once (~15 min: Ubuntu 24.04 + minimal GNOME, auto-login as `tester`,
+#       password `tester`, no setup wizard, no screen lock). --fresh is the
+#       only way to a clean desktop (a brand-new user's first run): it deletes
+#       the VM (asking first when it is running) and starts a new one.
+#       The target: `latest` (default) or a <version> of the GitHub release;
+#       `current` the newest package built in this checkout
+#       (target/release/bundle/{deb,appimage}; never built by this script:
+#       `APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:bundle`; the file, version
+#       and build time are printed); or a package file. A package is installed
+#       once: the VM records its file name AND content hash, so a rebuild at
+#       the same version is installed again and the very same file is not.
 #
 #   Desktop entry "Tabtivity (VM)": the same call (latest), a click away,
-#       in the app grid and as an icon on the desktop.
-#       Every host run of this script from the checkout writes it and
+#       in the app grid and as an icon on the desktop: an update in place of
+#       the VM that is there, running or not (never a question, never a new
+#       VM). Every host run of this script from the checkout writes it and
 #       refreshes the copy of the script it runs (under the VM folder, never
 #       the checkout's: an agent can edit the checkout). Clicked, it logs to
 #       <VM folder>/launcher.log and reports the long first build and any
 #       failure as a notification.
 #
-#   A VM already there? The call asks (in the terminal, or in a dialog when
-#       the desktop entry started it): keep it, or delete it and go on with a
-#       new VM (--fresh skips the question unless the VM is running), or
-#       cancel. Keeping a stopped VM boots it with the package installed over
-#       it; keeping a running one starts Tabtivity inside it (through the QEMU
-#       guest agent; nothing is installed). With no terminal and no dialog, a
-#       stopped VM is kept and a running one refused.
-#
-#   scripts/fresh-vm.sh boot               open the VM, install nothing
+#   scripts/fresh-vm.sh boot               open the VM, install nothing (running:
+#                                          just start the app in it)
 #   scripts/fresh-vm.sh repair             repair/start the running VM's desktop
 #   scripts/fresh-vm.sh reset              back to a clean desktop
-#   scripts/fresh-vm.sh status             what is installed, disk sizes
+#   scripts/fresh-vm.sh status             running or not, what is installed
+#                                          (asked of the running guest), sizes
 #   scripts/fresh-vm.sh base --rebuild     build the base image again
 #
 # The VM keeps its state between versions, so `0.2.9` after `0.2.8` is an
@@ -109,38 +123,20 @@ refuse_if_running() {
   fi
 }
 
-# What to do with the VM that is already there, running or not (STATE), when
-# WHAT (cmd_run's) is to be installed: prints start, new or cancel — or none
-# when there is no one to ask (no terminal, no dialog).
-choose_existing() {
-  local state="$1" what="$2" installed answer start_label new_label question
-  installed="$(cat "$INSTALLED" 2>/dev/null || echo nothing)"
-  if [ "$state" = running ]; then
-    question="The VM is already running (installed: $installed)."
-    start_label="Start $APP_DISPLAY in it"
-    new_label="Stop it, delete it, start a new VM"
-  else
-    question="There is a VM already (installed: $installed)."
-    start_label="Start it"
-    [ -z "$what" ] || start_label="$start_label, with $(basename "$what") installed over it"
-    new_label="Delete it, start a new VM"
-  fi
+# --fresh while the VM is running would delete a VM someone is using: prints
+# yes only when the user says so (terminal or dialog); with no one to ask, no.
+confirm_fresh_running() {
+  local question answer
+  question="The VM is running. --fresh stops it and deletes it (its installed apps, accounts and settings), then starts a clean VM."
   if [ -t 0 ]; then
-    printf '%s\n  s  %s\n  n  %s\n  c  cancel\n' "$question" "$start_label" "$new_label" >&2
-    read -r -p 'Choice [S/n/c]: ' answer || answer=c
-    case "$answer" in
-      s | S | "") echo start ;;
-      n | N) echo new ;;
-      *) echo cancel ;;
-    esac
+    printf '%s\n' "$question" >&2
+    read -r -p 'Stop and delete it? [y/N]: ' answer || answer=n
+    case "$answer" in y | Y) echo yes ;; *) echo no ;; esac
   elif [ "$FROM_DESKTOP" = 1 ] && command -v zenity >/dev/null 2>&1; then
-    # OK prints nothing and exits 0; the extra button prints its label.
-    answer="$(zenity --question --no-markup --title "$APP_DISPLAY (VM)" --text "$question" \
-      --ok-label "$start_label" --extra-button "$new_label" \
-      --cancel-label Cancel 2>/dev/null)" && { echo start; return; }
-    if [ "$answer" = "$new_label" ]; then echo new; else echo cancel; fi
+    zenity --question --no-markup --title "$APP_DISPLAY (VM)" --text "$question" \
+      --ok-label "Stop and delete it" --cancel-label Cancel >/dev/null 2>&1 && echo yes || echo no
   else
-    echo none
+    echo no
   fi
 }
 
@@ -168,6 +164,14 @@ qga_exec() {
 import base64, json, socket, sys, time
 
 path, timeout, argv = sys.argv[1], float(sys.argv[2]), sys.argv[3:]
+# --put SRC DEST: copy the host file SRC to DEST in the guest (1 MiB per
+# guest-exec, fed to `cat` on stdin; the timeout is per chunk).
+put = None
+if argv[:1] == ["--put"]:
+    try:
+        put = open(argv[1], "rb")
+    except OSError as e:
+        sys.exit(f"cannot read {argv[1]}: {e}")
 sock = socket.socket(socket.AF_UNIX)
 sock.settimeout(10)
 submitted = False
@@ -194,21 +198,50 @@ try:
         send(cmd, **args)
         return reply()
 
+    def run(prog, args, data=None):
+        extra = {"capture-output": True}
+        if data is not None:
+            extra["input-data"] = base64.b64encode(data).decode()
+        pid = call("guest-exec", path=prog, arg=args, **extra)["pid"]
+        deadline = time.monotonic() + timeout
+        while True:
+            status = call("guest-exec-status", pid=pid)
+            if status.get("exited"):
+                return status
+            if time.monotonic() > deadline:
+                sys.exit("the program in the guest did not finish")
+            time.sleep(0.05 if put else 0.3)
+
     # Skip any reply an earlier, interrupted client left in the channel.
     sync = int(time.time()) & 0x7FFFFFFF
     send("guest-sync", id=sync)
     while reply() != sync:
         pass
     submitted = True
-    pid = call("guest-exec", path=argv[0], arg=argv[1:], **{"capture-output": True})["pid"]
-    deadline = time.monotonic() + timeout
-    while True:
-        status = call("guest-exec-status", pid=pid)
-        if status.get("exited"):
-            break
-        if time.monotonic() > deadline:
-            sys.exit("the program in the guest did not finish")
-        time.sleep(0.3)
+    if put:
+        dest = argv[2]
+
+        def ok(status):
+            if status.get("exitcode", 1) != 0:
+                if status.get("err-data"):
+                    sys.stderr.write(base64.b64decode(status["err-data"]).decode(errors="replace"))
+                sys.exit(status.get("exitcode", 1))
+
+        ok(run("/bin/sh", ["-c", 'umask 022; mkdir -p "$(dirname "$1")" && : > "$1"', "sh", dest]))
+        put.seek(0, 2)
+        total = put.tell()
+        put.seek(0)
+        sent = 0
+        while True:
+            chunk = put.read(1 << 20)
+            if not chunk:
+                break
+            ok(run("/bin/sh", ["-c", 'cat >> "$1"', "sh", dest], chunk))
+            sent += len(chunk)
+            if total >= (16 << 20) and (sent % (16 << 20) == 0 or sent == total):
+                print(f"  copied {sent >> 20} of {total >> 20} MiB", file=sys.stderr, flush=True)
+        sys.exit(0)
+    status = run(argv[0], argv[1:])
 except (OSError, ValueError) as e:
     print(f"the guest agent does not answer ({e})", file=sys.stderr)
     if not submitted:
@@ -246,6 +279,56 @@ start_app_in_vm() {
   qga_exec /bin/sh -c "$(guest_launch)" ||
     die "could not start $APP_DISPLAY in the VM (a VM from an older base has no guest agent: scripts/fresh-vm.sh base --rebuild)"
   say "started $APP_DISPLAY in the running VM"
+}
+
+# The guest's side of a live update: $1 is the folder the host copied install.sh
+# and pkg/<package> into. Installs it as root (the boot disc's install.sh, same
+# stamp check), then quits the app that was running so the next step starts the
+# new one. The installed package changed files under the running app; SIGTERM,
+# then SIGKILL after 20 s.
+guest_live_update() {
+  cat <<'EOF'
+set -eu
+live=$1
+trap 'rm -rf "$live"' EXIT
+case $(systemctl show fresh-vm-install.service --property=ActiveState --value) in
+  activating|deactivating) echo 'the boot installer is still running; try again once it finishes' >&2; exit 1 ;;
+esac
+state=/var/lib/fresh-vm
+# What the running app is called, from the entry the previous install recorded.
+old=
+if entry=$(cat "$state/entry" 2>/dev/null) && [ -f "$entry" ]; then
+  old=$(sed -n 's/^Exec=//p' "$entry" | head -n 1 | sed 's/ %[A-Za-z]//g' | cut -d' ' -f1)
+fi
+
+sh "$live/install.sh" "$live/pkg"
+
+# tester's processes of the old app: by name (a .deb), or by the APPIMAGE
+# variable the AppImage runtime sets for its app (an AppImage).
+app_pids() {
+  [ -n "$old" ] || return 0
+  pgrep -u tester -x -- "$(basename "$old" | cut -c1-15)" || true
+  case $old in
+    /home/*)
+      for p in /proc/[0-9]*; do
+        if tr '\0' '\n' <"$p/environ" 2>/dev/null | grep -qxF "APPIMAGE=$old"; then basename "$p"; fi
+      done ;;
+  esac
+}
+alive() {
+  for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done
+  return 1
+}
+pids=$(app_pids | sort -u)
+if [ -n "$pids" ]; then
+  echo "quitting the running app ($(echo $pids))"
+  kill -TERM $pids 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 40 ] && alive; do sleep 0.5; i=$((i + 1)); done
+  alive && kill -KILL $pids 2>/dev/null || true
+fi
+echo "installed: $(cat "$state/installed")"
+EOF
 }
 
 need() {
@@ -348,7 +431,7 @@ fi
 EOF
 }
 
-# The disc's install.sh: once per package (a stamp of its file name), install
+# The disc's install.sh: once per package (a stamp of its file name and hash), install
 # a .deb with apt — Recommends included, as a user's `apt install` does, a
 # downgrade allowed — or put an AppImage into the home folder in place of the
 # ones placed before, with a launcher of its own. Either way the app is pinned
@@ -364,7 +447,11 @@ systemctl --no-block start display-manager.service
 mnt="$1"
 state=/var/lib/fresh-vm
 mkdir -p "$state"
-want=$(cd "$mnt" && ls | grep -v '^install\.sh$')
+# The stamp is the file's name AND a hash of its content: a rebuild at the
+# same version has the same name and must still be installed.
+want=$(cd "$mnt" && for f in *; do
+  [ "$f" = install.sh ] || printf '%s %s\n' "$f" "$(sha256sum "$f" | cut -c1-12)"
+done)
 [ "$(cat "$state/installed" 2>/dev/null)" = "$want" ] && exit 0
 
 # Start the app of desktop entry $1 at login and pin it to the dock (system
@@ -385,7 +472,8 @@ for f in "$mnt"/*.deb; do
   [ -e "$f" ] || continue
   cp "$f" /tmp/
   apt-get update
-  apt_install --allow-downgrades "/tmp/$(basename "$f")"
+  # --reinstall: the same version rebuilt is otherwise "already newest".
+  apt_install --allow-downgrades --reinstall "/tmp/$(basename "$f")"
   entry=$(dpkg -L "$(dpkg-deb -f "$f" Package)" | grep '^/usr/share/applications/.*\.desktop$' | head -n 1 || true)
   [ -z "$entry" ] || present "$entry"
 done
@@ -580,69 +668,160 @@ package_disc() {
   rm -rf "$work"
 }
 
-new_vm() {
-  rm -f "$VM" "$PKG_ISO" "$INSTALLED"
-  qemu-img create -q -f qcow2 -b "$BASE" -F qcow2 "$VM"
+# What the VM records for package FILE: its name and the head of its hash, the
+# same text install.sh writes in the guest. The name alone cannot tell a rebuild
+# at the same version from the package that is already there.
+pkg_stamp() {
+  printf '%s %s' "$(basename "$1")" "$(sha256sum "$1" | cut -c1-12)"
 }
 
-# cmd_run [--fresh] [WHAT]: WHAT is a version, `latest`, a package file, or
-# empty for a boot that installs nothing.
-cmd_run() {
-  local fresh=0 what="" pkg="" disc=()
-  if [ "${1:-}" = "--fresh" ]; then fresh=1; shift; fi
-  what="${1:-}"
-  need qemu-system-x86_64 qemu-img
-  need_kvm
-  if vm_running; then
-    case "$(choose_existing running "$what")" in
-      start)
-        start_app_in_vm
-        return
-        ;;
-      new)
-        stop_vm
-        refuse_if_running
-        fresh=1
-        ;;
-      cancel)
-        say "left the running VM as it is"
-        return
-        ;;
-      *) die "the VM is already running; close its window first" ;;
-    esac
-  elif [ -e "$VM" ] && [ "$fresh" = 0 ]; then
-    # Nobody to ask keeps the VM: the call's old meaning.
-    case "$(choose_existing stopped "$what")" in
-      new) fresh=1 ;;
-      cancel)
-        say "left the VM as it is"
-        return
-        ;;
-    esac
+# The newest package built in this checkout (`tauri build --bundles
+# appimage,deb`), by modification time. This script never builds one, and the
+# frozen dev build (`npm run package:dev`) is a bare binary, not a package.
+local_package() {
+  local bundle="$ROOT/target/release/bundle" best version built commit ct hint=""
+  best="$(ls -t "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage 2>/dev/null | head -n 1 || true)"
+  if [ -z "$best" ]; then
+    [ "$ROOT" != "$LAUNCHER" ] || hint=" (This is the desktop entry's copy of the script: run \`current\` from the checkout.)"
+    die "no package built in this checkout under $bundle/{deb,appimage}.$hint
+Build one (a few minutes; this script never starts a build): APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:bundle
+The frozen dev build from 'npm run package:dev' is a bare binary and cannot be installed in the VM."
   fi
-  [ -e "$BASE" ] || cmd_base
+  version=""
+  case "$best" in
+    *.deb) version="$(dpkg-deb -f "$best" Version 2>/dev/null || true)" ;;
+  esac
+  built="$(date -d "@$(stat -c %Y "$best")" '+%Y-%m-%d %H:%M' 2>/dev/null || echo unknown)"
+  commit="$(dev_git -C "$ROOT" log -1 --format='%h %ct' HEAD 2>/dev/null || true)"
+  say "current build: $best" >&2
+  say "  version ${version:-unknown}, built $built; checkout HEAD ${commit%% *}" >&2
+  ct="${commit##* }"
+  if [ -n "$commit" ] && [ "$(stat -c %Y "$best")" -lt "$ct" ] 2>/dev/null; then
+    say "  note: the package is older than the checkout's last commit; rebuild it for the latest changes" >&2
+  fi
+  printf '%s\n' "$best"
+}
 
+# The package for WHAT ("latest", a version, `current`, a file; empty: none),
+# printed as a path.
+resolve_package() {
+  local what="$1"
   if [ -z "$what" ]; then
-    :
+    return 0
+  elif [ "$what" = current ]; then
+    need sha256sum
+    local_package
   elif [ -f "$what" ]; then
     case "$what" in
       *.deb | *.AppImage) ;;
       *) die "$what is neither a .deb nor an .AppImage" ;;
     esac
-    pkg="$(realpath "$what")"
+    realpath "$what"
   else
     need curl jq sha256sum
-    pkg="$(fetch_release "$what")"
+    fetch_release "$what"
   fi
+}
 
+# The package stamp the running guest holds (empty when nothing is installed).
+# Return 69 when the guest agent does not answer.
+guest_stamp() {
+  qga_exec --timeout 15 /bin/sh -c 'cat /var/lib/fresh-vm/installed 2>/dev/null || true'
+}
+
+# The guest agent is not there, or does not answer: say why and what to do.
+no_agent_message() {
+  die "the VM is running but its guest agent does not answer (it is still booting, the base has no agent: scripts/fresh-vm.sh base --rebuild, or the VM was started by an older script). Nothing was changed. Wait a minute and run again, or close the VM window and run again: a stopped VM installs the package at boot, without the agent"
+}
+
+# Update the RUNNING VM in place: copy the package into the guest through the
+# agent, install it there as root, quit and restart the app as tester. WHAT is
+# resolved by resolve_package; empty only starts the app.
+update_running_vm() {
+  local what="$1" pkg stamp have rc=0 live=/var/tmp/fresh-vm-live sum guest_sum tmp
+  need python3
+  [ -S "$QGA_SOCK" ] ||
+    die "the running VM has no guest agent channel (it was started by an older fresh-vm.sh). Nothing was changed: close its window and run again; a stopped VM installs the package at boot"
+  pkg="$(resolve_package "$what")"
+  say "asking the running VM what it has installed"
+  have="$(guest_stamp)" || rc=$?
+  [ "$rc" = 0 ] || { [ "$rc" = 69 ] && no_agent_message; die "the guest agent failed (exit $rc); see the output above"; }
+  if [ -z "$pkg" ]; then
+    say "installed in the VM: ${have:-nothing}"
+    start_app_in_vm
+    return
+  fi
+  stamp="$(pkg_stamp "$pkg")"
+  if [ "$have" = "$stamp" ]; then
+    say "this package is already installed in the VM ($stamp); nothing to copy"
+    start_app_in_vm
+    return
+  fi
+  say "updating the running VM: ${have:-nothing} -> $stamp (its state is kept)"
+  tmp="$(mktemp -d)"
+  install_script >"$tmp/install.sh"
+  sum="$(sha256sum "$pkg" | cut -d' ' -f1)"
+  qga_exec /bin/sh -c 'rm -rf "$1" && mkdir -p "$1/pkg"' sh "$live" ||
+    { rm -rf "$tmp"; die "could not prepare $live in the VM"; }
+  qga_exec --timeout 60 --put "$tmp/install.sh" "$live/install.sh" ||
+    { rm -rf "$tmp"; die "could not copy the installer into the VM"; }
+  rm -rf "$tmp"
+  say "copying $(basename "$pkg") ($(du -h "$pkg" | cut -f1)) into the VM"
+  qga_exec --timeout 120 --put "$pkg" "$live/pkg/$(basename "$pkg")" ||
+    die "could not copy the package into the VM; nothing was installed"
+  guest_sum="$(qga_exec --timeout 300 /bin/sh -c 'sha256sum "$1"' sh "$live/pkg/$(basename "$pkg")" | cut -d' ' -f1)" || true
+  [ "$guest_sum" = "$sum" ] ||
+    die "the copy in the VM does not match the package (${guest_sum:-no checksum}); nothing was installed, run again"
+  say "installing in the VM; the guest's output follows when it finishes (up to 30 min)"
+  rc=0
+  qga_exec --timeout 1800 /bin/sh -c "$(guest_live_update)" sh "$live" || rc=$?
+  if [ "$rc" != 0 ]; then
+    die "installing in the running VM failed (exit $rc, output above). The running app was not restarted; close the VM window and run again to install at boot"
+  fi
+  printf '%s\n' "$stamp" >"$INSTALLED"
+  start_app_in_vm
+}
+
+new_vm() {
+  rm -f "$VM" "$PKG_ISO" "$INSTALLED"
+  qemu-img create -q -f qcow2 -b "$BASE" -F qcow2 "$VM"
+}
+
+# cmd_run [--fresh] [WHAT]: WHAT is a version, `latest`, `current`, a package
+# file, or empty for a boot that installs nothing. A VM that is there is only
+# UPDATED (running: live through the guest agent; stopped: at boot); only
+# --fresh, or no VM yet, makes a new one.
+cmd_run() {
+  local fresh=0 what="" pkg="" disc=()
+  if [ "${1:-}" = "--fresh" ]; then fresh=1; shift; fi
+  what="${1:-}"
+  if [ "$fresh" = 0 ] && vm_running; then
+    update_running_vm "$what"
+    return
+  fi
+  pkg="$(resolve_package "$what")" # before anything is deleted
+  if vm_running; then
+    if [ "$(confirm_fresh_running)" != yes ]; then
+      say "left the running VM as it is"
+      return
+    fi
+    stop_vm
+    refuse_if_running
+  fi
+  need qemu-system-x86_64 qemu-img
+  need_kvm
   if [ "$fresh" = 1 ] || [ ! -e "$VM" ]; then
+    [ -e "$BASE" ] || cmd_base
     new_vm
     say "clean VM"
+  else
+    say "updating the VM that is there; its state is kept (--fresh for a clean desktop)"
   fi
   if [ -n "$pkg" ]; then
     package_disc "$pkg"
-    printf '%s\n' "$(basename "$pkg")" >"$INSTALLED"
-    say "this boot installs $(basename "$pkg") before the desktop appears"
+    pkg_stamp "$pkg" >"$INSTALLED"
+    printf '\n' >>"$INSTALLED"
+    say "this boot installs $(basename "$pkg") before the desktop appears (skipped if the VM already has this exact package)"
     disc=(-drive "file=$PKG_ISO,media=cdrom,readonly=on")
   else
     say "installed: $(cat "$INSTALLED" 2>/dev/null || echo nothing)"
@@ -694,7 +873,7 @@ cmd_repair() {
   local rc=0
   qga_exec --timeout 900 /bin/sh -c "$(guest_repair)" || rc=$?
   if [ "$rc" = 69 ]; then
-    die "the guest agent is unavailable, so live repair could not start. Close the QEMU window yourself, then run: bash '$ROOT/scripts/fresh-vm.sh' latest — choose Start it to keep the VM; the package disc repairs the desktop at boot without the guest agent"
+    die "the guest agent is unavailable, so live repair could not start. Close the QEMU window yourself, then run: bash '$ROOT/scripts/fresh-vm.sh' latest — it updates the same VM; the package disc repairs the desktop at boot without the guest agent"
   fi
   [ "$rc" = 0 ] || die "desktop repair failed; see the guest output above"
   say "desktop repair finished; check the QEMU window"
@@ -703,17 +882,35 @@ cmd_repair() {
 # --- status / reset --------------------------------------------------------
 
 cmd_status() {
+  local stamp rc=0
   if [ -e "$BASE" ]; then
     printf 'base       %s\n' "$(du -h "$BASE" | cut -f1)"
   else
     echo "no base image (scripts/fresh-vm.sh base)"
     return
   fi
-  if [ -e "$VM" ]; then
-    printf 'vm         %s\n' "$(du -h "$VM" | cut -f1)"
-    printf 'installed  %s\n' "$(cat "$INSTALLED" 2>/dev/null || echo nothing)"
-  else
+  if [ ! -e "$VM" ]; then
     echo "vm         none yet (scripts/fresh-vm.sh [<version>])"
+    return
+  fi
+  printf 'vm         %s\n' "$(du -h "$VM" | cut -f1)"
+  if ! vm_running; then
+    printf 'state      stopped\n'
+    printf 'installed  %s\n' "$(cat "$INSTALLED" 2>/dev/null || echo nothing)"
+    return
+  fi
+  printf 'state      running\n'
+  if [ ! -S "$QGA_SOCK" ] || ! command -v python3 >/dev/null 2>&1; then
+    printf 'installed  %s (last recorded by the host; no guest agent channel to ask)\n' \
+      "$(cat "$INSTALLED" 2>/dev/null || echo nothing)"
+    return
+  fi
+  stamp="$(guest_stamp 2>/dev/null)" || rc=$?
+  if [ "$rc" = 0 ]; then
+    printf 'installed  %s (asked of the running VM)\n' "${stamp:-nothing}"
+  else
+    printf 'installed  %s (last recorded by the host; the VM is running but its guest agent does not answer: still booting, or no agent in this base)\n' \
+      "$(cat "$INSTALLED" 2>/dev/null || echo nothing)"
   fi
 }
 
