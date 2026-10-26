@@ -436,6 +436,7 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/projects/projectDialogEvent.ts` | `tabtivity:open-project-dialog` — asks `ProjectSwitcher` to open its New / Import / Clone dialog (used by the intro). |
 | `lib/projects/projectJumpEvent.ts` | `tabtivity:project-jump` — steering asks `ProjectSearch` to take the keyboard in jump mode; carries the level to return to. |
 | `lib/projects/fileViewSnapshots.ts` | Side panel's last-known data in module scope so a reveal's first frame is populated (the panel unmounts when closed). Tests need `clearFileViewSnapshots()`. |
+| `lib/projects/downloadsShown.ts` | Remembered show/hide of the Downloads section under the file tree, per host kind (side panel / Files tab); shown by default. |
 | `lib/viewers/python.ts` | Python editor intelligence (#87), pure: breakpoints snap to executable lines and remap on edit; go-to-definition is a lexical import-graph walk (only followable names underlined). |
 | `lib/browser.ts` | Typed invoke surface for the browser (`browser_*`); no component invokes directly (`BrowserTripwire.test.ts`), no wrapper takes a path. `READER_FRAME_CSP` is `MAIL_FRAME_CSP` imported. |
 | `lib/linkTarget.ts` | Pure URI routing table (#33) + address-bar commit rule. URLs Tabtivity itself starts go external; URLs from untrusted content open in reader mode, never live in one click. |

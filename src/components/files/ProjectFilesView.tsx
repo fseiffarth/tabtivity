@@ -35,6 +35,7 @@ import {
   type GitStatus,
 } from "../../lib/projects/fileViewSnapshots";
 import { basename, dirname } from "../../lib/paths";
+import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
 import { projectTypeTags } from "../projects/projectTypeTags";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
@@ -369,6 +370,12 @@ export interface ProjectFilesViewProps {
    *  view at a time (`assistantShownKeys` is a set, not a count), so a Files
    *  tab beside the panel must not draw a second one. */
   assistant?: boolean;
+
+  /** Which host kind's remembered Downloads-section state this viewer seeds
+   *  from and writes back (`lib/projects/downloadsShown`; shown by default).
+   *  Unset (the docked compact column) → hidden, not remembered: that column
+   *  has no toolbar to bring the section back once closed. */
+  downloadsHost?: DownloadsHost;
 }
 
 export function ProjectFilesView({
@@ -394,6 +401,7 @@ export function ProjectFilesView({
   view: hostView,
   onViewChange,
   assistant,
+  downloadsHost,
 }: ProjectFilesViewProps) {
   const t = useT();
   // Sessions/Jobs/workspaces ask their questions in the panel's own chrome, the
@@ -466,7 +474,14 @@ export function ProjectFilesView({
   const [showSettings, setShowSettings] = useState(false);
   // Toggles the Downloads section stacked below the file tree (fast-copy of
   // recent downloads into the project). Toolbar ⬇⬇ button; files view only.
-  const [showDownloads, setShowDownloads] = useState(false);
+  // Remembered per host kind, so a project switch or relaunch keeps it.
+  const [showDownloads, setShowDownloadsState] = useState(() =>
+    downloadsHost ? readDownloadsShown(downloadsHost) : false,
+  );
+  const setShowDownloads = (shown: boolean) => {
+    setShowDownloadsState(shown);
+    if (downloadsHost) writeDownloadsShown(downloadsHost, shown);
+  };
   // The in-tree search box's fold, hoisted out of FileTree so its 🔍 can live in
   // the toolbar row beside Files/Git/Apps: closed (the default) the tree spends
   // no row at all on search chrome, which in the side panel's width is the
@@ -1886,7 +1901,7 @@ export function ProjectFilesView({
             className={`toolbar-btn toolbar-btn--sm${showDownloads ? " active" : ""}`}
             aria-pressed={showDownloads}
             onClick={() => {
-              setShowDownloads((v) => !v);
+              setShowDownloads(!showDownloads);
               // The section lives in the files view; jump there when revealing it.
               if (!showDownloads) setView("files");
             }}

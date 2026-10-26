@@ -222,6 +222,7 @@ export const UNTESTED = {
   "projectFilesView.5": { area: "files", what: "ProjectFilesView · {s.name}" },
   "projectFilesView.6": { area: "files", what: "ProjectFilesView · Side panel, Jobs view" },
   "projectFilesView.7": { area: "files", what: "ProjectFilesView · Side panel, Windows view" },
+  "downloads.remembered": { area: "files", what: "Recent Downloads section under the file tree · shown by default in the side panel and in Files (Project) tabs; hiding it (toolbar inbox button or ×) is remembered for that kind of viewer across project switches, new tabs and a restart" },
   "projectFilesView.8": { area: "files", what: "ProjectFilesView · Sessions view, Kill all / Kill closed per machine" },
   "projectFilesView.openInIde": { area: "files", what: "ProjectFilesView · Side panel header, Open in IDE button" },
   "devTodo.title": { area: "files", what: "ProjectFilesView · Todo view (dev build): todo/*.md groups, task boxes write back to the file" },
