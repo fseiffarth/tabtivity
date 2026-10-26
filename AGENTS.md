@@ -190,6 +190,13 @@ Security / data loss:
 - `services::mobile_control`: raw project ids, paths, commands, tmux targets
   never cross the browser API.
 - Terminal `kill`/`kill_all` reap the whole child subtree.
+- A project's `.gitignore`/`project.json`/`info/exclude` is opened only
+  through the guarded helpers, never raw `fs::*`. A store never pairs
+  `read_json(..).unwrap_or_default()` with a write of the same file: use
+  `patch_json` or return the read error.
+- A sync `tauri::command` never does `remove_dir_all`/`.output()`/
+  `ollama_http`: make it `async` over a `*_blocking` body (source scans in
+  `commands/git/tests.rs` and `commands/projects/tests.rs`).
 
 Remote & sync:
 - Remoteness is explicit (`remote_target_for{,_dir}` and host-aware variants);
@@ -232,4 +239,8 @@ Frontend:
 - Experimental features use `useExperimental`.
 - Menus/dialogs use the one shared scheme; portaled dialogs set an explicit
   `color` (`body` has none → black text).
+- Components subscribe through `subscribeTauri`/`useTauriListener`, never a
+  bare `listen()`; path leaf/parent via `lib/paths` `basename`/`dirname`,
+  never `.split("/").pop()`/`lastIndexOf("/")`; ask through `useDialogs()`,
+  not plugin-dialog `confirm`/`ask`/`message` (ESLint, `eslint.config.js`).
 - To show the user a file on their phone: `tabtivity-send <file>`.
