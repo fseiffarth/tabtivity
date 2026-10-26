@@ -7,7 +7,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
-import { joinRemotePath, sanitizeName } from "./scaffold";
+import { joinRemotePath, sanitizeName } from "../../lib/projects/scaffold";
 import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
 import { targetLabel } from "../../lib/remote/machineLabel";

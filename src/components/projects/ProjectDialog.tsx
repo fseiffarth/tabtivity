@@ -23,7 +23,7 @@ import {
   repoNameFromCloneUrl,
   sanitizeName,
   type ScaffoldPreviewItem,
-} from "./scaffold";
+} from "../../lib/projects/scaffold";
 import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
 import { useProjectsStore } from "../../stores/projects";

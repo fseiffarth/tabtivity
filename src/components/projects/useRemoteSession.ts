@@ -6,9 +6,9 @@ import {
   type StoredVpnConfig,
   type VpnAuthNeeds,
 } from "../../types";
-import { joinRemotePath, parseSshAddress, type ParsedSshAddress } from "./scaffold";
+import { joinRemotePath, parseSshAddress, type ParsedSshAddress } from "../../lib/projects/scaffold";
 import { useRemoteBrowse } from "./useRemoteBrowse";
-import { rememberArg, useSavedCredential } from "./useSavedCredential";
+import { rememberArg, useSavedCredential } from "../../lib/projects/useSavedCredential";
 import { useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import {

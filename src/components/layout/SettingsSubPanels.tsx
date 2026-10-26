@@ -32,7 +32,7 @@ import {
   type CodexHookState,
 } from "../../lib/agents/codexHooks";
 import type { CustomAgent, GlobalAppEntry } from "../../types";
-import { parseSshAddress } from "../projects/scaffold";
+import { parseSshAddress } from "../../lib/projects/scaffold";
 import { useProjectsStore } from "../../stores/projects";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useT, type TranslationKey } from "../../lib/i18n";

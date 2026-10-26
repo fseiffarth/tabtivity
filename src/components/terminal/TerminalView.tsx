@@ -67,7 +67,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
-import { buildScaffoldFillPrompt } from "../projects/scaffold";
+import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { type ConfirmSpec, useDialogs } from "../common/PromptDialogs";

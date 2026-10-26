@@ -35,7 +35,7 @@ import type {
 } from "../../types";
 import { THEMES } from "../../types";
 import type { LinkOpenTarget } from "../../types/browser";
-import { summarizeScaffoldRepair, type ProjectScaffoldRepair } from "../projects/scaffold";
+import { summarizeScaffoldRepair, type ProjectScaffoldRepair } from "../../lib/projects/scaffold";
 import { providerName } from "../projects/projectTypeTags";
 import { GitTokenScopes, tokenPageUrl } from "../common/GitTokenScopes";
 import { OPEN_STATS_EVENT } from "../stats/StatsRecapHost";

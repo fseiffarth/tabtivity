@@ -1,4 +1,4 @@
-import { joinRemotePath, parseSshAddress } from "./scaffold";
+import { joinRemotePath, parseSshAddress } from "../../lib/projects/scaffold";
 import { RemoteFolderBrowser } from "./RemoteFolderBrowser";
 import { TerminalSignInToggle } from "./TerminalSignInToggle";
 import { SavePasswordRow } from "./SavePasswordRow";

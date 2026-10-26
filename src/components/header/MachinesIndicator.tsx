@@ -14,7 +14,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { machineKey, useRemoteUsageStore, type RemoteUsageReport } from "../../stores/remote/remoteUsage";
 import { useHostBusyStore, busyReading, busyLabel } from "../../stores/remote/hostBusy";
-import { parseSshAddress } from "../projects/scaffold";
+import { parseSshAddress } from "../../lib/projects/scaffold";
 import { TerminalSignInToggle } from "../projects/TerminalSignInToggle";
 import { openConnectionInRoot } from "../../lib/remote/remoteConnect";
 import { loginDedupeKey, sshLogin } from "../../lib/remote/loginTarget";

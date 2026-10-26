@@ -1,7 +1,7 @@
 import type { DetectedSpecSource, ProjectEntry } from "../../types";
 import { resolveProjectDirectory } from "../../types";
-import { translate, useI18nStore, type TranslationKey } from "../../lib/i18n";
-import { BRAND } from "../../lib/brand";
+import { translate, useI18nStore, type TranslationKey } from "../i18n";
+import { BRAND } from "../brand";
 
 export const TERMINAL_OPTIONS = ["claude", "codex", "gemini", "vibe"];
 

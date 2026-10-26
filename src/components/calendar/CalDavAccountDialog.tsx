@@ -8,7 +8,7 @@ import {
   rememberArg,
   useSavedCredentialSource,
   type SavedPasswordState,
-} from "../projects/useSavedCredential";
+} from "../../lib/projects/useSavedCredential";
 import {
   DEFAULT_CALDAV_SYNC_MIN,
   caldavDiscover,

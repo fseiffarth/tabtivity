@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { KeyringState } from "../../lib/keyring";
+import type { KeyringState } from "../keyring";
 
 /**
  * **"Is a password saved for this host?" — asked so the answer can be _"we don't

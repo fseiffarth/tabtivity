@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import { formatRemoteTarget, resolveLocalMirror } from "../../types";
-import { projectDirectory } from "./scaffold";
+import { projectDirectory } from "../../lib/projects/scaffold";
 import { useT } from "../../lib/i18n";
 import { HexagonIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";

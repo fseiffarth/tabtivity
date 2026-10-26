@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { SettingRow, SettingsHeader, SettingsSection } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
-import { summarizeScaffoldRepair } from "./scaffold";
+import { summarizeScaffoldRepair } from "../../lib/projects/scaffold";
 import {
   migrationApplyIsEmpty,
   migrationStepCopy,
