@@ -2044,6 +2044,7 @@ export const enSource = {
   "updates.legacyHit": "{id}: {count} time(s), last on {last}",
   "updates.legacyUnfinished": "Not moved yet:",
   "updates.versionAvailable": "Version {version} is available",
+  "updates.otherBuild": "This build ({build}) has the number of the latest release but was compiled from different code than the release ({release}). Installing the release replaces it.",
   "updates.noAssetForPlatform": "This release published no download for your platform. Open the release page to see what it has.",
   "updates.downloading": "Downloading…",
   "updates.downloadingPercent": "Downloading… {percent}%",

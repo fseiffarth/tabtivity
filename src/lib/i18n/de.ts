@@ -2094,6 +2094,7 @@ export const dict: Dict = {
   "updates.legacyHit": "{id}: {count}-mal, zuletzt am {last}",
   "updates.legacyUnfinished": "Noch nicht übernommen:",
   "updates.versionAvailable": "Version {version} ist verfügbar",
+  "updates.otherBuild": "Dieser Build ({build}) hat die Nummer der neuesten Version, wurde aber aus anderem Code als die Version ({release}) gebaut. Die Installation der Version ersetzt ihn.",
   "updates.noAssetForPlatform": "Dieses Release enthält keinen Download für deine Plattform. Öffne die Release-Seite, um zu sehen, was es gibt.",
   "updates.downloading": "Wird heruntergeladen…",
   "updates.downloadingPercent": "Wird heruntergeladen… {percent}%",
