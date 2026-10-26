@@ -1466,7 +1466,7 @@ fn assistant_host(launch: headless::HeadlessLaunch) -> Fixture {
     host
 }
 
-/// Start one Claude chat through the phone's routes. Returns the scope's
+/// Start one Codex chat through the phone's routes. Returns the scope's
 /// opaque id and the chat's opaque tab id.
 async fn start_assistant_chat(host: &Fixture, cookie: &str, key: &str) -> (String, String) {
     let (_, _, body) = host.send(get_as("/api/v1/projects", cookie)).await;
@@ -1474,7 +1474,7 @@ async fn start_assistant_chat(host: &Fixture, cookie: &str, key: &str) -> (Strin
     let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let launches = json(&body)["assistant"]["launches"].clone();
-    let claude = launches.as_array().expect("launches").iter().find(|l| l["label"] == "Claude" && l["local"] == false).expect("a cloud Claude launch")["id"]
+    let claude = launches.as_array().expect("launches").iter().find(|l| l["label"] == "Codex").expect("a Codex launch")["id"]
         .as_str()
         .expect("launch id")
         .to_string();
@@ -1519,7 +1519,7 @@ async fn an_assistant_chat_is_started_by_the_owner_from_an_opaque_launch() {
     assert_eq!(options["local"], Value::Null);
     assert_eq!(options["assistant"]["ollama_reachable"], true);
     let launches = options["assistant"]["launches"].as_array().expect("launches");
-    assert_eq!(launches.len(), 5, "the not-installed Codex is not offered: {body}");
+    assert_eq!(launches.len(), 5, "cloud Claude is not offered: {body}");
     for needle in ["qwen3", "opencode_local", "claude_local", "/", crate::brand::TMUX_PREFIX] {
         // Model names are shown (they are Ollama's own labels); ids carry nothing.
         if needle != "qwen3" {
@@ -1535,7 +1535,7 @@ async fn an_assistant_chat_is_started_by_the_owner_from_an_opaque_launch() {
             .unwrap()
             .to_string()
     };
-    let claude = by("Claude", None);
+    let claude = by("Codex", None);
     let opencode = by("OpenCode", Some("qwen3:8b"));
 
     // A create must name a launch, and only that.
@@ -1572,7 +1572,7 @@ async fn an_assistant_chat_is_started_by_the_owner_from_an_opaque_launch() {
     let answer = json(&body);
     assert_eq!(answer["desktop_available"], false);
     assert_eq!(answer["tab"]["kind"], "agent");
-    assert_eq!(answer["tab"]["label"], "Claude");
+    assert_eq!(answer["tab"]["label"], "Codex");
     let tab_id = answer["tab"]["id"].as_str().expect("tab id").to_string();
 
     let session_path = host.state.config.state_dir.join("sessions").join("assistant").join("terminals.json");
@@ -1582,8 +1582,8 @@ async fn an_assistant_chat_is_started_by_the_owner_from_an_opaque_launch() {
     let minted = &tabs[0];
     let uid = minted["sessionId"].as_str().expect("chat uuid").to_string();
     assert!(crate::services::agent_session::is_uuid_shaped(&uid));
-    assert_eq!(minted["assistant"], json!({ "cli": "claude" }));
-    assert_eq!(minted["cmd"], "claude");
+    assert_eq!(minted["assistant"], json!({ "cli": "codex" }));
+    assert_eq!(minted["cmd"], "codex");
     assert_eq!(minted["kind"], "agent");
     for absent in ["args", "env", "scheduleTargetId", "localLaunch", "sandbox"] {
         assert!(minted.get(absent).is_none(), "{absent} in {minted}");
@@ -1603,9 +1603,9 @@ async fn an_assistant_chat_is_started_by_the_owner_from_an_opaque_launch() {
     let spawned = recorded.lock().unwrap().clone();
     assert_eq!(spawned.len(), 1);
     let opts = &spawned[0];
-    assert_eq!(opts.assistant, Some(crate::services::assistant::AssistantLaunch { cli: crate::services::assistant::AssistantCli::Claude, model: None }));
+    assert_eq!(opts.assistant, Some(crate::services::assistant::AssistantLaunch { cli: crate::services::assistant::AssistantCli::Codex, model: None }));
     assert_eq!(opts.project_id.as_deref(), Some("assistant"));
-    assert_eq!(opts.cmd, "claude");
+    assert_eq!(opts.cmd, "codex");
     assert!(opts.args.is_empty());
     assert_eq!(opts.env, HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid.clone())]));
     assert!(opts.agent && !opts.local_model && opts.schedule_target_id.is_none() && opts.login.is_none() && !opts.host_session);

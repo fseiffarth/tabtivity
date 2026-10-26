@@ -2162,7 +2162,13 @@ mod tests {
     const CHAT: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
 
     fn chat_record(state: &Path, launch: &crate::services::assistant::AssistantLaunch) -> TabEntry {
-        let mut record = crate::services::assistant::new_chat_record(state, launch, CHAT, Some("h")).expect("chat record");
+        use crate::services::assistant::{is_listed, AssistantCli, AssistantLaunch};
+        // A chat made before its CLI was unlisted (cloud Claude) still resumes:
+        // mint a listed one and give it the older launch.
+        let listed = if is_listed(launch.cli) { launch.clone() } else { AssistantLaunch { cli: AssistantCli::Codex, model: None } };
+        let mut record = crate::services::assistant::new_chat_record(state, &listed, CHAT, Some("h")).expect("chat record");
+        record.cmd = launch.cli.bin().to_string();
+        record.extra.insert("assistant".into(), serde_json::to_value(launch).expect("launch"));
         record.extra.insert("tmuxSession".into(), serde_json::json!(format!("{}assistant--agent-1", crate::brand::TMUX_PREFIX)));
         record
     }
