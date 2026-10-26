@@ -555,11 +555,11 @@ pub fn remote_command(
         // argument to `$SHELL -lc`.
         let exec_cli = match host_side_resume(local_cmd, local_args) {
             // A Claude tab decides on the host whether this is a resume.
-            Some((id, resume_args)) => format!(
+            Some((id, resume_args, fresh_args)) => format!(
                 "if ls \"$HOME\"/.claude/projects/*/{} >/dev/null 2>&1; then {}; else {}; fi",
                 shell_quote(&format!("{id}.jsonl")),
                 exec_line(local_cmd, &resume_args),
-                exec_line(local_cmd, local_args),
+                exec_line(local_cmd, &fresh_args),
             ),
             None => exec_line(local_cmd, local_args),
         };
@@ -617,9 +617,14 @@ fn exec_line(cmd: &str, args: &[String]) -> String {
 /// uuid-shaped id, which is what lands in a shell glob. No hook runs on the
 /// host, so a `/clear` there is not followed; the launch id is what comes back.
 ///
-/// Returns the id and the args rewritten to `--resume`, or `None` when this is
-/// not a Claude launch carrying a session id.
-fn host_side_resume(local_cmd: &str, local_args: &[String]) -> Option<(String, Vec<String>)> {
+/// The other way round, a tab moved from this machine onto the host arrives as
+/// `--resume <id>`, because the local probe found the log of its local run.
+/// The host has no such log, and `claude --resume` of an unknown id exits at
+/// once — so the no-log branch always starts fresh under `--session-id`.
+///
+/// Returns the id and the args rewritten to `--resume` and to `--session-id`,
+/// or `None` when this is not a Claude launch carrying a session id.
+fn host_side_resume(local_cmd: &str, local_args: &[String]) -> Option<(String, Vec<String>, Vec<String>)> {
     if local_cmd != "claude" {
         return None;
     }
@@ -632,7 +637,9 @@ fn host_side_resume(local_cmd: &str, local_args: &[String]) -> Option<(String, V
     }
     let mut resume_args = local_args.to_vec();
     resume_args[i] = "--resume".to_string();
-    Some((id, resume_args))
+    let mut fresh_args = local_args.to_vec();
+    fresh_args[i] = "--session-id".to_string();
+    Some((id, resume_args, fresh_args))
 }
 
 /// The tmux **kill-session** one-shot script fired on an *explicit* tab close of

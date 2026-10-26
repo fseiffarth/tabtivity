@@ -155,8 +155,16 @@ fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
 /// `install_session_start_hook`); here we read it and, when Codex still has that
 /// conversation, launch `codex resume <live-id>`. With no record yet (first
 /// launch, or the hook not trusted), we leave the args untouched → a fresh Codex
-/// session.
-fn resolve_codex_session(opts: PtyOptions) -> PtyOptions {
+/// session. A remote tab is left alone, as Vibe's is: its rollouts are on the
+/// far host, and a local run's id (a tab moved onto the host) makes the host's
+/// `codex resume` exit at once.
+fn resolve_codex_session(mut opts: PtyOptions) -> PtyOptions {
+    let remote = !opts.local_only && opts.project_id.as_deref()
+        .is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
+    if remote {
+        opts.env.insert(TAB_AGENT_ENV.to_string(), "codex".to_string());
+        return opts;
+    }
     let project_id = opts.project_id.clone();
     // The scope's agent home, where the tab's Codex writes — not the user's.
     let sessions = codex_sessions_root(project_id.as_deref());

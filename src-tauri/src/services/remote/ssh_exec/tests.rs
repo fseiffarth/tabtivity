@@ -363,6 +363,13 @@ fn remote_command_lets_the_host_decide_a_claude_resume() {
     );
     assert!(cmd.contains(&expected), "cmd: {cmd}\nexpected: {expected}");
 
+    // A tab moved here from this machine arrives as `--resume <id>` (the local
+    // probe found its local log); with no log on the host it must start fresh,
+    // since `claude --resume` of an unknown id exits at once.
+    let args = vec!["--resume".to_string(), id.to_string()];
+    let cmd = remote_command("claude", &args, &HashMap::new(), "/srv/p", None);
+    assert!(cmd.contains(&expected), "cmd: {cmd}\nexpected: {expected}");
+
     // Not uuid-shaped → no glob is built from it; plain exec as before.
     let args = vec!["--session-id".to_string(), "not-a-uuid".to_string()];
     let cmd = remote_command("claude", &args, &HashMap::new(), "/srv/p", None);
