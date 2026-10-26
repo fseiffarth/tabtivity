@@ -698,6 +698,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[detail.project.host ?? "local"]) : undefined,
     ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
+    {drawerOffered && <HintMessage hint="projectFiles" />}
     {projectInbox.view}
     {/* An inactive project is activated before anything else here is worth
         doing, so the button leads the list rather than trailing it. */}
@@ -753,7 +754,6 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       </span>
       <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); if (showHoldHint) dropHint("hold"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
     </p>}
-    {drawerOffered && <HintMessage hint="projectFiles" />}
     <div className="project-foot">
       {/* Agent tabs closed on either surface, newest first, folded under one
           row: a tap reopens one on the desktop, resuming its conversation,

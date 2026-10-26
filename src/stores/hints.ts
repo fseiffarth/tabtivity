@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useSettingsStore } from "./settings";
-import type { HintId } from "../lib/shortcuts/hints";
+import { HINTS, type HintId } from "../lib/shortcuts/hints";
 
 /**
  * Live state for the contextual hint engine. The catalog (`HINTS`) and selection
@@ -15,6 +15,11 @@ import type { HintId } from "../lib/shortcuts/hints";
 interface HintsStore {
   /** The hint currently on screen, or null when nothing is shown. */
   active: HintId | null;
+  /** Feature-tier hints surfaced since the app started, and when the last hint
+   *  of any kind closed (ms epoch, 0 = none yet). Session-only on purpose: the
+   *  cap and gap in `HintHost` pace one sitting, not the user's whole history. */
+  featureShown: number;
+  lastClosedAt: number;
   show: (id: HintId) => void;
   /** Dismiss the active hint (× / Esc): mark it seen and clear it. */
   dismiss: (id: HintId) => void;
@@ -36,17 +41,23 @@ function persistSeen(id: HintId) {
 
 export const useHintsStore = create<HintsStore>((set, get) => ({
   active: null,
+  featureShown: 0,
+  lastClosedAt: 0,
 
-  show: (id) => set({ active: id }),
+  show: (id) =>
+    set((s) => ({
+      active: id,
+      featureShown: HINTS.find((h) => h.id === id)?.tier === "feature" ? s.featureShown + 1 : s.featureShown,
+    })),
 
   dismiss: (id) => {
     persistSeen(id);
-    if (get().active === id) set({ active: null });
+    if (get().active === id) set({ active: null, lastClosedAt: Date.now() });
   },
 
   markSeen: (id) => {
     persistSeen(id);
-    if (get().active === id) set({ active: null });
+    if (get().active === id) set({ active: null, lastClosedAt: Date.now() });
   },
 
   disableAll: () => {

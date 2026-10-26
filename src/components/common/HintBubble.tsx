@@ -1,5 +1,7 @@
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
+import { BUBBLE_W, placeBubble } from "../../lib/shortcuts/hintAnchor";
 
 /**
  * A small floating coachmark anchored above/below a UI element, or a centered
@@ -15,6 +17,7 @@ export function HintBubble({
   title,
   body,
   action,
+  tag,
   onDismiss,
   onDisableAll,
 }: {
@@ -25,20 +28,21 @@ export function HintBubble({
   /** Optional button that carries out what the hint describes. Running it also
    *  dismisses the hint — the user has acted on it. */
   action?: { label: string; run: () => void };
+  /** Rendered after the title (the untested pill of not-yet-verified hints). */
+  tag?: ReactNode;
   onDismiss: () => void;
   onDisableAll: () => void;
 }) {
   const t = useT();
-  const BUBBLE_W = 280;
   let style: React.CSSProperties;
   let banner = false;
   if (rect) {
-    // Clamp horizontally so an edge-anchored hint never overflows off-screen.
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - BUBBLE_W - 8));
-    style =
-      placement === "top"
-        ? { left, top: rect.top - 8, transform: "translateY(-100%)" }
-        : { left, top: rect.bottom + 8 };
+    // Flips to the roomier side and clamps horizontally, so an edge-anchored
+    // hint never overflows off-screen.
+    const spot = placeBubble(rect, placement, window.innerWidth, window.innerHeight);
+    style = spot.above
+      ? { left: spot.left, top: spot.top, transform: "translateY(-100%)" }
+      : { left: spot.left, top: spot.top };
   } else {
     banner = true;
     style = {};
@@ -59,7 +63,7 @@ export function HintBubble({
       >
         ×
       </button>
-      <div className="hint-bubble-title">{title}</div>
+      <div className="hint-bubble-title">{title}{tag}</div>
       <div className="hint-bubble-body">{body}</div>
       <div className="hint-bubble-actions">
         <button type="button" className="hint-bubble-link" onClick={onDisableAll}>

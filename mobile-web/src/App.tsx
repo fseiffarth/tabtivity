@@ -24,7 +24,6 @@ import { Home } from "./screens/Home";
 import { Project } from "./screens/Project";
 import { Terminal } from "./screens/Terminal";
 import { TabbyOpen } from "./screens/TabbyOpen";
-import { HintMessage } from "./components/HintMessage";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
@@ -658,9 +657,10 @@ export function App() {
     subagent={terminal.subagent}
     signInTab={terminal.signIn}
     markupBack={terminal.markupBack}
+    launchHint={terminal.launchHint}
     openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
     back={() => setTerminal(null)}
-  />{terminal.launchHint && <HintMessage key={terminal.tab.id} hint="agentHold" floating />}</BackNest>;
+  /></BackNest>;
   if (tabby) return <BackNest><TabbyOpen
     key={tabby}
     id={tabby}

@@ -7,11 +7,12 @@ const HINTS = {
   agentHold: { flag: "hintAgentHold", text: "mobile.hints.agentHold" },
   agentDefault: { flag: "hintAgentDefault", text: "mobile.hints.agentDefault" },
   projectFiles: { flag: "hintProjectFiles", text: "mobile.hints.projectFiles" },
+  chatTools: { flag: "hintChatTools", text: "mobile.hints.chatTools" },
 } as const satisfies Record<string, { flag: MobileFlag; text: TranslationKey }>;
 
 /** Closing lasts for this visit; only the checkbox remembers it on this phone.
  * No timer: the reader gets time to read and dismiss the message. */
-export function HintMessage({ hint, floating = false }: { hint: keyof typeof HINTS; floating?: boolean }) {
+export function HintMessage({ hint, floating = false, onClose }: { hint: keyof typeof HINTS; floating?: boolean; onClose?: () => void }) {
   const t = useT();
   const { flag, text } = HINTS[hint];
   const [hidden, setHidden] = useState(() => readFlag(flag));
@@ -20,7 +21,7 @@ export function HintMessage({ hint, floating = false }: { hint: keyof typeof HIN
   return <aside className={`hint-message${floating ? " hint-message-floating" : ""}`} aria-label={t("mobile.hints.title")}>
     <div className="hint-message-head">
       <strong>{t("mobile.hints.title")}{isUntested("mobile.hints") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
-      <button onClick={() => setHidden(true)} aria-label={t("mobile.hints.close")}>×</button>
+      <button onClick={() => { setHidden(true); onClose?.(); }} aria-label={t("mobile.hints.close")}>×</button>
     </div>
     <p role={floating ? "status" : undefined}>{t(text)}</p>
     <label><input type="checkbox" checked={neverAgain} onChange={(event) => {

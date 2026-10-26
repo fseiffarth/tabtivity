@@ -1,6 +1,7 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
+import { HintMessage } from "../components/HintMessage";
 import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
@@ -579,7 +580,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
  * model picker already up — once, as soon as the session has drawn.
  * `subagent`: one was picked off the tab card's subagent list, so the session
  * opens in Focus on that subagent's own conversation. */
-export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, markupBack }: {
+export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, markupBack, launchHint = false }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
@@ -596,6 +597,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** Opened from a markup view's Open tab: that view, marking, is kept here
    * tucked away under the bar over the composer, which brings it back. */
   markupBack?: MarkupBack;
+  /** Opened by a plain tap on ＋: the hint that holding it picks another
+   * agent. In Chat it opens the conversation, above the first prompt. */
+  launchHint?: boolean;
 }) {
   // From the tab list, or after the PWA reloaded on the way back from the
   // sign-in page, only the row knows — and without it the sheet lost its
@@ -697,6 +701,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   // A subagent picked off the card is read in Focus, whatever the reader's
   // choice — without making it their choice.
   const subagentTab = useRef(subagent && tab.kind === "agent" ? tab.id : null);
+  const [launchHintShown, setLaunchHintShown] = useState(launchHint);
   const [view, setView] = useState<TerminalViewChoice>(() => subagentTab.current === tab.id ? "focus" : initialView(tab));
   const chooseView = (next: TerminalViewChoice) => {
     setView(next);
@@ -2058,13 +2063,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     current: false,
   }));
   const subagentUntested = isUntested("mobile.focus.subagents") ? t("mobile.focus.untested") : "";
+  const shellsUntested = isUntested("mobile.focus.shells") ? t("mobile.focus.untested") : "";
   const planUntested = isUntested("mobile.focus.planBubble") ? t("mobile.focus.untested") : "";
   /** Where the open subagent stands among its siblings, and the conversation
    * the bar goes back up to. */
   const subagentPosition = openStep ? siblingPosition(openStep) : { index: -1, count: 0 };
   /** The open subagent at work: it has not reported back, and the session is
    * at work or it runs in the background. Its row names the subagent's own
-  const shellsUntested = isUntested("mobile.focus.shells") ? t("mobile.focus.untested") : "";
    * model, not the session's. */
   const subagentWorking = openSubagentRunning(subagentPath, sessionEntries, sessionBusy);
   const subagentModel = workingModelName(subTranscript?.model);
@@ -2128,13 +2133,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               {subagentRowUntested && <em>{subagentFacts.length > 0 && " · "}{t("mobile.focus.untested")}</em>}
             </small>}
           </div>}
+          <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
         </div>}
   </>;
   return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} />
         : <div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>}
-          <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}
@@ -2226,6 +2231,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {/* The stored session does not depend on the screen, so a full-screen
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionFocus && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span><button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
+      {launchHintShown && (view !== "focus" || (altScreen && !sessionFocus)) && <HintMessage hint="agentHold" floating onClose={() => setLaunchHintShown(false)} />}
       {view === "focus" && (!altScreen || sessionFocus) && <>
         <section ref={readableHost} className="readable-output" aria-label={t("mobile.focus.output")} aria-live="polite"
           onScroll={(event) => {
@@ -2265,6 +2271,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             </nav>}
             {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} files={chatFiles} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openSentFile} />}
           </div>}
+          {launchHintShown && <HintMessage hint="agentHold" onClose={() => setLaunchHintShown(false)} />}
+          {!launchHintShown && tab.kind === "agent" && !bare && <HintMessage hint="chatTools" />}
           {sessionFocus && openStep
             ? subagentView
             : sessionFocus
@@ -2321,6 +2329,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       {isUntested("mobile.focus.workingFacts") && <em> · {t("mobile.focus.untested")}</em>}
                     </small>}
                   </div>}
+                  <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
                   {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox} />}
@@ -2330,7 +2339,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                     {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                     <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                     {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
-                  <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   </div>}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
