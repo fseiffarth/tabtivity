@@ -4181,7 +4181,6 @@ export const dict: Dict = {
   "boxChip.title": "Box di progetti — scegline uno per mostrare solo i suoi progetti",
   "boxChip.allProjects": "Tutti i progetti",
   "boxChip.rootRow": "Progetto radice",
-  "boxChip.rootLabel": "Root",
   "boxChip.pickerTitle": "Tutti i progetti — passa sopra per il progetto radice e i box di progetti",
   "boxChip.logoTitle": "Progetto radice — clic per aprirne la console sopra questo progetto; trascina per spostare la finestra",
   "boxScopePill.title": "{name} · {members} — clicca per aprire questo box; trascina qui un progetto per aggiungerlo",

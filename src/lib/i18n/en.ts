@@ -4318,7 +4318,6 @@ export const enSource = {
   "boxChip.title": "Project boxes — pick one to show just its projects",
   "boxChip.allProjects": "All projects",
   "boxChip.rootRow": "Root project",
-  "boxChip.rootLabel": "Root",
   "boxChip.pickerTitle": "All projects — hover for the root project and the project boxes",
   "boxChip.logoTitle": "Root project — click to open its console over this project; drag to move the window",
   "boxScopePill.title": "{name} · {members} — click to open this box; drop a project on it to add it",

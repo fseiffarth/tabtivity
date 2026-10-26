@@ -290,11 +290,6 @@ export function BoxScopeChip({
     return t("boxChip.logoTitle");
   };
 
-  const chipLabel = () => {
-    if (naming === "root") return t("boxChip.rootLabel");
-    return null;
-  };
-
   const station = naming === "root" ? rootStation : undefined;
 
   const memberCountTitle = (b: ProjectBox) =>
@@ -329,12 +324,9 @@ export function BoxScopeChip({
             onSelectRoot();
           }}
         >
-          {naming === "root" ? (
-            <StarIcon className="box-chip-star" />
-          ) : (
-            <LogoIcon className="box-chip-icon" />
-          )}
-          {chipLabel() && <span className="box-chip-label">{chipLabel()}</span>}
+          {/* The logo alone, root scope included: root is reached by clicking
+              it (or Ctrl+Shift+R), not named here. */}
+          <LogoIcon className="box-chip-icon" />
         </button>
         {/* The list's trigger: hover (or keyboard focus) opens it. */}
         <button

@@ -411,26 +411,13 @@
 }
 
 /* The Tabtivity logo — the bar's one mark, at the full height the drag grip's
-   copy had before it was dropped — standing for "all projects / the boxes"
-   while the chip names no scope. */
+   copy had before it was dropped. It stays the mark when the chip names the
+   root scope too (the label beside it says "Root"). */
 .box-chip-icon {
   width: 25px;
   height: 25px;
   flex-shrink: 0;
   color: var(--top-frame-text);
-}
-
-/* The mark the chip wears instead of the logo when it names the root scope: the
-   app's own spark, the glyph its pinned pill carried before it folded in here,
-   at the logo's 25px (the two swap in one slot) and without the pill's
-   one-per-launch intro flourish (the chip re-mounts its star on every trip
-   back to root, and a logo that replays its entrance on each visit is a tic,
-   not a flourish). */
-.box-chip-star {
-  width: 25px;
-  height: 25px;
-  flex-shrink: 0;
-  color: inherit;
 }
 
 .box-chip-menu-star {
