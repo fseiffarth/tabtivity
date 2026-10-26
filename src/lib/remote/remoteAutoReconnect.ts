@@ -60,11 +60,10 @@ export function initRemoteAutoReconnect(): void {
 /**
  * The armed-machine sweep, behind the **feature switch**.
  *
- * `machines_enabled` is off by default and hides the header indicator — which was
+ * `machines_enabled` (on by default) hides the header indicator when off — which is
  * the whole surface for seeing a machine connect, disconnecting one, or disarming
- * its toggle. Sweeping anyway meant a user who turned the feature off (or never
- * turned it on, and imported a machine list once) still had every armed host
- * dialled at launch and again on every tunnel-up, with nowhere to watch it happen
+ * its toggle. Sweeping anyway meant a user who turned the feature off still had
+ * every armed host dialled at launch and again on every tunnel-up, with nowhere to watch it happen
  * and nothing to stop it with. A feature that is off connects nothing.
  *
  * Gated on settings being **loaded**, not merely present: an unloaded store reads
@@ -74,7 +73,9 @@ export function initRemoteAutoReconnect(): void {
  */
 async function machineSweep(): Promise<void> {
   await whenSettingsLoaded();
-  if (!useSettingsStore.getState().settings?.machines_enabled) return;
+  // On by default, but only once there are settings to say so.
+  const settings = useSettingsStore.getState().settings;
+  if (!settings || !(settings.machines_enabled ?? true)) return;
   const gm = useGlobalMachinesStore.getState();
   if (!gm.loaded) await gm.load();
   await useGlobalMachinesStore.getState().autoConnect();

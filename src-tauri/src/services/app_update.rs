@@ -124,6 +124,17 @@ pub struct UpdateCheck {
     pub published_at: Option<String>,
     pub html_url: String,
     pub update_available: bool,
+    /// The short commit this binary was compiled from (`build.rs`); `None`
+    /// outside a git checkout.
+    pub build_commit: Option<String>,
+    /// The commit the latest release was built from, read off its notes.
+    pub release_commit: Option<String>,
+    /// The running build carries the latest release's version number but was
+    /// compiled from different code (a local or dev package: the version is
+    /// only bumped when a push lands, so every build between two pushes shares
+    /// it). `update_available` is then true as well: installing the release
+    /// is the way to get the released code.
+    pub other_build: bool,
     /// The artifact for this platform, if the release published one.
     pub asset: Option<UpdateAsset>,
     pub install_kind: InstallKind,
@@ -148,6 +159,29 @@ pub struct Staged {
 /// The version this binary was built as.
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// The commit this binary was compiled from (see `build.rs`).
+pub fn build_commit() -> Option<&'static str> {
+    option_env!(crate::app_env!("BUILD_COMMIT"))
+}
+
+/// The commit a release says it was built from: the release workflow writes
+/// ``Built from commit `<sha>`.`` into the notes.
+pub fn release_commit(notes: &str) -> Option<String> {
+    let rest = notes.split("Built from commit `").nth(1)?;
+    let sha: String = rest
+        .chars()
+        .take_while(char::is_ascii_hexdigit)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    (sha.len() >= 7).then_some(sha)
+}
+
+/// Whether two commit ids (one short, one full, or both short) name one commit.
+fn same_commit(a: &str, b: &str) -> bool {
+    let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
+    !a.is_empty() && !b.is_empty() && (a.starts_with(&b) || b.starts_with(&a))
 }
 
 /// Compare two dotted version strings numerically.
@@ -452,6 +486,24 @@ pub fn is_repo_download_url(url: &str) -> bool {
 ///
 /// Split out from the request so the shape can be tested without the network.
 pub fn parse_release(body: &str, current: &str, kind: InstallKind) -> Result<UpdateCheck, String> {
+    parse_release_for(body, current, None, kind)
+}
+
+/// [`parse_release`] for a build that knows the commit it was compiled from.
+///
+/// Version numbers alone cannot tell two builds apart: `scripts/bump-version.sh`
+/// runs when a push lands, so every package built between two pushes carries
+/// the last release's number with different code in it, and a version-only
+/// check calls such a build "up to date" forever. When the numbers are equal
+/// and both commits are known and differ, the release is offered as an
+/// update (`other_build`). A build with no commit id, or a release whose notes
+/// name none, falls back to the version comparison alone.
+pub fn parse_release_for(
+    body: &str,
+    current: &str,
+    build_commit: Option<&str>,
+    kind: InstallKind,
+) -> Result<UpdateCheck, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("release JSON: {e}"))?;
     let tag = value
@@ -474,10 +526,29 @@ pub fn parse_release(body: &str, current: &str, kind: InstallKind) -> Result<Upd
                 .collect()
         })
         .unwrap_or_default();
-    let update_available = latest
+    let newer = latest
         .as_deref()
         .is_some_and(|latest| is_newer(latest, current));
+    let notes = value
+        .get("body")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let release_commit = notes.as_deref().and_then(release_commit);
+    // Equal numbers: neither side is newer. Same code, same commit.
+    let same_number = latest
+        .as_deref()
+        .is_some_and(|latest| !split_version(latest).0.is_empty() && !newer && !is_newer(current, latest));
+    let other_build = same_number
+        && matches!(
+            (build_commit, release_commit.as_deref()),
+            (Some(build), Some(release)) if !same_commit(build, release)
+        );
+    let update_available = newer || other_build;
     Ok(UpdateCheck {
+        build_commit: build_commit.map(str::to_string),
+        release_commit,
+        other_build,
         current: current.to_string(),
         latest,
         tag,
@@ -486,11 +557,7 @@ pub fn parse_release(body: &str, current: &str, kind: InstallKind) -> Result<Upd
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(str::to_string),
-        notes: value
-            .get("body")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string),
+        notes,
         published_at: value
             .get("published_at")
             .and_then(|v| v.as_str())
@@ -528,7 +595,14 @@ fn client() -> Result<reqwest::Client, String> {
 pub async fn check() -> Result<UpdateCheck, String> {
     let kind = install_kind_for_running_build();
     let body = fetch_latest(LATEST_API).await?;
-    parse_release(&body, current_version(), kind)
+    // A dev build is the checkout it came from, kept current by the commit
+    // hook: it is never "another build" of the release.
+    let commit = if crate::services::dev_build::SOURCE_ROOT.is_some() {
+        None
+    } else {
+        build_commit()
+    };
+    parse_release_for(&body, current_version(), commit, kind)
 }
 
 /// Fetch the latest-release JSON. Redirects are followed: after a repository
@@ -1125,6 +1199,60 @@ zWKrqHHacn3R/vU4reeTtE+MP1CZrcNAOYOmswDjH92r/YoK3ZxNK3NjBg==
         assert!(check.asset.is_none());
         // A newer local build (a dev checkout ahead of the tag) is not "behind".
         let ahead = parse_release(RELEASE_JSON, "0.2.0", InstallKind::Appimage).unwrap();
+        assert!(!ahead.update_available);
+    }
+
+    const RELEASE_WITH_COMMIT_JSON: &str = r#"{
+      "tag_name": "v0.1.53",
+      "name": "v0.1.53",
+      "body": "Built from commit `D2D6083CD4E4a6f8c7dd22810b1c90341935d319`.\n",
+      "assets": [
+        {"name": "eldrun_0.1.53_amd64.AppImage", "size": 120,
+         "browser_download_url": "https://github.com/fseiffarth/ProjectEldrun/releases/download/v0.1.53/eldrun_0.1.53_amd64.AppImage"}
+      ]
+    }"#;
+
+    #[test]
+    fn the_release_commit_is_read_off_the_notes() {
+        assert_eq!(
+            release_commit("Built from commit `D2d6083cd4e`.").as_deref(),
+            Some("d2d6083cd4e")
+        );
+        assert_eq!(release_commit("Built from commit `abc`."), None);
+        assert_eq!(release_commit("no commit here"), None);
+    }
+
+    #[test]
+    fn a_build_of_the_released_version_from_other_code_is_offered_the_release() {
+        let other = parse_release_for(
+            RELEASE_WITH_COMMIT_JSON,
+            "0.1.53",
+            Some("1234567"),
+            InstallKind::Appimage,
+        )
+        .unwrap();
+        assert!(other.other_build && other.update_available);
+        assert!(other.asset.is_some());
+        assert_eq!(other.release_commit.as_deref().map(|c| &c[..7]), Some("d2d6083"));
+    }
+
+    #[test]
+    fn the_released_build_itself_is_up_to_date() {
+        let same = parse_release_for(
+            RELEASE_WITH_COMMIT_JSON,
+            "0.1.53",
+            Some("d2d6083"),
+            InstallKind::Appimage,
+        )
+        .unwrap();
+        assert!(!same.other_build && !same.update_available);
+        // Without a commit on either side only the version decides.
+        let unknown = parse_release_for(RELEASE_WITH_COMMIT_JSON, "0.1.53", None, InstallKind::Appimage).unwrap();
+        assert!(!unknown.update_available);
+        let no_notes = parse_release_for(RELEASE_JSON, "0.1.53", Some("1234567"), InstallKind::Appimage).unwrap();
+        assert!(!no_notes.update_available);
+        // A newer local number is never "another build" of the older release.
+        let ahead = parse_release_for(RELEASE_WITH_COMMIT_JSON, "0.2.0", Some("1234567"), InstallKind::Appimage).unwrap();
         assert!(!ahead.update_available);
     }
 

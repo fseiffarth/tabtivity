@@ -57,7 +57,11 @@ import { EMPTY_GROUP_ID, useTabsStore, type GroupNode, type SplitNode } from "..
 import { NEW_TAB_SHORTCUT_EVENT, type NewTabShortcutDetail } from "../../lib/shortcuts/newTabChord";
 import { useDragStore } from "../../stores/drag/drag";
 import { useProjectsStore } from "../../stores/projects";
+import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
+import { en } from "../../lib/i18n";
 import * as coords from "../../lib/window/coords";
+
+const translate = (key: keyof typeof en) => en[key];
 
 // Panel geometry the stubs project onto. Body sits below a 28px tab bar.
 const PANEL = { left: 0, top: 0, width: 800, height: 600 };
@@ -176,13 +180,17 @@ describe("CenterPanel — pointer drag → edge split (integration)", () => {
   const BODY_Y = BAR_H + 200;
 
   it("opens the empty scope's own new-tab menu from its full-body placeholder", async () => {
-    useProjectsStore.setState({ projects: [], activeId: null, rootDir: "/r" });
+    useProjectsStore.setState({
+      projects: [{ id: "p", name: "P", directory: "/p", local_file: "" } as never],
+      activeId: "p",
+      rootDir: "/r",
+    });
     useTabsStore.setState({
-      scope: "root", tabsByScope: { root: [] }, layoutByScope: { root: null },
-      focusedGroupByScope: { root: null }, tabs: [], layout: null,
+      scope: "p", tabsByScope: { p: [] }, layoutByScope: { p: null },
+      focusedGroupByScope: { p: null }, tabs: [], layout: null,
       focusedGroupId: null, activeKey: null, detachedGroupsByScope: {},
     });
-    useTabsStore.getState().setScope("root");
+    useTabsStore.getState().setScope("p");
     const requests: NewTabShortcutDetail[] = [];
     const onRequest = (event: Event) => requests.push((event as CustomEvent<NewTabShortcutDetail>).detail);
     window.addEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
@@ -198,9 +206,34 @@ describe("CenterPanel — pointer drag → edge split (integration)", () => {
       expect(requests).toEqual([{ request: { kind: "menu" }, groupId: EMPTY_GROUP_ID, besideActive: undefined }]);
       expect(container.querySelector(".tab-new-btn")?.getAttribute("aria-expanded")).toBe("true");
       expect(document.querySelector(".tab-add-menu")).not.toBeNull();
-      expect(useTabsStore.getState().scope).toBe("root");
+      expect(useTabsStore.getState().scope).toBe("p");
     } finally {
       window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+    }
+  });
+
+  it("says no project is open in the root scope, and offers to add one", async () => {
+    useProjectsStore.setState({ projects: [], activeId: null, rootDir: "/r" });
+    useTabsStore.setState({
+      scope: "root", tabsByScope: { root: [] }, layoutByScope: { root: null },
+      focusedGroupByScope: { root: null }, tabs: [], layout: null,
+      focusedGroupId: null, activeKey: null, detachedGroupsByScope: {},
+    });
+    useTabsStore.getState().setScope("root");
+    const kinds: unknown[] = [];
+    const onDialog = (event: Event) => kinds.push((event as CustomEvent).detail);
+    window.addEventListener(OPEN_PROJECT_DIALOG_EVENT, onDialog);
+    try {
+      const { container } = render(<CenterPanel />);
+      await flush();
+      expect(container.querySelector(".center-placeholder-title")?.textContent).toBe(translate("centerPanel.noProjectOpen"));
+      expect(container.textContent).toContain(translate("centerPanel.firstProjectGuidance"));
+      await act(async () => {
+        fireEvent.click(container.querySelector(".center-placeholder-action")!);
+      });
+      expect(kinds).toEqual(["new"]);
+    } finally {
+      window.removeEventListener(OPEN_PROJECT_DIALOG_EVENT, onDialog);
     }
   });
 

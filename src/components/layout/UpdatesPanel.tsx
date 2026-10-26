@@ -166,7 +166,12 @@ export function UpdatesPanel({
 
       <SettingRow
         label={t("updates.installedVersion")}
-        control={<span className="app-update-version">{check?.current ?? "…"}</span>}
+        control={
+          <span className="app-update-version">
+            {check?.current ?? "…"}
+            {check?.buildCommit && ` · ${check.buildCommit}`}
+          </span>
+        }
       />
 
       {checking && <p className="settings-help">{t("updates.checking")}</p>}
@@ -189,6 +194,14 @@ export function UpdatesPanel({
               </span>
             )}
           </div>
+          {check.otherBuild && (
+            <div className="app-update-status">
+              {t("updates.otherBuild", {
+                build: check.buildCommit ?? "",
+                release: (check.releaseCommit ?? "").slice(0, 7),
+              })}
+            </div>
+          )}
           {check.notes && <pre className="app-update-notes">{check.notes}</pre>}
           {!check.asset && (
             <div className="app-update-status">{t("updates.noAssetForPlatform")}</div>

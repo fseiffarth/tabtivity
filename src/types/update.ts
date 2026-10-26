@@ -38,6 +38,16 @@ export interface UpdateCheck {
   /** Always a `github.com` release page — never a URL taken from the JSON. */
   htmlUrl: string;
   updateAvailable: boolean;
+  /** The short commit the running build was compiled from; null outside git. */
+  buildCommit: string | null;
+  /** The commit the latest release was built from (read off its notes). */
+  releaseCommit: string | null;
+  /**
+   * Same version number as the latest release but compiled from other code (a
+   * local or dev package: the number only moves when a push lands). Then
+   * `updateAvailable` is true too — installing the release replaces it.
+   */
+  otherBuild: boolean;
   /** Only set when something newer exists *and* this platform got an artifact. */
   asset: UpdateAsset | null;
   installKind: InstallKind;

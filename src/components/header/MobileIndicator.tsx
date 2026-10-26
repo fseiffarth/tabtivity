@@ -5,7 +5,7 @@ import { MobileSetupGuide } from "../mobile/MobileSetupGuide";
 import { PairedDeviceDialog } from "../mobile/PairedDeviceDialog";
 import { AddDevicePanel, useAddDevice } from "../mobile/AddDevice";
 import { useSettingsStore } from "../../stores/settings";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { useI18nStore, useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
@@ -179,9 +179,9 @@ export function MobileIndicator() {
     window.clearTimeout(closeTimer.current);
     openMenu(MENU_ID);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);
+    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   };
 
   // Reconnect and Update are one step: reinstall the sidecar from this window's

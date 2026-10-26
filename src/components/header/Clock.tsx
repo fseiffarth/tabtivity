@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
 import { useUse24h } from "../../lib/timeFormat";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { AppTimerDisplay } from "./AppTimerDisplay";
 import { useT } from "../../lib/i18n";
 import { OPEN_STATS_EVENT } from "../stats/StatsRecapHost";
@@ -58,9 +58,9 @@ export function Clock() {
     window.clearTimeout(closeTimer.current);
     setMenuOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setMenuOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setMenuOpen(false), headerMenuCloseDelay(e));
   };
   const clock = `${h}:${m}${showSeconds ? `:${s}` : ""}${suffix}`;
   // Like the mail and calendar triggers, a click opens the full view behind the

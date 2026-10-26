@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport, type HeaderStatusReport } from "../../stores/headerStatus";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useProjectsStore } from "../../stores/projects";
@@ -199,9 +199,9 @@ export function DevBuildIndicator() {
     window.clearTimeout(closeTimer.current);
     openMenu(MENU_ID);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);
+    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   };
 
   const followLog = () => {

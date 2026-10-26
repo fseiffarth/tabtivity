@@ -5,9 +5,9 @@ import type { Settings } from "../types";
 /**
  * Which top-bar items stay in the bar and which fold behind the ‹ chevron.
  *
- * Every item a user may place has an id. The default is the bar's old shape:
- * the global apps and menus (✉ 🗓 ☑ 📥 🧠 ?) are pinned, the machine-state
- * readouts (alerts, connection, battery, Mobile, VPN, Machines, CPU/RAM/GPU)
+ * Every item a user may place has an id. By default the global apps and menus
+ * (✉ 🗓 ☑ 📥 🧠 ?) and the VPN and Machines menus are pinned; the other
+ * machine-state readouts (alerts, connection, battery, Mobile, CPU/RAM/GPU)
  * fold. `Settings.header_pins` holds only the user's overrides — `true` pins an
  * item, `false` folds it — so an id the user never touched follows this table
  * and a default changed here reaches everyone who did not choose.
@@ -45,6 +45,8 @@ const PINNED_BY_DEFAULT: ReadonlySet<HeaderItemId> = new Set([
   "inbox",
   "models",
   "help",
+  "vpn",
+  "machines",
 ]);
 
 /** The table above plus the phone icon, while it is the way into Mobile. */

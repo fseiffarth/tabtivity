@@ -128,7 +128,9 @@ way around the pinned tool set: the help tools read no file and run nothing.
 ## The profiles, as built
 
 Pinned against Claude Code 2.1.300, Codex 0.162.1, OpenCode 1.19.1 and
-Ollama 0.40.3 (A0). All four are offered.
+Ollama 0.40.3 (A0). All four are offered (`is_offered`), but cloud Claude is
+no longer listed (`is_listed`, the user's call 2026-10-26): no new chat picks
+it, desktop or phone, and a chat made with it before still resumes.
 
 | Profile | What `launch_line` sets | Web |
 |---|---|---|
@@ -226,6 +228,12 @@ options poll sees it clear. The head's CLI dropdown and Relaunch start a
 fresh chat (`assistant_new_chat`) and then remove every other chat of the
 scope, so the scope holds the chat both surfaces show. A pick whose CLI is
 blocked shows its card and leaves the chat alone.
+
+**Clear is Relaunch.** `/clear` typed into the CLI would go nowhere, so in a
+Tabby chat the Reader's Clear chip and a typed `/clear` call
+`replaceAssistantChat` (`stores/assistantScope`), the head's Relaunch path. The
+composer offers no Plan, Goal or Commit (no slash commands, no files) and is
+drawn as an agent tab's (`.card-composer`), its chips inside the text box.
 
 **The model switches in place.** A chat's slash commands are off, so the
 Reader's usual chips that type `/model`, `/effort` or `/status` cannot reach

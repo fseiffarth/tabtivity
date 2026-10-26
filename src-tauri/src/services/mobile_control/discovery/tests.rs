@@ -386,7 +386,14 @@ fn the_root_scope_is_listed_by_its_switch_and_gate_alone() {
     let unfenced = RootEnv { dir: root.clone(), fenced: || false };
     let load = |settings: Option<serde_json::Value>, env: &RootEnv| {
         match settings {
-            Some(value) => fs::write(state.join("settings.json"), value.to_string()).expect("settings"),
+            Some(mut value) => {
+                // The assistant (on by default) would list a scope of its own;
+                // this test is about root.
+                if let Some(object) = value.as_object_mut() {
+                    object.entry("assistant").or_insert(false.into());
+                }
+                fs::write(state.join("settings.json"), value.to_string()).expect("settings")
+            }
             None => { let _ = fs::remove_file(state.join("settings.json")); }
         }
         Catalog::load_with(state, &[7; 32], env, &HashMap::new(), &HostLive::default(), true).expect("catalog").projects
@@ -519,11 +526,11 @@ fn the_assistant_scope_is_listed_by_its_gate_alone_and_keeps_only_chats() {
     let work = |state: &Path| crate::services::assistant::work_root(state);
     let valid = serde_json::json!({ "cli": "claude" });
 
-    // Off: the flag unset, or the Mobile switch off, or no settings, or an
-    // unreadable file.
+    // Off: the flag written false, or the Mobile switch off, or no settings,
+    // or an unreadable file. (Unset is on.)
+    assert!(!load_assistant(assistant_state(Some(serde_json::json!({})), vec![]).path()).is_empty());
     for settings in [
         None,
-        Some(serde_json::json!({})),
         Some(serde_json::json!({ "assistant": false })),
         Some(serde_json::json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "assistant_access": false } })),
     ] {
@@ -666,10 +673,10 @@ fn the_raw_json_gate_agrees_with_the_typed_settings() {
     assert!(opened > 0 && opened < 81);
     // No Mobile block at all.
     assert!(agree(serde_json::json!({ "assistant": true })));
-    assert!(!agree(serde_json::json!({})));
-    // A profile not yet marked explicit still follows Debug mode.
-    assert!(agree(serde_json::json!({ "debug": true })));
-    assert!(!agree(serde_json::json!({ "debug": true, "experimental_explicit": true })));
+    // On by default, Debug mode or not; only an explicit `false` closes it.
+    assert!(agree(serde_json::json!({})));
+    assert!(agree(serde_json::json!({ "debug": true, "experimental_explicit": true })));
+    assert!(!agree(serde_json::json!({ "assistant": false })));
     // Wrong types close both.
     for bad in [
         serde_json::json!({ "assistant": "yes" }),
@@ -1804,7 +1811,9 @@ fn shell_tabs_are_off_the_phone_unless_switched_on() {
 fn allow_shells(state: &Path) {
     fs::write(
         state.join("settings.json"),
-        serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+        // The assistant is on by default and would add its own scope; these
+        // fixtures are about project tabs.
+        serde_json::json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
     )
     .expect("settings");
 }

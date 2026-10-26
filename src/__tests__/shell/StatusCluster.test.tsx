@@ -67,12 +67,28 @@ afterEach(() => {
 
 describe("StatusCluster", () => {
   it("folds failing members too while collapsed, and says so on the summary lamp", async () => {
+    // VPN and Machines are pinned by default; folded here, the failing VPN must
+    // stay folded.
+    useSettingsStore.setState({
+      settings: {
+        header_status_expanded: false,
+        machines_enabled: true,
+        header_pins: { vpn: false, machines: false },
+      } as never,
+    } as never);
     render(<StatusCluster />);
     await screen.findByTestId("machines");
     for (const id of ["vpn", "machines", "resources"]) expect(folded(id)).toBe("true");
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle.getAttribute("title")).toContain("VPN failed");
     expect(toggle.querySelector("[aria-label]")).toBeTruthy();
+  });
+
+  it("keeps VPN and Machines in the bar by default while the rest folds", async () => {
+    render(<StatusCluster />);
+    await screen.findByTestId("machines");
+    for (const id of ["vpn", "machines"]) expect(folded(id)).toBe("false");
+    expect(folded("resources")).toBe("true");
   });
 
   it("tells the resource readout it is folded, and asks it for a reading on hover", () => {
@@ -99,7 +115,9 @@ describe("StatusCluster", () => {
   });
 
   it("mounts no Machines menu while the feature is off (perf plan §6)", async () => {
-    useSettingsStore.setState({ settings: { header_status_expanded: true } as never } as never);
+    useSettingsStore.setState({
+      settings: { header_status_expanded: true, machines_enabled: false } as never,
+    } as never);
     render(<StatusCluster />);
     // The other members are eager: once they are on screen, a mounted lazy
     // member would have had its chance to resolve too.

@@ -99,7 +99,9 @@ export function targetKey(t: Target): string {
  * caller applies `mayAutoTouch` to the host itself.
  */
 export function machineArmsHost(target: Target): boolean {
-  if (!useSettingsStore.getState().settings?.machines_enabled) return false;
+  // On by default, but no settings yet arms nothing.
+  const settings = useSettingsStore.getState().settings;
+  if (!settings || !(settings.machines_enabled ?? true)) return false;
   return useGlobalMachinesStore
     .getState()
     .machines.some((m) => m.auto_connect === true && sameTarget(m, target));

@@ -327,6 +327,33 @@ describe("the agent pane's Reader", () => {
     await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
   });
 
+  it("lets two prompts queued behind a turn go once Claude records both", async () => {
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "first queued prompt alpha"));
+      act(() => noteSentPrompt("st-1", "second queued prompt beta"));
+      expect(host.querySelectorAll(".terminal-reader-turn.pending")).toHaveLength(2);
+      // 2.1.310 records them as two `user` messages once the turn ends.
+      const at = new Date(Date.now() + 1000).toISOString();
+      const recorded = {
+        ...transcript,
+        version: "v2",
+        entries: [...transcript.entries, { kind: "prompt", text: "first queued prompt alpha", at }, { kind: "prompt", text: "second queued prompt beta", at }],
+      };
+      invoke.mockImplementation((command: string) =>
+        Promise.resolve(command === "agent_tab_transcript" ? recorded : []));
+      act(() => { rows.splice(2, 1, "✻ Crunched for 18s · done 12:11"); });
+      await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
   it("keeps the text and says why when the prompt did not go in", async () => {
     sendSteeringPrompt.mockRejectedValue(new Error("agent terminal is not ready"));
     reader(host);
@@ -983,38 +1010,16 @@ describe("the Reader's live rows", () => {
     expect(written).toEqual([]);
   });
 
-  it("switches a Tabby chat's model by restarting it, never through its disabled /model or /effort", async () => {
-    submitCommand.mockClear();
-    written.length = 0;
-    const chat: TabEntry = { ...tab, assistant: { cli: "claude", model: "opus" } };
+  it("draws no facts row in a Tabby chat: the view's own model dropdown is the one", async () => {
+    const chat: TabEntry = { ...tab, assistant: { cli: "claude_local", model: "qwen3:8b" } };
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { ...state.tabsByScope, assistant: [chat] } }));
-    invoke.mockImplementation((command: string) => {
-      if (command === "agent_tab_transcript") return Promise.resolve(transcript);
-      if (command === "assistant_options") {
-        return Promise.resolve({
-          clis: [{ id: "claude", label: "Claude", local: false, installed: true, signedIn: true, ready: true }],
-          localModels: [], ollamaReachable: false, defaultCli: null, defaultModel: null,
-          search: { kind: null, searxngUrl: null, ollamaKeyStored: false, keyring: "unlocked", configured: false },
-        });
-      }
-      return Promise.resolve([]);
-    });
     const rows = [">", "~/p · Opus 4.1 · 85% context left"];
     term = fakeTerminal(rows);
     registerTerminal("assistant:agent-1", term);
     render(<TerminalReaderView host={host} ptyId="assistant:agent-1" scope="assistant" tabKey="agent-1" cwd="/p" visible focused />);
-    const chip = await screen.findByRole("button", { name: /Opus 4\.1/ });
-    const facts = host.querySelector(".terminal-reader-facts") as HTMLElement;
-    // `/effort` and `/status` cannot reach the chat: shown, not offered.
-    expect(within(facts).queryByRole("button", { name: /Effort|Status/ })).toBeNull();
-    await act(async () => { fireEvent.click(chip); });
-    const list = await screen.findByRole("dialog", { name: "Select model" });
-    expect(submitCommand).not.toHaveBeenCalled();
-    await act(async () => { fireEvent.click(await within(list).findByRole("button", { name: /sonnet/ })); });
-    await waitFor(() => expect(useTabsStore.getState().tabsByScope.assistant?.[0].assistant).toEqual({ cli: "claude", model: "sonnet" }));
-    expect(useTabsStore.getState().tabsByScope.assistant?.[0].relaunchSeq).toBe(1);
-    expect(submitCommand).not.toHaveBeenCalled();
-    expect(written).toEqual([]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(host.querySelector(".terminal-reader-facts")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Opus 4\.1/ })).toBeNull();
     unregisterTerminal("assistant:agent-1", term);
   });
 

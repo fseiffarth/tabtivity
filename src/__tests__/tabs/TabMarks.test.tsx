@@ -201,6 +201,7 @@ describe("the tab's right-click menu", () => {
   });
 
   it("offers no card rows while the to-do board is off", () => {
+    useSettingsStore.setState({ settings: { todo_board: false } } as never);
     const { tab } = mountBar();
     fireEvent.contextMenu(tab());
     expect(menuRow("to-do card")).toBeUndefined();

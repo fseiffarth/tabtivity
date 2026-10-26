@@ -21,7 +21,7 @@ import {
 import { keyringState, unlockKeyring, type KeyringState } from "../../lib/keyring";
 import type { StoredVpnConfig } from "../../types";
 import { useT } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { ErrorNote } from "../common/ErrorNote";
 import { VpnGlyph } from "./HeaderGlyphs";
@@ -95,9 +95,9 @@ export function VpnIndicator() {
   // one of them as unsaved. `NO_SAVED` keeps the selector identity-stable.
   const savedConfigs = useSettingsStore((s) => s.settings?.vpn_saved_configs ?? NO_SAVED);
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
-  // Off by default (Settings' "Remote features") — most projects are local-only,
-  // so this machine-wide tunnel control stays out of the header until asked for.
-  const enabled = useSettingsStore((s) => s.settings?.vpn_enabled ?? false);
+  // On by default (Settings' "Remote features"); switched off, this machine-wide
+  // tunnel control leaves the header.
+  const enabled = useSettingsStore((s) => s.settings?.vpn_enabled ?? true);
 
   // Shared across every header hover-menu (stores/headerHoverMenu) so switching
   // straight from another one closes it instantly instead of racing its own
@@ -232,9 +232,9 @@ export function VpnIndicator() {
     window.clearTimeout(closeTimer.current);
     setOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setOpen(false), headerMenuCloseDelay(e));
   };
 
   /**

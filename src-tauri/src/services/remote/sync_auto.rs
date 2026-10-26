@@ -75,6 +75,18 @@ async fn run_bounded<T, E: From<String>>(
     }
 }
 
+/// `fut`, unless a manual sync command starts waiting for `project_id`'s lock
+/// first: then `None`, and the pass ends so it releases the lock. Only for the
+/// pass's read-only work (host walks and stats) — a transfer cut off there could
+/// leave a file written but unrecorded, or a temp file on the host.
+async fn unless_manual<T>(project_id: &str, fut: impl std::future::Future<Output = T>) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = crate::services::sync_op::manual_arrived(project_id) => None,
+        r = fut => Some(r),
+    }
+}
+
 /// One running auto-sync task: its cancel signal, its join handle, and the mirror
 /// watcher whose lifetime is tied to the task (dropping it unwatches).
 pub struct AutoSyncTask {
@@ -526,7 +538,9 @@ pub fn lockstep_unknown(why: &str) -> String {
 /// transfer — runs under the project's mutation lock (`services::sync_op`), so
 /// nothing it decided on can be rewritten by another writer of this app before
 /// it acts. `paused`/`stopping` are re-read once the lock is held (a checkout
-/// that paused the loop held it first) and `stopping` again between files.
+/// that paused the loop held it first) and `stopping` again between files. A
+/// manual command waiting for the lock (`sync_op::acquire_manual`) ends the pass
+/// early: between files, or at once during a host walk or stat.
 async fn reconcile_pass(
     ctx: Option<&CoreCtx>,
     pool: &RemotePoolState,
@@ -591,7 +605,11 @@ async fn reconcile_pass(
     let mut walked_host_meta: HashMap<String, (u64, Option<u64>)> = HashMap::new();
     let mut walked_host_mode: HashMap<String, Option<u32>> = HashMap::new();
     for d in &auto_dirs {
-        match remote_sync::walk_host_files(&sftp, &target.spec.remote_path, d).await {
+        let Some(walk) = unless_manual(project_id, remote_sync::walk_host_files(&sftp, &target.spec.remote_path, d)).await
+        else {
+            return; // a manual sync is waiting → hand it the lock
+        };
+        match walk {
             Ok(files) => {
                 for file in files {
                     walked_host_meta.insert(file.rel.clone(), (file.size, file.mtime));
@@ -638,6 +656,11 @@ async fn reconcile_pass(
         if stopping.load(Ordering::SeqCst) {
             break; // stopped: end after the file in flight, not after the whole tree
         }
+        // A manual pull/push/delete is waiting for the lock: hand it over after the
+        // file in flight. The rest of the tree is picked up by the next pass.
+        if crate::services::sync_op::manual_waiting(project_id) {
+            break;
+        }
         let host_abs = remote_sync::join_remote(&target.spec.remote_path, &rel);
         // `Option`, distinguishing a gone host path (None) from an empty file —
         // the same input `push_decision`/`divergence` expect (matches sync_push).
@@ -647,10 +670,11 @@ async fn reconcile_pass(
         let walked = walked_host_meta.get(&rel).copied();
         let (host, host_mode) = match walked {
             Some(meta) => (Some(meta), walked_host_mode.get(&rel).copied().flatten()),
-            None => match sftp::metadata_opt_with_mode_on(&sftp, &host_abs).await {
-                Ok(Some((size, mtime, mode))) => (Some((size, mtime)), mode),
-                Ok(None) => (None, None),
-                Err(e) => {
+            None => match unless_manual(project_id, sftp::metadata_opt_with_mode_on(&sftp, &host_abs)).await {
+                None => break,
+                Some(Ok(Some((size, mtime, mode)))) => (Some((size, mtime)), mode),
+                Some(Ok(None)) => (None, None),
+                Some(Err(e)) => {
                     eprintln!("auto-sync: skip '{rel}': {e}");
                     continue;
                 }
@@ -735,9 +759,10 @@ async fn reconcile_pass(
                 // size+mtime found the candidate; it is seconds old by now, so the
                 // host is stat'd again for the decision itself.
                 let host_now = if walked.is_some() {
-                    match sftp::metadata_opt_on(&sftp, &host_abs).await {
-                        Ok(now) => now,
-                        Err(e) => {
+                    match unless_manual(project_id, sftp::metadata_opt_on(&sftp, &host_abs)).await {
+                        None => break,
+                        Some(Ok(now)) => now,
+                        Some(Err(e)) => {
                             eprintln!("auto-sync: push skip '{rel}': {e}");
                             continue;
                         }

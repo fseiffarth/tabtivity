@@ -15,6 +15,15 @@
   padding: 0;
 }
 
+/* The shared line icons (common/icons/Icon.tsx) sit in the text line, beside
+   their label. The preflight makes every `svg` a block, which in a plain-block
+   button put the icon on a line of its own and pushed the label out of the
+   box (the agent cards' "Go to" chip). A class here outranks the preflight's
+   bare `svg` and still loses to any `.x svg` rule that wants a block. */
+.app-icon {
+  display: inline-block;
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;

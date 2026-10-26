@@ -107,7 +107,7 @@ Dead code / guards [12][F]
 - [F] With its trigger gone, the PDF viewer's in-app region capture (`copySelecting`, copy layer, `pdfViewer.copySelection*` strings) and `screenshot.ts` `startDelayedCapture`/`cancelDelayedCapture` are unreachable: wire to a new entry point, or delete?
 - [F] `paths::output_within` (ssh probe; parent-death signal, no cap) is a second bounded-run helper beside `git_bounded::run`.
 - [F] Read-only `unwrap_or_default()` callers kept (`agent_fence::read_lists` fails closed, `launch_prep` falls back to global, `agent_auth` labels).
-- [12] `src/lib`/`src/stores` → `src/components` import rule waits for S3. AGENTS.md wording for the guard rules: proposed in `.git/code-screen-handoff/step12.md`, not applied.
+- [12] `src/lib`/`src/stores` → `src/components` import rule waits for S3. AGENTS.md wording for the guard rules: applied 2026-10-26 (user's call).
 
 ## Owed
 
@@ -169,4 +169,6 @@ Phone
 - Flagged: the whole screenshot save chain (`capture_screenshot`, `ScreenshotSaveOverlay`, `screenshotPending`, `copy_png_bytes_to_clipboard`) has no caller left; macOS `/usr/bin/rsync` (openrsync) beats Homebrew, so Macs never take the fast path; rsync installed/downgraded mid-session is noticed only after a restart (pulls fall back); remote tooling status still lists rsync as present on macOS.
 - [15] Screenshot save chain deleted (user call) — `capture_screenshot`/`*_pending_screenshot` commands + command_class rows, clipboard image-out helpers, `ScreenshotSaveOverlay`, `screenshotPending`, `window/screenshot.ts`, `screenshotSave.*` keys. Kept (no writer left, user's call): the phone's `screenshots-pending` folder entry, the project screenshots-folder gitignore + name migration, the Screenshot global-app role in Settings.
 - macOS rsync: user kept `/usr/bin` only — Macs use SFTP; no binary from a user-writable dir runs.
-- S1–S9: not started — user said not yet.
+- S1 tests.rs extraction — 0d866d4f..14a2af4e; S2 `src/lib/i18n/` folder — ..fa2a9903; S3 upward imports out of `components/` + lint rule — ..f54fcade (review fix f54fcade).
+- S4 `services/` groups (mail, git, root_mcp, agent, api, remote, mcp, calendar; `pub use` re-exports, `git mv`) — dd8cb0f1..83f906b5; test counts equal before/after, windows-clippy's two pre-existing items fixed in bfc89615. No stale `services/<old>.rs` path left in scripts, CI or source scans; prose in DOCUMENTATION.md/todo/docs/context still names old paths (module paths unchanged). Row-less modules: mail_ai, mail_sanitize, git_credentials, remote_credentials, remote_usage.
+- S5–S9: not done — the user stopped the S series at S4 (2026-10-26); they stay in the plan as optional.

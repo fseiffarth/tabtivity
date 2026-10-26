@@ -138,7 +138,7 @@ fn read_search_state(settings: &Settings) -> SearchState {
 fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready: bool) -> Vec<CliOption> {
     AssistantCli::ALL
         .into_iter()
-        .filter(|cli| assistant::is_offered(*cli))
+        .filter(|cli| assistant::is_listed(*cli))
         .map(|cli| {
             let installed = crate::commands::agents::binary_is_installed(cli.bin());
             let signed_in = (!cli.is_local()).then(|| {
@@ -237,7 +237,7 @@ fn new_chat_at(
     model: Option<&str>,
 ) -> Result<NewChat, String> {
     let cli = AssistantCli::from_id(cli.trim())
-        .filter(|cli| assistant::is_offered(*cli))
+        .filter(|cli| assistant::is_listed(*cli))
         .ok_or_else(|| refused(Refusal::NotOffered))?;
     let model = model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
     let launch = AssistantLaunch { cli, model };
@@ -398,8 +398,9 @@ mod tests {
     fn the_flag_gates_every_command() {
         assert_eq!(gate(false), Err(OFF.to_string()));
         assert_eq!(gate(true), Ok(()));
-        // An absent settings block is off.
-        assert!(!Settings::default().assistant_enabled());
+        // An absent settings block is on: the assistant ships switched on.
+        assert!(Settings::default().assistant_enabled());
+        assert!(!settings_with(r#"{"assistant": false}"#).assistant_enabled());
     }
 
     #[test]
@@ -408,6 +409,9 @@ mod tests {
         let session = dir.path().join("sessions").join("assistant").join("terminals.json");
         // Not a CLI id at all.
         let err = new_chat_at(dir.path(), &session, "gemini", None).unwrap_err();
+        assert!(err.starts_with("not_offered: "), "{err}");
+        // Cloud Claude is no longer listed.
+        let err = new_chat_at(dir.path(), &session, "claude", None).unwrap_err();
         assert!(err.starts_with("not_offered: "), "{err}");
         // Nothing was stored for either refusal.
         assert!(!session.exists(), "a refused chat wrote {session:?}");
@@ -424,7 +428,7 @@ mod tests {
     fn a_new_chat_stores_one_assistant_tab_and_answers_with_its_ids() {
         let dir = tempfile::tempdir().unwrap();
         let session = dir.path().join("sessions").join("assistant").join("terminals.json");
-        let chat = new_chat_at(dir.path(), &session, " claude ", None).unwrap();
+        let chat = new_chat_at(dir.path(), &session, " codex ", None).unwrap();
         assert_eq!(chat.scope, "assistant");
         assert!(crate::services::agent_session::is_uuid_shaped(&chat.uid), "{}", chat.uid);
         assert!(chat.version > 0);
@@ -436,11 +440,11 @@ mod tests {
         assert_eq!(tab.session_id.as_deref(), Some(chat.uid.as_str()));
         assert_eq!(tab.extra["kind"], "agent");
         assert_eq!(tab.cwd, assistant::chat_dir(dir.path(), &chat.uid).unwrap().to_string_lossy());
-        assert_eq!(assistant::record_launch(tab), Some(AssistantLaunch { cli: AssistantCli::Claude, model: None }));
+        assert_eq!(assistant::record_launch(tab), Some(AssistantLaunch { cli: AssistantCli::Codex, model: None }));
         // The command creates no folder: the spawn gate is the one creator.
         assert!(!assistant::chat_dir(dir.path(), &chat.uid).unwrap().exists());
         // A second chat is a second tab with its own uid.
-        let other = new_chat_at(dir.path(), &session, "claude", None).unwrap();
+        let other = new_chat_at(dir.path(), &session, "codex", None).unwrap();
         assert_ne!((&other.uid, &other.tab_id), (&chat.uid, &chat.tab_id));
         // project-tree-read: ok — the assistant scope's own session, not a project tree
         assert_eq!(crate::services::workspace::snapshot_in(&session).unwrap().session.tab_layout.len(), 2);
@@ -608,13 +612,13 @@ mod tests {
         };
         let options = cli_options(&[login("claude", true), login("codex", false)], true);
         let ids: Vec<&str> = options.iter().map(|o| o.id.as_str()).collect();
-        assert_eq!(ids, ["claude", "codex", "opencode_local", "claude_local"]);
-        let claude = &options[0];
-        assert_eq!(claude.signed_in, Some(true));
-        assert_eq!(claude.ready, claude.installed);
-        assert_eq!(options[1].signed_in, Some(false));
-        assert!(!options[1].ready);
-        assert!(options[2].local && options[2].signed_in.is_none());
+        assert_eq!(ids, ["codex", "opencode_local", "claude_local"]);
+        assert_eq!(options[0].signed_in, Some(false));
+        assert!(!options[0].ready);
+        assert!(options[1].local && options[1].signed_in.is_none());
+        let signed_in = cli_options(&[login("codex", true)], true);
+        assert_eq!(signed_in[0].signed_in, Some(true));
+        assert_eq!(signed_in[0].ready, signed_in[0].installed);
         let no_ollama = cli_options(&[], false);
         assert!(no_ollama.iter().filter(|o| o.local).all(|o| !o.ready));
     }

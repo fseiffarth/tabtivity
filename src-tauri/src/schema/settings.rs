@@ -240,7 +240,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_default_reminder_minutes: Option<i64>,
     /// Calendar: put a 📅 button in the header that opens the calendar overlay,
-    /// badged with the events left today.
+    /// badged with the events left today. Absent means on.
     ///
     /// The twin of the header's mail button, with no experimental gate above
     /// it: the calendar is a shipped feature and its store reads one local file,
@@ -248,7 +248,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_global_app: Option<bool>,
     /// To-do board: put a ☑ button in the header that opens the global todo
-    /// board overlay, badged with what is due today.
+    /// board overlay, badged with what is due today. Absent means on.
     ///
     /// A plain setting for `calendar_global_app`'s reasons — the board's cards
     /// *are* `calendar.json`'s tasks, so it reads a shipped local file and
@@ -625,6 +625,11 @@ pub struct Settings {
     /// agents, scheduled prompts, completions, mail AI. Unset is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_off: Option<bool>,
+    /// When the AI switch was set for a while (the rail menu's "for 1 h"…):
+    /// the instant, in Unix milliseconds, it counts as on again. Unset with
+    /// `ai_off` means off until switched back on (`ai_switch::off_now`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_off_until: Option<u64>,
     /// Let a fenced **root** agent read every project (local directories, box
     /// folders, remote mirrors) read-only. Default off: one poisoned project can
     /// then reach the others through an agent with open network access.
@@ -925,8 +930,8 @@ pub struct Settings {
     /// written and an older settings file without it still loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_scrollback_rows: Option<u32>,
-    /// Header resource-monitor row toggles. Each defaults ON when unset so the
-    /// pill shows CPU/RAM/GPU by default; flip one off to hide that row. Shown in
+    /// Header resource-monitor row toggles. Each defaults OFF when unset, so the
+    /// pill shows no CPU/RAM/GPU until one is switched on. Shown in
     /// every build (independent of `debug`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_cpu_usage: Option<bool>,
@@ -1217,6 +1222,13 @@ impl Settings {
         })
     }
 
+    /// An experiment a profile gets without asking (`ON_BY_DEFAULT` in
+    /// `src/lib/experimental.ts`): unset means on; an explicit `false` still
+    /// turns it off.
+    fn experimental_on_by_default(flag: Option<bool>) -> bool {
+        flag.unwrap_or(true)
+    }
+
     /// Whether the experimental Copilot completion entry point is on — the one
     /// spelling of the rule for the backend's policy (`services::copilot::policy`)
     /// and the session teardown on a settings change. It alone never authorizes
@@ -1235,14 +1247,14 @@ impl Settings {
     /// Whether the experimental mail client is on — the one gate its overlay
     /// host asks (`src/components/mail/MailOverlay.tsx`).
     pub fn mail_client(&self) -> bool {
-        self.experimental(self.mail_client)
+        Self::experimental_on_by_default(self.mail_client)
     }
 
     /// Whether the experimental chat assistant is on — the one gate the
-    /// commands, the spawn and the web lane ask, read per request. Same rule
-    /// as every experimental flag ([`Self::experimental`]).
+    /// commands, the spawn and the web lane ask, read per request. On by
+    /// default ([`Self::experimental_on_by_default`]).
     pub fn assistant_enabled(&self) -> bool {
-        self.experimental(self.assistant)
+        Self::experimental_on_by_default(self.assistant)
     }
 
     /// Whether a paired phone may use the assistant: the flag on and the
@@ -1446,8 +1458,12 @@ mod tests {
         assert!(!marked_debug.python_run_debug());
         assert!(!marked_debug.deck_presenter());
         assert!(!marked_debug.web_browser());
-        assert!(!marked_debug.mail_client());
         assert!(!marked_debug.copilot_completion());
+        // Mail and the assistant are on by default, marked or not.
+        assert!(marked_debug.mail_client());
+        assert!(marked_debug.assistant_enabled());
+        assert!(Settings::default().mail_client());
+        assert!(Settings::default().assistant_enabled());
 
         let ticked = Settings {
             debug: Some(true),
@@ -1965,16 +1981,15 @@ mod default_rule_tests {
         assert_eq!(back["assistant"], true);
     }
 
-    /// The assistant follows the rule of every experimental flag: unset is
-    /// off (Debug mode decides only on a profile not yet marked explicit), an
+    /// The assistant is on by default (unset is on, Debug mode or not), an
     /// explicit value wins. The phone gate adds `assistant_access`, which is
     /// on unless written `false`.
     #[test]
     fn the_assistant_gates_follow_the_flag_and_the_phone_switch() {
-        assert!(!Settings::default().assistant_enabled());
-        assert!(!Settings::default().assistant_phone_open());
+        assert!(Settings::default().assistant_enabled());
+        assert!(Settings::default().assistant_phone_open());
         let marked = Settings { debug: Some(true), experimental_explicit: Some(true), ..Default::default() };
-        assert!(!marked.assistant_enabled());
+        assert!(marked.assistant_enabled());
         let unmarked_debug = Settings { debug: Some(true), ..Default::default() };
         assert!(unmarked_debug.assistant_enabled());
         let on = Settings { assistant: Some(true), ..Default::default() };

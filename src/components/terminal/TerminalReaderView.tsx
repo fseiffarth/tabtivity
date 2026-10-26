@@ -37,7 +37,8 @@ import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { hostTabCwd, hostTabId, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
-import { withAssistantPromptTarget } from "../../lib/assistant";
+import { ASSISTANT_SCOPE, withAssistantPromptTarget } from "../../lib/assistant";
+import { replaceAssistantChat } from "../../stores/assistantScope";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
@@ -519,7 +520,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   questionOpen: boolean;
   /** Claude's own suggestion for the next message, read off its empty box. */
   suggestion: string;
-  /** The facts row's end, where the chip row goes; over the text box without it. */
+  /** The facts row's end, where the chip row goes; in the text box without it. */
   chipSlot: HTMLElement | null;
   actionSlot?: HTMLElement | null;
   onEscape: () => void;
@@ -530,6 +531,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   pullRef: MutableRefObject<(() => void) | null>;
 }) {
   const t = useT();
+  const assistantChat = scope === ASSISTANT_SCOPE;
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
   useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
@@ -670,7 +672,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // dictated words went into the draft.
     const text = draftRef.current.trim();
     if (!current || !text || sending) return;
-    const panel = STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
+    // A Tabby chat has no facts row to open the panel in: the CLI answers.
+    const panel = assistantChat ? null
+      : STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
       : CONTEXT_AGENTS[current.cmd] && text === "/context" ? "context" : null;
     if (panel) {
       onStatus(panel);
@@ -726,10 +730,26 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   /** `/clear` into the tab; false, with the reason said, when it did not go in. */
   const startNewConversation = async (current: TabEntry): Promise<boolean> => {
+    if (assistantChat && current.assistant) return freshAssistantChat(current);
     if (await clearAgentTab(scope, current)) return true;
     // Codex refuses one mid-turn, and says so only in its terminal.
     const busy = agentFamily(agentTabLabel(current)) === "codex" && !!useActivityStore.getState().busyByTab[ptyId];
     setSendError(t(busy ? "terminal.reader.clearBusy" : "terminal.reader.sendFailed"));
+    return false;
+  };
+  /** A Tabby chat's slash commands are off, so `/clear` would never reach its
+   * CLI: Clear is its view's Relaunch — a fresh chat on the same CLI and
+   * model, this one removed with this composer. */
+  const freshAssistantChat = async (current: TabEntry): Promise<boolean> => {
+    if (!current.assistant) return false;
+    try {
+      if (await replaceAssistantChat(current.assistant)) return true;
+      setSendError(t("assistant.newChat.vanished"));
+    } catch (error) {
+      setSendError(isAiOffRefusal(error)
+        ? t("sidePanel.aiOffHint")
+        : t("assistant.newChat.failed", { reason: String(error).replace(/^Error: /, "") }));
+    }
     return false;
   };
   const sendFailure = (error: unknown) =>
@@ -737,7 +757,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   /** The chip row (`ReaderComposerChips`): Plan / Goal only lead the draft,
    * as the phone's do; Clear and Commit act at once and leave the draft alone. */
-  const prefixCommands = draftPrefixes(cli);
+  // A Tabby chat takes no `/plan` or `/goal` and has no files to commit.
+  const prefixCommands = assistantChat ? [] : draftPrefixes(cli);
   const togglePrefix = (command: string) => {
     editDraft(toggleDraftPrefix(draftRef.current, command, prefixCommands));
     composerRef.current?.focus();
@@ -882,7 +903,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     disabled={sending}
     onPrefix={togglePrefix}
     onClear={clearChat}
-    onCommit={commit}
+    onCommit={assistantChat ? undefined : commit}
     actionSlot={actionSlot}
   />;
   return <>
@@ -926,6 +947,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {historyAt.current !== null && <UntestedTag id="terminal.reader.history" />}
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
+      {assistantChat && <UntestedTag id="assistant.clear" />}
     </div>
     {sendError && (actionSlot && !visible
       ? createPortal(<span className="reader-toolbar-error" role="alert">{sendError}</span>, actionSlot)
@@ -1758,7 +1780,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   return createPortal(<>
     <div
       ref={regionRef}
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}`}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}`}
       hidden={!shown || changesOpen}
       role="region"
       aria-label={t("terminal.reader.title")}
@@ -1955,7 +1977,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         )}
       </div>
-      {tab && !browsed && (
+      {/* No facts row in a Tabby chat: the view's own model dropdown says enough. */}
+      {tab && !browsed && scope !== ASSISTANT_SCOPE && (
         <TerminalReaderFacts
           tab={tab}
           ptyId={ptyId}
@@ -2001,7 +2024,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         steering={steering}
         questionOpen={!!shownLive.question}
         suggestion={shownLive.suggestion}
-        chipSlot={actionSlot ? null : chipSlot}
+        chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}

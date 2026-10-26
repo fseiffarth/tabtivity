@@ -90,8 +90,8 @@ export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
   // switch, and a row that opened nothing would be worse than one that says why
   // it can't — `TodoAgendaRail` makes the same call about its calendar button.
   const mailClient = useExperimental("mail_client");
-  const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? false);
-  const todoBoard = useSettingsStore((s) => s.settings?.todo_board ?? false);
+  const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
+  const todoBoard = useSettingsStore((s) => s.settings?.todo_board ?? true);
 
   const counts = useMemo(() => alertCounts(items), [items]);
 

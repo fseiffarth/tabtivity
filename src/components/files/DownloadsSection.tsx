@@ -11,6 +11,7 @@ import { FileIcon } from "../common/icons/FileIcon";
 import { InboxIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
+import { UntestedTag } from "../common/UntestedTag";
 import { BRAND } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 
@@ -267,7 +268,7 @@ export function DownloadsSection({
         title={t("downloads.resizeHint")}
       />
       <div className="downloads-header">
-        <span className="downloads-title"><InboxIcon /> {t("downloads.title")}</span>
+        <span className="downloads-title"><InboxIcon /> {t("downloads.title")} <UntestedTag id="downloads.remembered" /></span>
         <div className="downloads-windows">
           {WINDOWS.map((w, i) => (
             <button

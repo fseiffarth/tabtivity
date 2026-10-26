@@ -2348,8 +2348,8 @@ const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
 /// and bounded by [`REGISTRY_TIMEOUT`]. The `curl` this replaced had no time
 /// limit, so a stalled server held its caller for as long as TCP kept the
 /// connection (code screen B2). `Ok(None)` is an HTTP error status, what
-/// `curl -f` failed on.
-async fn registry_get(url: &str, accept: Option<&str>) -> Result<Option<Vec<u8>>, String> {
+/// `curl -f` failed on. `headers` are sent as given (fixed names and values).
+async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u8>>, String> {
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -2359,8 +2359,8 @@ async fn registry_get(url: &str, accept: Option<&str>) -> Result<Option<Vec<u8>>
         .build()
         .map_err(|e| format!("failed to query registry: {e}"))?;
     let mut request = client.get(url);
-    if let Some(accept) = accept {
-        request = request.header(reqwest::header::ACCEPT, accept);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
     }
     let response = request
         .send()
@@ -2384,7 +2384,7 @@ async fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, Strin
     // `validate_model_name` (inside) already restricts the characters that
     // reach the URL.
     let url = registry_manifest_url(model)?;
-    let body = registry_get(&url, Some("application/vnd.docker.distribution.manifest.v2+json"))
+    let body = registry_get(&url, &[("accept", "application/vnd.docker.distribution.manifest.v2+json")])
         .await?
         .ok_or_else(|| format!("registry returned no manifest for {model}"))?;
     serde_json::from_slice(&body).map_err(|e| format!("manifest json: {e}"))
@@ -2400,7 +2400,7 @@ async fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Val
         .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| "invalid config digest".to_string())?;
     let url = format!("https://registry.ollama.ai/v2/{repo}/blobs/sha256:{hex}");
-    let body = registry_get(&url, None)
+    let body = registry_get(&url, &[])
         .await?
         .ok_or_else(|| "registry returned no config blob".to_string())?;
     serde_json::from_slice(&body).map_err(|e| format!("config json: {e}"))
@@ -2473,19 +2473,25 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 // ── Live registry browse (ollama.com/search) ─────────────────────────────────
 //
 // Ollama exposes no JSON catalog API, only its server-rendered search page. It
-// used to carry `x-test-*` hooks, but a 2026 redesign dropped them, so we now
-// key off the one anchor the page has always had: each result card's title
-// links to `/library/<name>`. We fetch it with [`registry_get`] (as
-// `fetch_registry_manifest` does) and parse that. This surfaces *every*
-// model in the registry and
-// supports Ollama's own filters: free-text query, capability filter, sort, and
-// pagination for lazy loading. NB: Ollama provides no country/year metadata, so
-// "recency" comes only from its relative `updated` label and the `newest` sort.
+// used to carry `x-test-*` hooks, but a 2026 redesign dropped them, so we key
+// off the one anchor every result card has: its title links to the model page,
+// `/library/<name>` for an official model or `/<user>/<name>` for a community
+// one, as `<a href="/…" class="group …">`. We fetch it with [`registry_get`]
+// (as `fetch_registry_manifest` does) and parse that. Filtering and ordering
+// are ollama.com's own (`c=` capabilities, all of them; `s=` download size;
+// `o=` sort), so every page arrives already filtered and in order and the
+// frontend can lazy-load page after page. Later pages are served only to an
+// htmx request (`HX-Request: true`); without that header every `page=N` is
+// page 1 again.
 
 /// One model row parsed from an ollama.com/search results page.
 #[derive(serde::Serialize, Clone, PartialEq, Debug)]
 pub struct RegistryModel {
+    /// The pullable name: `gemma4` for an official model, `<user>/<name>` for a
+    /// community one.
     pub name: String,
+    /// A community upload (`<user>/<name>`), not one of Ollama's library models.
+    pub community: bool,
     pub description: String,
     /// Capability badges: e.g. "tools", "vision", "thinking", "embedding", "audio".
     pub capabilities: Vec<String>,
@@ -2493,8 +2499,17 @@ pub struct RegistryModel {
     pub sizes: Vec<String>,
     /// Human pull count as shown, e.g. "65.8K".
     pub pulls: String,
-    /// Relative update label as shown, e.g. "1 week ago".
+    /// Relative update label, e.g. "1 week ago".
     pub updated: String,
+}
+
+/// One page of ollama.com/search results.
+#[derive(serde::Serialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySearchPage {
+    pub models: Vec<RegistryModel>,
+    /// The page ends in the "load the next page" placeholder: there is more.
+    pub has_more: bool,
 }
 
 /// Percent-encode a search query for safe inclusion in the URL's query string.
@@ -2513,15 +2528,46 @@ fn percent_encode_query(s: &str) -> String {
 }
 
 /// Minimal HTML-entity unescape for the text fragments we extract (names,
-/// descriptions). Covers the entities Ollama's templates actually emit.
+/// descriptions): the named entities Ollama's templates emit and every numeric
+/// one (`&#43;`, `&#x27;`). One pass, so `&amp;lt;` stays `&lt;`.
 fn html_unescape(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&nbsp;", " ")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest.find(';').filter(|&semi| semi <= 10).and_then(|semi| {
+            let entity = &rest[1..semi];
+            let c = match entity {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                _ => {
+                    let code = match entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X")) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => entity.strip_prefix('#').and_then(|dec| dec.parse().ok()),
+                    };
+                    code.and_then(char::from_u32)
+                }
+            };
+            c.map(|c| (c, semi))
+        });
+        match decoded {
+            Some((c, semi)) => {
+                out.push(c);
+                rest = &rest[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Text content right after an attribute marker: find `marker`, then the next
@@ -2595,69 +2641,159 @@ fn value_after_label(card: &str, label: &str) -> Option<String> {
     Some(html_unescape(rest[gt + 1..gt + 1 + lt].trim()))
 }
 
-/// Parse the ollama.com/search HTML into model rows. Pure + tested: each result
-/// card's title links to `/library/<name>`, so we split on that href — the one
-/// anchor the page has always had, unlike the `x-test-*` hooks it dropped in a
-/// 2026 redesign. The first chunk is the page chrome before any card, so skip it.
-fn parse_search_html(html: &str) -> Vec<RegistryModel> {
-    html.split("href=\"/library/")
+/// The pull count of a card. The current page carries it as
+/// `<span title="27,871,499 downloads"><svg…/><span >27.9M</span></span>`; the
+/// layout before it as `<span >65.8K</span><span>&nbsp;Pulls</span>`.
+fn card_pulls(card: &str) -> Option<String> {
+    let marker = ["downloads\"", "download\""]
+        .into_iter()
+        .find_map(|m| card.find(m).map(|i| i + m.len()));
+    match marker {
+        Some(i) => {
+            let rest = &card[i..];
+            let close = rest.find("</span>")?;
+            let gt = rest[..close].rfind('>')?;
+            Some(html_unescape(rest[gt + 1..close].trim()))
+        }
+        None => value_before_label(card, "Pulls"),
+    }
+}
+
+/// The update label of a card, in the long form the frontend sorts by
+/// ("1 week ago"). The current page shows a short one (`1w`, `2mo`) inside
+/// `<span title="Updated October 12, 2026">`; the layout before it the long form
+/// after an `Updated` label.
+fn card_updated(card: &str) -> Option<String> {
+    match tag_text_after(card, "title=\"Updated ") {
+        Some(short) => Some(long_age_label(&short)),
+        None => value_after_label(card, "Updated"),
+    }
+}
+
+/// `1w` → "1 week ago", `2mo` → "2 months ago"; anything else unchanged.
+fn long_age_label(short: &str) -> String {
+    let digits = short.chars().take_while(|c| c.is_ascii_digit()).count();
+    let (num, unit) = short.split_at(digits);
+    let unit = match unit.trim() {
+        "s" => "second",
+        "m" | "min" => "minute",
+        "h" => "hour",
+        "d" => "day",
+        "w" => "week",
+        "mo" => "month",
+        "y" => "year",
+        _ => return short.to_string(),
+    };
+    match num.parse::<u32>() {
+        Ok(1) => format!("1 {unit} ago"),
+        Ok(n) => format!("{n} {unit}s ago"),
+        Err(_) => short.to_string(),
+    }
+}
+
+/// The model path a result card's title links to — `library/gemma4`,
+/// `someone/gemma4-coder` — taken from `<a href="/<path>" class="group …">`.
+/// Only a two-part path counts: a link to one of the page's own pages
+/// (`/search`, `/pricing`) is not a model.
+fn card_path(chunk: &str) -> Option<&str> {
+    let end = chunk.find('"')?;
+    let path = &chunk[..end];
+    let rest = chunk[end + 1..].trim_start();
+    if !rest.starts_with("class=\"group") {
+        return None;
+    }
+    let (owner, name) = path.split_once('/')?;
+    let part_ok = |p: &str| {
+        !p.is_empty()
+            && p != "."
+            && p != ".."
+            && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    (part_ok(owner) && part_ok(name)).then_some(path)
+}
+
+/// Parse an ollama.com/search page (or the htmx fragment a later page is) into
+/// model rows. Pure + tested. A card is a list item, cut at its `</li>` so no
+/// card takes in the badges of the cards after it, whose first link is a
+/// [`card_path`] anchor.
+fn parse_search_html(html: &str) -> RegistrySearchPage {
+    let models = html
+        .split("<li")
         .skip(1)
-        .filter_map(|card| {
-            // The name is the href slug, up to the closing quote.
-            let name_end = card.find('"')?;
-            let name = html_unescape(card[..name_end].trim());
-            if name.is_empty() {
-                return None;
-            }
-            // Description is the first <p> with the max-w-lg class.
-            let description = tag_text_after(card, "class=\"max-w-lg").unwrap_or_default();
+        .filter_map(|item| {
+            let card = item.split("</li>").next().unwrap_or(item);
+            let (_, anchor) = card.split_once("<a href=\"/")?;
+            let path = card_path(anchor)?;
+            let (name, community) = match path.strip_prefix("library/") {
+                Some(official) => (official.to_string(), false),
+                None => (path.to_string(), true),
+            };
+            // The description is the card's first <p> (the `max-w-lg` one in
+            // the layout before the current one).
+            let description = tag_text_after(card, "class=\"max-w-lg")
+                .or_else(|| tag_text_after(card, "<p "))
+                .unwrap_or_default();
             let (sizes, capabilities): (Vec<String>, Vec<String>) = badge_texts(card)
                 .into_iter()
                 .partition(|b| looks_like_size(b));
             Some(RegistryModel {
                 name,
+                community,
                 description,
                 capabilities,
                 sizes,
-                pulls: value_before_label(card, "Pulls").unwrap_or_default(),
-                updated: value_after_label(card, "Updated").unwrap_or_default(),
+                pulls: card_pulls(card).unwrap_or_default(),
+                updated: card_updated(card).unwrap_or_default(),
             })
         })
-        .collect()
+        .collect();
+    RegistrySearchPage {
+        models,
+        has_more: html.contains("hx-get=\"/search?page="),
+    }
 }
 
-/// Browse the full Ollama registry via its search page. Returns one page
-/// (~20 rows) of results so the frontend can lazy-load; an empty vec means no
-/// more pages. `capability` filters by a single capability ("" = any);
-/// `sort` is "newest" or anything else (popular, the default). `page` is 1-based.
+/// The ollama.com/search URL for one page. Only values ollama.com offers pass
+/// through, so nothing else reaches the query string: `capabilities` are its
+/// `c=` filters (a model must have all of them; `local`/`cloud` say where it
+/// runs), `size` its download-size cap (`s=`), `sort` its order (`o=`).
+fn search_url(query: &str, capabilities: &[String], size: &str, sort: &str, page: u32) -> String {
+    const CAPS: [&str; 7] = ["tools", "vision", "thinking", "embedding", "audio", "local", "cloud"];
+    const SIZES: [&str; 5] = ["8", "16", "32", "64", "over64"];
+    const SORTS: [&str; 2] = ["newest", "name"];
+    let mut url = format!(
+        "https://ollama.com/search?q={}&page={}",
+        percent_encode_query(query.trim()),
+        page.max(1)
+    );
+    for cap in CAPS.iter().filter(|c| capabilities.iter().any(|w| w == *c)) {
+        url.push_str(&format!("&c={cap}"));
+    }
+    if SIZES.contains(&size) {
+        url.push_str(&format!("&s={size}"));
+    }
+    if SORTS.contains(&sort) {
+        url.push_str(&format!("&o={sort}"));
+    }
+    url
+}
+
+/// Browse the full Ollama registry via its search page, one page (~20 rows) at
+/// a time so the frontend can lazy-load. See [`search_url`] for the filters;
+/// `page` is 1-based.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn search_ollama_registry(
     query: String,
-    capability: String,
+    capabilities: Vec<String>,
+    size: String,
     sort: String,
     page: u32,
-) -> Result<Vec<RegistryModel>, String> {
-    let page = page.max(1);
-    let mut url = format!(
-        "https://ollama.com/search?q={}&page={page}",
-        percent_encode_query(query.trim())
-    );
-    // Only forward a capability we recognise, so we never inject arbitrary params.
-    const CAPS: [&str; 6] = ["tools", "vision", "thinking", "embedding", "audio", "cloud"];
-    if CAPS.contains(&capability.as_str()) {
-        url.push_str(&format!("&c={capability}"));
-    }
-    if sort == "newest" {
-        url.push_str("&o=newest");
-    }
-
-    // The URL is built only from a validated capability/sort and a
-    // percent-encoded query.
-    let body = registry_get(&url, None)
+) -> Result<RegistrySearchPage, String> {
+    let url = search_url(&query, &capabilities, &size, &sort, page);
+    let body = registry_get(&url, &[("hx-request", "true")])
         .await?
         .ok_or_else(|| "ollama.com search request failed".to_string())?;
-    let html = String::from_utf8_lossy(&body);
-    Ok(parse_search_html(&html))
+    Ok(parse_search_html(&String::from_utf8_lossy(&body)))
 }
 
 /// Three-state health of the local Ollama server for the header status lamp:

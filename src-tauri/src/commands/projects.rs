@@ -55,7 +55,7 @@ async fn clear_host_bound_state(project_id: &str, manifest: &SyncManifestState) 
     // pass still in flight finishes first rather than re-creating `sync.json` from
     // its own record right after it was removed. A lock that cannot be had does not
     // stop the detach the user asked for; it is logged.
-    let _op = match crate::services::sync_op::acquire(project_id).await {
+    let _op = match crate::services::sync_op::acquire_manual(project_id).await {
         Ok(op) => Some(op),
         Err(e) => {
             eprintln!("clear_host_bound_state: {project_id}: {e}");

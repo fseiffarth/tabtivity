@@ -144,6 +144,7 @@ export function ProjectFilesTab({
       onOpenFolderTab={canOpenTabs ? (rel) => openProjectFilesTab(t, projectDir, rel, scope) : undefined}
       containerClassName="project-files-tab"
       compact={compact}
+      downloadsHost={compact ? undefined : "fileViewer"}
     />
   );
 }

@@ -12,8 +12,8 @@ the whole window from their header indicator, or from the `+` menu.
 
 An IMAP/SMTP client with keyword rules, local-model help with drafts and
 summaries, and encryption for what is stored on this machine. It is
-experimental: switch it on in **Settings → System → Experimental** (Mail
-client). The mail assistant runs only on a local Ollama model that you assign
+experimental and on by default; **Settings → System → Experimental** (Mail
+client) switches it off. The mail assistant runs only on a local Ollama model that you assign
 to the **Mail** role in the Models & agents menu; nothing about your mail
 leaves the machine. It refuses an Ollama cloud model (one that runs on
 ollama.com) and any model Ollama does not list as installed. See
@@ -83,8 +83,8 @@ account. Tabtivity supports modern Curve25519 keys only, not RSA.
 
 Events, reminders, and `.ics` import and export, with CalDAV sync that merges
 by resource instead of replacing what is already there. Open it from the
-header's calendar indicator or `+` → Calendar. Drag in the grid to create an
-event.
+header's calendar indicator (shown by default) or `+` → Calendar. Drag in the
+grid to create an event.
 
 A CalDAV server address must start with `https://`. Plain `http://` is refused,
 because your password and calendar would cross the network unencrypted; for a
@@ -100,7 +100,8 @@ you are asked which version to keep.
 ## To-do board
 
 A board of cards in columns over the same to-dos the calendar keeps — steps,
-tags and due dates included. Open it from the header's board indicator.
+tags and due dates included. Open it from the header's board indicator, shown
+by default.
 
 ## Browser
 

@@ -101,7 +101,9 @@ interface OllamaModelsDirPlan {
 
 /** One row from the live Ollama registry search (mirrors backend RegistryModel). */
 interface RegistryModel {
+  /** `gemma4`, or `<user>/<name>` for a community upload. */
   name: string;
+  community: boolean;
   description: string;
   capabilities: string[];
   sizes: string[];
@@ -122,75 +124,29 @@ interface RegistryDetails {
  *  "error" when they could not be reached. */
 type TagInfo = RegistryDetails | "loading" | "error";
 
-/** Approximate age in days from a registry row's relative "updated" label
- *  ("yesterday", "3 weeks ago", …), for the client-side "newest" reorder that
- *  stands in when a text query is present — ollama.com returns nothing for a
- *  query combined with its own `o=newest` sort. Unrecognized → Infinity, so a
- *  row with no readable label sorts last rather than first. */
-function updatedAgeDays(updated: string): number {
-  const s = updated.trim().toLowerCase();
-  if (!s) return Infinity;
-  if (s === "today" || s === "just now") return 0;
-  if (s === "yesterday") return 1;
-  if (s === "last week") return 7;
-  if (s === "last month") return 30;
-  if (s === "last year") return 365;
-  const m = /(\d+)\s*(hour|day|week|month|year)/.exec(s);
-  if (!m) return Infinity;
-  const n = parseInt(m[1], 10);
-  const per: Record<string, number> = { hour: 1 / 24, day: 1, week: 7, month: 30, year: 365 };
-  return n * (per[m[2]] ?? 1);
+/** One page of registry search results (mirrors backend RegistrySearchPage). */
+interface RegistrySearchPage {
+  models: RegistryModel[];
+  hasMore: boolean;
 }
 
-/** Capability filters, mapped to Ollama's `c=` search param. */
+/** Capability filters, Ollama's `c=` search param: a model must have all chosen. */
 const REGISTRY_TYPES = ["tools", "vision", "thinking", "embedding", "audio"] as const;
 
-/** Parameter-size buckets (billions) for client-side filtering of results. */
-const SIZE_BUCKETS: { key: string; label: string; lo: number; hi: number }[] = [
-  { key: "xs", label: "<1B", lo: 0, hi: 1 },
-  { key: "sm", label: "1–4B", lo: 1, hi: 4 },
-  { key: "md", label: "4–9B", lo: 4, hi: 9 },
-  { key: "lg", label: "9–32B", lo: 9, hi: 32 },
-  { key: "xl", label: "32B+", lo: 32, hi: Infinity },
-];
+/** Where a model runs, also a `c=` value on ollama.com — one or neither. */
+const REGISTRY_RUNS = ["local", "cloud"] as const;
 
-/** Largest parsable parameter size (billions) among a model's tags, for sorting. */
-function modelMaxParamsB(sizes: string[]): number {
-  const ps = sizes.map(tagParamsB).filter((n): n is number => n !== null);
-  return ps.length ? Math.max(...ps) : 0;
-}
+/** Download-size caps, Ollama's `s=` search param (GB; "over64" is the top bucket). */
+const REGISTRY_DOWNLOAD_SIZES = ["8", "16", "32", "64", "over64"] as const;
 
-/** Parse a human pull count ("65.8K", "30M", "1,203") into a number for sorting. */
-function parsePulls(s: string): number {
-  const m = /^([\d.,]+)\s*([kmbg]?)/i.exec(s.trim());
-  if (!m) return 0;
-  const n = parseFloat(m[1].replace(/,/g, ""));
-  if (!isFinite(n)) return 0;
-  const mult: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, g: 1e9 };
-  return n * (mult[m[2].toLowerCase()] ?? 1);
-}
-
-/** Sort options for the registry browser. "popular"/"newest" map to Ollama's
- *  server-side `o=` param; the rest reorder the loaded rows client-side. */
+/** Sort options for the registry browser, Ollama's own `o=` orders: every
+ *  lazy-loaded page arrives already in order. */
 const SORT_OPTIONS = [
   { key: "popular", labelKey: "ollama.sort.popular" },
   { key: "newest", labelKey: "ollama.sort.newest" },
-  { key: "pulls", labelKey: "ollama.sort.pulls" },
   { key: "name", labelKey: "ollama.sort.name" },
-  { key: "params-asc", labelKey: "ollama.sort.sizeAsc" },
-  { key: "params-desc", labelKey: "ollama.sort.sizeDesc" },
 ] as const satisfies { key: string; labelKey: TranslationKey }[];
 type SortKey = (typeof SORT_OPTIONS)[number]["key"];
-
-/** True if any of a model's size tags falls into any selected bucket. */
-function matchesSizeBuckets(sizes: string[], selected: Set<string>): boolean {
-  if (selected.size === 0) return true;
-  const buckets = SIZE_BUCKETS.filter((b) => selected.has(b.key));
-  return sizes.some((s) => {
-    const p = tagParamsB(s);
-    return p !== null && buckets.some((b) => p >= b.lo && p < b.hi);
-  });
-}
 
 /** Every sub-panel takes the same two: `onBack` returns to the main settings
  *  panel, `onClose` dismisses the whole dialog. Both optional: the panels are
@@ -531,18 +487,6 @@ export function RemoteHostsSettings({ onBack, onClose }: SubPanelProps) {
   );
 }
 
-
-/**
- * Parameter count (in billions) parsed from a catalog tag like "1b", "0.5b",
- * "135m", "405b". Non-parameter tags (quantization labels such as "q4_K_M",
- * "latest") yield null so they don't affect size sorting.
- */
-function tagParamsB(tag: string): number | null {
-  const m = /^(\d+(?:\.\d+)?)\s*([bm])$/i.exec(tag.trim());
-  if (!m) return null;
-  const n = parseFloat(m[1]);
-  return m[2].toLowerCase() === "m" ? n / 1000 : n;
-}
 
 /** Official, distro-agnostic install command — kept in sync with the backend. */
 /** One agent CLI + its install status (mirrors backend `AgentInfo`). */
@@ -3347,8 +3291,9 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const [regQuery, setRegQuery] = useState("");
   const [regQueryLive, setRegQueryLive] = useState(""); // debounced
   const [regTypes, setRegTypes] = useState<Set<string>>(new Set()); // empty = any
+  const [regRuns, setRegRuns] = useState(""); // "" = either, else a REGISTRY_RUNS value
+  const [regDownload, setRegDownload] = useState(""); // "" = any, else a REGISTRY_DOWNLOAD_SIZES value
   const [sortBy, setSortBy] = useState<SortKey>("popular");
-  const [regSizes, setRegSizes] = useState<Set<string>>(new Set());
   const [regModels, setRegModels] = useState<RegistryModel[]>([]);
   const [regPage, setRegPage] = useState(0);
   const [regLoading, setRegLoading] = useState(false);
@@ -3356,6 +3301,9 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const [regError, setRegError] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<() => void>(() => {});
+  // Bumped by every registry fetch: an answer that is no longer the latest
+  // request's (the query or a filter changed meanwhile) is dropped.
+  const regSeq = useRef(0);
 
   // Fetch a tag's registry facts (size + parameters + quantization) once. Called
   // on hover for a tag button, and eagerly for a row with no size badge (below),
@@ -3684,38 +3632,45 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const installedNames = useMemo(() => new Set(models.map((m) => m.name)), [models]);
 
   // ── Live registry browser ────────────────────────────────────────────────
-  // Only "popular"/"newest" are server-side (Ollama's `o=`); the name/size/pulls
-  // sorts reorder loaded rows client-side, so they fetch in popular order.
-  // "newest" is server-side ONLY when there is no text query: ollama.com returns
-  // an empty result set for `q=…&o=newest`, so a searched "newest" fetches the
-  // query's relevance results and is reordered by recency client-side (below).
-  const hasRegQuery = regQueryLive.trim().length > 0;
-  const serverSort = sortBy === "newest" && !hasRegQuery ? "newest" : "popular";
+  // Filters and sort are ollama.com's own (see `search_ollama_registry`), so
+  // every page arrives filtered and in order and scrolling just appends.
+  const regCapabilities = [...regTypes, regRuns].filter(Boolean);
+  const regFilterKey = `${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
 
   // Fetch one page of ollama.com/search results. `reset` replaces the list
-  // (new query/sort); otherwise it appends, de-duping by name across pages.
+  // (new query/filter/sort); otherwise it appends, de-duping by name across
+  // pages (a model published meanwhile shifts the pages by one).
   const loadRegistryPage = async (page: number, reset: boolean) => {
+    const seq = ++regSeq.current;
     setRegLoading(true);
     setRegError(null);
+    if (reset) {
+      setRegModels([]);
+      setRegPage(0);
+      setRegDone(false);
+    }
     try {
-      const rows = await invoke<RegistryModel[]>("search_ollama_registry", {
+      const result = await invoke<RegistrySearchPage>("search_ollama_registry", {
         query: regQueryLive.trim(),
-        capability: "", // type filter is multi-select + client-side (see shownRegistry)
-        sort: serverSort,
+        capabilities: regCapabilities,
+        size: regDownload,
+        sort: sortBy,
         page,
       });
+      if (seq !== regSeq.current) return;
       setRegPage(page);
-      setRegDone(rows.length === 0);
+      setRegDone(!result.hasMore);
       setRegModels((prev) => {
-        if (reset) return rows;
+        if (reset) return result.models;
         const seen = new Set(prev.map((m) => m.name));
-        return [...prev, ...rows.filter((m) => !seen.has(m.name))];
+        return [...prev, ...result.models.filter((m) => !seen.has(m.name))];
       });
     } catch (e) {
+      if (seq !== regSeq.current) return;
       setRegError(String(e));
       setRegDone(true);
     } finally {
-      setRegLoading(false);
+      if (seq === regSeq.current) setRegLoading(false);
     }
   };
 
@@ -3725,21 +3680,25 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     return () => window.clearTimeout(id);
   }, [regQuery]);
 
-  // (Re)load page 1 whenever the query or the server-side sort changes. Type and
-  // size filters and client sorts don't refetch — they reshape loaded rows.
+  // (Re)load page 1 whenever the query, a filter or the sort changes.
   useEffect(() => {
     if (installed !== true) return;
     void loadRegistryPage(1, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regQueryLive, serverSort, installed]);
+  }, [regQueryLive, regFilterKey, installed]);
 
-  // Keep the observer callback pointing at the latest state without re-observing.
+  // Load the next page while the sentinel under the list is in (or near) view,
+  // once page 1 is in (that one is the effect's above). The observer is
+  // re-armed after every page: observing fires once with the current state, so
+  // a page that still leaves the sentinel visible (a short page, a tall window)
+  // pulls the next one instead of stalling.
+  const canLoadMore = !regLoading && !regDone && regPage > 0;
   loadMoreRef.current = () => {
-    if (!regLoading && !regDone) void loadRegistryPage(regPage + 1, false);
+    if (canLoadMore) void loadRegistryPage(regPage + 1, false);
   };
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el) return;
+    if (!el || !canLoadMore) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) loadMoreRef.current();
@@ -3748,61 +3707,28 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, []);
+  }, [canLoadMore, regPage]);
 
-  // Toggle a value in a Set-valued filter (used by both Type and Params chips).
-  const toggleInSet =
-    (setter: (updater: (prev: Set<string>) => Set<string>) => void) => (key: string) =>
-      setter((prev) => {
-        const next = new Set(prev);
-        if (next.has(key)) next.delete(key);
-        else next.add(key);
-        return next;
-      });
-  const toggleType = toggleInSet(setRegTypes);
-  const toggleSizeBucket = toggleInSet(setRegSizes);
-
-  // Client-side filtering + sorting over the loaded rows. Type (any-of selected
-  // capability) and size buckets narrow; the chosen sort then reorders. Ollama
-  // offers no type/size/pulls query params, so this reshapes what's fetched.
-  const shownRegistry = useMemo(() => {
-    const out = regModels.filter(
-      (m) =>
-        (regTypes.size === 0 || m.capabilities.some((c) => regTypes.has(c))) &&
-        matchesSizeBuckets(m.sizes, regSizes),
-    );
-    if (sortBy === "name") {
-      out.sort((a, b) => a.name.localeCompare(b.name));
-    } else if (sortBy === "params-asc" || sortBy === "params-desc") {
-      const dir = sortBy === "params-asc" ? 1 : -1;
-      out.sort(
-        (a, b) =>
-          dir * (modelMaxParamsB(a.sizes) - modelMaxParamsB(b.sizes)) ||
-          a.name.localeCompare(b.name),
-      );
-    } else if (sortBy === "pulls") {
-      out.sort((a, b) => parsePulls(b.pulls) - parsePulls(a.pulls));
-    } else if (sortBy === "newest" && hasRegQuery) {
-      // A searched "newest" cannot be honoured server-side (see `serverSort`),
-      // so reorder the query's results by their relative "updated" label.
-      out.sort((a, b) => updatedAgeDays(a.updated) - updatedAgeDays(b.updated) || a.name.localeCompare(b.name));
-    }
-    // "popular"/"newest" without a query: keep the server's fetch order.
-    return out;
-  }, [regModels, regTypes, regSizes, sortBy, hasRegQuery]);
+  const toggleType = (key: string) =>
+    setRegTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // Rows with no size badge on their search card (cloud models, single-variant
   // models) carry their parameter count and size only in the registry manifest,
   // not the search HTML — so fetch those few eagerly, or the card would show a
   // bare "pull"/"cloud" button with no parameters and no size to judge fit by.
   useEffect(() => {
-    for (const m of shownRegistry) {
+    for (const m of regModels) {
       if (m.sizes.length === 0) {
         fetchTagInfo(`${m.name}:${m.capabilities.includes("cloud") ? "cloud" : "latest"}`);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownRegistry]);
+  }, [regModels]);
 
   // "Load on Tabtivity start" — which models `stores/agents/ollamaAutoload` warms into
   // memory at launch. Both controls write straight through: the per-model switch
@@ -4054,8 +3980,13 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </div>
         {meta && <div className="ollama-catalog-hint">{meta}</div>}
         {m.description && <div className="ollama-catalog-desc">{m.description}</div>}
-        {caps.length > 0 && (
+        {(caps.length > 0 || m.community) && (
           <div className="ollama-caps">
+            {m.community && (
+              <span className="ollama-cap" title={t("ollama.communityTitle", { user: m.name.split("/")[0] })}>
+                {t("ollama.communityBadge")}
+              </span>
+            )}
             {caps.map((c) => (
               <span className="ollama-cap" key={c}>
                 {c}
@@ -4523,7 +4454,11 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </SettingsCard>
       </SettingsAdvanced>
 
-      {sectionHead(t("ollama.browseRegistry"))}
+      {sectionHead(
+        <>
+          {t("ollama.browseRegistry")} <UntestedTag id="ollama.browseRegistry" />
+        </>,
+      )}
 
       <div className="ollama-browse-bar">
         <input
@@ -4567,14 +4502,25 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           })),
         )}
         {filterGroup(
-          t("ollama.filterParams"),
-          regSizes.size === 0,
-          () => setRegSizes(new Set()),
-          SIZE_BUCKETS.map((b) => ({
-            key: b.key,
-            label: b.label,
-            active: regSizes.has(b.key),
-            toggle: () => toggleSizeBucket(b.key),
+          t("ollama.filterRuns"),
+          regRuns === "",
+          () => setRegRuns(""),
+          REGISTRY_RUNS.map((where) => ({
+            key: where,
+            label: t(`ollama.runs.${where}`),
+            active: regRuns === where,
+            toggle: () => setRegRuns((prev) => (prev === where ? "" : where)),
+          })),
+        )}
+        {filterGroup(
+          t("ollama.filterDownload"),
+          regDownload === "",
+          () => setRegDownload(""),
+          REGISTRY_DOWNLOAD_SIZES.map((cap) => ({
+            key: cap,
+            label: cap === "over64" ? t("ollama.sizeOver", { gb: 64 }) : t("ollama.sizeUpTo", { gb: cap }),
+            active: regDownload === cap,
+            toggle: () => setRegDownload((prev) => (prev === cap ? "" : cap)),
           })),
         )}
         <label className="ollama-sort-label" title={t("ollama.sortBy")}>
@@ -4603,16 +4549,12 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       )}
 
       <div className="settings-list">
-        {shownRegistry.map(registryCard)}
+        {regModels.map(registryCard)}
 
         {/* Lazy-load sentinel + status line. */}
         {regLoading && <div className="ollama-empty">{t("common.loading")}</div>}
-        {!regLoading && shownRegistry.length === 0 && (
-          <div className="ollama-empty">
-            {regModels.length === 0
-              ? t("ollama.noModelsFound")
-              : t("ollama.noMatchSizeFilter")}
-          </div>
+        {!regLoading && !regError && regModels.length === 0 && (
+          <div className="ollama-empty">{t("ollama.noModelsFound")}</div>
         )}
         <div ref={sentinelRef} aria-hidden="true" />
         {regDone && regModels.length > 0 && (

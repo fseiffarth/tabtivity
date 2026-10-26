@@ -78,6 +78,7 @@ import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
 import { requestNewTab } from "../../lib/shortcuts/newTabChord";
 import { UntestedTag } from "../common/UntestedTag";
+import { openProjectDialog } from "../../lib/projects/projectDialogEvent";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
 import { mobileAgentTmuxReady } from "../../lib/terminal/mobileTmuxReady";
 
@@ -1101,19 +1102,38 @@ function CenterPanelImpl() {
             className="center-placeholder"
             style={{ height: "100%" }}
           >
-            <div className="center-placeholder-card">
-              <h2 className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</h2>
-              <div className="center-placeholder-hint">
-                {t("centerPanel.noTabsGuidance")}
+            {/* With no project open the panel shows the root scope, whose
+                empty state is about projects, not tabs: the first thing to do
+                is add one (the header + menu's own dialog). */}
+            {scope === ROOT_SCOPE ? (
+              <div className="center-placeholder-card">
+                <h2 className="center-placeholder-title">{t("centerPanel.noProjectOpen")}</h2>
+                <div className="center-placeholder-hint">
+                  {t(projects.length === 0 ? "centerPanel.firstProjectGuidance" : "centerPanel.pickProjectGuidance")}
+                </div>
+                <button
+                  className="center-placeholder-action"
+                  aria-label={t("centerPanel.addProject")}
+                  onClick={() => openProjectDialog("new")}
+                >
+                  {t("centerPanel.addProject")} <UntestedTag id="centerPanel.addProject" />
+                </button>
               </div>
-              <button
-                className="center-placeholder-action"
-                aria-label={t("centerPanel.openTab")}
-                onClick={() => requestNewTab({ kind: "menu" }, { groupId: EMPTY_GROUP_ID })}
-              >
-                {t("centerPanel.openTab")} <UntestedTag id="centerPanel.openTab" />
-              </button>
-            </div>
+            ) : (
+              <div className="center-placeholder-card">
+                <h2 className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</h2>
+                <div className="center-placeholder-hint">
+                  {t("centerPanel.noTabsGuidance")}
+                </div>
+                <button
+                  className="center-placeholder-action"
+                  aria-label={t("centerPanel.openTab")}
+                  onClick={() => requestNewTab({ kind: "menu" }, { groupId: EMPTY_GROUP_ID })}
+                >
+                  {t("centerPanel.openTab")} <UntestedTag id="centerPanel.openTab" />
+                </button>
+              </div>
+            )}
           </div>
         </Subwindow>
       )}

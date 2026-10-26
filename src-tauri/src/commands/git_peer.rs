@@ -69,7 +69,7 @@ pub async fn git_peer_set_local_authoritative(
     project_id: String,
     enabled: bool,
 ) -> Result<GitPeerState, String> {
-    let op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -108,7 +108,7 @@ pub async fn git_peer_sync_now(
     ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
-    let op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -143,7 +143,7 @@ pub async fn git_peer_pair_confirm(
     ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
-    let op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -185,7 +185,7 @@ pub async fn git_peer_restore_backup(
     peer: String,
     refname: String,
 ) -> Result<GitPeerState, String> {
-    let op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -228,7 +228,7 @@ pub async fn git_peer_checkout(
     target: String,
     initiating_side: Option<String>,
 ) -> Result<GitPeerState, String> {
-    let op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -262,7 +262,7 @@ pub async fn git_peer_resolve(
     project_id: String,
     authority: String,
 ) -> Result<GitPeerState, String> {
-    let op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();

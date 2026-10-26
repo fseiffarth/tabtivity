@@ -4,6 +4,14 @@
 // "system" must be resolved first (desktop: `stores/settings.resolveTheme`;
 // phone: `theme.resolvePhoneTheme`). Anything unknown gets the Fancy Dark palette.
 
+/** xterm's `minimumContrastRatio` for every terminal: text a program draws
+ * in a colour too close to the background is pushed to WCAG AA. An agent TUI
+ * prints its version, model and hints in the palette's light `white` slot,
+ * which on a light theme sat near-invisible on the background (light
+ * lavender: 1.6:1). xterm keeps dimmed text at half the ratio, so it still
+ * reads as dimmed. */
+export const TERMINAL_MIN_CONTRAST = 4.5;
+
 export function terminalPalette(scheme: string | undefined) {
   if (scheme === "soft_dark") {
     // The neutral dark theme: background/foreground match its own

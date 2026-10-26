@@ -102,7 +102,7 @@ describe("sync store actions", () => {
     expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 3, skippedTooLarge: [] });
   });
 
-  it("resolveAll on the host side collects the files left on the host as too large", async () => {
+  it("resolveAll collects the files left on the host as too large and the failures", async () => {
     const big = { rel: "data/big.bin", size: 70 * 1024 * 1024 };
     invokeMock.mockImplementation(((cmd: string, args?: { relPath?: string }) => {
       if (cmd !== "sync_pull") return Promise.resolve([]);
@@ -114,10 +114,26 @@ describe("sync store actions", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(
       await useSyncStore.getState().resolveAll("p1", ["a.txt", "data/big.bin", "data/bad.txt"], "host"),
-    ).toEqual([big]);
-    err.mockRestore();
+    ).toEqual({ skipped: [big], failed: 1, firstError: "gone" });
     // The local side pushes; nothing is pulled, nothing reported.
-    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual([]);
+    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual({
+      skipped: [],
+      failed: 0,
+      firstError: null,
+    });
+    // A push the backend refused per file (an Ok result) counts as a failure.
+    invokeMock.mockImplementation(((cmd: string) =>
+      Promise.resolve(
+        cmd === "sync_push"
+          ? { pushed: 0, conflicts: [], failed_total: 1, failed: ["a.txt"], first_error: "denied" }
+          : [],
+      )) as never);
+    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual({
+      skipped: [],
+      failed: 1,
+      firstError: "denied",
+    });
+    err.mockRestore();
   });
 
   it("markSelected forwards the selection + dir flag", async () => {

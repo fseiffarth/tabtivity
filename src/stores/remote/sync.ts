@@ -192,6 +192,23 @@ export interface SyncPullOutcome {
   skippedTooLarge: SyncSkippedFile[];
 }
 
+/** What a batch take-one-side (`resolveAll`) did. */
+export interface SyncResolveOutcome {
+  /** Host files over the cap a "host" batch left on the host. */
+  skipped: SyncSkippedFile[];
+  /** Files that did not transfer. */
+  failed: number;
+  /** The first failure's message, or null when every file went. */
+  firstError: string | null;
+}
+
+/** Why a forced push of named files did not go, or null when it did: a per-file
+ *  failure is not a command error (`SyncPushResult.failed_total`). */
+export function pushFailure(result: SyncPushResult | null | undefined): string | null {
+  if (!result || !result.failed_total) return null;
+  return result.first_error ?? `${result.failed_total} file(s) failed`;
+}
+
 /** Read a pull result defensively: an older backend (or a test double) may
  *  answer with a bare count or nothing at all. */
 function toPullOutcome(raw: unknown): SyncPullOutcome {
@@ -244,12 +261,13 @@ interface SyncStore {
    *  (the mirror overwrites the host). Refreshes the status once at the end rather
    *  than per file. Backs the orange view's "…for all" buttons. Resolves to the
    *  files over the cap a "host" batch left on the host (gap 35), for the view
-   *  to name; empty for "local". */
+   *  to name (empty for "local"), and the files that failed with the first
+   *  reason — a failed file is skipped, never the whole batch. */
   resolveAll: (
     projectId: string,
     relPaths: string[],
     side: "host" | "local",
-  ) => Promise<SyncSkippedFile[]>;
+  ) => Promise<SyncResolveOutcome>;
   /** Toggle the selected flag for paths without transferring (deselect = stop). */
   markSelected: (
     projectId: string,
@@ -553,21 +571,33 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     // the whole selection N times. A single failed file is logged and skipped so
     // one bad path doesn't abort the rest of the batch. A host copy over the
     // cap is not pulled; it is collected and returned rather than only logged.
+    // The failures are returned too: logging them only made a batch the backend
+    // refused file by file look exactly like one that went through.
     const skipped: SyncSkippedFile[] = [];
+    let failed = 0;
+    let firstError: string | null = null;
+    const fail = (rel: string, e: unknown) => {
+      console.error(`resolveAll: ${side} failed for ${rel}`, e);
+      failed += 1;
+      firstError ??= e instanceof Error ? e.message : String(e);
+    };
     for (const rel of relPaths) {
       try {
         if (side === "host") {
           const outcome = toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath: rel }));
           skipped.push(...outcome.skippedTooLarge);
         } else {
-          await invoke("sync_push", { projectId, relPath: rel, force: true });
+          const why = pushFailure(
+            await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force: true }),
+          );
+          if (why) fail(rel, why);
         }
       } catch (e) {
-        console.error(`resolveAll: ${side} failed for ${rel}`, e);
+        fail(rel, e);
       }
     }
     await get().refreshStatus(projectId);
-    return skipped;
+    return { skipped, failed, firstError };
   },
 
   markSelected: async (projectId, relPaths, selected, isDir) => {

@@ -495,6 +495,25 @@ describe("the desktop Reader's live screen", () => {
     expect(sameReaderLive(ended, readReaderLive(plainBuffer(idle), "Claude"))).toBe(false);
   });
 
+  it("finds the input box under a rule that names the session, its draft ending in an empty line", () => {
+    // Claude Code 2.1.310 names the session in the box's top rule; an Enter
+    // taken as a newline leaves the draft's last line empty.
+    const live = readReaderLive(plainBuffer([
+      " ▐▛███▜▌   Claude Code v2.1.310",
+      "",
+      `${"─".repeat(60)} MyProject ─`,
+      "❯ fix: under wayland apps opened through the app are not moved",
+      "  appear in side panel apps view and also does not move",
+      "  ",
+      "─".repeat(76),
+      "  user@host ~/projects/app (develop*) · Opus 5.5 [high] · 5h 85%/48m",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ]), "Claude", 76);
+    expect(live.stray).toBe(false);
+    expect(live.question).toBeNull();
+    expect(live.status?.branch).toBe("develop");
+  });
+
   it("leaves a dialog answered before the last prompt alone", () => {
     const answered = readReaderLive(plainBuffer([
       "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "> and now the tests", "", "⏺ Running them.", "> ",

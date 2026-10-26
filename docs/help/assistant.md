@@ -9,11 +9,12 @@ Tabby is a chat assistant that can search and read the web and look things up
 in Tabtivity's own help, and cannot see anything on your computer: no files, no
 projects, no mail or calendar, no MCP servers of yours. Use it for questions
 that need no project ("what does this error mean", "find me the paper on X",
-"how do I sync a remote project?"). It is experimental and off by default.
+"how do I sync a remote project?"). It is experimental and on by default.
 
 ## Turn it on
 
-1. **Settings → System → Experimental**: switch **Tabby** on.
+1. Tabby is on in a new install. If it was switched off, switch **Tabby** on
+   again in **Settings → System → Experimental**.
 2. A small Tabtivity-mark icon (a ring with a tree and two hexagons) appears
    on the side panel's edge bar, below Files, Git, Apps and Agents (and as a
    button in the panel's own row of views), and **Settings → Agents** gets a
@@ -104,8 +105,8 @@ off removes the button. There is no phone chat on Windows (it needs tmux).
 
 ## Troubleshooting
 
-- **No Tabby icon on the side panel's edge bar**: the Experimental switch is
-  off. With no project open the side panel (and its bar) is not shown at all;
+- **No Tabby icon on the side panel's edge bar**: the Experimental switch was
+  turned off. With no project open the side panel (and its bar) is not shown at all;
   open a project or the root folder first.
 - **A model says it cannot search**: local models need a search service set up.
 - **`not_public` on a page you can open in your browser**: the address is on

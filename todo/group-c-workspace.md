@@ -130,9 +130,13 @@
     project, desktop 1 = parked) and sets/restores its workspace gsettings;
     the Apps view says which rows a project switch can't hide.
     - [ ] 🖐️ PyCharm via **Open in PyCharm** (cold start): listed in the side
-      panel Apps view; switching to another project moves its window to the
-      hidden workspace (Ctrl+Alt+→ shows it there), switching back brings it
-      back — on the primary and on a secondary monitor.
+      panel Apps view. On X11 (and for any XWayland app on Wayland, e.g.
+      xterm) switching to another project moves its window to the hidden
+      workspace (Ctrl+Alt+→ shows it there), switching back brings it back —
+      on the primary and on a secondary monitor. On GNOME Wayland PyCharm is a
+      native Wayland window (JetBrains' default toolkit): it is listed with the
+      "stays on screen" line and does not move (user decision 2026-10-26: list
+      only, no XWayland launch hints).
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)
@@ -166,7 +170,7 @@
     - [ ] 🖐️ A native Wayland app opened from the project (e.g. GNOME Text
       Editor) is listed in the Apps view with the muted "Stays on screen …
       only XWayland windows can move" line, and stays on screen on a switch;
-      the PyCharm (XWayland) row shows no such line. On KDE Wayland/XFCE the
+      an XWayland app's row (e.g. xterm) shows no such line. On KDE Wayland/XFCE the
       list shows the one "This desktop can't hide app windows" line instead.
       - [ ] ✅ Works on Linux (Wayland)
       - [ ] ❌ Doesn't work on Linux (Wayland)

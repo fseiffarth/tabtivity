@@ -79,7 +79,8 @@ describe("Mobile bridge — a box scope", () => {
     vi.mocked(listen).mockResolvedValue(() => {});
     useProjectsStore.setState({ projects: [member], activeId: null, loaded: true });
     useBoxesStore.setState({ boxes: [paper, privateBox], loaded: true });
-    useSettingsStore.setState({ settings: {} as Settings, loaded: true });
+    // Tabby (on by default) adds a row of its own; these tests are about boxes.
+    useSettingsStore.setState({ settings: { assistant: false } as Settings, loaded: true });
     useTabsStore.setState({
       scope: "root",
       tabsByScope: {
@@ -143,7 +144,8 @@ describe("Mobile settings — box access rows", () => {
     vi.mocked(listen).mockResolvedValue(() => {});
     useProjectsStore.setState({ projects: [member], activeId: null, loaded: true });
     useBoxesStore.setState({ boxes: [{ ...paper, folder: undefined, [MOBILE_ACCESS_KEY]: undefined }], loaded: true });
-    useSettingsStore.setState({ settings: {} as Settings, loaded: true });
+    // Tabby (on by default) adds a row of its own; these tests are about boxes.
+    useSettingsStore.setState({ settings: { assistant: false } as Settings, loaded: true });
   });
 
   afterEach(() => {
@@ -225,7 +227,8 @@ describe("Mobile settings — which phones a row reaches", () => {
       ],
       loaded: true,
     });
-    useSettingsStore.setState({ settings: {} as Settings, loaded: true });
+    // Tabby (on by default) adds a row of its own; these tests are about boxes.
+    useSettingsStore.setState({ settings: { assistant: false } as Settings, loaded: true });
   });
 
   afterEach(() => {

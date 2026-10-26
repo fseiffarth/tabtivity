@@ -811,11 +811,14 @@ const SEARCH_FIXTURE: &str = r#"
 
 #[test]
 fn parse_search_html_extracts_all_fields() {
-    let models = parse_search_html(SEARCH_FIXTURE);
+    let page = parse_search_html(SEARCH_FIXTURE);
+    assert!(!page.has_more);
+    let models = page.models;
     assert_eq!(models.len(), 2);
 
     let glm = &models[0];
     assert_eq!(glm.name, "glm-5.2");
+    assert!(!glm.community);
     // HTML entities are unescaped.
     assert_eq!(glm.description, "GLM-5.2 is Z.ai's flagship model & more.");
     assert_eq!(glm.capabilities, vec!["tools", "thinking"]);
@@ -831,9 +834,142 @@ fn parse_search_html_extracts_all_fields() {
     assert_eq!(nomic.updated, "1 year ago");
 }
 
+// The current ollama.com/search markup, trimmed: the description is the
+// card's first <p>, the pull count sits in a `title="… downloads"` span, the
+// update label is a short `2mo` under `title="Updated …"`, and community
+// models (`/<user>/<name>`) follow the library ones in the same list.
+const SEARCH_FIXTURE_CURRENT: &str = r#"
+<ul role="list" class="overflow-hidden rounded-3xl">
+<li  class="border-t-[0.5px] border-line first:border-t-0">
+  <a href="/library/gemma4" class="group grid grid-cols-1 gap-x-4 px-4 py-6">
+    <div class="flex min-w-0 items-baseline gap-2.5">
+      <h2 class="min-w-0 truncate text-xl" title="gemma4"><span >gemma4</span></h2>
+      <span class="flex-none text-[15px] tabular-nums text-muted" title="Updated October 12, 2026">1w</span>
+    </div>
+    <div class="order-last mt-3 flex flex-wrap items-center gap-2"><span  class="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs">vision</span><span  class="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs">tools</span>
+      <span  class="inline-flex items-center rounded-md bg-cyan-50 px-2 py-0.5 text-xs">cloud</span>
+    </div>
+    <p class="mt-1 line-clamp-2 text-[15px] leading-6 text-black sm:col-span-2">Gemma 4 models &amp; more.</p>
+    <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+      <span class="inline-flex items-center gap-1.5 tabular-nums text-ink sm:mr-1" title="27,871,499 downloads"><svg class="flex-none" width="15"><path d="M12 3.5v12"/></svg><span >27.9M</span></span>
+      <span class="inline-flex items-center gap-1.5 tabular-nums text-ink sm:mr-1"><svg></svg><span >51 tags</span></span>
+      <span  class="inline-flex items-center rounded-md bg-[#ddf4ff] px-2 py-0.5 text-xs">e4b</span>
+      <span  class="inline-flex items-center rounded-md bg-[#ddf4ff] px-2 py-0.5 text-xs">26b</span>
+    </div>
+  </a>
+</li>
+<li  class="border-t-[0.5px] border-line first:border-t-0">
+  <a href="/library/glm-5.3-flash" class="group grid grid-cols-1 gap-x-4 px-4 py-6">
+    <div class="flex min-w-0 items-baseline gap-2.5">
+      <h2 class="min-w-0 truncate text-xl" title="glm-5.3-flash"><span >glm-5.3-flash</span></h2>
+      <span class="flex-none text-[15px] tabular-nums text-muted" title="Updated August 26, 2026">2mo</span>
+    </div>
+    <div class="order-last mt-3 flex flex-wrap items-center gap-2"><span  class="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs">vision</span><span  class="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs">thinking</span>
+      <span  class="inline-flex items-center rounded-md bg-cyan-50 px-2 py-0.5 text-xs">cloud</span>
+    </div>
+    <p class="mt-1 line-clamp-2 text-[15px] leading-6 text-black sm:col-span-2">Z.ai&#39;s first natively multimodal model.</p>
+    <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+      <span class="inline-flex items-center gap-1.5 text-ink sm:mr-1" title="Context window"><svg></svg><span >1M</span></span>
+    </div>
+  </a>
+</li>
+<li  class="border-t-[0.5px] border-line first:border-t-0">
+  <a href="/someone/gemma4-uncensored" class="group grid grid-cols-1 gap-x-4 px-4 py-6">
+    <div class="flex min-w-0 items-baseline gap-2.5">
+      <h2 class="min-w-0 truncate text-xl" title="someone/gemma4-uncensored"><span >someone/gemma4-uncensored</span></h2>
+      <span class="flex-none text-[15px] tabular-nums text-muted" title="Updated October 23, 2026">2d</span>
+    </div>
+    <div class="order-last mt-3 flex flex-wrap items-center gap-2"><span  class="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs">tools</span><span  class="inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs">audio</span></div>
+    <p class="mt-1 line-clamp-2 text-[15px] leading-6 text-black sm:col-span-2">A community model.</p>
+    <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+      <span class="inline-flex items-center gap-1.5 tabular-nums text-ink sm:mr-1" title="293 downloads"><svg></svg><span >293</span></span>
+      <span  class="inline-flex items-center rounded-md bg-[#ddf4ff] px-2 py-0.5 text-xs">12b</span>
+    </div>
+  </a>
+</li>
+<li
+  hx-get="/search?page=2&q=gemma&#43;4"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+></li>
+</ul>
+<footer><a href="/public/terms" class="group">Terms</a><a href="/search">Search</a></footer>"#;
+
+#[test]
+fn parse_search_html_reads_the_current_layout() {
+    let page = parse_search_html(SEARCH_FIXTURE_CURRENT);
+    // The next-page placeholder closes the list.
+    assert!(page.has_more);
+    let models = page.models;
+    // Library and community cards; the footer links are not cards.
+    assert_eq!(models.len(), 3);
+
+    let gemma = &models[0];
+    assert_eq!(gemma.name, "gemma4");
+    assert!(!gemma.community);
+    assert_eq!(gemma.description, "Gemma 4 models & more.");
+    assert_eq!(gemma.capabilities, vec!["vision", "tools", "cloud"]);
+    assert_eq!(gemma.sizes, vec!["e4b", "26b"]);
+    assert_eq!(gemma.pulls, "27.9M");
+    assert_eq!(gemma.updated, "1 week ago");
+
+    // The last library card stops at its own `</li>`: the community card's
+    // badges and size after it are not its own.
+    let glm = &models[1];
+    assert_eq!(glm.name, "glm-5.3-flash");
+    assert_eq!(glm.description, "Z.ai's first natively multimodal model.");
+    assert_eq!(glm.capabilities, vec!["vision", "thinking", "cloud"]);
+    assert!(glm.sizes.is_empty());
+    assert_eq!(glm.pulls, "");
+    assert_eq!(glm.updated, "2 months ago");
+
+    let community = &models[2];
+    assert_eq!(community.name, "someone/gemma4-uncensored");
+    assert!(community.community);
+    assert_eq!(community.capabilities, vec!["tools", "audio"]);
+    assert_eq!(community.sizes, vec!["12b"]);
+    assert_eq!(community.pulls, "293");
+    assert_eq!(community.updated, "2 days ago");
+}
+
+#[test]
+fn search_url_passes_only_ollama_com_s_own_filters() {
+    assert_eq!(
+        search_url(" gemma 4 ", &[], "", "popular", 0),
+        "https://ollama.com/search?q=gemma%204&page=1"
+    );
+    let caps = ["vision", "cloud", "tools", "x&y=1"].map(String::from);
+    assert_eq!(
+        search_url("", &caps, "16", "newest", 3),
+        "https://ollama.com/search?q=&page=3&c=tools&c=vision&c=cloud&s=16&o=newest"
+    );
+    assert_eq!(
+        search_url("", &[], "17&o=x", "name", 2),
+        "https://ollama.com/search?q=&page=2&o=name"
+    );
+}
+
+#[test]
+fn html_unescape_decodes_named_and_numeric_entities() {
+    assert_eq!(html_unescape("A &#43; B &amp; C&#39;s &#x2014; &lt;x&gt;"), "A + B & C's — <x>");
+    assert_eq!(html_unescape("&amp;lt; stays one pass"), "&lt; stays one pass");
+    assert_eq!(html_unescape("AT&T & co; &bogus; &#xZZ;"), "AT&T & co; &bogus; &#xZZ;");
+}
+
+#[test]
+fn long_age_label_expands_the_short_units() {
+    assert_eq!(long_age_label("1w"), "1 week ago");
+    assert_eq!(long_age_label("2mo"), "2 months ago");
+    assert_eq!(long_age_label("12h"), "12 hours ago");
+    assert_eq!(long_age_label("1y"), "1 year ago");
+    assert_eq!(long_age_label("yesterday"), "yesterday");
+}
+
 #[test]
 fn parse_search_html_empty_when_no_cards() {
-    assert!(parse_search_html("<html><body>no results</body></html>").is_empty());
+    let page = parse_search_html("<html><body>no results</body></html>");
+    assert!(page.models.is_empty());
+    assert!(!page.has_more);
 }
 
 #[test]
