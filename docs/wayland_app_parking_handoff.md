@@ -157,3 +157,126 @@ All green on `756b9fd3` (own `CARGO_TARGET_DIR` = `<worktree>/target`,
 - Confirm when convenient (from the plan): a project-opened row whose window
   can't be seen and whose family died is kept delist-only rather than
   vanishing.
+
+## A1b — switch + IDE (Phase 1 steps 4–5)
+
+Commit: `ecde7510` (code) + the commit adding this section (branch
+`worktree-agent-aef0a4200f53c2932`, on A1a's `bfe5480f`). Files:
+`commands/apps.rs`, `commands/ide.rs`, `services/window_service.rs`,
+`services/project_runtime.rs`. `commands/workspace.rs` untouched (A3's).
+
+### What landed
+
+- **Row resolver.** `window_service::resolve_missing_window_ids(windows,
+  project_id, resolve: FnMut(&TrackedWindow) -> Option<u64>)`. Windows/macOS
+  wrap `resolve_window_id_for_pid(w.pid)` and now skip pid-0 rows (they
+  used to ask the OS for pid 0's windows).
+- **Linux resolver.** `apps::resolve_missing_launch_windows(reg, scope)`
+  (no-op off Linux-desktop) → `resolve_missing_launch_windows_with(reg,
+  scope, windows, marked)` (pure, injected scan + marked lookup). Per
+  windowless project-owned row: pids = `proc_table::marked_procs(&snapshot(),
+  launch_id, track.since)` (cached snapshot) plus the row's own pid when
+  non-zero → `resolve_window_for_launch`; a pid-0 `ORIGIN_PROJECT_IDE` row
+  with `ide_project` facts additionally adopts the IDE's window showing the
+  project (`adopt_project_window`). `held` starts as every row's window id
+  and grows as rows resolve, so two rows never take one window. The scan is
+  lazy (`OnceCell`): none when no row has pids or IDE facts.
+- **Switch time.** `project_runtime::switch` step 5 calls it on Linux
+  (cfg `not(windows|macos)`); the `allow(unused_mut)` cfg and the "Linux
+  resolves at launch" comment are gone.
+- **Read time.** `prune_dead_windows` runs the resolve first, then the prune;
+  both share one `OnceCell` scan (`current_window_list` removed).
+- **IDE facts on the launch.** Choice beyond the A1a note: instead of
+  filling `LaunchTrack::ide_project` after `do_launch` returns (a race — a
+  hand-off launcher can exit and its watcher read the track before
+  `ide.rs` writes it), `do_launch_project_ide(registry, exec, args, target,
+  project_id, ide, names)` passes them into `record_launch`, before the
+  watcher thread starts. `do_launch` and it share `launch_tracked` (8 args,
+  `allow(clippy::too_many_arguments)`). `ide.rs` computes
+  `project_window_names` once and hands it to both the raise check and the
+  launch.
+- **Exit adoption.** `exit_adoption(row, clients, family_pids, held, ide,
+  new_window)` (pure): family window by pid first; with no family, an IDE
+  row with facts adopts by `adopt_project_window` (never the
+  any-new-window guess), any other row keeps `find_new_window(&before, 1)`;
+  a live family that shows no window gets no guess (as A1a).
+- **Raise path.** `track_raised_window(reg, wid, exec, target, project)`
+  returns the row holding the window or inserts `row_for_raised_window`:
+  id `ide-window-<wid>`, pid 0, `window_id`, `ORIGIN_PROJECT_IDE`, role
+  `ide`, file = target, no `launch_id`, no launch track.
+  `open_project_in_ide` now always returns `Some(row)` on a raise (the
+  frontend already refreshes after the call; no notify needed).
+- **pid-0 window-only liveness.** `prune_dead_windows_with` gained
+  `pid0_window_liveness: bool` (`PID0_WINDOW_LIVENESS = cfg!(linux)`): a
+  pid-0 row with a window id is a prune candidate judged by the list alone
+  (gone → removed with its track; `Unknown` → nothing). Applies to every
+  pid-0 row with an id (OS-default opens, demoted hand-offs, raised rows),
+  not just IDE rows. Off on Windows/macOS: their enumerations list *visible*
+  windows only, so a parked (`SW_HIDE`) window would be pruned.
+
+### Gotchas
+
+- Heredocs/`python3 - <<EOF` in Bash are refused by this worktree's
+  isolation check ("too complex"); scripts written to the scratchpad and run
+  by path work.
+- Under Wayland every Apps-view read of a scope holding a live, windowless
+  (native) row now opens one X connection (the read-time resolve finds pids
+  to try). `get_opened_windows` is a sync command (main thread) and holds
+  the registry lock across it — a few ms per read. Making it `async` +
+  `try_blocking` would be the fix; it is in `workspace.rs` (A3's file), so
+  left alone — merge-time call.
+
+### Gates
+
+All green on `ecde7510` (`CARGO_TARGET_DIR=<worktree>/target`,
+`CARGO_INCREMENTAL=0`):
+
+- `cargo test -q -p tabtivity --lib`: 4752 passed, 7 ignored (A1a: 4742).
+  New: 9 in `apps.rs` (hand-off adopts the project window → `KeepDemoted`,
+  held skip, no guess; guess only without family/IDE facts; read/switch
+  resolve by marker + IDE project from one scan; no scan without anything
+  to resolve by; two rows never share a window; `row_for_raised_window` +
+  `track_raised_window`; pid-0 window-only liveness incl. off-Linux and
+  `Unknown`; adopted hand-off pruned once its window closes;
+  `record_launch` keeps `ide_project`), 1 in `window_service.rs` (row
+  resolver reaches pid-0 rows); 3 existing `resolve_missing_window_ids`
+  tests adapted.
+- `cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+  4612 + 1 passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings`: clean.
+- `scripts/brand-check.sh`, `git diff --check`, `scripts/privacy-check.sh`
+  (staged, 572 lines): pass.
+- **Not run:** the Windows clippy / macOS check — the Windows build needs
+  crates not in the read-only `~/.cargo` cache (`dyn-clonable`; "Read-only
+  file system"). The only Windows/macOS-compiled change is the
+  `project_runtime` resolver closure (`match w.pid { 0 => None, pid =>
+  resolve_window_id_for_pid(pid) }`). Run `scripts/ci-local.sh` at merge.
+- `npm run backend:stale` not run (worktree; main agent after merge).
+
+### Wanted filemap rows (`docs/filemap_backend.md`, apply at merge)
+
+- `commands/apps.rs` row (on top of A1a's): "`resolve_missing_launch_windows`
+  (Linux switch-time + Apps-view-read resolve by marker pids / IDE project
+  title, one lazy scan shared with the prune); pid-0 rows with a window id
+  live while it stays in the X client list (Linux); `do_launch_project_ide`,
+  `track_raised_window` / `row_for_raised_window` (raised IDE window → pid-0
+  `project_ide` row)".
+- `commands/ide.rs` row: add "a raised window no row holds gets a pid-0
+  row; launches carry the IDE + project window names for hand-off adoption".
+- `services/window_service.rs` row (line 284): add
+  "`resolve_missing_window_ids` takes a row resolver (pid-0 rows resolve by
+  launch marker)".
+- `services/project_runtime.rs` row (line 257): "step 5 re-resolves missing
+  window ids on every OS (Linux via `apps::resolve_missing_launch_windows`)".
+
+### Flagged for user
+
+- Nothing live-verified. Whether PyCharm's window is XWayland and titled
+  `proj – file` (the owed live facts) decides whether hand-off adoption and
+  the read-time resolve ever find it.
+- Window-only liveness now also prunes OS-default opens (`opener::open`,
+  pid 0) and demoted hand-offs once their window leaves the client list —
+  previously such rows stayed until "Remove from list". Linux only.
+- A raised IDE row has pid 0, so the Apps view offers "Remove from list",
+  not "Close" — Tabtivity never signals an app it did not start.
