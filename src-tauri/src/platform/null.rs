@@ -1,5 +1,8 @@
-//! No-op workspace backend — used on non-Linux, unsupported compositors,
-//! or when X11/DBus connections fail. Never errors; always reports a safe state.
+//! No-op workspace backend — used on Linux desktops `platform::route` has no
+//! backend for (XFCE, sway, …), when the `x11` connect fails (no `DISPLAY`,
+//! XWayland disabled — GNOME included), in the server daemon's build, and in
+//! the phone sidecar's process (the window's backend does the parking).
+//! Never errors; always reports a safe state.
 
 use super::{WorkspaceBackend, WorkspaceInfo};
 
