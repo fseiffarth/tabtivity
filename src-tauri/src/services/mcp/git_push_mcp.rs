@@ -33,12 +33,12 @@ use crate::services::git_hardened::{hardened_git_command_in, push_transport_comm
 pub const SERVER_NAME: &str = crate::brand::MCP_GIT_SERVER;
 /// Emitted whenever a proposal is created or changes state.
 pub const CHANGED_EVENT: &str = "git-push-mcp-changed";
-pub const CONTRACT: &str = concat!("Pushes the branch checked out in this tab's project, fast-forward only, to its existing upstream branch — never a tag, a force-push, a delete, a new remote branch or the remote's default branch. ", crate::app_name!(), " pushes from outside your sandbox with the user's stored token; you never see it. The repo's pre-push hook runs first, inside your sandbox and without any token (", crate::app_upper!(), "_PUSH_PREFLIGHT=1); other hooks do not run. Depending on the project's level the push is applied at once or staged for the user's approval — then poll git_push_status for the outcome. A repository made or swapped in after this tab started is never pushed (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six pushes per hour and two pending proposals per tab.");
+pub const CONTRACT: &str = concat!("Pushes the branch checked out in this tab's project, fast-forward only, to its existing upstream branch — never a tag, a force-push, a delete, a new remote branch or a branch the user protected. A push to the remote's default branch (main, say) always waits for the user's approval, whatever the level. ", crate::app_name!(), " pushes from outside your sandbox with the user's stored token; you never see it. The repo's pre-push hook runs first, inside your sandbox and without any token (", crate::app_upper!(), "_PUSH_PREFLIGHT=1); other hooks do not run. Depending on the project's level the push is applied at once or staged for the user's approval — then poll git_push_status for the outcome. A repository made or swapped in after this tab started is never pushed (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six pushes per hour and two pending proposals per tab.");
 /// What every CI tool's description says about which repo it reads (gap 19).
 const CI_REPO_RULE: &str = "Only for the repository the user confirmed for this project's pushes or allowed on a card; any other answers ci_repo_unconfirmed and puts an \"Allow CI\" card in front of the user — ask again once they allowed it.";
 /// The server's `instructions`: the push contract plus the release and CI
 /// tools that share the lane.
-pub const INSTRUCTIONS: &str = concat!("Pushes, release tags and CI for the project this tab works in, done by ", crate::app_name!(), " outside your sandbox with the user's stored token (you never see it). git_push pushes the checked-out branch fast-forward to its existing upstream (never a tag, force-push, delete, new remote branch or the remote's default branch); the repo's pre-push hook runs first inside your sandbox without a token. git_release proposes an annotated release tag on the checked-out branch's tip once that tip is on the remote; it always waits for the user to press Release on the card. Staged requests: poll git_push_status for the outcome. ci_runs, ci_run and ci_security_alerts read GitHub Actions runs, failed-job logs and annotations, and open code-scanning alerts of this repo — read-only, sixty reads per tab per hour, and only for the repo the user confirmed for pushes or allowed on a card (ci_repo_unconfirmed otherwise: a card is waiting, ask again once the user allowed it). A repository created or swapped after this tab started is never used (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six push or release requests per hour and two pending per tab.");
+pub const INSTRUCTIONS: &str = concat!("Pushes, release tags and CI for the project this tab works in, done by ", crate::app_name!(), " outside your sandbox with the user's stored token (you never see it). git_push pushes the checked-out branch fast-forward to its existing upstream (never a tag, force-push, delete, new remote branch or a branch the user protected; a push to the remote's default branch always waits for the user's approval on a card); the repo's pre-push hook runs first inside your sandbox without a token. Your sandbox holds no git credentials, so a plain `git push` from the shell fails: push with git_push instead, and never ask the user to push for you before trying it. git_release proposes an annotated release tag on the checked-out branch's tip once that tip is on the remote; it always waits for the user to press Release on the card. Staged requests: poll git_push_status for the outcome. ci_runs, ci_run and ci_security_alerts read GitHub Actions runs, failed-job logs and annotations, and open code-scanning alerts of this repo — read-only, sixty reads per tab per hour, and only for the repo the user confirmed for pushes or allowed on a card (ci_repo_unconfirmed otherwise: a card is waiting, ask again once the user allowed it). A repository created or swapped after this tab started is never used (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six push or release requests per hour and two pending per tab.");
 
 /// How long the whole request may block the tool call before it answers
 /// `running` and lets the agent poll — inside the listener's 30 s socket life.
@@ -68,7 +68,8 @@ pub enum Level { Off, Propose, Apply }
 pub struct ProjectPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<Level>,
-    /// Branch names never pushed, beside the remote's default branch.
+    /// Branch names never pushed. The remote's default branch is not listed
+    /// by default; a push to it always waits for the user's click.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protected: Vec<String>,
     /// The upstream URL the user confirmed. A different URL asks again.
@@ -352,14 +353,20 @@ pub(crate) fn before_transport() {
 #[cfg(test)]
 thread_local! { pub(crate) static BEFORE_TRANSPORT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
 
-/// Whether `branch` may never be pushed: the remote's default branch (falling
-/// back to `main`/`master` when the remote did not say) or a listed one.
-pub fn is_protected(branch: &str, default_branch: Option<&str>, policy: &ProjectPolicy) -> bool {
-    let default_hit = match default_branch {
+/// Whether `branch` may never be pushed: one the project lists.
+pub fn is_protected(branch: &str, policy: &ProjectPolicy) -> bool {
+    policy.protected.iter().any(|p| p == branch)
+}
+
+/// Whether `branch` is the remote's default branch (falling back to
+/// `main`/`master` when the remote did not say). A push to it is always
+/// staged for the user's click, whatever the level: a single-branch
+/// project has nothing else to push, and the user still decides.
+pub fn is_default_branch(branch: &str, default_branch: Option<&str>) -> bool {
+    match default_branch {
         Some(default) => default == branch,
         None => matches!(branch, "main" | "master"),
-    };
-    default_hit || policy.protected.iter().any(|p| p == branch)
+    }
 }
 
 // ── Running processes with a cap ────────────────────────────────────────────
@@ -409,6 +416,8 @@ pub struct Plan {
     pub commits: Vec<String>,
     pub diffstat: String,
     pub needs_url_confirm: bool,
+    /// The branch is the remote's default branch ([`is_default_branch`]).
+    pub to_default: bool,
 }
 
 /// What `git_push_status` reports: the checked-out branch, its upstream and
@@ -444,14 +453,19 @@ fn local_default_branch(dir: &Path, remote: &str) -> Option<String> {
         .and_then(|full| full.strip_prefix(&format!("refs/remotes/{remote}/")).map(str::to_string))
 }
 
-/// Local branches the policy would let through, for `git_push_status`.
-fn allowed_branches(dir: &Path, policy: &ProjectPolicy) -> Vec<String> {
+/// The checked-out branch's upstream's default branch as the local clone
+/// knows it, for `git_push_status` (a push to it waits for the user's click).
+fn upstream_default_branch(dir: &Path) -> Option<String> {
     let remote = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).ok()
         .and_then(|b| git(dir, &["config", "--get", &format!("branch.{b}.remote")]).ok())
-        .filter(|s| !s.is_empty());
-    let default = remote.as_deref().and_then(|r| local_default_branch(dir, r));
+        .filter(|s| !s.is_empty())?;
+    local_default_branch(dir, &remote)
+}
+
+/// Local branches the policy would let through, for `git_push_status`.
+fn allowed_branches(dir: &Path, policy: &ProjectPolicy) -> Vec<String> {
     git(dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).map(|list| {
-        list.lines().map(str::to_string).filter(|b| !is_protected(b, default.as_deref(), policy)).collect()
+        list.lines().map(str::to_string).filter(|b| !is_protected(b, policy)).collect()
     }).unwrap_or_default()
 }
 
@@ -552,7 +566,7 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
         }
     }
     validate_branch(&branch).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
-    if policy.protected.iter().any(|p| p == &branch) {
+    if is_protected(&branch, policy) {
         return Err(Failure::new(Category::BranchProtected, format!("'{branch}' is protected for this project; agent pushes never touch it.")));
     }
     let remote = git(dir, &["config", "--get", &format!("branch.{branch}.remote")]).ok().filter(|s| !s.is_empty())
@@ -571,9 +585,6 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
     }
     let head = git(dir, &["rev-parse", "--verify", &format!("refs/heads/{branch}^{{commit}}")]).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
     let view = ls_remote(dir, &url, &branch, token, origins)?;
-    if is_protected(&branch, view.default_branch.as_deref(), policy) {
-        return Err(Failure::new(Category::BranchProtected, format!("'{branch}' is the remote's default branch; agent pushes never touch it. Work on another branch and open a pull request.")));
-    }
     let remote_sha = view.sha.ok_or_else(|| Failure::new(Category::RemoteBranchMissing, format!("'{branch}' does not exist on the remote yet; the user can publish it once with the git bar.")))?;
     if remote_sha == head {
         return Err(Failure::new(Category::NothingToPush, format!("'{branch}' is already up to date with the remote.")));
@@ -585,6 +596,7 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
     let (commits, diffstat) = commits_between(dir, &remote_sha, &head);
     Ok(Plan {
         needs_url_confirm: policy.confirmed_url.as_deref() != Some(url.as_str()),
+        to_default: is_default_branch(&branch, view.default_branch.as_deref()),
         default_branch: view.default_branch, branch, remote, url, head, remote_sha, commits, diffstat,
     })
 }
@@ -781,6 +793,9 @@ pub struct Proposal {
     pub diffstat: String,
     pub note: String,
     pub needs_url_confirm: bool,
+    /// The push goes to the remote's default branch, so it waits for the
+    /// user's click even at apply.
+    pub to_default: bool,
     pub created_at: String,
     #[serde(skip)]
     created: Instant,
@@ -839,7 +854,7 @@ fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> P
         session: session.id.clone(), tab: session.identity.tab.clone(), project: project.to_string(), dir: dir.to_path_buf(),
         fence_scope: session.identity.push.as_ref().and_then(|b| b.fence_scope.clone()),
         kind: Kind::Push, tag: None, repo: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), note,
-        needs_url_confirm: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
+        needs_url_confirm: false, to_default: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
         category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
         cleared: false,
     }
@@ -887,6 +902,7 @@ fn apply_plan(p: &mut Proposal, plan: &Plan) {
     p.commits = plan.commits.clone();
     p.diffstat = plan.diffstat.clone();
     p.needs_url_confirm = plan.needs_url_confirm;
+    p.to_default = plan.to_default;
     p.state = local_state(&p.dir);
     p.state.remote_sha = Some(plan.remote_sha.clone());
 }
@@ -1010,6 +1026,12 @@ pub(crate) fn creds(project: &str) -> (Option<String>, Vec<String>) {
     (token, origins)
 }
 
+/// Whether a planned push waits for the user's click: always below apply,
+/// and at apply for a URL not confirmed yet or the remote's default branch.
+fn must_stage(level: Level, plan: &Plan) -> bool {
+    level != Level::Apply || plan.needs_url_confirm || plan.to_default
+}
+
 /// The worker behind `git_push`: plan, preflight, then stage or push. Runs
 /// under the project's lock so two tabs cannot push the same repo at once.
 fn run_request(id: String, level: Level, requested: Option<String>) {
@@ -1027,7 +1049,7 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
         Ok(done) => done,
         Err(failure) => { fail(&id, failure); return; }
     };
-    let staged = level != Level::Apply || plan.needs_url_confirm;
+    let staged = must_stage(level, &plan);
     update(&id, |p| {
         apply_plan(p, &plan);
         p.preflight_output = preflight_output;
@@ -1035,6 +1057,8 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
             p.status = Status::Pending;
             p.message = if plan.needs_url_confirm && level == Level::Apply {
                 "The first push to this URL needs the user's confirmation; a card is waiting for them.".into()
+            } else if plan.to_default && level == Level::Apply {
+                format!("'{}' is the remote's default branch, so the push waits for the user's approval; a card is waiting for them.", plan.branch)
             } else {
                 "Staged for the user's approval; poll git_push_status for the outcome.".into()
             };
@@ -1105,7 +1129,7 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
         return fail(id, Failure::new(Category::Diverged, "The remote moved in the meantime; pull or rebase first, then ask again.")).ok_or("proposal not found".into());
     }
     update(id, |p| { p.status = Status::Running; p.needs_url_confirm = false; });
-    let plan = Plan { branch, remote, url, head, remote_sha: live_remote, default_branch: view.default_branch, commits: p.commits.clone(), diffstat: p.diffstat.clone(), needs_url_confirm: false };
+    let plan = Plan { branch, remote, url, head, remote_sha: live_remote, to_default: p.to_default, default_branch: view.default_branch, commits: p.commits.clone(), diffstat: p.diffstat.clone(), needs_url_confirm: false };
     push_now(id, &plan, token.as_deref(), &origins);
     get(id).ok_or("proposal not found".into())
 }
@@ -1342,7 +1366,7 @@ fn proposal_view(p: &Proposal) -> Value {
     json!({
         "id": p.id, "kind": p.kind, "tag": p.tag, "repo": p.repo, "status": p.status, "category": p.category, "message": p.message, "output": p.output, "state": p.state,
         "branch": p.branch, "remote": p.remote, "url": p.url, "head": p.head, "remoteSha": p.remote_sha,
-        "commits": p.commits, "diffstat": p.diffstat, "note": p.note, "needsUrlConfirm": p.needs_url_confirm,
+        "commits": p.commits, "diffstat": p.diffstat, "note": p.note, "needsUrlConfirm": p.needs_url_confirm, "toDefault": p.to_default,
         "createdAt": p.created_at, "preflightOutput": p.preflight_output,
     })
 }
@@ -1441,7 +1465,7 @@ fn call_cancel(session: &Session, id: &str) -> Result<Value, String> {
 
 fn call_status(session: &Session, dir: &Path, policy: &ProjectPolicy) -> Value {
     let rows: Vec<Value> = proposals_for(None, Some(&session.identity.tab)).iter().map(proposal_view).collect();
-    json!({"state":local_state(dir),"level":policy.level(),"protected":policy.protected,"allowedBranches":allowed_branches(dir, policy),"urlConfirmed":policy.confirmed_url,"proposals":rows})
+    json!({"state":local_state(dir),"level":policy.level(),"protected":policy.protected,"allowedBranches":allowed_branches(dir, policy),"defaultBranch":upstream_default_branch(dir),"urlConfirmed":policy.confirmed_url,"proposals":rows})
 }
 
 /// One CI read against a repo [`ci_target`] let through.
@@ -1656,15 +1680,16 @@ mod tests {
     }
 
     #[test]
-    fn protected_branches_are_the_default_and_the_listed_ones() {
+    fn only_listed_branches_are_protected_and_the_default_branch_is_recognised() {
         let mut policy = ProjectPolicy::default();
-        assert!(is_protected("main", Some("main"), &policy));
-        assert!(!is_protected("develop", Some("main"), &policy));
-        assert!(is_protected("trunk", Some("trunk"), &policy));
-        assert!(!is_protected("main", Some("trunk"), &policy), "the remote's own answer wins");
-        assert!(is_protected("main", None, &policy) && is_protected("master", None, &policy), "fallback without a remote answer");
+        assert!(!is_protected("main", &policy), "the default branch is pushable, behind a card");
         policy.protected = vec!["release".into()];
-        assert!(is_protected("release", Some("main"), &policy));
+        assert!(is_protected("release", &policy) && !is_protected("develop", &policy));
+        assert!(is_default_branch("main", Some("main")));
+        assert!(!is_default_branch("develop", Some("main")));
+        assert!(is_default_branch("trunk", Some("trunk")));
+        assert!(!is_default_branch("main", Some("trunk")), "the remote's own answer wins");
+        assert!(is_default_branch("main", None) && is_default_branch("master", None), "fallback without a remote answer");
     }
 
     #[test]
@@ -1881,10 +1906,18 @@ mod tests {
         assert_eq!((p.branch.as_str(), p.head.as_str(), p.commits.len()), ("develop", head.as_str(), 1));
         assert!(p.needs_url_confirm);
         assert_eq!(p.default_branch.as_deref(), Some("main"));
-        // The remote's default branch is never pushed.
+        assert!(!p.to_default);
+        // The remote's default branch is planned, marked for the user's click.
         sh(&work, &["checkout", "-q", "main"]);
         commit(&work, "c.txt");
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::BranchProtected);
+        let mut to_main = plan(&work, &policy, None, None, &[]).unwrap();
+        assert!(to_main.to_default && to_main.branch == "main");
+        to_main.needs_url_confirm = false;
+        assert!(must_stage(Level::Apply, &to_main), "even apply waits for the click on the default branch");
+        assert!(!must_stage(Level::Apply, &Plan { to_default: false, ..to_main.clone() }));
+        // Unless the project lists it.
+        let main_listed = ProjectPolicy { protected: vec!["main".into()], ..propose_policy() };
+        assert_eq!(plan(&work, &main_listed, None, None, &[]).unwrap_err().category, Category::BranchProtected);
         sh(&work, &["checkout", "-q", "develop"]);
         // A listed branch neither.
         let listed = ProjectPolicy { protected: vec!["develop".into()], ..propose_policy() };
@@ -2100,7 +2133,7 @@ mod tests {
         let s = session("tab:approve", &work);
         let id = test_proposal(&s, &work);
         let plan = Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: head.clone(),
-            remote_sha: sh(&work, &["rev-parse", "origin/develop"]), default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false };
+            remote_sha: sh(&work, &["rev-parse", "origin/develop"]), to_default: false, default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false };
         set_pending(&id, &plan);
         commit(&work, "moved.txt");
         let decided = decide(&id, true).unwrap();
@@ -2133,7 +2166,7 @@ mod tests {
         let s = session("tab:moved", &work);
         let id = test_proposal(&s, &work);
         let plan = Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: approved.clone(),
-            remote_sha: remote_sha.clone(), default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false };
+            remote_sha: remote_sha.clone(), to_default: false, default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false };
         set_pending(&id, &plan);
         // The approval check passes; the agent then fast-forwards the branch
         // while the remote is queried, right before the transport.
@@ -2187,7 +2220,7 @@ mod tests {
         sh(&work, &["replace", "--graft", &ours, &theirs]);
         assert_eq!(super::plan(&work, &propose_policy(), None, None, &[]).unwrap_err().category, Category::Diverged);
         let forced = Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: ours,
-            remote_sha: theirs.clone(), default_branch: Some("main".into()), commits: vec![], diffstat: String::new(), needs_url_confirm: false };
+            remote_sha: theirs.clone(), to_default: false, default_branch: Some("main".into()), commits: vec![], diffstat: String::new(), needs_url_confirm: false };
         assert!(transport(&work, &forced, None, &[]).is_err(), "the transport refuses the non-fast-forward too");
         assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), theirs);
     }
@@ -2208,7 +2241,8 @@ mod tests {
         assert!(off["message"].as_str().unwrap().contains("Manage CLIs"));
         let status = call_status(&s, &work, &propose_policy());
         assert_eq!(status["level"], "propose");
-        assert_eq!(status["allowedBranches"], json!(["develop"]), "main is the default branch");
+        assert_eq!(status["allowedBranches"], json!(["develop", "main"]), "the default branch is pushable, behind a card");
+        assert_eq!(status["defaultBranch"], "main");
         assert_eq!(status["state"]["ahead"], 1);
         let reply = handle_message(&s, &json!({"jsonrpc":"2.0","id":7,"method":"tools/list"})).0.unwrap();
         let names: Vec<&str> = reply["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();

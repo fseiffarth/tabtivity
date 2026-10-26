@@ -1267,6 +1267,8 @@ export interface GitPushProposal {
   diffstat: string;
   note: string;
   needs_url_confirm: boolean;
+  /** The push goes to the remote's default branch: it always waits for a click. */
+  to_default?: boolean;
   created_at: string;
   /** `allowed`: an "Allow CI" card the user allowed. */
   status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";
