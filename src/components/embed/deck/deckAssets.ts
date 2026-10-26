@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { readFileBytes } from "../fileAccess";
+import { readFileBytes } from "../../../lib/files/fileAccess";
 import { normalizePath } from "../../../lib/paths";
 import type { Deck, Interstitial } from "../../../lib/viewers/deck/model";
 import { type DecodedGif, decodeInterstitial, disposeGif } from "./gifPlayback";

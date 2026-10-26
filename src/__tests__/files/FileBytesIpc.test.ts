@@ -17,7 +17,7 @@ import { NAMES } from "../../lib/brand";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-const { readFileBytes, writeFileBytes } = await import("../../components/embed/fileAccess");
+const { readFileBytes, writeFileBytes } = await import("../../lib/files/fileAccess");
 
 beforeEach(() => {
   invoke.mockReset();

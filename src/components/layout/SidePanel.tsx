@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ProjectFilesView } from "../files/ProjectFilesView";
 import { useFileSource } from "../files/ProjectFilesPane";
-import { openProjectFilesTab } from "../files/ProjectFilesTab";
+import { openProjectFilesTab } from "../../lib/tabs/openProjectFilesTab";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import {

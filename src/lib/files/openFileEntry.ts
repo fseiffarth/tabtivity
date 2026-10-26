@@ -2,10 +2,10 @@ import {
   internalViewerFor,
   type FileEntry,
   type InternalViewer,
-} from "../../lib/viewers/fileUtils";
+} from "../viewers/fileUtils";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useWindowsStore } from "../../stores/windows";
-import { openTexWorkspace } from "../embed/openTexWorkspace";
+import { openTexWorkspace } from "../viewers/tex/openTexWorkspace";
 import { openTabInNewSubwindow, openTabInScope } from "../tabs/tabScopeContext";
 
 /**

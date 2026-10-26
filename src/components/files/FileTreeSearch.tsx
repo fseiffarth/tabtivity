@@ -17,7 +17,7 @@
  * content hit opens at its line — and the other is a trailing button.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useTabScope } from "../tabs/tabScopeContext";
+import { useTabScope } from "../../lib/tabs/tabScopeContext";
 import { invoke } from "@tauri-apps/api/core";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { useSettingsStore } from "../../stores/settings";
@@ -33,7 +33,7 @@ import {
   type PathEntry,
   type SearchMatch,
 } from "../../lib/projects/projectSearch";
-import { openFileEntry } from "./openFileEntry";
+import { openFileEntry } from "../../lib/files/openFileEntry";
 import { FileIcon } from "../common/icons/FileIcon";
 import { useT } from "../../lib/i18n";
 import { ArrowUpRightIcon } from "../common/icons/Icon";

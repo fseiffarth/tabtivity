@@ -3,7 +3,7 @@ import { internalViewerFor, type FileEntry, type InternalViewer } from "../fileU
 import { bibPlainValue, parseBib } from "./bib";
 import { isBeamerDocument } from "./beamer";
 import { basename, dirname, isAbsolute, normalizePath, resolvePath } from "../../paths";
-import { fileMtime, writeFileBytes, writeFileText } from "../../../components/embed/fileAccess";
+import { fileMtime, writeFileBytes, writeFileText } from "../../files/fileAccess";
 
 /** Which TeX tools are on PATH; mirrors the backend `TexCapability`. */
 export type TexCapability = {

@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../../hooks/useTauriListener";
-import { fileMtime } from "../fileAccess";
+import { fileMtime } from "../../../lib/files/fileAccess";
 import { useT } from "../../../lib/i18n";
 import { holdPhonePrompt } from "../../../lib/agents/phoneHolds";
 import { readTabDialogLine } from "../../../lib/agents/tabDialog";

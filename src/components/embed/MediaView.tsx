@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ViewerHeader } from "./FileViewerPane";
-import { useFileScope, readFileBytes } from "./fileAccess";
+import { useFileScope, readFileBytes } from "../../lib/files/fileAccess";
 import { basename } from "../../lib/paths";
 import { useT } from "../../lib/i18n";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";

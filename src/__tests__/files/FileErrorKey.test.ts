@@ -5,7 +5,7 @@
  * rather than the generic "couldn't open".
  */
 import { describe, expect, it } from "vitest";
-import { describeFileErrorKey } from "../../components/embed/fileAccess";
+import { describeFileErrorKey } from "../../lib/files/fileAccess";
 
 describe("describeFileErrorKey", () => {
   it("names a save refused because the file is a link", () => {

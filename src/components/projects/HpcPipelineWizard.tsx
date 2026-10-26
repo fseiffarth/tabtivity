@@ -43,7 +43,7 @@ import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { resolveProjectDirectory, resolveLocalMirror, type ProjectEntry } from "../../types";
 import { basename } from "../../lib/paths";
 import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
-import { writeFileText } from "../embed/fileAccess";
+import { writeFileText } from "../../lib/files/fileAccess";
 import { UntestedTag } from "../common/UntestedTag";
 import {
   parseSbatchDirectives,

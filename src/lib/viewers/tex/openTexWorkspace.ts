@@ -1,15 +1,15 @@
-import { ROOT_SCOPE, orderedTabKeys, useTabsStore, type TabEntry } from "../../stores/tabs";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { ROOT_SCOPE, orderedTabKeys, useTabsStore, type TabEntry } from "../../../stores/tabs";
+import { useRootOverlayStore } from "../../../stores/rootOverlay";
 import {
   centerTexWorkspace,
   compileTexWorkspace,
   hasTexCompiler,
   requestTexCenter,
   requestTexCompile,
-} from "../../stores/viewers/texCenter";
-import { resolveTexRoot } from "../../lib/viewers/tex/tex";
-import { basename, dirname } from "../../lib/paths";
-import { openTabInScope } from "../tabs/tabScopeContext";
+} from "../../../stores/viewers/texCenter";
+import { resolveTexRoot } from "./tex";
+import { basename, dirname } from "../../paths";
+import { openTabInScope } from "../../tabs/tabScopeContext";
 
 /**
  * The single open-a-LaTeX-file policy: open (or focus) the ONE "TeX workspace"

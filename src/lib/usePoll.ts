@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { usePaneVisible } from "../components/embed/fileAccess";
+import { usePaneVisible } from "./files/fileAccess";
 import { energySaverActive, saverInterval, usePowerStore } from "../stores/power";
 import { useSettingsStore } from "../stores/settings";
 

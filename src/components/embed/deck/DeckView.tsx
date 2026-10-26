@@ -49,7 +49,7 @@ import {
   useFileScope,
   usePaneVisible,
   writeFileBytes,
-} from "../fileAccess";
+} from "../../../lib/files/fileAccess";
 import { openLinkedFile, useViewerState } from "../FileViewerPane";
 import { useProjectsStore } from "../../../stores/projects";
 import {

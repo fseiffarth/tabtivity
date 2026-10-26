@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
-import { fileMtime, usePaneVisible } from "../components/embed/fileAccess";
+import { fileMtime, usePaneVisible } from "./files/fileAccess";
 import { startPoll } from "./usePoll";
 
 /** The viewers' disk-reload cadence (#43), ~1.5 s — widened ×3 while the

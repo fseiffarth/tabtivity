@@ -91,7 +91,7 @@ vi.mock("../../../mobile-web/src/markup/store", async (original) => ({
 }));
 
 import { PdfView } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext, FileSourceContext, type FileSource } from "../../components/embed/fileAccess";
+import { FileScopeContext, FileSourceContext, type FileSource } from "../../lib/files/fileAccess";
 import { setDetachedWindowContext, type DetachedWindowContext } from "../../stores/detachedContext";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";

@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { TranslationKey } from "../../lib/i18n";
-import { NAMES } from "../../lib/brand";
+import type { TranslationKey } from "../i18n";
+import { NAMES } from "../brand";
 
 /**
  * The project scope that absolute-path file commands are confined to.

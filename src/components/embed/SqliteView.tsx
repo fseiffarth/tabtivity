@@ -4,7 +4,7 @@ import { ViewerHeader } from "./FileViewerPane";
 import { useT } from "../../lib/i18n";
 import { cellToneColor } from "../../lib/viewers/table";
 import { viewerErrorText } from "../../lib/viewers/limitError";
-import { useFileScope } from "./fileAccess";
+import { useFileScope } from "../../lib/files/fileAccess";
 
 /** One page of a table, mirroring the backend `SqlitePage` struct. */
 type SqlitePage = {

@@ -25,7 +25,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
-import { fileMtime, readFileBytes } from "../fileAccess";
+import { fileMtime, readFileBytes } from "../../../lib/files/fileAccess";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 import { useSettingsStore } from "../../../stores/settings";
 import { useT } from "../../../lib/i18n";

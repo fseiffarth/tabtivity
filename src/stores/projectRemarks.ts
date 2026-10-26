@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { fileMtime, readFileText, writeFileText } from "../components/embed/fileAccess";
+import { fileMtime, readFileText, writeFileText } from "../lib/files/fileAccess";
 import { translateNow } from "../lib/i18n";
 import { resolvePath } from "../lib/paths";
 import {

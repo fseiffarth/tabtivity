@@ -119,7 +119,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, SYNC_HIGHLIGHT_MS } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext, FileSourceContext, PaneVisibleContext, type FileSource } from "../../components/embed/fileAccess";
+import { FileScopeContext, FileSourceContext, PaneVisibleContext, type FileSource } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { flushViewerState, useTabsStore, type TabEntry } from "../../stores/tabs";

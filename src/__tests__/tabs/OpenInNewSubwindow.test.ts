@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { allGroups, useTabsStore, type TabEntry } from "../../stores/tabs";
-import { openFileEntry } from "../../components/files/openFileEntry";
+import { openFileEntry } from "../../lib/files/openFileEntry";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 
 const md: FileEntry = { name: "plan.md", path: "/p1/plan.md", is_dir: false, size: 1, extension: ".md", mime: null };

@@ -20,9 +20,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { allGroups, findTabByKey, useTabsStore, type TabEntry } from "../../stores/tabs";
-import { openFileEntry } from "../../components/files/openFileEntry";
+import { openFileEntry } from "../../lib/files/openFileEntry";
 import { openLinkedFile } from "../../components/embed/FileViewerPane";
-import { openTabInScope } from "../../components/tabs/tabScopeContext";
+import { openTabInScope } from "../../lib/tabs/tabScopeContext";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { BRAND } from "../../lib/brand";
 

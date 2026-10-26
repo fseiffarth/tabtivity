@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useTabScope } from "../tabs/tabScopeContext";
+import { useTabScope } from "../../lib/tabs/tabScopeContext";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { useProjectsStore } from "../../stores/projects";
@@ -20,7 +20,7 @@ import {
 import { basename, dirname, isAbsolute, resolvePath } from "../../lib/paths";
 import { openErrorText } from "../../lib/openExternal";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
-import { openFileEntry } from "./openFileEntry";
+import { openFileEntry } from "../../lib/files/openFileEntry";
 import { useExperimental } from "../../lib/experimental";
 import { createDeckFile } from "../../lib/viewers/deck/create";
 import { UntestedTag } from "../common/UntestedTag";

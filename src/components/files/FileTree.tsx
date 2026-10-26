@@ -12,8 +12,8 @@ import { useDragStore, type EmbedCap, type FileDragItem } from "../../stores/dra
 import { commitFileDrop, fileDropGoesToNewWindow } from "../tabs/commitFileDrop";
 import { startDetachedDropSession } from "../tabs/detachedDropTargets";
 import { FileDropContext } from "./fileDropContext";
-import { openTabInScope, useTabScope } from "../tabs/tabScopeContext";
-import { openFileEntry } from "./openFileEntry";
+import { openTabInScope, useTabScope } from "../../lib/tabs/tabScopeContext";
+import { openFileEntry } from "../../lib/files/openFileEntry";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import {
   startCursorPoll,
@@ -74,7 +74,7 @@ import {
 import { guardLoginNodeRun } from "../../lib/remote/hpc/hpcGuard";
 import { projectIsOnHpc } from "../../lib/remote/hpc/hpcHost";
 import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
-import { readFileText } from "../embed/fileAccess";
+import { readFileText } from "../../lib/files/fileAccess";
 import { SetDefaultAppDialog } from "./SetDefaultAppDialog";
 import { SendToProjectDialog, type SendSource } from "./SendToProjectDialog";
 import { AddRemarkDialog } from "./AddRemarkDialog";

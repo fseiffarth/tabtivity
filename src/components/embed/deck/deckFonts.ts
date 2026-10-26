@@ -23,7 +23,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { readFileBytes } from "../fileAccess";
+import { readFileBytes } from "../../../lib/files/fileAccess";
 import { type Deck, customFontsOf } from "../../../lib/viewers/deck/model";
 import { type TextMetrics, cssFontName } from "../../../lib/viewers/deck/fonts";
 import { dirOf, resolveRel } from "./deckAssets";

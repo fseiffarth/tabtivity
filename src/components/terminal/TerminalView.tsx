@@ -35,7 +35,7 @@ import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
-import { isExternalFileDrag, parseDroppedFiles } from "../files/importDrop";
+import { isExternalFileDrag, parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../../mobile-web/src/terminal/openCodeMini";

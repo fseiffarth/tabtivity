@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FileSource } from "../../components/embed/fileAccess";
+import type { FileSource } from "../../lib/files/fileAccess";
 
 /**
  * Ephemeral, non-persisted map of a viewer tab's resolved file source

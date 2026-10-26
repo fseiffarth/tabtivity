@@ -108,7 +108,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, RELOAD_SETTLE_MS } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext } from "../../components/embed/fileAccess";
+import { FileScopeContext } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 
 const PATH = "/home/u/paper/paper.pdf";

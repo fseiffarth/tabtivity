@@ -152,7 +152,7 @@ describe("openTexWorkspace — one tab per document", () => {
   });
 
   it("mints exactly one workspace tab keyed on the resolved root", async () => {
-    const { openTexWorkspace } = await import("../../components/embed/openTexWorkspace");
+    const { openTexWorkspace } = await import("../../lib/viewers/tex/openTexWorkspace");
     const { useTabsStore } = await import("../../stores/tabs");
     useTabsStore.getState().setScope("p");
 
@@ -167,7 +167,7 @@ describe("openTexWorkspace — one tab per document", () => {
   });
 
   it("opening a child focuses the existing workspace and centers the child (no 2nd tab)", async () => {
-    const { openTexWorkspace } = await import("../../components/embed/openTexWorkspace");
+    const { openTexWorkspace } = await import("../../lib/viewers/tex/openTexWorkspace");
     const { useTabsStore } = await import("../../stores/tabs");
     useTabsStore.getState().setScope("p");
 
@@ -183,7 +183,7 @@ describe("openTexWorkspace — one tab per document", () => {
   });
 
   it("adopts a legacy bare `tex` tab on the root instead of opening a second tab", async () => {
-    const { openTexWorkspace } = await import("../../components/embed/openTexWorkspace");
+    const { openTexWorkspace } = await import("../../lib/viewers/tex/openTexWorkspace");
     const { useTabsStore } = await import("../../stores/tabs");
     useTabsStore.getState().setScope("p");
 
@@ -210,7 +210,7 @@ describe("openTexWorkspace — one tab per document", () => {
   });
 
   it("leaves a CHILD editor tab a plain editor (it is not the root)", async () => {
-    const { openTexWorkspace } = await import("../../components/embed/openTexWorkspace");
+    const { openTexWorkspace } = await import("../../lib/viewers/tex/openTexWorkspace");
     const { useTabsStore } = await import("../../stores/tabs");
     useTabsStore.getState().setScope("p");
 
@@ -231,7 +231,7 @@ describe("openTexWorkspace — one tab per document", () => {
   });
 
   it("centers on the root (not undefined) when the main itself is re-opened", async () => {
-    const { openTexWorkspace } = await import("../../components/embed/openTexWorkspace");
+    const { openTexWorkspace } = await import("../../lib/viewers/tex/openTexWorkspace");
     const { useTabsStore } = await import("../../stores/tabs");
     useTabsStore.getState().setScope("p");
     await openTexWorkspace(CHILD); // opens the workspace centered on the child
@@ -964,7 +964,7 @@ it("skips Markdown parsing and image reads while hidden or editing", async () =>
 it("flushes a replaced viewer to its original scoped path and ignores late completion", async () => {
   cleanup();
   const { useEditableFile } = await import("../../components/embed/FileViewerPane");
-  const { FileScopeContext } = await import("../../components/embed/fileAccess");
+  const { FileScopeContext } = await import("../../lib/files/fileAccess");
   const { useSettingsStore } = await import("../../stores/settings");
   const settings = useSettingsStore.getState().settings!;
   settings.autosave = true;

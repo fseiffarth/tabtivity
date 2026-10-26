@@ -9,7 +9,7 @@ import {
   MAX_SCALE,
   ZOOM_STEP,
 } from "./FileViewerPane";
-import { useFileScope, usePaneVisible, readFileBytes } from "./fileAccess";
+import { useFileScope, usePaneVisible, readFileBytes } from "../../lib/files/fileAccess";
 import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { openGif, effectiveDelayMs } from "../../lib/viewers/gif";
 import { Dropdown } from "../common/Dropdown";

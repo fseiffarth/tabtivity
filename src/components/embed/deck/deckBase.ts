@@ -11,7 +11,7 @@
 
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { invoke } from "@tauri-apps/api/core";
-import { readFileBytes } from "../fileAccess";
+import { readFileBytes } from "../../../lib/files/fileAccess";
 import type { BasePage } from "../../../lib/viewers/deck/sidecar";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
 

@@ -11,8 +11,8 @@
  * remote host names paths on that host (`pathLinkContext` gives it no folders).
  */
 import { invoke } from "@tauri-apps/api/core";
-import { openFileEntry } from "../../components/files/openFileEntry";
-import { openProjectFilesTab } from "../../components/files/ProjectFilesTab";
+import { openFileEntry } from "../files/openFileEntry";
+import { openProjectFilesTab } from "../tabs/openProjectFilesTab";
 import { useTabsStore } from "../../stores/tabs";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { basename, relativePathWithin } from "../paths";

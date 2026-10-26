@@ -18,7 +18,7 @@ const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 
 import { DISK_RELOAD_POLL_MS, useDiskReloadPoll, type DiskReloadPollOptions } from "../../lib/useDiskReloadPoll";
-import { PaneVisibleContext } from "../../components/embed/fileAccess";
+import { PaneVisibleContext } from "../../lib/files/fileAccess";
 import { usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";

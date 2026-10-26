@@ -28,12 +28,12 @@ import {
   fileMtime,
   fileSize,
   describeFileErrorKey,
-} from "../fileAccess";
+} from "../../../lib/files/fileAccess";
 import { useExperimental } from "../../../lib/experimental";
 import { emptyDeck } from "../../../lib/viewers/deck/model";
 import { deckPathForPdf, serializeDeck } from "../../../lib/viewers/deck/sidecar";
 import { jumpToSource, SaveButton, useViewerState } from "../FileViewerPane";
-import { canRecompileTexSource, recompileTexSource } from "../openTexWorkspace";
+import { canRecompileTexSource, recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import {
   renderPdfPagesToImages,
   printHtmlBody,

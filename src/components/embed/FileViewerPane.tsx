@@ -27,7 +27,7 @@ import {
   type ViewerState,
 } from "../../stores/tabs";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
-import { openTabInScope } from "../tabs/tabScopeContext";
+import { openTabInScope } from "../../lib/tabs/tabScopeContext";
 import { useSettingsStore } from "../../stores/settings";
 import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { useTexViewPrefStore, texViewScopeKey } from "../../stores/viewers/texViewPref";
@@ -176,7 +176,7 @@ import {
   writeFileText,
   fileMtime,
   describeFileErrorKey,
-} from "./fileAccess";
+} from "../../lib/files/fileAccess";
 import { DiffView } from "./DiffView";
 import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 import {
@@ -266,7 +266,7 @@ import {
 } from "../../lib/viewers/tex/texPreview";
 import { TexStructureRail, TexStructureSidebar } from "./tex/TexStructureSidebar";
 import { useDialogs } from "../common/PromptDialogs";
-import { focusTexWorkspaceForSource } from "./openTexWorkspace";
+import { focusTexWorkspaceForSource } from "../../lib/viewers/tex/openTexWorkspace";
 import {
   compileTexWorkspace,
   registerTexCompile,

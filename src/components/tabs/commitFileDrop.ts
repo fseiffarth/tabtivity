@@ -12,7 +12,7 @@ import {
 } from "../../stores/tabs";
 import { useWindowsStore } from "../../stores/windows";
 import { reseedDetached } from "./detachedDropTargets";
-import { openTexWorkspace } from "../embed/openTexWorkspace";
+import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";
 
 /**
  * The embed-tab payload a dropped file becomes. Shared by every file-drop path —
