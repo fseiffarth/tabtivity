@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "desktop")]
 use tauri::State;
 
-use crate::commands::apps::{opened_windows_for_project, TrackedWindow, WindowRegistryState};
+use crate::commands::apps::{TrackedWindow, WindowRegistryState};
 use crate::platform::{detect_backend, WorkspaceBackend, WorkspaceInfo};
 
 pub struct WorkspaceState {
@@ -94,15 +94,20 @@ pub fn hide_window(state: State<'_, WorkspaceStateArc>, window_id: u64) -> Resul
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn get_opened_windows(
-    windows: State<'_, WindowRegistryState>,
+pub async fn get_opened_windows(
+    ctx: crate::tauri_host::Ctx,
     project_id: Option<String>,
-) -> Vec<TrackedWindow> {
-    let mut windows = windows.lock_ok();
+) -> Result<Vec<TrackedWindow>, String> {
+    let registry = ctx.get::<WindowRegistryState>().clone();
     // Backstop for the exit watcher: a read is the moment a stale dead row
-    // would become visible, so sweep the requested scope first.
-    crate::commands::apps::prune_dead_windows(&mut windows, project_id.as_deref());
-    opened_windows_for_project(windows.windows.values(), project_id.as_deref())
+    // would become visible, so sweep the requested scope first. Off the main
+    // thread: the sweep's read-time resolve probes the process table and
+    // scans the X client list (`prune_dead_windows` keeps the registry
+    // unlocked across both).
+    app_core::rt::blocking("apps", move || {
+        crate::commands::apps::prune_dead_windows(&registry, project_id.as_deref())
+    })
+    .await
 }
 
 /// Returns "wlan", "lan", or "disconnected".

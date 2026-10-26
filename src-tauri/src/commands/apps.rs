@@ -2419,30 +2419,110 @@ pub fn close_tracked_window(
 /// listed; elsewhere, and without a window id, a pid-0 row has no liveness
 /// signal and is never pruned.
 ///
-/// First, every windowless row of the scope gets one try at its window
+/// Every windowless row of the scope also gets one try at its window
 /// ([`resolve_missing_launch_windows`]), so the view sees a late window
 /// without waiting for a project switch. The two share one window scan, made
 /// only when either needs it.
-pub fn prune_dead_windows(reg: &mut WindowRegistry, project_id: Option<&str>) {
-    let scan = std::cell::OnceCell::new();
-    if cfg!(all(target_os = "linux", feature = "desktop")) {
-        resolve_missing_launch_windows_with(
-            reg,
-            project_id,
-            || scan.get_or_init(window_scan).1.as_slice(),
-            marked_pids_now,
-        );
-    }
+///
+/// The Apps-view read (`get_opened_windows`, off the main thread): the
+/// registry is locked only to pick the candidates and to apply the answers —
+/// the marked-process lookups and the window scan (an X round trip; under
+/// Wayland it may start XWayland) run unlocked, so a launch, an exit watcher
+/// or a project switch never waits on them behind a read. A row that changed
+/// in between is left for the next read. Returns the scope's Apps-view rows.
+pub fn prune_dead_windows(registry: &WindowRegistryState, project_id: Option<&str>) -> Vec<TrackedWindow> {
     // An unprobeable pid (`EPERM`) is not dead: its window stays tracked.
     let alive = |pid| crate::services::proc_table::pid_state(pid) != crate::services::proc_table::PidState::Gone;
-    prune_dead_windows_with(
-        reg,
+    let resolve = cfg!(all(target_os = "linux", feature = "desktop"));
+    prune_dead_windows_unlocked(
+        registry,
         project_id,
+        resolve,
         alive,
         live_family_lead,
-        || scan.get_or_init(window_scan).0.clone(),
-        PID0_WINDOW_LIVENESS,
+        marked_pids_now,
+        window_scan,
     )
+}
+
+/// [`prune_dead_windows`] with every probe injected: `resolve` turns the
+/// read-time window resolve on (Linux desktop), `marked` and `scan` are only
+/// ever called with the registry unlocked.
+fn prune_dead_windows_unlocked(
+    registry: &WindowRegistryState,
+    project_id: Option<&str>,
+    resolve: bool,
+    alive: impl Fn(u32) -> bool,
+    live_lead: impl Fn(&[FamilyMember]) -> Option<u32>,
+    marked: impl Fn(&str, u64) -> Vec<u32>,
+    scan: impl FnOnce() -> (WindowList, Vec<ClientWindow>),
+) -> Vec<TrackedWindow> {
+    // 1. Locked: what the resolve asks about, and the prune's candidates.
+    let (asks, dead) = {
+        let mut reg = registry.lock_ok();
+        let asks = if resolve { resolve_asks(&reg, project_id) } else { Vec::new() };
+        let dead = prune_candidates(&mut reg, project_id, alive, live_lead, PID0_WINDOW_LIVENESS);
+        (asks, dead)
+    };
+    // 2. Unlocked: the marked processes per launch, and the one scan.
+    let mut marked_by_launch: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut resolve_needs_scan = false;
+    for ask in &asks {
+        let pids = match &ask.launch {
+            Some((launch_id, since)) => marked_by_launch
+                .entry(launch_id.clone())
+                .or_insert_with(|| marked(launch_id, *since))
+                .clone(),
+            None => Vec::new(),
+        };
+        resolve_needs_scan |= ask.pid != 0 || ask.adopt || !pids.is_empty();
+    }
+    let scanned = (resolve_needs_scan || !dead.is_empty()).then(scan);
+    // 3. Locked: apply. A row new since step 1 resolves next read.
+    let mut reg = registry.lock_ok();
+    if let Some((list, clients)) = &scanned {
+        if resolve {
+            resolve_missing_launch_windows_with(
+                &mut reg,
+                project_id,
+                || clients.as_slice(),
+                |launch_id, _| marked_by_launch.get(launch_id).cloned().unwrap_or_default(),
+            );
+        }
+        apply_prune(&mut reg, dead, list);
+    }
+    opened_windows_for_project(reg.windows.values(), project_id)
+}
+
+/// One windowless row the read-time resolve may look up: its launch marker
+/// and floor (for `proc_table::marked_procs`), its pid, and whether it is a
+/// pid-0 IDE row that adopts by project title.
+struct ResolveAsk {
+    launch: Option<(String, u64)>,
+    pid: u32,
+    adopt: bool,
+}
+
+/// The rows [`resolve_missing_launch_windows_with`] would try in `project_id`,
+/// read without touching the registry.
+fn resolve_asks(reg: &WindowRegistry, project_id: Option<&str>) -> Vec<ResolveAsk> {
+    reg.windows
+        .values()
+        // `window_service::resolve_missing_window_ids`'s row filter.
+        .filter(|w| {
+            w.project_id.as_deref() == project_id && is_project_opened_window(w) && w.window_id.is_none()
+        })
+        .map(|w| {
+            let track = reg.launches.get(&w.id);
+            ResolveAsk {
+                launch: w.launch_id.clone().zip(track.map(|t| t.since)),
+                pid: w.pid,
+                adopt: w.pid == 0
+                    && w.origin == ORIGIN_PROJECT_IDE
+                    && track.is_some_and(|t| t.ide_project.is_some()),
+            }
+        })
+        .collect()
 }
 
 /// Whether a pid-0 row with a window id is judged by its window alone. Only
@@ -2450,6 +2530,10 @@ pub fn prune_dead_windows(reg: &mut WindowRegistry, project_id: Option<&str>) {
 /// and macOS enumerate visible windows, which would prune a parked one.
 const PID0_WINDOW_LIVENESS: bool = cfg!(target_os = "linux");
 
+/// The prune alone, over one registry already in hand — [`prune_candidates`]
+/// then [`apply_prune`] with the window list fetched only for a candidate.
+/// The tests' seam; [`prune_dead_windows`] splits the two around its scan.
+#[cfg(test)]
 fn prune_dead_windows_with(
     reg: &mut WindowRegistry,
     project_id: Option<&str>,
@@ -2458,16 +2542,39 @@ fn prune_dead_windows_with(
     window_list: impl FnOnce() -> WindowList,
     pid0_window_liveness: bool,
 ) {
+    let dead = prune_candidates(reg, project_id, alive, live_lead, pid0_window_liveness);
+    if dead.is_empty() {
+        return;
+    }
+    // Paid only when a dead candidate exists — one OS window enumeration.
+    apply_prune(reg, dead, &window_list());
+}
+
+/// A row [`prune_candidates`] found dead: its id, and the window id and pid it
+/// had then — [`apply_prune`] leaves a row that has changed since alone.
+type DeadRow = (String, Option<u64>, u32);
+
+/// The first half of the prune: sweeps launch tracks without a row, moves a
+/// family-kept row to its live lead, and returns the rows whose app is gone
+/// (and, with `pid0_window_liveness`, every pid-0 row holding a window id),
+/// for [`apply_prune`] to judge by the window list.
+fn prune_candidates(
+    reg: &mut WindowRegistry,
+    project_id: Option<&str>,
+    alive: impl Fn(u32) -> bool,
+    live_lead: impl Fn(&[FamilyMember]) -> Option<u32>,
+    pid0_window_liveness: bool,
+) -> Vec<DeadRow> {
     let WindowRegistry { windows, launches, .. } = reg;
     launches.retain(|id, _| windows.contains_key(id));
-    let mut dead: Vec<(String, Option<u64>)> = Vec::new();
+    let mut dead: Vec<DeadRow> = Vec::new();
     for w in windows.values_mut() {
         if w.project_id.as_deref() != project_id || !is_project_opened_window(w) {
             continue;
         }
         if w.pid == 0 {
             if pid0_window_liveness && w.window_id.is_some() {
-                dead.push((w.id.clone(), w.window_id));
+                dead.push((w.id.clone(), w.window_id, 0));
             }
             continue;
         }
@@ -2476,21 +2583,29 @@ fn prune_dead_windows_with(
             Some(LaunchTrack { family: None, .. }) => {}
             Some(LaunchTrack { family: Some(family), .. }) => match live_lead(family) {
                 Some(lead) => w.pid = lead,
-                None => dead.push((w.id.clone(), w.window_id)),
+                None => dead.push((w.id.clone(), w.window_id, w.pid)),
             },
-            None if !alive(w.pid) => dead.push((w.id.clone(), w.window_id)),
+            None if !alive(w.pid) => dead.push((w.id.clone(), w.window_id, w.pid)),
             None => {}
         }
     }
-    if dead.is_empty() {
+    dead
+}
+
+/// The second half of the prune: each `dead` row still as it was found is
+/// removed when `list` proves its window gone, demoted to pid 0 when the list
+/// cannot tell, and kept when its window is listed. An `Unknown` list changes
+/// nothing.
+fn apply_prune(reg: &mut WindowRegistry, dead: Vec<DeadRow>, list: &WindowList) {
+    if *list == WindowList::Unknown {
         return;
     }
-    // Paid only when a dead candidate exists — one OS window enumeration.
-    let list = window_list();
-    if list == WindowList::Unknown {
-        return;
-    }
-    for (id, wid) in dead {
+    let WindowRegistry { windows, launches, .. } = reg;
+    for (id, wid, pid) in dead {
+        let unchanged = windows.get(&id).is_some_and(|w| w.window_id == wid && w.pid == pid);
+        if !unchanged {
+            continue;
+        }
         match list.shows(wid) {
             Some(true) => {}
             Some(false) => {
@@ -3544,6 +3659,96 @@ mod tests {
         let ids: Vec<Option<u64>> = reg.windows.values().map(|w| w.window_id).collect();
         assert_eq!(ids.iter().filter(|id| **id == Some(4)).count(), 1);
         assert_eq!(ids.iter().filter(|id| id.is_none()).count(), 1);
+    }
+
+    // ── the Apps-view read: probes run with the registry unlocked ──────────
+
+    #[test]
+    fn the_apps_view_read_scans_and_probes_with_the_registry_unlocked() {
+        // w0: windowless marked launch whose family member 300 shows window 3.
+        let mut marked = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        marked.pid = 299;
+        marked.launch_id = Some("tok".into());
+        // w1: dead app whose window is gone → removed.
+        let mut dead = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(9));
+        dead.pid = 100;
+        // w2: another scope, untouched and not returned.
+        let other = tracked(Some("p2"), ORIGIN_SIDE_FILE_TREE, None);
+        let mut reg = registry_of(vec![marked, dead, other]);
+        with_family(&mut reg, "w0", None);
+        reg.launches.get_mut("w0").unwrap().since = 40;
+        let registry: WindowRegistryState = Arc::new(Mutex::new(reg));
+        let unlocked = |what: &str| assert!(registry.try_lock().is_ok(), "{what} ran under the registry lock");
+        let windows = pycharm_windows();
+        let scans = std::cell::Cell::new(0);
+        let rows = prune_dead_windows_unlocked(
+            &registry,
+            Some("p1"),
+            true,
+            |pid| pid != 100,
+            |_| None,
+            |id, since| {
+                unlocked("the marked-process lookup");
+                if (id, since) == ("tok", 40) { vec![300] } else { Vec::new() }
+            },
+            || {
+                unlocked("the window scan");
+                scans.set(scans.get() + 1);
+                (WindowList::Complete(windows.iter().map(|w| w.id).collect()), windows.clone())
+            },
+        );
+        assert_eq!(scans.get(), 1, "one scan for the resolve and the prune");
+        let reg = registry.lock_ok();
+        assert_eq!(reg.windows["w0"].window_id, Some(3), "resolved by its marked process");
+        assert!(!reg.windows.contains_key("w1"), "dead and its window gone");
+        assert!(reg.windows.contains_key("w2"));
+        let ids: Vec<&str> = rows.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, ["w0"], "the scope's rows, after the sweep");
+    }
+
+    #[test]
+    fn the_apps_view_read_makes_no_scan_without_a_question() {
+        // A live row with its window, and a pid-0 open without one: nothing
+        // to resolve, nothing dead.
+        let mut live = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(5));
+        live.pid = 200;
+        let mut opener = tracked(Some("p1"), ORIGIN_DOWNLOADS, None);
+        opener.pid = 0;
+        let registry: WindowRegistryState = Arc::new(Mutex::new(registry_of(vec![live, opener])));
+        let rows = prune_dead_windows_unlocked(
+            &registry,
+            Some("p1"),
+            true,
+            |_| true,
+            |_| None,
+            |_, _| Vec::new(),
+            || panic!("no row needs a scan"),
+        );
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_row_that_changed_during_the_unlocked_scan_is_left_for_the_next_read() {
+        let mut dead = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(9));
+        dead.pid = 100;
+        let registry: WindowRegistryState = Arc::new(Mutex::new(registry_of(vec![dead])));
+        prune_dead_windows_unlocked(
+            &registry,
+            Some("p1"),
+            false,
+            |_| false,
+            |_| None,
+            |_, _| Vec::new(),
+            || {
+                // The exit watcher demoted it meanwhile (adopting window 4).
+                let mut reg = registry.lock_ok();
+                let w = reg.windows.get_mut("w0").unwrap();
+                w.pid = 0;
+                w.window_id = Some(4);
+                (WindowList::Complete(Vec::new()), Vec::new())
+            },
+        );
+        assert!(registry.lock_ok().windows.contains_key("w0"), "judged on what it was, not removed");
     }
 
     // ── raise path + window-only liveness ──────────────────────────────────
