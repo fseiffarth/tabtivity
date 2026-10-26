@@ -138,7 +138,7 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   Something an older build may have written under the old name is looked up
   through `brand::PAIR.legacy(Name::…)` and counted with `brand::legacy_hit`;
   nothing is ever *written* under it.
-- All user-facing strings via `src/lib/i18n.ts` (`useT()`); English holds
+- All user-facing strings via `src/lib/i18n` (`useT()`; English in `i18n/en.ts`); English holds
   every key. Never hardcode display text.
 - Tag new, not-live-verified features with the `UntestedTag` pill, and give it
   a row in the register (`src/lib/untested.ts`) — pills carry its id, menu-entry
