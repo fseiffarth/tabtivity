@@ -1219,12 +1219,12 @@ export function LocalModelsSection({
                 stays silent when it is current, so without this a good
                 result was indistinguishable from a dead button) and a failed
                 one, which speaks in the reason the check itself gave. */}
-            {!checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
-              <span className="local-model-update-note">
-                {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
-              </span>
-            )}
           </button>
+          {!checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
+            <span className="local-model-update-note">
+              {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
+            </span>
+          )}
           {/* The version pair, and the whole reason this row is a `div` with
               two children rather than one button: what the check found is
               `v0.14.3 → v0.15.2`, and the *new number is the upgrade*. A
