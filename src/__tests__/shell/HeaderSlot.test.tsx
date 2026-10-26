@@ -16,7 +16,7 @@ const updateSettings = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
   localStorage.clear();
-  useHeaderSlotsStore.setState({ present: {} });
+  useHeaderSlotsStore.setState({ present: {}, drag: null, foldPeek: false });
   useSettingsStore.setState({ settings: {} as never, updateSettings } as never);
 });
 
@@ -108,6 +108,42 @@ describe("HeaderSlot", () => {
     );
     fireEvent.contextMenu(screen.getByTestId("inner"));
     expect(screen.queryByText("Hide behind the ‹ chevron")).toBeNull();
+  });
+
+  it("folds an icon dropped on the collapsed chevron, opening the folded icons on the way", () => {
+    const box = (left: number, width: number) =>
+      ({ left, right: left + width, width, top: 0, bottom: 40, height: 40, x: left, y: 0, toJSON() {} }) as DOMRect;
+    render(
+      <div>
+        <HeaderSlot id="mail"><i data-testid="mail" /></HeaderSlot>
+        <HeaderSlot id="calendar"><i /></HeaderSlot>
+        <div className="header-status-cluster">
+          <HeaderSlot id="battery"><i data-testid="battery" /></HeaderSlot>
+          <button className="status-cluster-toggle" data-testid="toggle" />
+        </div>
+      </div>,
+    );
+    const left: Record<string, number> = { mail: 0, calendar: 40 };
+    document.querySelectorAll<HTMLElement>("[data-header-slot]").forEach((el) => {
+      // A folded slot is `display: none`: no box.
+      el.getBoundingClientRect = () =>
+        el.dataset.folded === "true" ? box(0, 0) : box(left[el.dataset.headerSlot!] ?? 120, 32);
+    });
+    screen.getByTestId("toggle").getBoundingClientRect = () => box(160, 30);
+    const battery = screen.getByTestId("battery").parentElement!;
+    expect(battery.getAttribute("data-folded")).toBe("true");
+
+    fireEvent.pointerDown(screen.getByTestId("mail").parentElement!, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 170, clientY: 10 });
+    expect(battery.getAttribute("data-folded")).toBe("false");
+    fireEvent.pointerUp(window, { clientX: 170, clientY: 10 });
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      header_order: expect.arrayContaining(["status:mail"]),
+      header_pins: { mail: false },
+    });
+    // The peek ends with the drag; the saved collapsed state never changed.
+    expect(battery.getAttribute("data-folded")).toBe("true");
   });
 
   it("reports whether it holds anything", async () => {

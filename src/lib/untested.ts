@@ -363,7 +363,7 @@ export const UNTESTED = {
   "settingsSubPanels.agentUpdates": { area: "layout", what: "Manage CLIs · each installed CLI's own Check for update asks npm/PyPI/GitHub for its newest release (GitHub via the release page's redirect, no API quota); a newer one turns the card's version chip into `current → latest`, which re-runs the installer" },
   "shortcutHelp.title": { area: "layout", what: "ShortcutHelpOverlay · Keyboard Shortcuts" },
   "headerPins.menu": { area: "layout", what: "HeaderSlot · right-click a top-bar icon: always show it, or hide it behind the ‹ chevron" },
-  "headerOrder.menu": { area: "layout", what: "HeaderSlot · drag a top-bar icon sideways to reorder it within its group; right-click → reset the order" },
+  "headerOrder.menu": { area: "layout", what: "HeaderSlot · drag a top-bar icon sideways to reorder it within its group, or onto the ‹ chevron (it opens the hidden icons) to hide it, or out of the hidden ones to always show it; right-click → reset the order" },
   "statusCluster.settingLabel": { area: "layout", what: "SettingsPanel · Collapse header status indicators" },
   "theme.presets": { area: "layout", what: "ThemeCustomizer · Saved themes" },
   "theme.title": { area: "layout", what: "ThemeCustomizer · Theme colors" },

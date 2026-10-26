@@ -101,6 +101,11 @@ export function StatusCluster() {
   const pinDefaults = useHeaderPinDefaults();
   const order = useSettingsStore((s) => s.settings?.header_order);
   const present = useHeaderSlotsStore((s) => s.present);
+  // A drag that reached the chevron shows the folded icons until it ends
+  // (`HeaderSlot`); a drag of a foldable icon needs the chevron as its way in
+  // even when nothing is folded yet.
+  const foldPeek = useHeaderSlotsStore((s) => s.foldPeek);
+  const dragFoldable = useHeaderSlotsStore((s) => s.drag != null && s.drag.id !== "settings");
   const [resourcePeek, setResourcePeek] = useState(0);
 
   useEffect(() => {
@@ -171,8 +176,8 @@ export function StatusCluster() {
   // that drew something and are not pinned. An item whose feature is off (empty
   // slot) is not counted, or the toggle would unfold nothing.
   const foldable = HEADER_ITEM_IDS.filter((id) => present[id] && !isHeaderPinned(pins, id, pinDefaults)).length;
-  const hasToggle = foldable >= 1;
-  const collapsed = !expanded && hasToggle;
+  const hasToggle = foldable >= 1 || dragFoldable;
+  const collapsed = !expanded && !foldPeek && hasToggle;
 
   // Alerts leads the row by default: it is the one member that is a *control*
   // rather than a readout, so it takes the row's head — the slot nearest the
