@@ -11,7 +11,8 @@ import { splitPtyId, projectIdOfScope } from "../../lib/terminal/ptyId";
 import { useActivityStore } from "../activity";
 import { isDetachedWindow } from "../detachedContext";
 import { useProjectsStore } from "../projects";
-import { hostTabId, useTabsStore, type TabEntry } from "../tabs";
+import { useTabsStore, type TabEntry } from "../tabs";
+import { hostTabId } from "../tabs/tabLocation";
 
 /**
  * Which model each agent tab last answered with, and the last prompt it was
