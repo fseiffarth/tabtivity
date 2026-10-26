@@ -67,14 +67,18 @@ fn write_ics_refuses_a_non_ics_path() {
 #[test]
 fn no_todo_command_takes_a_path() {
     let src = include_str!("../calendar.rs");
-    for line in src.lines() {
-        let line = line.trim();
-        if !line.starts_with("pub fn todo_") {
+    let lines: Vec<&str> = src.lines().map(str::trim).collect();
+    let mut seen = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if !line.starts_with("pub fn todo_") && !line.starts_with("pub async fn todo_") {
             continue;
         }
-        assert!(
-            !line.contains("path"),
-            "a todo command must not take a path: {line}"
-        );
+        seen += 1;
+        // The whole signature: a command's parameters may wrap onto later lines.
+        let end = (i..lines.len()).find(|&j| lines[j].contains('{')).unwrap_or(i);
+        let sig = lines[i..=end].join(" ");
+        assert!(!sig.contains("path"), "a todo command must not take a path: {sig}");
     }
+    // The commands are `async`: a scan that matched only `pub fn` saw none.
+    assert!(seen >= 2, "the scan found {seen} todo commands in calendar.rs");
 }
