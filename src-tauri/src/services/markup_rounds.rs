@@ -418,7 +418,7 @@ fn run(mut cmd: Command, stdin: Option<Vec<u8>>, limit: usize) -> Result<Output,
 /// A hardened git command in `dir` that reads the repo as the user's own git
 /// would (its config unpinned), the caller's own git variables dropped.
 fn repo_git(dir: &Path, args: &[&str]) -> Command {
-    let mut cmd = crate::commands::git::hardened_git_command_in(dir, args);
+    let mut cmd = crate::services::git_hardened::hardened_git_command_in(dir, args);
     for name in FOREIGN_GIT_ENV {
         cmd.env_remove(name);
     }

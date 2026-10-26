@@ -27,7 +27,7 @@ use crate::services::git_push_mcp::{
     Category, Failure, TRANSPORT_TIMEOUT,
 };
 use crate::services::git_bounded::RunError;
-use crate::commands::git::{hardened_git_command_in, push_transport_command};
+use crate::services::git_hardened::{hardened_git_command_in, push_transport_command};
 
 /// What a release would do: tag `head` (the tip of `branch`, already on
 /// `remote`) as `tag` and push it to `url`.

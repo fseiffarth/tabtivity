@@ -264,7 +264,7 @@ fn is_live_folder(root: &str, dir: &str) -> bool {
         return false;
     }
     // Background-grade (hookless) and bounded: the repo is untrusted.
-    let listing = crate::commands::git::hookless_git_command_in(&root, &["worktree", "list", "--porcelain"])
+    let listing = crate::services::git_hardened::hookless_git_command_in(&root, &["worktree", "list", "--porcelain"])
         .bounded_output();
     match listing {
         Ok(out) if out.status.success() => listed_worktree(&String::from_utf8_lossy(&out.stdout), &real),

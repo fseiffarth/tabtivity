@@ -192,7 +192,7 @@ fn status_of(checkout: &Path, paths: &[String]) -> Option<Vec<(String, &'static 
         .map(str::to_string)
         .collect();
     args.extend(paths.iter().map(|path| format!(":(literal){path}")));
-    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(checkout, &args)).ok()?;
+    let out = crate::services::git_bounded::output(crate::services::git_hardened::hardened_git_command_in(checkout, &args)).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn only_the_chats_files_still_changed_are_counted_per_checkout() {
-        if !crate::commands::git::git_available_blocking() {
+        if !crate::services::git_hardened::git_available_blocking() {
             return;
         }
         // Reached through a symlink, as macOS's temp dir is: git reports the

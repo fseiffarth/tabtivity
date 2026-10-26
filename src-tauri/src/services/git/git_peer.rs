@@ -259,7 +259,7 @@ impl Peer {
             // `.git/config` and `.git/hooks/` included.
             // Bounded (#2349): a FIFO the agent planted must not hang lockstep.
             Peer::Local(dir) => {
-                crate::services::git_bounded::output(crate::commands::git::hookless_git_command_in(dir, args))
+                crate::services::git_bounded::output(crate::services::git_hardened::hookless_git_command_in(dir, args))
             }
             Peer::Remote(spec) => {
                 let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -3221,7 +3221,7 @@ async fn checkout_lockstep_on(
     // `git branch` listing), and `git checkout <target>` has no `--` boundary — a
     // refname beginning with `-` would be parsed as an option on BOTH peers, one of
     // which runs over ssh. Validate once, here, before either `run` sees it.
-    crate::commands::git::check_rev(target)?;
+    crate::services::git_hardened::check_rev(target)?;
     // #28p D4: a checkout writes to both trees; never start one against a host we
     // cannot reach (the remote half would fail command by command).
     if !connected(pool, project_id).await {

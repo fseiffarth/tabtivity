@@ -43,11 +43,11 @@ impl ProjectReport {
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<std::process::Output> {
-    crate::services::git_bounded::output(crate::commands::git::hookless_git_command_in(root, args)).ok()
+    crate::services::git_bounded::output(crate::services::git_hardened::hookless_git_command_in(root, args)).ok()
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    crate::commands::git::stdout(None, root, args)
+    crate::services::git_hardened::stdout(None, root, args)
 }
 
 /// The repository's common git dir, absolute; `None` when `root` is not in a

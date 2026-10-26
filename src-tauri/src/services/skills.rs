@@ -140,7 +140,7 @@ fn slug_from(url: &str, label: &str) -> String {
 /// (https/ssh/git/scp-like only — no `ext::`, no local paths). Re-adding the
 /// same URL is a no-op that returns the existing entry rather than a duplicate.
 pub fn add_source(label: String, url: String) -> Result<SkillSource, String> {
-    crate::commands::git::validate_clone_url(&url)?;
+    crate::services::git_hardened::validate_clone_url(&url)?;
     add_source_in(&sources_path(), label, url)
 }
 

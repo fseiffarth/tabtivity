@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::services::root_mcp::{Caller, Session};
-use crate::commands::git::{hardened_git_command_in, push_transport_command, resolve_pre_push_hook, scoped_token_config};
+use crate::services::git_hardened::{hardened_git_command_in, push_transport_command, resolve_pre_push_hook, scoped_token_config};
 
 pub const SERVER_NAME: &str = crate::brand::MCP_GIT_SERVER;
 /// Emitted whenever a proposal is created or changes state.

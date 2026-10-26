@@ -224,7 +224,7 @@ pub fn pin(hub: &Path) -> [String; 2] {
 fn git_in(dir: &Path, hub: Option<&Path>, args: &[&str]) -> Result<String, String> {
     let mut all: Vec<String> = hub.map(|h| pin(h).to_vec()).unwrap_or_default();
     all.extend(args.iter().map(|a| a.to_string()));
-    let out = crate::commands::git::hookless_git_command_in(dir, &all).output().map_err(|e| format!("git: {e}"))?;
+    let out = crate::services::git_hardened::hookless_git_command_in(dir, &all).output().map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -279,7 +279,7 @@ pub fn fetch(dir: &Path, hub: &Path) -> Result<(), String> {
 /// [`git_in`] with `input` on stdin.
 fn git_stdin(dir: &Path, args: &[&str], input: &str) -> Result<(), String> {
     use std::io::Write;
-    let mut child = crate::commands::git::hookless_git_command_in(dir, args)
+    let mut child = crate::services::git_hardened::hookless_git_command_in(dir, args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())

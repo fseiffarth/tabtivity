@@ -3249,7 +3249,7 @@ fn run_git(stores: &Stores, dir: &Path, args: &[&str]) -> Result<Option<Vec<u8>>
     use std::process::Stdio;
     use std::time::{Duration, Instant};
     stores.check()?;
-    let mut command = crate::commands::git::hookless_git_command_in(dir, args);
+    let mut command = crate::services::git_hardened::hookless_git_command_in(dir, args);
     command.env("GIT_OPTIONAL_LOCKS", "0").stdin(Stdio::null()).stderr(Stdio::null()).stdout(Stdio::piped());
     #[cfg(unix)] {
         use std::os::unix::process::CommandExt;
@@ -3324,7 +3324,7 @@ fn local_checkout(entry: &crate::schema::projects::ProjectEntry) -> Result<(Stri
 }
 
 fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
-    if !crate::commands::git::git_available_blocking() {
+    if !crate::services::git_hardened::git_available_blocking() {
         return Err("git is not installed (or not on PATH), so no working copy can be read".into());
     }
     let only = project_filter(stores, args)?;
@@ -3393,7 +3393,7 @@ fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
 /// One project up close: its git state and its latest commits. The sweep says
 /// *which* projects moved; this says what happened in the one being asked about.
 fn project_activity(stores: &Stores, args: &Value) -> Result<Value, String> {
-    if !crate::commands::git::git_available_blocking() {
+    if !crate::services::git_hardened::git_available_blocking() {
         return Err("git is not installed (or not on PATH), so no working copy can be read".into());
     }
     let wanted = str_arg(args, "project").ok_or("`project` is required")?;

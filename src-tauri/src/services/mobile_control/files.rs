@@ -592,7 +592,7 @@ pub(crate) fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) ->
     // way would stall both ends), and bounded (#2349): a FIFO `.gitignore`
     // must not hang the phone's listing.
     let ran = crate::services::git_bounded::run(
-        &mut crate::commands::git::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"]),
+        &mut crate::services::git_hardened::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"]),
         crate::services::git_bounded::Opts { stdin: Some(input), ..Default::default() },
     );
     // Exit 0: some are ignored; 1: none; 128: not a repo, or git refused.
@@ -795,7 +795,7 @@ fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
     // Bounded (#2349): stopped at the cap, or at the timeout when a FIFO
     // ignore file blocks it.
     let ran = crate::services::git_bounded::run(
-        &mut crate::commands::git::hardened_git_command_in(
+        &mut crate::services::git_hardened::hardened_git_command_in(
             root,
             &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         ),

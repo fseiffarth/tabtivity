@@ -412,7 +412,7 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
     // The hooked variant, so the view is the one the gated verb gets: the hooks
     // pin every other call carries would make `--git-path hooks` answer `./`.
     // Neither query runs a hook.
-    use crate::commands::git::{hardened_git_command_in, hooked_git_command_in};
+    use crate::services::git_hardened::{hardened_git_command_in, hooked_git_command_in};
     use crate::services::git_bounded::BoundedOutput;
     let mut out = Vec::new();
     let mut have_hook = false;

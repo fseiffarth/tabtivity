@@ -659,9 +659,9 @@ mod tests {
         assert_eq!(timeout_for(&["fetch"], false), LONG_TIMEOUT);
         assert_eq!(timeout_for(&["status"], true), READ_TIMEOUT);
         assert_eq!(timeout_for(&["commit"], true), LONG_TIMEOUT);
-        let hardened = crate::commands::git::hardened_git_command_in(std::env::temp_dir(), &["status"]);
+        let hardened = crate::services::git_hardened::hardened_git_command_in(std::env::temp_dir(), &["status"]);
         assert_eq!(timeout_of(&hardened), READ_TIMEOUT);
-        let hooked = crate::commands::git::hooked_git_command_in(std::env::temp_dir(), &["commit"]);
+        let hooked = crate::services::git_hardened::hooked_git_command_in(std::env::temp_dir(), &["commit"]);
         assert_eq!(timeout_of(&hooked), LONG_TIMEOUT);
     }
 
@@ -670,19 +670,19 @@ mod tests {
         let tmp = repo();
         std::fs::write(tmp.path().join("new.txt"), "n").unwrap();
         assert_eq!(hazard(tmp.path()), None);
-        let out = output(crate::commands::git::hardened_git_command_in(tmp.path(), &["status", "--porcelain"]))
+        let out = output(crate::services::git_hardened::hardened_git_command_in(tmp.path(), &["status", "--porcelain"]))
             .expect("status");
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout), "?? new.txt\n");
         // stdin and a stdout cap.
         let ran = run(
-            &mut crate::commands::git::hardened_git_command_in(tmp.path(), &["check-ignore", "-z", "--stdin"]),
+            &mut crate::services::git_hardened::hardened_git_command_in(tmp.path(), &["check-ignore", "-z", "--stdin"]),
             Opts { stdin: Some(b"./a.txt\0".to_vec()), ..Opts::default() },
         )
         .expect("check-ignore");
         assert_eq!(ran.output.status.code(), Some(1), "nothing ignored");
         let ran = run(
-            &mut crate::commands::git::hardened_git_command_in(tmp.path(), &["ls-files", "-z"]),
+            &mut crate::services::git_hardened::hardened_git_command_in(tmp.path(), &["ls-files", "-z"]),
             Opts { stdout_cap: Some(4), ..Opts::default() },
         )
         .expect("ls-files");
@@ -700,7 +700,7 @@ mod tests {
             let _ = std::fs::remove_file(&path);
             mkfifo(&path);
             let started = Instant::now();
-            let err = output(crate::commands::git::hardened_git_command_in(tmp.path(), &["status"]))
+            let err = output(crate::services::git_hardened::hardened_git_command_in(tmp.path(), &["status"]))
                 .expect_err(name);
             assert!(err.contains("named pipe"), "{name}: {err}");
             assert!(started.elapsed() < NOT_A_HANG, "{name}: took {:?}", started.elapsed());
@@ -728,7 +728,7 @@ mod tests {
             assert_eq!(hazard(tmp.path()), None, "an unnamed pipe is harmless");
             git(tmp.path(), &["config", "--local", key, value]);
             let started = Instant::now();
-            let err = output(crate::commands::git::hardened_git_command_in(tmp.path(), &["status"]))
+            let err = output(crate::services::git_hardened::hardened_git_command_in(tmp.path(), &["status"]))
                 .expect_err(key);
             assert!(err.contains("named pipe"), "{key}: {err}");
             assert!(started.elapsed() < NOT_A_HANG, "{key}: took {:?}", started.elapsed());
@@ -783,7 +783,7 @@ mod tests {
         assert_eq!(hazard(tmp.path()), None, "nested files are not pre-checked");
         TEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(700))));
         let started = Instant::now();
-        let err = output(crate::commands::git::hardened_git_command_in(tmp.path(), &["status", "--porcelain"]))
+        let err = output(crate::services::git_hardened::hardened_git_command_in(tmp.path(), &["status", "--porcelain"]))
             .expect_err("a FIFO .gitignore must not hang");
         TEST_TIMEOUT.with(|t| t.set(None));
         assert!(err.contains("timed out"), "{err}");

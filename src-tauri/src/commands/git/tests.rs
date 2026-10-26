@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_util::init_repo;
 use std::fs;
+use crate::services::git_hardened::{hardened_git_args, is_denylisted_config_key, valid_rev, DIFF_DRIVER_CMDS, HARDENED_CONFIG, NO_HOOKS_CONFIG, OUTPUT_CONFIG};
 
 /// Tests skip gracefully when `git` isn't on PATH.
 fn git_available() -> bool {
@@ -2052,11 +2053,11 @@ fn a_fifo_ignore_file_makes_the_status_polls_fail_fast_not_hang() {
 /// `(file under src/, enclosing fn, why)`. None of them runs git in a
 /// project's repo; each site carries the same reason as a comment.
 const BARE_GIT_ALLOWED: &[(&str, &str, &str)] = &[
-    ("commands/git.rs", "git_command", "the hardened builder itself"),
-    ("commands/git.rs", "surviving_denylisted_key", "`config --file` on one file, no repo"),
-    ("commands/git.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
+    ("services/git/git_hardened.rs", "git_command", "the hardened builder itself"),
+    ("services/git/git_hardened.rs", "surviving_denylisted_key", "`config --file` on one file, no repo"),
+    ("services/git/git_hardened.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
     ("services/git/git_bounded.rs", "list_path_values", "`config --file` on one file, no repo"),
-    ("commands/git.rs", "git_available_blocking", "`--version`, no repo"),
+    ("services/git/git_hardened.rs", "git_available_blocking", "`--version`, no repo"),
     ("commands/git.rs", "git_clone_blocking", "network clone into a new empty dir"),
     ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),
     ("services/dev_build.rs", "commits_behind", "the app's own checkout"),

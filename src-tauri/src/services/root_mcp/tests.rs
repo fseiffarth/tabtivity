@@ -2126,7 +2126,7 @@ fn porcelain_counts_split_staged_unstaged_and_untracked() {
 /// A real repo, because the point of the tool is the answer about a folder.
 #[test]
 fn the_git_sweep_reads_local_copies_and_says_why_it_skipped_the_rest() {
-    if !crate::commands::git::git_available_blocking() {
+    if !crate::services::git_hardened::git_available_blocking() {
         return; // Reported honestly by the tool itself; nothing to test here.
     }
     let f = Fixture::new();

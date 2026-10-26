@@ -44,12 +44,12 @@ fn local_repo_dir(project_id: &str) -> Option<PathBuf> {
 }
 
 fn git_stdout(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(dir, args)).ok()?;
+    let out = crate::services::git_bounded::output(crate::services::git_hardened::hardened_git_command_in(dir, args)).ok()?;
     out.status.success().then_some(out.stdout)
 }
 
 fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
-    crate::commands::git::stdout(None, dir, args).filter(|text| !text.is_empty())
+    crate::services::git_hardened::stdout(None, dir, args).filter(|text| !text.is_empty())
 }
 
 /// HEAD of a local project's repo, or `None` when there is nothing to record

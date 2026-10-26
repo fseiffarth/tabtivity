@@ -208,7 +208,7 @@ fn safe_directory_is_pinned_to_the_exact_hub() {
         }
         args.push(hub.to_string_lossy().into_owned());
         args.push(dir.path().join(name).to_string_lossy().into_owned());
-        crate::commands::git::hookless_git_command_in(dir.path(), &args).env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap()
+        crate::services::git_hardened::hookless_git_command_in(dir.path(), &args).env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap()
     };
     // CI's git 2.55 opens the local-path clone's source unpinned (ci-cd #382),
     // so only where git still refuses is the pin's exactness observable.

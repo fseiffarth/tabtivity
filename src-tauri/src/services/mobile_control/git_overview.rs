@@ -442,7 +442,7 @@ fn probeable(wt: &Worktree) -> bool {
 /// project dot's full ladder, which costs more spawns per row. `None` when
 /// git could not answer.
 fn linked_dot(wt: &Worktree, branches: &[GitBranch]) -> Option<Option<&'static str>> {
-    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(
+    let out = crate::services::git_bounded::output(crate::services::git_hardened::hardened_git_command_in(
         &wt.path,
         &["status", "--porcelain"],
     ))
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn probe_reads_worktrees_branches_and_one_dirty_row() {
-        if !crate::commands::git::git_available_blocking() {
+        if !crate::services::git_hardened::git_available_blocking() {
             return;
         }
         let tmp = tempfile::tempdir().expect("tmp");

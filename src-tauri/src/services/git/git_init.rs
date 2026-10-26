@@ -48,7 +48,7 @@ pub const INIT_SHELL: &str =
 /// an existing repo, whose config and hooks are the project's (untrusted).
 /// `init` is special-cased there (no config strip, no common-dir pin).
 fn git(dir: &Path, args: &[&str]) -> Command {
-    crate::commands::git::hardened_git_command_in(dir, args)
+    crate::services::git_hardened::hardened_git_command_in(dir, args)
 }
 
 /// Run `git` in `dir` and report only whether it succeeded. Bounded
