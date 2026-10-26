@@ -3087,7 +3087,7 @@ export function AgentsPanel({
     ? availableAgents.filter((a) =>
         [a.label, a.id, a.bin].some((s) => s.toLowerCase().includes(query)),
       )
-    : [];
+    : availableAgents;
 
   return (
     <>
@@ -3101,12 +3101,7 @@ export function AgentsPanel({
         <p className="settings-help">{t("agents.checkingInstalled")}</p>
       ) : (
         <>
-          {/* Two sections, and the asymmetry between them is the point: the
-              installed CLIs are a short list you manage (enable, remove,
-              reinstall, schedule), while everything else is a catalog that only
-              grows. Rendering the catalog in full buried the handful of entries
-              that matter under a dozen install cards, so it is behind a search
-              box instead and shows nothing until something is typed. */}
+          {/* Keep installed CLIs first, then reveal the searchable available catalog on request. */}
           <div className="agents-section-head" role="heading" aria-level={3}>
             {t("agents.installedGroup")}
             <span className="agents-count">{installedAgents.length}</span>
@@ -3118,13 +3113,14 @@ export function AgentsPanel({
           )}
           <div className="agents-section-head" role="heading" aria-level={3}>
             {t("agents.availableGroup")}
+            <UntestedTag id="settingsSubPanels.availableList" />
             <span className="agents-count">{availableAgents.length}</span>
             <AgentsHelp text={t("agents.googleCliChoice")} />
           </div>
           {availableAgents.length === 0 ? (
             <p className="settings-help">{t("agents.allInstalled")}</p>
           ) : (
-            <>
+            <AgentsFold label={t("agents.browseAvailable")}>
               <div className="agents-search">
                 <input
                   type="text"
@@ -3138,18 +3134,14 @@ export function AgentsPanel({
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              {query === "" ? (
-                <p className="settings-help">
-                  {t("agents.searchHint", { count: String(availableAgents.length) })}
-                </p>
-              ) : matches.length === 0 ? (
+              {matches.length === 0 ? (
                 <p className="settings-help">
                   {t("agents.noSearchMatch", { query: search.trim() })}
                 </p>
               ) : (
                 <SettingsList className="agents-grid">{matches.map(agentCard)}</SettingsList>
               )}
-            </>
+            </AgentsFold>
           )}
         </>
       )}

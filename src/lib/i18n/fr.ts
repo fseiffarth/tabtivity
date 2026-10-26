@@ -2628,6 +2628,7 @@ export const dict: Dict = {
   "agents.remoteFold": "Installer sur une autre machine",
   "agents.checkingInstalled": "Vérification des agents installés…",
   "agents.installedGroup": "Installés",
+  "agents.browseAvailable": "Afficher les CLI disponibles",
   "agents.availableGroup": "Disponibles à l'installation",
   "agents.noneInstalled": "Aucune CLI d'agent détectée pour l'instant — cherchez ci-dessous pour en installer une.",
   "agents.allInstalled": "Toutes les CLI connues de {app} sont installées.",

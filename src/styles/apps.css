@@ -2596,7 +2596,7 @@
 
 /* ── Models overlay: Agents section redesign ── */
 /* The Agents & CLIs section (`AgentsPanel`, in Settings too): a short lead, the
-   installed CLIs as an equal-height card grid, a search for the rest, and the
+   installed CLIs as an equal-height card grid, a collapsible searchable install list, and the
    rarely-touched settings as closed groups. Status is a dot and a word, the
    version is plain text — neither has a border or a fill, so nothing but a
    button looks like one. Buttons are the settings button: one filled primary
