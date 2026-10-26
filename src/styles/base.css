@@ -39,6 +39,16 @@ html, body, #root {
   background: var(--bg-main, #101624);
 }
 
+/* One text rasterisation for the whole window. WebKitGTK draws text with
+   subpixel (colour-fringed) antialiasing only on its opaque root layer; text in
+   any composited layer (a scroller, a fixed menu, an animated panel) falls back
+   to greyscale, which reads bolder and softer next to it. A screenshot of
+   2026-10-26 showed exactly that split: chat fringed, side panel and menus
+   grey. Greyscale everywhere ends the mismatch, whichever layers exist. */
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
 /* #42: detached-subwindow seed-wait state. Explicit colors (not theme vars) so
    it stays visible even before the detached window has applied a theme class —
    otherwise an unseeded window reads as a blank black pane. */
