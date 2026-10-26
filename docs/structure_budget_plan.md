@@ -2,8 +2,8 @@
 
 Status: plan only (2026-10-26), reviewed by two plan reviewers the same day.
 No code changed. Builds on `docs/code_screen_plan.md` section S, which owns
-the file splits (S5–S9 are shelved, so step 2 and "Later" wait for the user
-to restart S); this plan adds the guard that keeps the result from
+the file splits (another session runs S5 and S7 first, 2026-10-26; see
+"Sequencing with code screen S5/S7"); this plan adds the guard that keeps the result from
 regrowing, a boundary for the optional features, and the process rules
 around them. U1–U3 decided 2026-10-26 (see "User decisions"); U4 is
 approved at step 5. Step 3 now only picks stub vs gate per add-on.
@@ -176,8 +176,9 @@ A later change to the script alone selects no vitest in gates.sh
 
 ### Step 2 — Burn-down order (extends code screen S7)
 
-S5–S9 are parked (user's call 2026-10-26, code screen plan status line), so
-this step adds to that parked list and runs only once the user restarts S.
+Runs after S5 and S7 have landed (another session runs them first). The
+S7b list goes into `docs/code_screen_plan.md` only then, so this plan never
+edits that file while the other session works from it.
 Rank the baseline by lines over the limit. Code screen S7 covers
 `FileViewerPane.tsx`, `SettingsSubPanels.tsx`, `stores/tabs.ts`, `FileTree()`,
 mobile `Terminal.tsx`, `git_peer.rs`'s apply loops and three long functions
@@ -393,8 +394,8 @@ After code screen S5 (services no longer reach into commands) and S9
 workspace crate. Criterion: its Cargo feature from step 4 compiles cleanly on
 and off for a month. Planned separately when that holds.
 
-S5–S9 are shelved ("optional, kept for a later plan", the user's call
-2026-10-26), so this needs them re-planned first. They are necessary, not
+S5 is being run by another session; S9 is still shelved and needs the
+user's go-ahead. Both are necessary, not
 sufficient: mail also reaches `services::server` (vault/secrets, 17 refs),
 `root_mcp`, `agent_fence`, `openvpn`, `vm_proxy`, `ai_switch` and `storage`,
 which must sit in `app-core` or behind a trait first; and its commands stay
@@ -419,9 +420,43 @@ Shape: **mixed risk**, mostly small.
 
 Bound: ≤ 5 subagents at once, ≤ 3 running cargo. Dependencies: 1 → 2;
 3 → 4.0 → print manager → deck presenter → calendar + to-do → mail
-(4m1–4m4); 5(a) waits for the user's U4 approval; 5(b), 6, 7 independent. 4m3 and an S7b split of
+(4m1–4m4); 5(a) waits for the user's U4 approval; 5(b), 6, 7 independent.
+Waves against S5/S7: see the section below. 4m3 and an S7b split of
 `mobile_control/host.rs` never run together; whichever lands second
 rebases on the first.
+
+### Sequencing with code screen S5/S7
+
+Another session runs code screen S5 (services → commands inversion, thins
+`commands/{projects,ollama,git,mail,fs}.rs`) and S7 (giant-file splits:
+`FileViewerPane.tsx`, `SettingsSubPanels.tsx`, `stores/tabs.ts`, `FileTree`,
+mobile `Terminal.tsx`, `git_peer.rs`, three long functions) first. Both move
+code this plan's steps 1–4 point at, so the steps run in two waves:
+
+- **Wave A — now, alongside S5/S7** (no file overlap with them): step 5(b)
+  backlog triage (`todo/` only), step 6 (`scripts/dead-code.sh` and the
+  knip config; its *first deletion run* waits for wave B, so it never
+  deletes code S5/S7 is moving), step 7 (`CONTRIBUTING.md`, frozen-add-on
+  list taken from "User decisions"; the size-budget line is added by step 1
+  in wave B). Not in wave A: anything touching
+  `src-tauri/src/commands/`, `services/`, `src/components/`, `src/stores/`,
+  `mobile-web/src/`, or the filemaps (S moves rewrite their rows).
+- **Wave B — after S5 and S7 have landed on develop:**
+  - step 1, so `--init` records the post-split tree (fewer, smaller
+    entries) and S7's own splits never have to carry baseline entries
+    they do not know about;
+  - step 3 against the moved code (S5 moves mail/calendar helpers into
+    `services/`; the appendix paths are re-checked, not trusted);
+  - step 4.0 and the add-ons (4m2 and 4m4 edit `commands/mail.rs`,
+    `SettingsSubPanels`' successors and `stores/tabs/` — S5/S7's files);
+  - step 2 (S7b), which extends the code screen list once S7 is done;
+  - step 5(a) once the user approved the U4 wording.
+
+The main agent checks before wave B: the code screen handoff
+(`docs/code_screen_handoff.md`) lists S5 and S7 as landed, `git log`
+shows their ranges on develop, and no S5/S7 worktree or uncommitted S
+edit is left in the shared tree. If S5/S7 are still running when wave A is
+done, wave B waits; it never runs beside them.
 
 ### Agent steps
 
