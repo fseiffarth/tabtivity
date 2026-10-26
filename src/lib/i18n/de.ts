@@ -6865,6 +6865,7 @@ export const dict: Dict = {
   "projectFilesView.keepLocalAllTitle": "Die lokale Kopie für jede abweichende Datei behalten (Force-Push über den Host)",
   "projectFilesView.takeNewerAllAria": "Die neuere Kopie für alle übernehmen",
   "projectFilesView.takeNewerAllTitle": "Die neuere Kopie für jede abweichende Datei übernehmen (Remote, wo der Host neuer ist, lokal, wo die Spiegelkopie neuer ist; auf einer Seite gelöschte Dateien werden übersprungen)",
+  "projectFilesView.resolveFailed": "{count} Datei(en) nicht übertragen: {error}",
   "projectFilesView.openFileTitle": "{rel} öffnen",
   "projectFilesView.takeRemoteAria": "Die Remote-Kopie übernehmen",
   "projectFilesView.noRemoteCopyTitle": "Keine Remote-Kopie zum Übernehmen",

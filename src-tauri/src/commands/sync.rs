@@ -1919,6 +1919,10 @@ async fn pull_subtree(
     // pull goes on, then fails visibly with the count and the first reason.
     let mut unrecorded = 0usize;
     let mut record_error: Option<String> = None;
+    // Why the one file of a single-file pull did not land, when it did not: that
+    // pull has nothing else to show, so it fails with this instead of reading as
+    // done (the orange view's take-host used to answer a refused write with nothing).
+    let mut pull_error: Option<String> = None;
     for file in files {
         let host_abs = join_remote(&target.spec.remote_path, &file.rel);
         let local = mirror_local_path(project_id, &file.rel);
@@ -1930,9 +1934,13 @@ async fn pull_subtree(
         let local_base = if rsynced {
             remote_sync::rsync_pulled_base(&local, file.size)
         } else {
-            remote_sync::pull_file(sftp, &host_abs, file.size, file.mode, &mirror_root, &file.rel)
-                .await
-                .ok()
+            match remote_sync::pull_file(sftp, &host_abs, file.size, file.mode, &mirror_root, &file.rel).await {
+                Ok(base) => Some(base),
+                Err(e) => {
+                    pull_error.get_or_insert(e);
+                    None
+                }
+            }
         };
         outcome.tally(&file, local_base.is_some());
         match local_base {
@@ -1959,6 +1967,12 @@ async fn pull_subtree(
         emit(ctx, project_id, "file", &file.rel, done, total);
     }
     emit(ctx, project_id, "done", rel, done, total);
+    if !is_dir && outcome.pulled == 0 && outcome.skipped_too_large.is_empty() {
+        return Err(match pull_error {
+            Some(e) => format!("could not pull '{rel}': {e}"),
+            None => format!("could not pull '{rel}'"),
+        });
+    }
     if let Some(e) = record_error {
         return Err(format!(
             "Pulled {} file(s), but the sync record of {unrecorded} could not be saved ({e}); \

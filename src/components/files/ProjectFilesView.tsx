@@ -20,7 +20,15 @@ import { useImportDrop } from "./importDrop";
 import { logoutRemote, useProjectsStore } from "../../stores/projects";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
-import { useSyncStore, amberPaths, localNewPaths, splitByNewerSide, type SyncSkippedFile } from "../../stores/remote/sync";
+import {
+  useSyncStore,
+  amberPaths,
+  localNewPaths,
+  pushFailure,
+  splitByNewerSide,
+  type SyncResolveOutcome,
+  type SyncSkippedFile,
+} from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
@@ -564,6 +572,14 @@ export function ProjectFilesView({
   // Files over the 64 MiB cap a "take host" in the diverged view left on the
   // host (gap 35): named in a result line instead of a log line only.
   const [orangeSkipped, setOrangeSkipped] = useState<SyncSkippedFile[] | null>(null);
+  // Why a take-a-side in the diverged view did not transfer: the backend's
+  // refusal used to reach only the console, so the click read as doing nothing.
+  const [orangeError, setOrangeError] = useState<string | null>(null);
+  const noteResolveFailures = (...outcomes: SyncResolveOutcome[]) => {
+    const failed = outcomes.reduce((n, o) => n + o.failed, 0);
+    const first = outcomes.find((o) => o.firstError)?.firstError ?? "";
+    if (failed > 0) setOrangeError(t("projectFilesView.resolveFailed", { count: failed, error: first }));
+  };
   // Whether the project is missing scaffold files — drives the "no scaffold"
   // type tag shown beside its name, mirroring ProjectPill's hover tags.
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
@@ -2098,6 +2114,19 @@ export function ProjectFilesView({
               </button>
             </div>
           )}
+          {orangeError && (
+            <div className="project-files-sync-result" role="alert">
+              <ErrorNote as="span" error={orangeError} />
+              <button
+                className="file-tree-up"
+                onClick={() => setOrangeError(null)}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                ×
+              </button>
+            </div>
+          )}
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
             <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
           ) : (
@@ -2135,10 +2164,12 @@ export function ProjectFilesView({
                         });
                         if (!ok) return;
                         setOrangeSkipped(null);
-                        const skipped = await useSyncStore
+                        setOrangeError(null);
+                        const outcome = await useSyncStore
                           .getState()
                           .resolveAll(projectId, orangeFiles, "host");
-                        setOrangeSkipped(skipped);
+                        setOrangeSkipped(outcome.skipped);
+                        noteResolveFailures(outcome);
                       })();
                     }}
                   >
@@ -2163,9 +2194,10 @@ export function ProjectFilesView({
                           force: true,
                         });
                         if (!ok) return;
-                        await useSyncStore
-                          .getState()
-                          .resolveAll(projectId, orangeFiles, "local");
+                        setOrangeError(null);
+                        noteResolveFailures(
+                          await useSyncStore.getState().resolveAll(projectId, orangeFiles, "local"),
+                        );
                       })();
                     }}
                   >
@@ -2183,6 +2215,8 @@ export function ProjectFilesView({
                         // One confirmation per direction, each naming the files
                         // that side's copy would overwrite.
                         setOrangeSkipped(null);
+                        setOrangeError(null);
+                        const outcomes: SyncResolveOutcome[] = [];
                         if (newerSplit.host.length > 0) {
                           const ok = await confirmSyncTransfer({
                             projectId,
@@ -2194,9 +2228,11 @@ export function ProjectFilesView({
                             force: true,
                           });
                           if (ok) {
-                            setOrangeSkipped(
-                              await useSyncStore.getState().resolveAll(projectId, newerSplit.host, "host"),
-                            );
+                            const outcome = await useSyncStore
+                              .getState()
+                              .resolveAll(projectId, newerSplit.host, "host");
+                            setOrangeSkipped(outcome.skipped);
+                            outcomes.push(outcome);
                           }
                         }
                         if (newerSplit.local.length > 0) {
@@ -2209,8 +2245,12 @@ export function ProjectFilesView({
                             relPaths: newerSplit.local,
                             force: true,
                           });
-                          if (ok) await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local");
+                          if (ok)
+                            outcomes.push(
+                              await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local"),
+                            );
                         }
+                        noteResolveFailures(...outcomes);
                       })();
                     }}
                   >
@@ -2335,8 +2375,13 @@ export function ProjectFilesView({
                         });
                         if (!ok) return;
                         setOrangeSkipped(null);
-                        const outcome = await useSyncStore.getState().pull(projectId, rel);
-                        setOrangeSkipped(outcome.skippedTooLarge);
+                        setOrangeError(null);
+                        try {
+                          const outcome = await useSyncStore.getState().pull(projectId, rel);
+                          setOrangeSkipped(outcome.skippedTooLarge);
+                        } catch (e) {
+                          setOrangeError(String(e));
+                        }
                       })();
                     }}
                   >
@@ -2359,7 +2404,14 @@ export function ProjectFilesView({
                           label: basename(rel) || rel,
                           force: true,
                         });
-                        if (ok) await useSyncStore.getState().push(projectId, rel, true);
+                        if (!ok) return;
+                        setOrangeError(null);
+                        try {
+                          const why = pushFailure(await useSyncStore.getState().push(projectId, rel, true));
+                          if (why) setOrangeError(why);
+                        } catch (e) {
+                          setOrangeError(String(e));
+                        }
                       })();
                     }}
                   >
