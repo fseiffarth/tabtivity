@@ -16,7 +16,7 @@
 //! model installed on the shared Ollama and nothing else — a request for a
 //! model that is not on disk is refused, never forwarded for Ollama to look
 //! up. An empty list allows nothing. The installed list comes from the shared
-//! Ollama only (`commands::ollama::host_setting` pins the endpoint on a
+//! Ollama only (`services::ollama_client::host_setting` pins the endpoint on a
 //! server), within [`TAGS_TIMEOUT`], cached for [`TAGS_TTL`].
 //!
 //! Server only: off a server [`check_model`] allows everything (the desktop's
@@ -160,7 +160,7 @@ fn installed_cached() -> Option<Vec<String>> {
     use std::sync::Mutex;
     use std::time::Instant;
     static CACHE: Mutex<TagsCache> = Mutex::new(None);
-    cached_with(&CACHE, Instant::now(), || crate::commands::ollama::installed_model_names_within(TAGS_TIMEOUT).ok())
+    cached_with(&CACHE, Instant::now(), || crate::services::ollama_client::installed_model_names_within(TAGS_TIMEOUT).ok())
 }
 
 /// [`installed_cached`]'s cache rule, with the clock and the fetch passed in.

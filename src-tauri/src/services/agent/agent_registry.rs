@@ -601,7 +601,7 @@ pub(crate) fn spec_is_installed(spec: &AgentSpec) -> bool {
 }
 
 /// Sync install probe for callers outside the agent registry (e.g. the local-
-/// model drivers in `commands::ollama`). Looks `bin` up in the registry first so
+/// model drivers in `services::local_drivers`). Looks `bin` up in the registry first so
 /// it reuses the known user install locations; falls back to a bare PATH lookup
 /// for binaries the registry doesn't track (e.g. Droid).
 pub fn binary_is_installed(bin: &str) -> bool {

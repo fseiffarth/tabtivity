@@ -174,7 +174,7 @@ pub async fn assistant_options() -> Result<AssistantOptions, String> {
     let logins = crate::commands::agents::agent_logins().await;
     app_core::rt::spawn_blocking(move || {
         let settings = storage::load_settings().unwrap_or_default();
-        let (local_models, ollama_reachable) = match crate::commands::ollama::installed_model_names_within(
+        let (local_models, ollama_reachable) = match crate::services::ollama_client::installed_model_names_within(
             std::time::Duration::from_secs(3),
         ) {
             Ok(models) => (models, true),

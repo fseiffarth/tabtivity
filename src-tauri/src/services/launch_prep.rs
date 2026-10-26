@@ -975,7 +975,7 @@ pub async fn prepare(
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
 
     // A local OpenCode is offered exactly the models Ollama has loaded (see
-    // `commands::ollama::opencode_loaded_models_config`) — handed over as an
+    // `services::local_drivers::opencode_loaded_models_config`) — handed over as an
     // inline config, never written into OpenCode's own. A remote run's OpenCode
     // talks to the far host's Ollama, and an inline config the user set wins.
     const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
@@ -986,9 +986,9 @@ pub async fn prepare(
         && !opts.env.contains_key(OPENCODE_INLINE)
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
-        if let Some(requested) = crate::commands::ollama::opencode_spawn_model(&opts.cmd, &opts.args) {
+        if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
             if let Some(cfg) =
-                crate::commands::ollama::opencode_loaded_models_config(requested.as_deref())
+                crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref())
             {
                 opts.env.insert(OPENCODE_INLINE.into(), cfg);
             }
@@ -1007,7 +1007,7 @@ pub async fn prepare(
         .await?;
         let provider = match (plan.launch.cli, plan.launch.model.as_deref()) {
             (crate::services::assistant::AssistantCli::OpenCodeLocal, Some(model)) => {
-                Some(crate::commands::ollama::opencode_assistant_provider(model))
+                Some(crate::services::local_drivers::opencode_assistant_provider(model))
             }
             _ => None,
         };

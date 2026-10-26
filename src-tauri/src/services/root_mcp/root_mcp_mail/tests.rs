@@ -311,7 +311,7 @@ fn only_a_root_tabs_attach_items_take_a_path_and_nothing_takes_a_file_a_bcc_or_a
 fn local_reader<'a>(f: &'a Fx, settings: &'a Path, session: &'a crate::services::root_mcp::Session) -> Stores<'a> {
     // The endpoint lists the test session's model as installed (gap 25),
     // and the taint markers land beside the settings file (gap 33).
-    crate::commands::ollama::test_tags::set(Some(LOCAL_TAGS));
+    crate::services::ollama_client::test_tags::set(Some(LOCAL_TAGS));
     let mut s = stores(Some(f), Caller::LocalModel);
     s.settings = settings;
     s.state = settings.parent().unwrap();
@@ -895,16 +895,16 @@ fn local_reads_refuse_a_cloud_or_unconfirmed_model() {
     let (_, session) = test_session_with(Caller::LocalModel, "root:model-ok", dir.path(), ep);
     let s = local_reader(&f, &settings, &session);
     for unreadable in [Some("not json"), Some(""), None] {
-        crate::commands::ollama::test_tags::set(unreadable);
+        crate::services::ollama_client::test_tags::set(unreadable);
         assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_CLOUD, "{unreadable:?}");
     }
     // Another installed model sharing the tab model's alias (its Vibe home
     // and taint key): not confirmed either (step 5 review).
     let twin = r#"{"models":[{"name":"llama3:latest"},{"name":"llama3-latest"}]}"#;
-    crate::commands::ollama::test_tags::set(Some(twin));
+    crate::services::ollama_client::test_tags::set(Some(twin));
     assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_CLOUD, "shared alias");
     assert!(!session.has_read_mail());
-    crate::commands::ollama::test_tags::set(Some(LOCAL_TAGS));
+    crate::services::ollama_client::test_tags::set(Some(LOCAL_TAGS));
     assert!(call(&s, "mail_read", &json!({ "message_id": "m1" })).is_ok(), "an installed local model reads");
     assert!(session.has_read_mail() && tab_read_mail(dir.path(), "root:model-ok"));
     assert!(model_read_mail(dir.path(), TEST_LOCAL_MODEL), "and taints its model");

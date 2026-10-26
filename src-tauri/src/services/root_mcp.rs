@@ -316,12 +316,12 @@ pub fn read_mail_marker(state: &Path, tab: &str) -> std::path::PathBuf {
 }
 /// The per-model half of the taint (gap 33): a local model's Vibe
 /// conversations live in its per-model `VIBE_HOME`, keyed by the model's
-/// alias (`commands::ollama::sanitize_alias`), so a *new* tab can continue a
+/// alias (`services::ollama_client::sanitize_alias`), so a *new* tab can continue a
 /// conversation that read mail in another. Keyed by the same alias, hashed.
 /// Never cleared by the app: once one tab of a model has read mail, every
 /// later tab of that model starts tainted (`docs/context/root_console.md`).
 pub fn model_read_mail_marker(state: &Path, model: &str) -> std::path::PathBuf {
-    let alias = crate::commands::ollama::sanitize_alias(model.trim());
+    let alias = crate::services::ollama_client::sanitize_alias(model.trim());
     state.join("root_mcp").join("read_mail_model").join(crate::digest::sha256_hex(alias.as_bytes()))
 }
 /// Write the taint markers for `tab` and, for a local model, its `model`.
@@ -796,7 +796,7 @@ fn is_local_model(opts: &PtyOptions) -> bool {
 fn local_model_of(opts: &PtyOptions, tool_models: &[String]) -> Option<String> {
     let raw = opts.env.get(crate::app_env!("LOCAL_MODEL")).map(|m| m.trim()).filter(|m| !m.is_empty());
     let alias = opts.env.get("VIBE_ACTIVE_MODEL").map(|a| a.trim()).filter(|a| !a.is_empty());
-    let alias_of = crate::commands::ollama::sanitize_alias;
+    let alias_of = crate::services::ollama_client::sanitize_alias;
     match (raw, alias) {
         (Some(raw), Some(alias)) => (alias_of(raw) == alias).then(|| raw.to_string()),
         (Some(raw), None) => Some(raw.to_string()),
@@ -1038,14 +1038,14 @@ pub fn web_endpoint_url(port: u16) -> String {
 fn grant_root(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, trusted: &Trusted) {
     let Some(settings) = trusted.settings.as_ref() else { return };
     if !settings.root_mcp() { return; }
-    let host = crate::commands::ollama::host_setting(settings).0.map(str::to_string);
+    let host = crate::services::ollama_client::host_setting(settings).0.map(str::to_string);
     let Some(token) = mint_token() else { return };
     let caller = if is_local_model(opts) { Caller::LocalModel } else { Caller::Agent };
     // The endpoint this tab's model answers from, fixed here like its Vibe
     // config is: `resolve_ollama_addr` with the remote allowance, so a remote
     // host is *recorded* and refused at read time, not hidden behind an error.
     let endpoint = (caller == Caller::LocalModel)
-        .then(|| crate::commands::ollama::resolve_ollama_addr(host.as_deref(), true).ok())
+        .then(|| crate::services::ollama_client::resolve_ollama_addr(host.as_deref(), true).ok())
         .flatten();
     let tool_models = trusted.tool_models();
     // The model, fixed here with the endpoint: what the read gate judges
@@ -3614,7 +3614,7 @@ fn oversized_receipt(name: &str, value: &Value) -> (String, bool) {
 /// Whether a local-model caller's model is confirmed to run on this machine:
 /// its endpoint, recorded at spawn, lists the model it was spawned on without
 /// a remote, and no other listed model shares its alias
-/// ([`crate::commands::ollama::tab_model_is_local_at`]). The two "kept to
+/// ([`crate::services::ollama_client::tab_model_is_local_at`]). The two "kept to
 /// local models" switches (`root_mcp_local_only`, `root_mcp_mail_local_only`)
 /// mean the model, not the tab kind: an Ollama cloud model reached through a
 /// loopback Ollama is a hosted model (the gap 25 sibling). Every caller that
@@ -3623,7 +3623,7 @@ fn oversized_receipt(name: &str, value: &Value) -> (String, bool) {
 fn local_model_confirmed(stores: &Stores) -> bool {
     let Some(session) = stores.session.filter(|_| stores.caller == Caller::LocalModel) else { return true };
     match (session.identity.endpoint.as_deref(), session.identity.model.as_deref()) {
-        (Some(endpoint), Some(model)) => crate::commands::ollama::tab_model_is_local_at(endpoint, model).is_ok(),
+        (Some(endpoint), Some(model)) => crate::services::ollama_client::tab_model_is_local_at(endpoint, model).is_ok(),
         _ => false,
     }
 }

@@ -1146,7 +1146,7 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
             None => {
                 let settings: crate::schema::Settings = crate::storage::read_json(stores.settings)
                     .map_err(|_| LOCAL_READ_REMOTE.to_string())?;
-                crate::services::mail_ai::resolve_endpoint(crate::commands::ollama::host_setting(&settings).0).map_err(|_| LOCAL_READ_REMOTE.to_string())?
+                crate::services::mail_ai::resolve_endpoint(crate::services::ollama_client::host_setting(&settings).0).map_err(|_| LOCAL_READ_REMOTE.to_string())?
             }
         };
         let addr = crate::services::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;
@@ -1157,8 +1157,8 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
         // model (or no session) is not proof of one, and an unreadable list
         // fails closed.
         let model = stores.session.and_then(|s| s.identity.model.as_deref()).ok_or_else(|| LOCAL_READ_CLOUD.to_string())?;
-        crate::commands::ollama::tab_model_is_local_at(&addr, model).map_err(|e| {
-            if e == crate::commands::ollama::LISTENER_REFUSED { LOCAL_READ_LISTENER } else { LOCAL_READ_CLOUD }.to_string()
+        crate::services::ollama_client::tab_model_is_local_at(&addr, model).map_err(|e| {
+            if e == crate::services::ollama_client::LISTENER_REFUSED { LOCAL_READ_LISTENER } else { LOCAL_READ_CLOUD }.to_string()
         })?;
         // Latched before the read, not after it: a result that fails halfway
         // may already be in the model's context. On disk too, per tab and per

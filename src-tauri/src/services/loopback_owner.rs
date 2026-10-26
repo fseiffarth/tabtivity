@@ -8,7 +8,7 @@
 //! from `/proc/net/tcp{,6}` so a caller can judge the *owner*, not the
 //! address. Three callers:
 //!
-//! * the Ollama transport and every "is it local?" gate (`commands::ollama`),
+//! * the Ollama transport and every "is it local?" gate (`services::ollama_client`),
 //!   through [`check`] and [`Policy`];
 //! * the phone's OAuth-callback relay (`mobile_control::sign_in`), through
 //!   [`own_targets`];

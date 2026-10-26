@@ -5248,7 +5248,7 @@ async fn switch_assistant_model(
     let Ok(SwitchModelBody { model }) = serde_json::from_slice::<SwitchModelBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    if model.is_empty() || model.len() > 128 || !crate::commands::ollama::model_name_ok(&model) {
+    if model.is_empty() || model.len() > 128 || !crate::services::local_drivers::model_name_ok(&model) {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {

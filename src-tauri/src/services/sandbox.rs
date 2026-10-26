@@ -584,7 +584,7 @@ pub fn prune_host_bound_markers(project_id: &str, keep: &std::collections::HashS
 
 /// The commands a **host-bound** local-model tab can spawn: `vibe`, `ollama`
 /// (`ollama launch <agent> --model …`) and the direct fallbacks of
-/// `commands::ollama::LOCAL_DRIVERS`. These tabs must not be containerized even
+/// `services::local_drivers::LOCAL_DRIVERS`. These tabs must not be containerized even
 /// when the project's toggle is on — they depend on the host's Ollama server,
 /// `VIBE_HOME`, and each agent's host-side wiring, none of which exists inside the
 /// image. Kept as an explicit allowlist rather than "trust whatever says it is

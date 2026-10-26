@@ -1063,7 +1063,7 @@ fn agent_label_of(tab: &SavedTab) -> String {
         .as_ref()
         .and_then(|launch| launch.get("driver"))
         .and_then(Value::as_str)
-        .and_then(crate::commands::ollama::local_driver_bin)
+        .and_then(crate::services::local_drivers::local_driver_bin)
         .unwrap_or(&tab.cmd);
     crate::services::agent_registry::agent_label_for_bin(bin)
         .map(str::to_string)

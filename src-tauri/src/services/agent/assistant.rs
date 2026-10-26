@@ -111,7 +111,7 @@ impl AssistantCli {
         matches!(self, Self::OpenCodeLocal | Self::ClaudeLocal)
     }
 
-    /// The `commands::ollama::LOCAL_DRIVERS` id a local profile launches
+    /// The `services::local_drivers::LOCAL_DRIVERS` id a local profile launches
     /// through (`"opencode"`, `"claude"`); `None` for a cloud profile.
     pub fn local_driver(self) -> Option<&'static str> {
         match self {
@@ -148,7 +148,7 @@ pub enum Refusal {
     NotOffered,
     /// A local profile with no model.
     ModelRequired,
-    /// A model name that fails `commands::ollama` validation, or starts with `-`.
+    /// A model name that fails `services::ollama_client` validation, or starts with `-`.
     BadModel,
     /// A tab uid that is not uuid-shaped (it becomes a path component).
     BadUid,
@@ -266,7 +266,7 @@ pub struct LaunchCtx<'a> {
     /// only path an argv may name inside the home (Codex's catalog file).
     pub visible_home: &'a Path,
     /// A local OpenCode profile's `ollama` provider config
-    /// (`commands::ollama::opencode_assistant_provider`), which the profile's
+    /// (`services::local_drivers::opencode_assistant_provider`), which the profile's
     /// own settings are merged into. The caller reads it (it asks Ollama); a
     /// profile without it refuses with [`Refusal::Config`].
     pub opencode_provider: Option<&'a str>,
@@ -331,7 +331,7 @@ pub fn validate_launch(launch: &AssistantLaunch) -> Result<(), Refusal> {
     match launch.model.as_deref() {
         None | Some("") if launch.cli.is_local() => Err(Refusal::ModelRequired),
         None => Ok(()),
-        Some(model) if crate::commands::ollama::model_name_ok(model) => Ok(()),
+        Some(model) if crate::services::local_drivers::model_name_ok(model) => Ok(()),
         Some(_) => Err(Refusal::BadModel),
     }
 }
@@ -404,7 +404,7 @@ fn claude_local_tail(session: &[String], url: &str, help: Option<&str>) -> Vec<S
 /// is exactly the tail [`launch_line`] builds for local Claude, for the lane
 /// this spawn was granted (`lane_url`, pinned: host, port and path) and the
 /// help url it was granted (`help_url`, likewise; `None` = no help server).
-/// Only the assistant's launch path asks: `commands::ollama::local_launch_line_ok`
+/// Only the assistant's launch path asks: `services::local_drivers::local_launch_line_ok`
 /// accepts no `--` tail for any scope. Rebuilt from its variable parts — the
 /// session form and the urls — and compared whole, so nothing can be added,
 /// dropped or reordered.
@@ -449,7 +449,7 @@ const OPENCODE_TOOLS_OFF: [&str; 15] = [
 const OPENCODE_LANE_TOOLS: &str = "web_web_*";
 
 /// OpenCode's inline config for a local chat: `provider` (the `ollama`
-/// provider block, `commands::ollama::opencode_assistant_provider`) with the
+/// provider block, `services::local_drivers::opencode_assistant_provider`) with the
 /// profile merged in — every built-in tool off, the lane as the one MCP
 /// server (its token named by `{env:VAR}`, which OpenCode substitutes in
 /// headers, A0: the token stays in the spawn env only), the help server
@@ -815,7 +815,7 @@ fn codex_pinned_args(catalog: &Path, help: Option<&str>) -> Vec<String> {
     ] {
         args.extend(["-c".to_string(), key.to_string()]);
     }
-    args.extend(crate::commands::ollama::catalog_arg_pair(catalog));
+    args.extend(crate::services::local_drivers::catalog_arg_pair(catalog));
     args.extend(["-c".to_string(), "web_search=\"live\"".to_string()]);
     args.extend(["-c".to_string(), format!("developer_instructions=\"{SYSTEM_PROMPT}\"")]);
     if let Some(url) = help {
@@ -916,12 +916,12 @@ pub fn launch_line(launch: &AssistantLaunch, ctx: &LaunchCtx<'_>) -> Result<Assi
     }
 }
 
-/// The driver's own launch line for `model` (`commands::ollama`'s builder,
+/// The driver's own launch line for `model` (`services::local_drivers`' builder,
 /// not a copy of its table), checked with `local_launch_line_ok` and the
 /// program it must start.
-fn local_line(driver: &str, model: &str, cmd: &str) -> Result<crate::commands::ollama::LocalLaunchSpec, Refusal> {
-    let spec = crate::commands::ollama::pinned_local_line(driver, model).ok_or(Refusal::BadModel)?;
-    if spec.cmd != cmd || !crate::commands::ollama::local_launch_line_ok(driver, model, &spec.cmd, &spec.args) {
+fn local_line(driver: &str, model: &str, cmd: &str) -> Result<crate::services::local_drivers::LocalLaunchSpec, Refusal> {
+    let spec = crate::services::local_drivers::pinned_local_line(driver, model).ok_or(Refusal::BadModel)?;
+    if spec.cmd != cmd || !crate::services::local_drivers::local_launch_line_ok(driver, model, &spec.cmd, &spec.args) {
         return Err(Refusal::BadModel);
     }
     Ok(spec)
@@ -1215,7 +1215,7 @@ mod tests {
         // The tail is `claude_local_tail_ok` for this spawn's lane; the plain
         // checker (every scope's persisted `localLaunch`) refuses the whole line.
         assert!(claude_local_tail_ok(tail, LANE_URL, None));
-        assert!(!crate::commands::ollama::local_launch_line_ok("claude", "qwen3:8b", &spec.cmd, &spec.args));
+        assert!(!crate::services::local_drivers::local_launch_line_ok("claude", "qwen3:8b", &spec.cmd, &spec.args));
         assert_eq!(spec.env[crate::app_env!("LOCAL_MODEL")], "qwen3:8b");
         // No lane, no local chat: the model has no tool of its own.
         assert_eq!(launch_line(&launch(AssistantCli::ClaudeLocal, Some("qwen3:8b")), &ctx(home.path(), None)), Err(Refusal::NoLane));
@@ -1243,7 +1243,7 @@ mod tests {
         let plain = |tail: &[String]| {
             let mut args = strs(&["launch", "claude", "--model", m, "--"]);
             args.extend(tail.iter().cloned());
-            crate::commands::ollama::local_launch_line_ok("claude", m, "ollama", &args)
+            crate::services::local_drivers::local_launch_line_ok("claude", m, "ollama", &args)
         };
         let session = strs(&["--session-id", UID]);
         let good = claude_local_tail(&session, LANE_URL, None);
@@ -1252,10 +1252,10 @@ mod tests {
         assert!(!plain(&claude_local_tail(&strs(&["--continue"]), LANE_URL, None)));
         assert!(!plain(&[]));
         // The plain form stays valid, and the assistant's tail is no other driver's.
-        assert!(crate::commands::ollama::local_launch_line_ok("claude", m, "ollama", &strs(&["launch", "claude", "--model", m])));
+        assert!(crate::services::local_drivers::local_launch_line_ok("claude", m, "ollama", &strs(&["launch", "claude", "--model", m])));
         let mut codex = strs(&["launch", "codex", "--model", m, "--"]);
         codex.extend(good.iter().cloned());
-        assert!(!crate::commands::ollama::local_launch_line_ok("codex", m, "ollama", &codex));
+        assert!(!crate::services::local_drivers::local_launch_line_ok("codex", m, "ollama", &codex));
 
         let ok = |tail: &[String]| claude_local_tail_ok(tail, LANE_URL, None);
         assert!(ok(&good));
@@ -1370,7 +1370,7 @@ mod tests {
         let spec = launch_line(&launch(AssistantCli::OpenCodeLocal, Some("qwen3:8b")), &ctx(home.path(), Some(&grant))).unwrap();
         assert_eq!(spec.cmd, "opencode");
         assert_eq!(spec.args, strs(&["--model", "ollama/qwen3:8b"]));
-        assert!(crate::commands::ollama::local_launch_line_ok("opencode", "qwen3:8b", &spec.cmd, &spec.args));
+        assert!(crate::services::local_drivers::local_launch_line_ok("opencode", "qwen3:8b", &spec.cmd, &spec.args));
         let config: serde_json::Value = serde_json::from_str(&spec.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
         for tool in OPENCODE_TOOLS_OFF {
             assert_eq!(config["tools"][tool], serde_json::json!(false), "{tool}");

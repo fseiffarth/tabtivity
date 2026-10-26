@@ -99,6 +99,11 @@ pub mod private_file;
 pub mod connect;
 pub mod mobile_control;
 pub mod net_usage;
+// The Ollama client: endpoint, listener owner gate, bounded HTTP, capability
+// and locality reads (moved down from `commands::ollama`, S5).
+pub mod ollama_client;
+// The local-model coding agents and the launch lines a local-model tab runs.
+pub mod local_drivers;
 pub mod openvpn;
 pub mod process_lease;
 pub mod project_runtime;

@@ -6,13 +6,13 @@
 //! here does not: it runs only against a **loopback** Ollama, and
 //! [`resolve_endpoint`] refuses a non-loopback host **even when the global
 //! `ollama_allow_remote_host` is true**. That is deliberately stricter than the
-//! setting the general `commands::ollama` transport honours — "classify my mail
+//! setting the general `services::ollama_client` transport honours — "classify my mail
 //! on someone else's box" defeats the whole point — and it is enforced *before*
 //! any socket is opened, so a remote host is a stated refusal and never a silent
 //! remote call. A loopback endpoint is not enough on its own: an Ollama cloud
 //! model (`*-cloud`) runs on ollama.com through that same loopback server, so
 //! the model must also be one the local Ollama lists without a remote
-//! ([`commands::ollama::model_is_local_at`](crate::commands::ollama::model_is_local_at),
+//! ([`services::ollama_client::model_is_local_at`](crate::services::ollama_client::model_is_local_at),
 //! gap 25), checked before the request and failing closed. No prompt here fetches a web page, an image or a link; the only
 //! input is what the local store already holds.
 //!
@@ -22,7 +22,7 @@
 
 use std::fmt::Write as _;
 
-use crate::commands::ollama;
+use crate::services::ollama_client as ollama;
 use crate::schema::mail::{MailExtractedEvent, MailExtractedTask, MailPriority};
 use crate::schema::Settings;
 
@@ -126,7 +126,7 @@ fn host_of_addr(addr: &str) -> &str {
 
 /// Resolve the configured host to a `host:port` **that is loopback**, or refuse.
 ///
-/// It normalizes with `commands::ollama::resolve_ollama_addr` (so `http://`
+/// It normalizes with `services::ollama_client::resolve_ollama_addr` (so `http://`
 /// prefixes, bare ports and IPv6 are handled exactly as the general transport
 /// handles them, and a `https://` host is refused for the same reason) and then
 /// re-checks the literal against `host_is_loopback` — never consulting
@@ -581,7 +581,7 @@ mod tests {
     /// `/api/chat` (which, with no server in a test, would say `not_running`).
     #[test]
     fn a_cloud_mail_model_is_refused_before_the_chat_request() {
-        crate::commands::ollama::test_tags::set(Some(TAGS));
+        crate::services::ollama_client::test_tags::set(Some(TAGS));
         for model in ["gpt-oss:120b-cloud", "mine", "qwen3-coder:cloud"] {
             let err = chat_with(&mail_on(model), "s", "u", ChatOptions::bounded(16)).unwrap_err();
             assert_eq!(err, cloud_model_reason(model), "{model}");
@@ -592,10 +592,10 @@ mod tests {
         assert_eq!(preflight(&mail_on("llama3")), Ok(("llama3".to_string(), "127.0.0.1:11434".to_string())));
         // Unlisted, or a list that cannot be read: fail closed.
         assert_eq!(preflight(&mail_on("mistral")).unwrap_err(), unlisted_model_reason("mistral"));
-        crate::commands::ollama::test_tags::set(Some("not json"));
+        crate::services::ollama_client::test_tags::set(Some("not json"));
         assert_eq!(preflight(&mail_on("llama3")).unwrap_err(), unlisted_model_reason("llama3"));
         // Nothing answers: the sentinel every 🧠 surface branches on.
-        crate::commands::ollama::test_tags::set(None);
+        crate::services::ollama_client::test_tags::set(None);
         assert_eq!(preflight(&mail_on("llama3")).unwrap_err(), NOT_RUNNING);
         // Loopback still comes first: a remote host is refused before the list.
         let mut remote = mail_on("llama3");
@@ -609,8 +609,8 @@ mod tests {
     /// `settings.json` in between.
     #[test]
     fn the_chat_goes_to_the_endpoint_the_checks_judged() {
-        use crate::commands::ollama::test_http;
-        crate::commands::ollama::test_tags::set(Some(TAGS));
+        use crate::services::ollama_client::test_http;
+        crate::services::ollama_client::test_tags::set(Some(TAGS));
         test_http::set(Some(Box::new(|_addr: &str, _method: &str, path: &str| match path {
             "/api/tags" => Ok(r#"{"models":[{"name":"llama3:latest","digest":"sha256:mail-ai-endpoint-test"}]}"#.into()),
             "/api/show" => Ok(r#"{"capabilities":["completion"]}"#.into()),
@@ -633,10 +633,10 @@ mod tests {
     #[test]
     fn a_tags_timeout_reads_as_not_running() {
         for err in ["read: Resource temporarily unavailable (os error 11)", "read: Connection reset by peer (os error 104)", "write: Broken pipe (os error 32)"] {
-            crate::commands::ollama::test_tags::fail(err);
+            crate::services::ollama_client::test_tags::fail(err);
             assert_eq!(preflight(&mail_on("llama3")).unwrap_err(), NOT_RUNNING, "{err}");
         }
-        crate::commands::ollama::test_tags::set(None);
+        crate::services::ollama_client::test_tags::set(None);
     }
 
     // ── Model resolution ────────────────────────────────────────────────────

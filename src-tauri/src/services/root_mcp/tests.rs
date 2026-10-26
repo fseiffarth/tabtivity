@@ -902,7 +902,7 @@ fn mail_local_only_withholds_mail_from_cloud_agents_only() {
 fn local_only_switches_refuse_a_local_tab_on_a_cloud_model() {
     let fx = Fixture::new();
     let tags = r#"{"models":[{"name":"llama3:latest"},{"name":"gpt-oss:120b-cloud","remote_host":"https://ollama.com:443"}]}"#;
-    crate::commands::ollama::test_tags::set(Some(tags));
+    crate::services::ollama_client::test_tags::set(Some(tags));
     let ep = Some("127.0.0.1:11434".to_string());
     let session_of = |tab: &str, model: Option<&str>| test_session_model(Caller::LocalModel, tab, fx.dir.path(), ep.clone(), model.map(String::from)).1;
     let local = session_of("root:lo-local", Some("llama3:latest"));
@@ -934,7 +934,7 @@ fn local_only_switches_refuse_a_local_tab_on_a_cloud_model() {
         assert!(reply(s, &list)["result"]["tools"].is_array(), "its other tools stay: {}", s.identity.tab);
     }
     // No server to ask: not confirmed, refused.
-    crate::commands::ollama::test_tags::set(None);
+    crate::services::ollama_client::test_tags::set(None);
     assert_eq!(text(&local), MAIL_LOCAL_ONLY);
     for tab in ["root:lo-local", "root:lo-cloud", "root:lo-unknown", "root:lo-none"] { revoke_tab(tab); }
 }

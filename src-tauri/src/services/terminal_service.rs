@@ -318,7 +318,7 @@ const PANE_MARKER_CMDS: &[&str] = &[
 /// Agent CLIs a persisted tab may relaunch: every built-in agent's binary
 /// (`services::agent_registry`' registry, which the frontend's generated
 /// `agentCliTable.ts` mirrors, so `cmdToKind` writes each as an agent tab) plus
-/// `ollama`, the local-model launcher (`commands::ollama::LOCAL_DRIVERS`),
+/// `ollama`, the local-model launcher (`services::local_drivers::LOCAL_DRIVERS`),
 /// because those are the only commands `loadFromLayout` can legitimately have
 /// written.
 fn agent_cmds() -> Vec<&'static str> {
@@ -587,7 +587,7 @@ pub fn sanitize_tab_layout(
 
 /// Drop a persisted `localLaunch` unless it is a local-model tab's launch line
 /// Tabtivity itself builds for the driver and model it names
-/// (`commands::ollama::local_launch_line_ok`). The field is what lets such a
+/// (`services::local_drivers::local_launch_line_ok`). The field is what lets such a
 /// tab restore at all — the frontend relaunches it with `localLaunch.args` —
 /// so, like `resumeArgs`, it is an argv for a host-bound agent CLI and is never
 /// trusted from disk as written. Without it the tab is simply not restorable.
@@ -619,7 +619,7 @@ pub(crate) fn local_launch_ok(launch: &Value, cmd: &str) -> bool {
     else {
         return false;
     };
-    crate::commands::ollama::local_launch_line_ok(driver, model, cmd, &args)
+    crate::services::local_drivers::local_launch_line_ok(driver, model, cmd, &args)
 }
 
 /// Whether a persisted tab `env` may not set `key` (gap 17): the variables that
