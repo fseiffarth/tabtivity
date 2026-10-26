@@ -14,7 +14,7 @@ import INDEX from "../../../mobile-web/index.html?raw";
 import { shellAssets } from "../../../mobile-web/src/shellAssets";
 import { BRAND, NAMES } from "../../lib/brand";
 import { translate } from "../../lib/i18n";
-import { TRANSLATIONS } from "../../lib/i18nDicts/all";
+import { TRANSLATIONS } from "../../lib/i18n/all";
 import {
   PUSH_LANG_CACHE,
   PUSH_LANG_URL,

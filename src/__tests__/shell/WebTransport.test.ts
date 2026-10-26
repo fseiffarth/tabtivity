@@ -20,7 +20,7 @@ import { WsInternals } from "../../lib/transport/wsInternals";
 import { pausePollersWhileDown, socketUrl } from "../../lib/transport/installWeb";
 import { setDialogAdapter } from "../../lib/transport/dialogAdapter";
 import { registerDict, useI18nStore } from "../../lib/i18n";
-import { dict as de } from "../../lib/i18nDicts/de";
+import { dict as de } from "../../lib/i18n/de";
 
 class FakeSocket implements SocketLike {
   static instances: FakeSocket[] = [];

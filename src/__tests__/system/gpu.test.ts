@@ -15,7 +15,7 @@ import {
   type GpuSample,
 } from "../../lib/gpu";
 import { registerDict } from "../../lib/i18n";
-import { dict as de } from "../../lib/i18nDicts/de";
+import { dict as de } from "../../lib/i18n/de";
 
 /** The machine this was built on: a Strix APU — a 512 MB carve-out + a 61 GB GTT pool. */
 const apu: GpuSample = {

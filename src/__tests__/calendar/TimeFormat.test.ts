@@ -4,7 +4,7 @@ import { defaultUse24h, resolveUse24h } from "../../lib/timeFormat";
 import { localeUses24h, osUse24hFrom } from "../../lib/osClock";
 import { formatLongDate, formatStampTime, formatTime } from "../../lib/calendar/calendarTime";
 import { registerDict, useI18nStore } from "../../lib/i18n";
-import { dict as es } from "../../lib/i18nDicts/es";
+import { dict as es } from "../../lib/i18n/es";
 
 /**
  * The app-wide clock.

@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { formatFingerprint, mailCryptoNoteKey, mailCryptoTone } from "../../lib/mail";
-import { TRANSLATIONS } from "../../lib/i18nDicts/all";
+import { TRANSLATIONS } from "../../lib/i18n/all";
 import type { MailCryptoInfo, MailCryptoState } from "../../types/mail";
 
 function info(over: Partial<MailCryptoInfo> = {}): MailCryptoInfo {

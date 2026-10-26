@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { create } from "zustand";
-import { fillBrand, storageDashKey } from "./brand";
+import { fillBrand, storageDashKey } from "../brand";
 
 /**
  * Tabtivity's in-house internationalization (i18n) — the ONE place every language
@@ -14,11 +14,11 @@ import { fillBrand, storageDashKey } from "./brand";
  *    missing, so a half-translated language degrades gracefully instead of
  *    rendering blanks.
  *  - The four non-English dictionaries are code-split (§5.2 startup size): they
- *    live in `i18nDicts/{de,es,fr,it}.ts` and are `import()`ed on demand, so
+ *    live in `i18n/{de,es,fr,it}.ts` and are `import()`ed on demand, so
  *    the startup chunk carries only English plus the language actually in use.
  *    The cached language's dictionary is kicked off at module evaluation, in
  *    parallel with the rest of startup; until it lands, `translate` falls back
- *    to English — never a blank. `i18nDicts/all.ts` re-aggregates the full set
+ *    to English — never a blank. `i18n/all.ts` re-aggregates the full set
  *    for the parity tests; importing it from app code would undo the split.
  *  - The current language is a tiny zustand store (`useI18nStore`). Switching is
  *    **instant**: `setLangLocal` flips one field and every component reading
@@ -28,8 +28,8 @@ import { fillBrand, storageDashKey } from "./brand";
  *    launch already shows the chosen language before settings finish loading.
  *
  * To add a language: add its code to `Language`, a `{ value, label }` row to
- * `LANGUAGES`, a dictionary module under `i18nDicts/`, and its loader to
- * `dictLoaders` (+ `i18nDicts/all.ts`). To add a string: add the key to the
+ * `LANGUAGES`, a dictionary module under `i18n/`, and its loader to
+ * `dictLoaders` (+ `i18n/all.ts`). To add a string: add the key to the
  * `en` block (and, ideally, the dictionaries) and call `t("your.key")`.
  */
 export type Language = "en" | "de" | "es" | "fr" | "it";
@@ -10541,7 +10541,7 @@ export const enSource = {
 } as const;
 
 /** English with `{app}` filled. Exported solely for the test aggregator
- *  (`i18nDicts/all.ts`). */
+ *  (`i18n/all.ts`). */
 export const en = fillBrand(enSource);
 
 /** The key set every component is allowed to translate. */
@@ -10554,14 +10554,14 @@ export type Dict = Partial<Record<TranslationKey, string>>;
 const loadedDicts: Partial<Record<Language, Dict>> = {};
 
 const dictLoaders: Record<Exclude<Language, "en">, () => Promise<{ dict: Dict }>> = {
-  de: () => import("./i18nDicts/de"),
-  es: () => import("./i18nDicts/es"),
-  fr: () => import("./i18nDicts/fr"),
-  it: () => import("./i18nDicts/it"),
+  de: () => import("./de"),
+  es: () => import("./es"),
+  fr: () => import("./fr"),
+  it: () => import("./it"),
 };
 
 /** Make `lang`'s dictionary available to `translate` synchronously. Called by
- *  the dynamic loaders below and by the test aggregator (`i18nDicts/all.ts`). */
+ *  the dynamic loaders below and by the test aggregator (`i18n/all.ts`). */
 export function registerDict(lang: Language, dict: Dict) {
   if (lang === "en") return;
   loadedDicts[lang] = fillBrand(dict);

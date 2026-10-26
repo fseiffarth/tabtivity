@@ -6,7 +6,7 @@ import autoprefixer from "autoprefixer";
 import { manifestPath, PAGE_COLOR, type PaintedTheme } from "./mobile-web/src/pageColors.ts";
 import { shellAssets } from "./mobile-web/src/shellAssets.ts";
 import { pushTitleTable, stampPushTitles } from "./mobile-web/src/pushTitles.ts";
-import { TRANSLATIONS } from "./src/lib/i18nDicts/all.ts";
+import { TRANSLATIONS } from "./src/lib/i18n/all.ts";
 import { themeColors } from "./mobile-web/src/themeColors.ts";
 
 const BUILD_PLACEHOLDER = "__APP_BUILD__";

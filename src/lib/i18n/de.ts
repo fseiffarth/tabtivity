@@ -1,10 +1,10 @@
 /**
- * German dictionary — code-split out of `lib/i18n.ts` so the startup chunk
+ * German dictionary — code-split out of `lib/i18n/index.ts` so the startup chunk
  * carries only English plus the language in use. Loaded on demand by
- * `lib/i18n.ts`; app code must never import this module directly (a static
+ * `lib/i18n/index.ts`; app code must never import this module directly (a static
  * import would pull it back into the startup chunk).
  */
-import type { Dict } from "../i18n";
+import type { Dict } from "./index";
 
 export const dict: Dict = {
   "mobile.pair.title": "Dieses Handy verbinden",
