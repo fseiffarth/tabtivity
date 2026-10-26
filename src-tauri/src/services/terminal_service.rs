@@ -316,13 +316,13 @@ const PANE_MARKER_CMDS: &[&str] = &[
 ];
 
 /// Agent CLIs a persisted tab may relaunch: every built-in agent's binary
-/// (`commands::agents`' registry, which the frontend's generated
+/// (`services::agent_registry`' registry, which the frontend's generated
 /// `agentCliTable.ts` mirrors, so `cmdToKind` writes each as an agent tab) plus
 /// `ollama`, the local-model launcher (`commands::ollama::LOCAL_DRIVERS`),
 /// because those are the only commands `loadFromLayout` can legitimately have
 /// written.
 fn agent_cmds() -> Vec<&'static str> {
-    let mut cmds = crate::commands::agents::agent_bins();
+    let mut cmds = crate::services::agent_registry::agent_bins();
     cmds.push("ollama");
     cmds
 }
@@ -1224,7 +1224,7 @@ mod tests {
         // The set used to be a hand copy of 13 CLIs, so a tab of any agent added
         // to the registry later (Kiro, Goose, Amp, …) came back as a plain shell.
         let set = known_tab_commands(&no_custom());
-        for bin in crate::commands::agents::agent_bins() {
+        for bin in crate::services::agent_registry::agent_bins() {
             let mut tabs = vec![entry(bin)];
             sanitize_tab_layout(&mut tabs, &set, &no_custom());
             assert_eq!(tabs[0].cmd, bin, "{bin} restored as a shell");

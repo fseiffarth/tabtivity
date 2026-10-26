@@ -14,7 +14,7 @@ pub fn bin_dir() -> PathBuf { crate::storage::state_dir().join("bin") }
 
 pub fn install() -> io::Result<()> {
     let exe = std::env::current_exe().ok();
-    install_in(&bin_dir(), exe.as_deref(), &crate::commands::agents::agent_bins())
+    install_in(&bin_dir(), exe.as_deref(), &crate::services::agent_registry::agent_bins())
 }
 
 fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {

@@ -613,7 +613,7 @@ pub fn is_host_bound_local_agent(cmd: &str, marker: bool) -> bool {
 }
 
 /// Whether a spawn's command launches an AI coding agent — the question
-/// [`SandboxScope::Agents`] turns on. Mirrors `commands::agents::AGENTS` (the
+/// [`SandboxScope::Agents`] turns on. Mirrors `services::agent_registry::AGENTS` (the
 /// registry the + menu lists, and the frontend's generated `agentCliTable.ts`
 /// that classifies a tab); `agent_registry_matches_classifier` fails if the
 /// registry grows an entry this misses.
@@ -632,7 +632,7 @@ pub fn is_host_bound_local_agent(cmd: &str, marker: bool) -> bool {
 pub fn is_agent_cmd(cmd: &str) -> bool {
     let base = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
     let base = base.strip_suffix(".exe").unwrap_or(base);
-    crate::commands::agents::agent_bins().contains(&base)
+    crate::services::agent_registry::agent_bins().contains(&base)
 }
 
 /// Re-derive a spawn's authority flags from the trustworthy project record.
@@ -2715,10 +2715,10 @@ mod tests {
 
     #[test]
     fn agent_registry_matches_classifier() {
-        // `is_agent_cmd` reads `commands::agents::AGENTS`, as the frontend's
+        // `is_agent_cmd` reads `services::agent_registry::AGENTS`, as the frontend's
         // generated `agentCliTable.ts` does; this is the tripwire. An agent missing from the classifier runs OUTSIDE the container under
         // agents-only scope, which is exactly the silent failure worth a test.
-        for bin in crate::commands::agents::agent_bins() {
+        for bin in crate::services::agent_registry::agent_bins() {
             assert!(
                 is_agent_cmd(bin),
                 "{bin} is in the registry but not classified"
@@ -2726,7 +2726,7 @@ mod tests {
         }
         // The registry is non-empty (a `Vec::new()` refactor would make every
         // assertion above vacuous and every agent escape the container).
-        assert!(crate::commands::agents::agent_bins().len() >= 10);
+        assert!(crate::services::agent_registry::agent_bins().len() >= 10);
     }
 
     // ── Mount narrowing (S-3) ─────────────────────────────────────────────

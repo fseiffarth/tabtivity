@@ -89,7 +89,7 @@ fn cache() -> &'static Mutex<Read> {
 pub fn claude_model_screens() -> Result<Vec<Screen>, String> {
     use crate::services::model_rows;
     let mut cached = cache().lock().unwrap_or_else(|e| e.into_inner());
-    let source = crate::commands::agents::installed_source("claude").map(|(_, source)| source);
+    let source = crate::services::agent_registry::installed_source("claude").map(|(_, source)| source);
     let store = model_rows::store_path();
     if let Some(screens) = model_rows::screens_in(&store, "claude", source.as_ref()) {
         return Ok(screens);

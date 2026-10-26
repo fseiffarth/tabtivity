@@ -206,7 +206,7 @@ const MAX_KEY_BYTES: usize = 512;
 pub fn cli_of(cmd: &str) -> Option<&'static str> {
     let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
     let bin = bin.strip_suffix(".exe").unwrap_or(bin);
-    crate::commands::agents::agent_id_for_bin(bin)
+    crate::services::agent_registry::agent_id_for_bin(bin)
 }
 
 /// Whether the proxy serves CLI `id` (registry id) at all — what an API key,
@@ -719,7 +719,7 @@ pub fn refuse_in_container(cmd: &str, pick: Option<bool>, keyless: bool) -> Resu
         && crate::services::server::agent_keys::chosen_in(&crate::storage::state_dir()).contains(id);
     let own = applies_to(cmd, pick, &settings()) && routes_of(id).iter().any(|r| has_key(r.provider));
     if admin || own {
-        let label = crate::commands::agents::agent_label_for_id(id).unwrap_or(id);
+        let label = crate::services::agent_registry::agent_label_for_id(id).unwrap_or(id);
         return Err(format!(
             "{label} runs on an API key, which never goes into a project container: turn the container off for this project, or switch {label} back to its own login in Settings → Manage CLIs"
         ));

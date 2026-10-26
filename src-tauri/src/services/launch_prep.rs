@@ -881,7 +881,7 @@ pub async fn prepare(
         // the file for 1.x): probe first, so the resolve lists the one this
         // binary loads even right after an upgrade. The check below reuses it.
         if opts.cmd == "opencode" {
-            crate::commands::agents::opencode_is_v2().await;
+            crate::services::agent_registry::opencode_is_v2().await;
         }
         let resolving = opts.clone();
         opts = match tokio::task::spawn_blocking(move || crate::services::agent_session::resolve_agent_session_bounded(resolving)).await {
@@ -1018,7 +1018,7 @@ pub async fn prepare(
     // The first v2 launch needs its new flags too; do not defer this probe to
     // the next tab. Remote/container binaries have their own release.
     if opts.cmd == "opencode" && !remote_agent_run && !opts.sandbox
-        && crate::commands::agents::opencode_is_v2().await
+        && crate::services::agent_registry::opencode_is_v2().await
     {
         crate::services::opencode_session::v2_launch_args(&mut opts.args);
     }
@@ -1199,7 +1199,7 @@ pub async fn prepare(
     let named = opts.cmd == "claude"
         && session_name.is_some()
         && !crate::services::agent_fence::runs_subcommand(&opts.args)
-        && crate::commands::agents::claude_takes_name_flag()
+        && crate::services::agent_registry::claude_takes_name_flag()
         && append_claude_name(&mut opts.args, session_name.as_deref());
 
     // A compatible host Codex TUI stays in-process: its detached app-server
@@ -1208,7 +1208,7 @@ pub async fn prepare(
     if opts.cmd == "codex"
         && crate::services::agent_versions::codex_runs_tui(&opts.args)
         && !opts.args.iter().any(|a| a == "--no-daemon")
-        && crate::commands::agents::codex_takes_no_daemon()
+        && crate::services::agent_registry::codex_takes_no_daemon()
     {
         opts.args.push("--no-daemon".to_string());
     }

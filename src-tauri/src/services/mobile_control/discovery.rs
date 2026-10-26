@@ -1034,19 +1034,19 @@ fn expected_tmux_for(pair: &crate::brand::Pair, project_id: &str, kind: &str, na
 }
 
 /// The built-in agent CLIs whose tabs resume across a relaunch, in registry
-/// order (`commands::agents`' `Resume`, the frontend's `RESUMABLE_AGENTS`):
+/// order (`services::agent_registry`' `Resume`, the frontend's `RESUMABLE_AGENTS`):
 /// what the phone may come back to, and — with no window — what it may start
 /// (`headless::agents`).
 pub(super) fn resumable_builtins() -> Vec<&'static str> {
-    crate::commands::agents::agent_bins()
+    crate::services::agent_registry::agent_bins()
         .into_iter()
-        .filter(|bin| crate::commands::agents::is_resumable_bin(bin))
+        .filter(|bin| crate::services::agent_registry::is_resumable_bin(bin))
         .collect()
 }
 
 fn resumable(tab: &SavedTab) -> bool {
     tab.session_id.is_some()
-        && (crate::commands::agents::is_resumable_bin(&tab.cmd)
+        && (crate::services::agent_registry::is_resumable_bin(&tab.cmd)
             || tab.resume_args.as_ref().is_some_and(|v| !v.is_empty()))
 }
 
@@ -1065,7 +1065,7 @@ fn agent_label_of(tab: &SavedTab) -> String {
         .and_then(Value::as_str)
         .and_then(crate::commands::ollama::local_driver_bin)
         .unwrap_or(&tab.cmd);
-    crate::commands::agents::agent_label_for_bin(bin)
+    crate::services::agent_registry::agent_label_for_bin(bin)
         .map(str::to_string)
         .unwrap_or_else(|| tab.label.chars().take(120).collect())
 }

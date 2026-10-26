@@ -165,7 +165,7 @@ impl Default for HeadlessSpawner {
                     }
                 })
             }),
-            installed: Arc::new(crate::commands::agents::binary_is_installed),
+            installed: Arc::new(crate::services::agent_registry::binary_is_installed),
             new_project: Arc::new(crate::commands::projects::create_project_for_phone),
             assistant_options: Arc::new(|| Box::pin(crate::commands::assistant::assistant_options())),
         }
@@ -5167,7 +5167,7 @@ fn model_rows_cli(
     if project.host != super::discovery::ProjectHost::Local || tab.place.on_host() || tab.local_model {
         return Err(api_error(StatusCode::CONFLICT, "not_this_machine"));
     }
-    crate::commands::agents::installed_source(&tab.cmd).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))
+    crate::services::agent_registry::installed_source(&tab.cmd).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))
 }
 
 /// `GET /api/v1/tabs/{id}/model-rows` — `{ title?, rows }`, the rows the tab's

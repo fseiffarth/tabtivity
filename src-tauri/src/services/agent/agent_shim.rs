@@ -51,7 +51,7 @@ pub fn plan(cli: &str, env: &HashMap<String, String>) -> Result<(Option<String>,
 pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, String> {
     let env: HashMap<String, String> = std::env::vars().collect();
     let (project_id, cwd) = plan(cli, &env)?;
-    if !crate::commands::agents::agent_bins().contains(&cli) {
+    if !crate::services::agent_registry::agent_bins().contains(&cli) {
         return Err(format!("agent shim: '{cli}' is not a registry CLI"));
     }
     let scope_id = crate::services::agent_home::scope_of(project_id.as_deref());

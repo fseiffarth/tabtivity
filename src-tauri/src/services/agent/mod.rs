@@ -32,6 +32,8 @@ pub mod agent_home;
 pub mod agent_install;
 pub mod agent_latest;
 pub mod agent_prompts;
+// The built-in agent-CLI registry (`AGENTS`) and its lookups.
+pub mod agent_registry;
 // An agent tab's conversation taken along to another worktree (the Reader's
 // branch chip).
 pub mod agent_relocate;

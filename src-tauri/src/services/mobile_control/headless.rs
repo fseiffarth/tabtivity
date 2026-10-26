@@ -403,8 +403,8 @@ pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> boo
     super::discovery::resumable_builtins()
         .into_iter()
         .filter_map(|bin| {
-            let label = crate::commands::agents::agent_label_for_bin(bin)?;
-            let id = crate::commands::agents::agent_id_for_bin(bin)?;
+            let label = crate::services::agent_registry::agent_label_for_bin(bin)?;
+            let id = crate::services::agent_registry::agent_id_for_bin(bin)?;
             if disabled.contains(id) || disabled.contains(bin) || !installed(bin) {
                 return None;
             }
@@ -1049,12 +1049,12 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
 }
 
 /// The launch args that bring a resumable agent tab's conversation back — the
-/// registry's `Resume` (`commands::agents`, the frontend's `RESUMABLE_AGENTS`).
+/// registry's `Resume` (`services::agent_registry`, the frontend's `RESUMABLE_AGENTS`).
 /// Claude's `--resume <launch id>` is upgraded to the live id by `launch_prep`
 /// as at every restart; Codex resolves its own from `<UPPER>_TAB_UID`; the
 /// rest continue their latest.
 pub(super) fn resume_args(cmd: &str, session_id: &str) -> Vec<String> {
-    crate::commands::agents::resume_args_for_bin(cmd, session_id).unwrap_or_default()
+    crate::services::agent_registry::resume_args_for_bin(cmd, session_id).unwrap_or_default()
 }
 
 /// `ReopenTab` with no window: the closed record comes back as a new tab

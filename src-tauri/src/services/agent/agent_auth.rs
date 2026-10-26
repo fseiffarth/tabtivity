@@ -2,7 +2,7 @@
 //!
 //! Each CLI keeps its sign-in in a plain file (or a small directory) under
 //! `$HOME` — see the `auth_paths` column of the registry in
-//! `commands::agents`. Those paths, and only those, are shared across scopes:
+//! `services::agent_registry`. Those paths, and only those, are shared across scopes:
 //! the file lives once in `<state_dir>/agent-auth/<cli-id>/` and every scope
 //! home (`services::agent_home`) carries a **copy** of it at the CLI's own
 //! path — its own inode, so nothing a tab writes reaches another scope until
@@ -173,7 +173,7 @@ fn home_path(home: &Path, rel: &str) -> PathBuf {
 
 /// The registry's login paths, `(cli id, paths)`.
 fn registry() -> Vec<(&'static str, &'static [AuthPath])> {
-    crate::commands::agents::auth_registry()
+    crate::services::agent_registry::auth_registry()
 }
 
 /// The home's key in the store's records: its directory name, which is the

@@ -15,7 +15,7 @@
 //! version moved works exactly as well (or as badly) as it did before anyone
 //! looked.
 //!
-//! Two refusals shape the tables, both inherited from [`crate::commands::agents`]'
+//! Two refusals shape the tables, both inherited from [`crate::services::agent_registry`]'
 //! `WARMUPS` and [`crate::services::agent_usage`]'s `RECIPES`:
 //!
 //! 1. **Only argv run against a real binary is listed** ([`VERSION_ARGV`]).
