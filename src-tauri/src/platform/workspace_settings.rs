@@ -12,7 +12,9 @@
 //!   recorded and restored — the user's other settings are never touched;
 //! - the record is persisted to [`RESTORE_FILE`] in the state dir *before*
 //!   the first write and deleted after the restore, so a crash leaves the
-//!   originals behind for the next start, which restores them first;
+//!   originals behind for the next start, which restores them first; a key
+//!   whose restore fails stays in the file (and in the next record) until a
+//!   restore of it succeeds;
 //! - without a file, a `workspace-names` that already starts with the app's
 //!   own pair (current or old name) is a leftover of a crash under an older
 //!   build: it is recorded as the GSettings default (`gsettings reset`), not
@@ -180,6 +182,8 @@ pub fn restore_ops(record: &[Recorded]) -> Vec<Op> {
 ///
 /// A restore file left by a crash is restored first — its originals win over
 /// whatever is current — and the plan is made afresh from the restored values.
+/// A leftover key whose restore fails keeps its original: it is carried into
+/// this run's record (and file), never replaced by the app's own value.
 /// `Err` only from a strict table, after undoing what it had written.
 pub fn take_over(
     table: Option<&DesktopSettings>,
@@ -187,17 +191,34 @@ pub fn take_over(
     get: impl Fn(&str, &str) -> Option<String>,
     mut set: impl FnMut(&Op) -> Result<(), String>,
 ) -> Result<Vec<Recorded>, String> {
+    let mut carried: Vec<Recorded> = Vec::new();
     if let Some(left) = read_restore_file(path) {
-        run(&restore_ops(&left.keys), &mut set);
-        remove_restore_file(path);
+        carried = restore(&left.keys, &mut set);
+        if carried.is_empty() {
+            remove_restore_file(path);
+        } else {
+            persist(path, &left.desktop, &carried);
+        }
     }
-    let Some(table) = table else { return Ok(Vec::new()) };
-    let planned = plan(table, get);
+    let Some(table) = table else { return Ok(carried) };
+    let same = |a: &Recorded, b: &Recorded| a.schema == b.schema && a.key == b.key;
+    let mut planned = plan(table, get);
+    for p in &mut planned {
+        if let Some(c) = carried.iter().find(|c| same(c, &p.record)) {
+            p.record.original = c.original.clone();
+        }
+    }
+    let extra: Vec<Planned> = carried
+        .iter()
+        .filter(|c| !planned.iter().any(|p| same(&p.record, c)))
+        .map(|c| Planned { write: None, record: c.clone() })
+        .collect();
+    planned.splice(0..0, extra);
     if planned.is_empty() {
         return Ok(Vec::new());
     }
     let mut record: Vec<Recorded> = planned.iter().map(|p| p.record.clone()).collect();
-    persist(path, table, &record);
+    persist(path, table.desktop, &record);
     let mut written: Vec<Recorded> = Vec::new();
     for p in &planned {
         let Some(value) = &p.write else {
@@ -208,15 +229,17 @@ pub fn take_over(
         match set(&op) {
             Ok(()) => written.push(p.record.clone()),
             Err(e) if table.strict => {
-                run(&restore_ops(&written), &mut set);
-                remove_restore_file(path);
+                give_back(&written, path, &mut set);
+                if written.is_empty() {
+                    remove_restore_file(path);
+                }
                 return Err(e);
             }
             Err(e) => {
                 eprintln!("workspace settings: {e}");
                 // Not written: nothing to restore, unless it is a leftover
-                // the reset still repairs.
-                if p.record.original.is_none() {
+                // the reset still repairs, or a crash's original still owed.
+                if p.record.original.is_none() || carried.iter().any(|c| same(c, &p.record)) {
                     written.push(p.record.clone());
                 }
             }
@@ -224,33 +247,49 @@ pub fn take_over(
     }
     if written != record {
         record = written;
-        persist(path, table, &record);
+        persist(path, table.desktop, &record);
     }
     Ok(record)
 }
 
-/// Restore `record` and delete the restore file.
+/// Restore `record` and delete the restore file — or, when a restore fails
+/// (no session bus at logout, dconf unwritable), keep exactly the keys not
+/// restored in it, so the next start restores them instead of reading the
+/// app's own values as the user's.
 pub fn give_back(record: &[Recorded], path: &Path, mut set: impl FnMut(&Op) -> Result<(), String>) {
-    run(&restore_ops(record), &mut set);
-    if !record.is_empty() {
+    if record.is_empty() {
+        return;
+    }
+    let failed = restore(record, &mut set);
+    if failed.is_empty() {
         remove_restore_file(path);
+    } else {
+        let desktop = read_restore_file(path).map(|f| f.desktop).unwrap_or_default();
+        persist(path, &desktop, &failed);
     }
 }
 
-fn run(ops: &[Op], set: &mut impl FnMut(&Op) -> Result<(), String>) {
-    for op in ops {
+/// Put `record` back, last write first; the keys whose restore failed, in
+/// `record`'s order.
+fn restore(record: &[Recorded], set: &mut impl FnMut(&Op) -> Result<(), String>) -> Vec<Recorded> {
+    let ops = restore_ops(record);
+    let mut failed: Vec<Recorded> = Vec::new();
+    for (op, r) in ops.iter().zip(record.iter().rev()) {
         if let Err(e) = set(op) {
             eprintln!("workspace settings restore: {e}");
+            failed.push(r.clone());
         }
     }
+    failed.reverse();
+    failed
 }
 
-fn persist(path: &Path, table: &DesktopSettings, record: &[Recorded]) {
+fn persist(path: &Path, desktop: &str, record: &[Recorded]) {
     if record.is_empty() {
         remove_restore_file(path);
         return;
     }
-    let file = RestoreFile { desktop: table.desktop.to_string(), keys: record.to_vec() };
+    let file = RestoreFile { desktop: desktop.to_string(), keys: record.to_vec() };
     let written = serde_json::to_vec_pretty(&file)
         .map_err(|e| e.to_string())
         .and_then(|bytes| crate::storage::write_private_atomic(path, &bytes));
@@ -631,6 +670,73 @@ mod tests {
         assert_eq!(record.len(), 1);
         assert_eq!(record[0].key, "num-workspaces");
         assert_eq!(read_restore_file(&path).unwrap().keys, record);
+    }
+
+    /// A `set` that refuses every op on `key`, logging and applying the rest.
+    fn refusing<'a>(
+        store: &'a Store,
+        log: &'a RefCell<Vec<Op>>,
+        key: &'a str,
+    ) -> impl FnMut(&Op) -> Result<(), String> + 'a {
+        let mut inner = set(store, log);
+        move |op| match op {
+            Op::Set { key: k, .. } | Op::Reset { key: k, .. } if k == key => Err("no session bus".to_string()),
+            _ => inner(op),
+        }
+    }
+
+    #[test]
+    fn a_failed_restore_keeps_that_key_in_the_file_for_the_next_start() {
+        let s = store(&[
+            (MUT, "dynamic-workspaces", "true"),
+            (GWM, "num-workspaces", "1"),
+            (GWM, "workspace-names", "['Mine']"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(RESTORE_FILE);
+        let log = RefCell::new(Vec::new());
+        let record = take_over(Some(&GNOME), &path, get(&s), set(&s, &log)).unwrap();
+        assert_eq!(record.len(), 3);
+        // Quit: the dynamic-workspaces restore fails, the other two land.
+        give_back(&record, &path, refusing(&s, &log, "dynamic-workspaces"));
+        assert_eq!(value(&s, GWM, "num-workspaces").as_deref(), Some("1"));
+        assert_eq!(value(&s, MUT, "dynamic-workspaces").as_deref(), Some("false"));
+        let left = read_restore_file(&path).expect("the unrestored key keeps its file");
+        assert_eq!(left.desktop, "gnome");
+        let keys: Vec<_> = left.keys.iter().map(|r| (r.key.as_str(), r.original.as_deref())).collect();
+        assert_eq!(keys, vec![("dynamic-workspaces", Some("true"))], "only what was not restored");
+        // Next start: the file is restored first, so the original survives.
+        let record = take_over(Some(&GNOME), &path, get(&s), set(&s, &log)).unwrap();
+        assert_eq!(value(&s, MUT, "dynamic-workspaces").as_deref(), Some("false"), "taken over again");
+        give_back(&record, &path, set(&s, &log));
+        assert_eq!(value(&s, MUT, "dynamic-workspaces").as_deref(), Some("true"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_crash_key_that_cannot_be_restored_is_carried_not_lost() {
+        // The previous run died; this start cannot write dynamic-workspaces
+        // back, and its current value already equals what the table wants.
+        let s = store(&[(MUT, "dynamic-workspaces", "false"), (GWM, "num-workspaces", "4")]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(RESTORE_FILE);
+        let left = RestoreFile {
+            desktop: "gnome".into(),
+            keys: vec![Recorded { schema: MUT.into(), key: "dynamic-workspaces".into(), original: Some("true".into()) }],
+        };
+        std::fs::write(&path, serde_json::to_vec(&left).unwrap()).unwrap();
+        let log = RefCell::new(Vec::new());
+        let record = take_over(Some(&GNOME), &path, get(&s), refusing(&s, &log, "dynamic-workspaces")).unwrap();
+        assert_eq!(record, left.keys, "the crash's original is still owed");
+        assert_eq!(read_restore_file(&path).unwrap().keys, left.keys);
+        // Without a table (KDE after a GNOME crash) it is owed too.
+        let record = take_over(None, &path, get(&s), refusing(&s, &log, "dynamic-workspaces")).unwrap();
+        assert_eq!(record, left.keys);
+        assert!(path.exists());
+        // A later restore that works settles it.
+        give_back(&record, &path, set(&s, &log));
+        assert_eq!(value(&s, MUT, "dynamic-workspaces").as_deref(), Some("true"));
+        assert!(!path.exists());
     }
 
     #[test]
