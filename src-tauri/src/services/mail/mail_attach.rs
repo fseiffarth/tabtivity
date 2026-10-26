@@ -195,7 +195,7 @@ fn within_grant(granted: Option<&[PathBuf]>, root: &Path) -> bool {
 fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static str> {
     let forms: Vec<PathBuf> = [Some(root.to_path_buf()), root.canonicalize().ok()].into_iter().flatten().collect();
     let homes: Vec<PathBuf> = [Some(home.to_path_buf()), home.canonicalize().ok()].into_iter().flatten().collect();
-    let private = super::agent_fence::private_state_paths(state_dir);
+    let private = crate::services::agent_fence::private_state_paths(state_dir);
     for r in &forms {
         if r.parent().is_none() || homes.iter().any(|h| h.starts_with(r)) {
             return Some("that project's folder is `/` or your home folder, which no sandboxed tab sees");
@@ -210,13 +210,13 @@ fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static s
 /// The name a root is shown under on the chip: the project or box that owns
 /// it, else the project asked for.
 fn root_label(lists: &Lists, root: &Path, asked: &str) -> String {
-    use super::agent_fence::{entry_directory, entry_mirror};
+    use crate::services::agent_fence::{entry_directory, entry_mirror};
     let owner = lists.projects.iter().find(|p| {
         let remote = p.extra.contains_key("remote");
         (!remote && entry_directory(p).as_deref() == Some(root))
             || (remote
                 && entry_mirror(p)
-                    .unwrap_or_else(|| super::remote_sync::default_mirror_dir_in(lists.state_dir, &p.id))
+                    .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(lists.state_dir, &p.id))
                     == root)
     });
     if let Some(p) = owner {
@@ -247,13 +247,13 @@ pub fn resolve(lists: &Lists, project_id: &str, path: &str) -> Result<Resolved, 
         .find(|p| p.id == project_id)
         .map(|p| p.name.clone())
         .ok_or_else(|| format!("no project named '{project_id}' (see projects_list)"))?;
-    let roots = super::agent_fence::attach_roots(lists.boxes, lists.projects, project_id, lists.state_dir)
+    let roots = crate::services::agent_fence::attach_roots(lists.boxes, lists.projects, project_id, lists.state_dir)
         .ok_or_else(|| format!("no project named '{project_id}' (see projects_list)"))?;
     read_from_roots(lists, &roots, &parts, &asked, path)
 }
 
 fn read_from_roots(lists: &Lists, roots: &[PathBuf], parts: &[&str], asked: &str, path: &str) -> Result<Resolved, String> {
-    let private = super::agent_fence::private_state_paths(lists.state_dir);
+    let private = crate::services::agent_fence::private_state_paths(lists.state_dir);
     for (i, root) in roots.iter().enumerate() {
         if !within_grant(lists.granted, root) {
             if i == 0 {
@@ -370,7 +370,7 @@ fn read_under(root: &Path, parts: &[&str], max: u64) -> Result<Vec<u8>, Miss> {
 /// read is the handle just proven.
 #[cfg(windows)]
 fn read_under(root: &Path, parts: &[&str], max: u64) -> Result<Vec<u8>, Miss> {
-    use super::mobile_control::files::ProjectDir;
+    use crate::services::mobile_control::files::ProjectDir;
     let link = |name: &str, what: &str| {
         Miss::Refused(format!("'{name}' is a link or {what}; links (junctions, symbolic links) are never followed, even inside the project"))
     };

@@ -192,7 +192,7 @@ fn no_certificate_verification_escape_hatch() {
         ("mail_engine.rs", include_str!("../mail_engine.rs")),
         ("mail_sanitize.rs", include_str!("../mail_sanitize.rs")),
         ("mail_store.rs", include_str!("../mail_store.rs")),
-        ("commands/mail.rs", include_str!("../../commands/mail.rs")),
+        ("commands/mail.rs", include_str!("../../../commands/mail.rs")),
     ];
     // Split so this list does not match itself when the scan runs over
     // this very file.
@@ -220,7 +220,7 @@ fn no_certificate_verification_escape_hatch() {
 fn no_cleartext_default_ports() {
     let sources: [(&str, &str); 2] = [
         ("mail_engine.rs", include_str!("../mail_engine.rs")),
-        ("commands/mail.rs", include_str!("../../commands/mail.rs")),
+        ("commands/mail.rs", include_str!("../../../commands/mail.rs")),
     ];
     for (name, src) in sources {
         // Split so the list does not match itself when the scan runs over
