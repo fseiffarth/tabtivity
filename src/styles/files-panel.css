@@ -58,8 +58,15 @@
   border-left-color: transparent;
 }
 
+/* Open = `none`, not `translateX(0)`: an identity transform is still a
+   transform. It is a suspect for the panel's text rendering heavier and softer
+   than the rest of the window in WebKitGTK (the panel drawn on its own
+   compositing layer). It also made the panel the containing block of every
+   `position: fixed` element inside it, so the file viewer's mouse-anchored tips
+   (`clientX`/`clientY`) landed offset by the panel's left edge. `none` still
+   interpolates from the closed offset, so the overlay keeps its slide. */
 .side-panel.open {
-  transform: translateX(0);
+  transform: none;
 }
 
 /* ── Left-docked variant ──────────────────────────────────────────────────
@@ -80,7 +87,7 @@
 }
 
 .side-panel.left.open {
-  transform: translateX(0);
+  transform: none;
 }
 
 .side-panel.left .side-panel-resize {
