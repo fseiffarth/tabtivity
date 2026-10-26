@@ -157,3 +157,146 @@ All green on `756b9fd3` (own `CARGO_TARGET_DIR` = `<worktree>/target`,
 - Confirm when convenient (from the plan): a project-opened row whose window
   can't be seen and whose family died is kept delist-only rather than
   vanishing.
+
+## A2 — GNOME on the x11 backend (Phase 2 steps 1–6)
+
+Commit: `955c73dc` (code) + the commit adding this section (branch
+`worktree-agent-a122d698db325032a`, on A1a's `bfe5480f`). Files:
+`platform/{mod.rs, x11.rs, null.rs}`, new `platform/workspace_settings.rs`,
+`lib.rs`, `tests/embed_capability_tests.rs`.
+
+### What landed
+
+- **Routing.** `platform::route(desktop, wayland) -> Route` (`KdeWayland` |
+  `X11(X11Desktop)` | `Null`), pure, compiled everywhere. A `:` segment equal
+  to `gnome` (any case) → `X11(Gnome)`, X11 and Wayland; KDE/Cinnamon as
+  before; everything else `Null`. `X11Backend::try_new(X11Desktop)` (was
+  `try_new()` reading the env itself); a failed connect → `null`.
+- **Settings table.** `platform::workspace_settings` (pure, injected
+  `get`/`set`, every OS): `CINNAMON` (its three keys, `strict` = a failed set
+  fails the backend as before, `property_fallback` = the `ChangeProperty`
+  fallback in `move_window`, Cinnamon only) and `GNOME` (mutter
+  `dynamic-workspaces` → false, `workspaces-only-on-primary` → false,
+  wm.preferences `num-workspaces` raised to 2 only when < 2,
+  `workspace-names`; lenient: a failed set is logged and not recorded).
+  `plan` / `restore_ops` / `take_over` / `give_back`. Unreadable or
+  unparsable keys skipped; only differing keys written; restore in reverse
+  write order. `cinnamon_workspace_names{,_value}` → `workspace_names{,_value}`
+  there (now compares parsed lists, so `@as []` and spacing don't matter).
+- **Crash leftovers.** `<state_dir>/workspace_settings_restore.json`
+  (`RESTORE_FILE`, `storage::write_private_atomic`) written before the first
+  set, rewritten if a lenient set failed, deleted by `give_back`.
+  `take_over` restores a found file first (even with no table, e.g. KDE
+  after a Cinnamon crash), then plans afresh. No file + `workspace-names`
+  starting with the brand pair (current, or legacy counted via
+  `legacy_hit("workspace-names")`) → recorded as `None` = `gsettings reset`.
+  A corrupt file is logged and removed. A strict failure undoes its own
+  earlier writes and removes the file.
+- **cleanup.** `request_desktop_count(original)` only without a table (KDE);
+  then `give_back`. `try_new` also gives back if `ensure_desktop_count`
+  fails after the take-over.
+- **Wayland gates.** `supports_embedding` = `embeds(wayland)`,
+  `position_window` returns `Ok(())` untouched when `!positions(wayland)`
+  (pure predicates, tested); `wayland` read once in `try_new`. Other methods
+  unchanged as the plan's audit says; `PROTECTED_CLASSES` unchanged.
+- **Exit.** `RunEvent::Exit` calls `backend.cleanup()` right after the
+  Mobile host stop, before root MCP / PTY / container teardowns.
+- **Docs.** `mod.rs` module doc, `null.rs` doc, x11 module doc, and the stale
+  `session_is_wayland` doc A1a flagged.
+
+### Choices beyond the plan's letter
+
+- **Sidecar gets `null` (sibling bug, fixed).** The phone sidecar is the same
+  binary (desktop feature) and built its singletons through
+  `WorkspaceState::new()` → `detect_backend()`: on Cinnamon it already ran a
+  second `X11Backend` (taking the settings over again, recording the
+  window's values as the "originals"); with GNOME routed it would have done
+  so on this host too and raced the restore file. `Singletons::new` now takes
+  the `WorkspaceState`; the window passes `WorkspaceState::new()`,
+  `standalone_core_state()` passes `NullBackend`. `workspace.rs` untouched.
+- **No test constructs a live backend.** `platform::mod` tests that call
+  `detect_backend()` are now `cfg(not(all(linux, desktop)))`, and the
+  integration test `x11_backend_supports_embedding_when_available` (which ran
+  `X11Backend::try_new()` against any reachable X server) is removed: on a
+  developer's GNOME/Cinnamon desktop either would take over real GSettings
+  and touch the real restore file. Covered by `route` + `embeds` tests.
+- **Wait before the EWMH count request.** After a take-over, `try_new` polls
+  `_NET_NUMBER_OF_DESKTOPS` up to 1 s (20 × 50 ms) before
+  `ensure_desktop_count`, because GSettings land asynchronously and an early
+  `_NET_NUMBER_OF_DESKTOPS` request would (on Mutter) write an unrecorded
+  `num-workspaces`.
+- GNOME write order: dynamic → only-on-primary → num → names.
+
+### Gotchas
+
+- Under Wayland `try_new` opens an X connection at startup — starts an
+  on-demand XWayland and keeps it alive while the app runs (accepted cost).
+- Integration tests live in the single `it` binary (`--test it`), not
+  per-file targets.
+- Two instances on one desktop (dev + packaged) still each take over; the
+  second sees the first's values and records little (write-only-differs),
+  and the first to quit restores under the other. Not new; not fixed.
+- A leftover restore file is only consulted when the `x11` connect
+  succeeds (a GNOME session with XWayland disabled never restores it).
+
+### Gates
+
+All green (own `CARGO_TARGET_DIR` = `<worktree>/target`,
+`CARGO_INCREMENTAL=0`):
+
+- `cargo test -q -p tabtivity --lib`: 4751 passed, 7 ignored (before the
+  final x11.rs wait-loop/clippy-only edits; `platform::` re-run after: 73
+  passed). New: 14 in `workspace_settings` (2 of them replace x11's 4
+  Cinnamon-name tests), 2 in `platform::mod` (route table, settings per
+  desktop), 1 in `x11` (gates).
+- `cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+  4619 passed, 7 ignored (2 suites).
+- `cargo test -q -p tabtivity --test it embed`: 11 passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings`,
+  `cargo clippy -p app-serverd --all-targets -- -D warnings`: clean.
+- `scripts/brand-check.sh`, `git diff --check`, `scripts/privacy-check.sh`:
+  pass.
+- Not run: `scripts/ci-local.sh` (Windows/macOS legs) — `workspace_settings`
+  compiles on every OS (pure, `tempfile` tests); run at merge.
+  `npm run backend:stale` is the main agent's after merge.
+
+### Wanted filemap rows (`docs/filemap_backend.md`, apply at merge)
+
+- `platform/mod.rs`: replace "There is no GNOME backend" wording with "pure
+  `route(desktop, wayland)`: KDE (Wayland → `kde-wayland`), Cinnamon and
+  GNOME (X11 and Wayland, `:`-segment match) → `x11` with
+  `X11Desktop::settings()`, else/failed connect → `null`".
+- `platform/x11.rs`: add "GNOME/Mutter too; under Wayland XWayland windows
+  only, `embeds`/`positions` gates; workspace GSettings via
+  `workspace_settings`, given back in `cleanup` (called from
+  `RunEvent::Exit`)".
+- New `platform/workspace_settings.rs`: "per-desktop workspace GSettings
+  table (Cinnamon, GNOME): write only what differs, record/restore only what
+  was written, crash restore file `<state_dir>/workspace_settings_restore.json`,
+  brand-named leftovers reset; pure over injected gsettings, every OS".
+- `lib.rs` / `standalone_core_state`: "null workspace backend (the window
+  parks)".
+
+### Must be verified live
+
+- GNOME/Wayland: the backend comes up as `x11` (Settings → Layout), the
+  four keys change (`gsettings get org.gnome.mutter dynamic-workspaces` …)
+  and the restore file appears; after a clean quit all four are back and
+  the file is gone; after `kill -9` + restart they are restored before the
+  new take-over.
+- Mutter honours `_NET_WM_DESKTOP` / `_NET_CURRENT_DESKTOP` from an
+  XWayland client; the parked workspace is the one to the right.
+- Mutter's `_NET_NUMBER_OF_DESKTOPS` → `num-workspaces` write (inferred), and
+  that the 1 s wait suffices for the count to appear.
+- Cinnamon: settings now restored on a clean quit (never before).
+- Drop-to-open on GNOME/Wayland no longer moves the window.
+
+### Flagged for user
+
+- Nothing live-verified (no X display from the fence; no `gsettings set`
+  run).
+- Sidecar's backend changed to `null` (above) — it never parked anything for
+  the phone, but on Cinnamon it had been taking the settings over.
+- The removed integration test and the Linux-gated `detect_backend` tests
+  mean no test exercises a live X server any more; that is deliberate.
