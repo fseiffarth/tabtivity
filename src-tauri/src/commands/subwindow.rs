@@ -835,7 +835,7 @@ pub const ROOT_SCOPE: &str = "root";
 /// X11 it complements the desktop-park in `project_runtime::switch`. Native
 /// Wayland does not park at all: [`sync_detached_visibility`] retires
 /// (closes) an inactive scope's popouts there instead, and only falls back to
-/// [`park_minimized`] for one holding unsaved work.
+/// [`hide_parked_window`] for one holding unsaved work.
 ///
 /// The geometry is captured in PHYSICAL px (scale-invariant, so it re-applies
 /// onto the SAME monitor) BEFORE hiding, because `hide()`/`show()` lets the WM
@@ -889,8 +889,8 @@ pub fn hide_detached_windows(
 
 /// Un-park the given popouts, back onto the screen they were parked from (#42).
 ///
-/// Wayland presents a popout minimized by the unsaved-work fallback
-/// ([`park_minimized`]) — the only kind parked there; other backends use
+/// Wayland re-shows a popout hidden by the unsaved-work fallback
+/// ([`hide_parked_window`]) — the only kind parked there; other backends use
 /// `unminimize()` first in case a backend minimized rather than hid them,
 /// except for a popout the user had minimized, which comes back minimized
 /// (`detached_minimized`). The remembered rect
@@ -911,18 +911,35 @@ pub fn show_detached_windows(
             continue;
         };
         if !window_positions_readable() {
-            let changed = win_registry
-                .lock_ok().detached_parking.transition(label, true);
-            if changed {
-                // GTK deiconify/show alone cannot undo a Wayland minimize.
-                // Tauri's set_focus uses gtk_window_present_with_time, asking
-                // GNOME to activate the existing surface without recreating it.
-                if win.set_focus().is_ok() {
-                    presented = true;
-                } else {
-                    win_registry
-                        .lock_ok().detached_parking.transition(label, false);
+            let saved = {
+                let mut reg = win_registry.lock_ok();
+                reg.detached_parking
+                    .transition(label, true)
+                    .then(|| reg.detached_bounds.get(label).copied())
+            };
+            if let Some(saved) = saved {
+                // Hidden by the unsaved-work fallback: a plain show() would
+                // land on the pointer's screen, so it goes back the way a
+                // respawn does — onto the screen it was hidden from — and, like
+                // a respawn (`focused(false)`), without taking the focus the
+                // user is typing into in the main window.
+                #[cfg(target_os = "linux")]
+                if let Ok(gtk_win) = win.gtk_window() {
+                    use gtk::prelude::GtkWindowExt;
+                    gtk_win.set_focus_on_map(false);
                 }
+                match saved.and_then(|b| b.monitor) {
+                    Some(monitor) => {
+                        let size = saved
+                            .map(|b| Size::Physical(PhysicalSize::new(b.w, b.h)));
+                        present_on_monitor(app, label, monitor, size);
+                    }
+                    None => {
+                        let _ = win.show();
+                        spawn_first_paint_nudge(app.clone(), label.clone());
+                    }
+                }
+                presented = true;
             }
             continue;
         }
@@ -994,7 +1011,7 @@ pub fn show_detached_windows(
 pub struct DetachedSyncPlan {
     /// Hidden with their geometry captured (positions readable: X11/Windows/macOS).
     pub hide: Vec<String>,
-    /// Shown again (there: all of the scope's; Wayland: those minimized by the
+    /// Shown again (there: all of the scope's; Wayland: those hidden by the
     /// unsaved-work fallback).
     pub show: Vec<String>,
     /// Wayland: asked to settle their unsaved work, then closed, each with the
@@ -1040,7 +1057,7 @@ pub fn plan_detached_sync(
     let (mut retire, mut close) = (Vec::new(), Vec::new());
     for label in others {
         let r = &reg.detached_retire;
-        // Already minimized for unsaved work (it stays so until its scope
+        // Already hidden for unsaved work (it stays so until its scope
         // returns), or already being asked / closed: nothing new to do.
         if reg.detached_parking.is_parked(&label) || r.is_pending(&label) || r.is_retiring(&label)
         {
@@ -1070,8 +1087,8 @@ pub enum RetireOutcome {
     Abandon,
     /// Clean: marked retiring; destroy it.
     Close,
-    /// Unsaved work (or no answer): marked parked; minimize it.
-    Minimize,
+    /// Unsaved work (or no answer): marked parked; hide it.
+    Hide,
 }
 
 /// Whether `label`'s scope is still one the main window is NOT showing.
@@ -1083,7 +1100,7 @@ pub fn retire_still_wanted(reg: &WindowRegistry, label: &str) -> bool {
 /// Settle a retire in ONE critical section: close the handshake, re-check the
 /// scope, and record the outcome (retiring / parked) before the lock drops — so
 /// a `sync_detached_scope` for the popout's scope can never slip in between
-/// the check and the record and leave the active scope's popout minimized.
+/// the check and the record and leave the active scope's popout hidden.
 pub fn settle_retire(
     reg: &mut WindowRegistry,
     label: &str,
@@ -1097,7 +1114,7 @@ pub fn settle_retire(
         reg.detached_retire.mark_retiring(label);
         RetireOutcome::Close
     } else if reg.detached_parking.transition(label, false) {
-        RetireOutcome::Minimize
+        RetireOutcome::Hide
     } else {
         RetireOutcome::Abandon
     }
@@ -1115,10 +1132,10 @@ pub fn confirm_close(reg: &mut WindowRegistry, label: &str) -> bool {
     false
 }
 
-/// Main thread, right before `minimize()`: the same re-check for the
+/// Main thread, right before `hide()`: the same re-check for the
 /// unsaved-work fallback. A sync that already presented the popout cleared its
 /// parked mark; one that finds its scope active again drops the mark.
-pub fn confirm_minimize(reg: &mut WindowRegistry, label: &str) -> bool {
+pub fn confirm_park(reg: &mut WindowRegistry, label: &str) -> bool {
     if reg.detached_parking.is_parked(label) && retire_still_wanted(reg, label) {
         return true;
     }
@@ -1169,7 +1186,7 @@ pub fn sync_detached_scope(
 pub const RETIRE_REQUEST_EVENT_PREFIX: &str = "detached-retire-request-";
 
 /// How long a ready popout gets to answer. Covers an autosave flush to a remote
-/// project; one that does not answer in time (hung) is minimized instead of
+/// project; one that does not answer in time (hung) is hidden instead of
 /// closed, so nothing it holds is lost.
 const RETIRE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
 
@@ -1177,7 +1194,7 @@ const RETIRE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis
 const RETIRE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Ask one popout to settle, then close it — or, if it still holds unsaved
-/// work, minimize it. Off the main thread: the answer arrives through a
+/// work, hide it. Off the main thread: the answer arrives through a
 /// command the main thread must be free to run.
 fn retire_detached_window(app: AppHandle, label: String, token: u64) {
     std::thread::spawn(move || {
@@ -1193,12 +1210,13 @@ fn retire_detached_window(app: AppHandle, label: String, token: u64) {
             // A cancel (the scope came back) drops the sender: Err → Abandon.
             && rx.recv_timeout(RETIRE_ACK_TIMEOUT).unwrap_or(false);
         let outcome = settle_retire(&mut reg.lock_ok(), &label, token, clean);
+        eprintln!("popout {label}: retire answered clean={clean} -> {outcome:?}");
         match outcome {
             // The window stays: if it answered clean it went inert waiting to
             // be closed, so tell it it is staying.
             RetireOutcome::Abandon => emit_retire_withdrawn(&app, &label),
             RetireOutcome::Close => close_retiring_window(&app, &label),
-            RetireOutcome::Minimize => minimize_parked_window(&app, &label),
+            RetireOutcome::Hide => hide_parked_window(&app, &label),
         }
     });
 }
@@ -1219,24 +1237,7 @@ fn close_retiring_window(app: &AppHandle, label: &str) {
             reg.lock_ok().detached_retire.finish(&label);
             return;
         };
-        if let Ok(size) = win.inner_size() {
-            // The screen it is on, so the respawn lands there again rather
-            // than wherever GNOME puts new windows (the pointer's screen). A
-            // surface that never entered an output keeps the last one known.
-            let mut reg = reg.lock_ok();
-            let monitor = gdk_monitor_of(&win)
-                .or_else(|| reg.detached_bounds.get(&label).and_then(|b| b.monitor));
-            reg.detached_bounds.insert(
-                label.clone(),
-                crate::commands::apps::DetachedBounds {
-                    x: 0,
-                    y: 0,
-                    w: size.width,
-                    h: size.height,
-                    monitor,
-                },
-            );
-        }
+        remember_wayland_bounds(&reg, &win, &label);
         // No registry lock held here: `destroy()` may run the `Destroyed` hook,
         // which takes it.
         if win.destroy().is_err() {
@@ -1263,23 +1264,54 @@ fn emit_retire_withdrawn(app: &AppHandle, label: &str) {
     let _ = app.emit(&format!("{RETIRE_WITHDRAWN_EVENT_PREFIX}{label}"), ());
 }
 
+/// The size and screen a Wayland popout has right now, kept for the moment it
+/// comes back (a respawn, or the re-show of a hidden one). The screen it is
+/// on, so it lands there again rather than wherever GNOME puts new windows
+/// (the pointer's screen). A surface that never entered an output keeps the
+/// last one known.
+fn remember_wayland_bounds(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str) {
+    let Ok(size) = win.inner_size() else { return };
+    let mut reg = reg.lock_ok();
+    let monitor =
+        gdk_monitor_of(win).or_else(|| reg.detached_bounds.get(label).and_then(|b| b.monitor));
+    reg.detached_bounds.insert(
+        label.to_string(),
+        crate::commands::apps::DetachedBounds {
+            x: 0,
+            y: 0,
+            w: size.width,
+            h: size.height,
+            monitor,
+        },
+    );
+}
+
 /// The unsaved-work fallback, already marked parked by [`settle_retire`]:
-/// minimize instead of close (the pre-retire Wayland park). Presented again by
-/// [`show_detached_windows`] when its scope returns. It keeps rendering
-/// meanwhile (see `detached_window_is_parked`), so wherever the compositor
-/// shows it, it is never blank.
-fn minimize_parked_window(app: &AppHandle, label: &str) {
+/// hide instead of close, so the unsaved buffer survives. Shown again by
+/// [`show_detached_windows`] when its scope returns. Hidden, not minimized: GTK
+/// never reports a Wayland minimize, so a popout GNOME left on screen (or that
+/// Alt+Tab / the overview brought back) stayed live over the other project,
+/// still marked parked, and every later switch skipped it. A hidden window has
+/// no surface for the compositor to bring back. Re-showing one used to land on
+/// the pointer's screen; it now goes through [`present_on_monitor`] like a
+/// respawn.
+fn hide_parked_window(app: &AppHandle, label: &str) {
     let on_main = app.clone();
     let label = label.to_string();
     let _ = app.run_on_main_thread(move || {
         let reg = on_main.state::<WindowRegistryState>();
-        if !confirm_minimize(&mut reg.lock_ok(), &label) {
+        if !confirm_park(&mut reg.lock_ok(), &label) {
+            eprintln!("popout {label}: unsaved-work park withdrawn (scope back)");
             return;
         }
-        let minimized = on_main
-            .get_webview_window(&label)
-            .is_some_and(|win| win.minimize().is_ok());
-        if !minimized {
+        let hidden = on_main.get_webview_window(&label).is_some_and(|win| {
+            remember_wayland_bounds(&reg, &win, &label);
+            win.hide().is_ok()
+        });
+        if hidden {
+            eprintln!("popout {label}: hidden with unsaved work");
+        } else {
+            eprintln!("popout {label}: hide failed, stays on screen");
             reg.lock_ok().detached_parking.forget(&label);
         }
     });
@@ -1871,9 +1903,9 @@ mod tests {
         assert_eq!(settle_retire(&mut reg, &l1, t1, true), RetireOutcome::Close);
         assert!(reg.detached_retire.is_retiring(&l1));
         assert!(confirm_close(&mut reg, &l1));
-        assert_eq!(settle_retire(&mut reg, &l2, t2, false), RetireOutcome::Minimize);
+        assert_eq!(settle_retire(&mut reg, &l2, t2, false), RetireOutcome::Hide);
         assert!(reg.detached_parking.is_parked(&l2));
-        assert!(confirm_minimize(&mut reg, &l2));
+        assert!(confirm_park(&mut reg, &l2));
         // A second settle of the same request does nothing.
         assert_eq!(settle_retire(&mut reg, &l2, t2, false), RetireOutcome::Abandon);
     }
@@ -1885,13 +1917,13 @@ mod tests {
         let mut reg = two_scopes();
         let plan = plan_detached_sync(&mut reg, "B", false);
         let (label, token) = plan.retire[0].clone();
-        assert_eq!(settle_retire(&mut reg, &label, token, false), RetireOutcome::Minimize);
+        assert_eq!(settle_retire(&mut reg, &label, token, false), RetireOutcome::Hide);
         let back = plan_detached_sync(&mut reg, "A", false);
         // The sync sees the mark and presents it (clearing the mark) …
         assert!(back.show.contains(&label));
         reg.detached_parking.transition(&label, true);
         // … and the queued minimize, re-checking on the main thread, stands down.
-        assert!(!confirm_minimize(&mut reg, &label));
+        assert!(!confirm_park(&mut reg, &label));
         assert!(!reg.detached_parking.is_parked(&label));
 
         // Same race before the sync has presented it: the scope check alone
@@ -1901,7 +1933,7 @@ mod tests {
         let (label, token) = plan.retire[0].clone();
         settle_retire(&mut reg, &label, token, false);
         reg.detached_active_scope = Some("A".into());
-        assert!(!confirm_minimize(&mut reg, &label));
+        assert!(!confirm_park(&mut reg, &label));
         assert!(!reg.detached_parking.is_parked(&label));
     }
 
