@@ -111,6 +111,9 @@ pub mod project_runtime;
 pub mod project_registry;
 // The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
 pub mod box_store;
+// Which roots the absolute-path file commands may touch, and the
+// handle-based open that holds them to it.
+pub mod fs_confine;
 pub mod prompt_blame;
 pub mod remote;
 pub use remote::{remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};

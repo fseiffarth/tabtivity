@@ -20,7 +20,7 @@
 //! A root agent's mail `attach` (`services::mail_attach`) reads through the
 //! same walk ([`ProjectDir::open_root`], [`ProjectDir::lookup_dir`],
 //! [`ProjectDir::lookup_file`]), and the viewers' absolute-path reads and
-//! saves (`commands::fs::open_confined`) and mail's "Save to project"
+//! saves (`services::fs_confine::open_confined`) and mail's "Save to project"
 //! (`commands::mail`) read, write and create through it, hence the
 //! crate-wide visibility.
 

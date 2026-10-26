@@ -319,10 +319,10 @@ pub fn compute_fence_roots(
 /// root: the fence binds a root at its own path, so such a root would bind
 /// wherever the link was pointed. Dropped, never rewritten to its real path.
 fn drop_planted(roots: Vec<PathBuf>, boxes: &BoxesList, projects: &ProjectsList) -> Vec<PathBuf> {
-    crate::commands::fs::drop_planted_roots(
+    crate::services::fs_confine::drop_planted_roots(
         roots,
-        &crate::commands::fs::registered_roots(projects, boxes),
-        &crate::commands::fs::keep_clear_roots(),
+        &crate::services::fs_confine::registered_roots(projects, boxes),
+        &crate::services::fs_confine::keep_clear_roots(),
     )
 }
 

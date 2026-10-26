@@ -1,4 +1,5 @@
 use super::*;
+use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::test_util::init_repo;
 use std::path::PathBuf;
 

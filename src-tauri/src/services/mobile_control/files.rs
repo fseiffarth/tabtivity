@@ -224,7 +224,7 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
     // A project folder reached through a link planted inside another registered
     // root is not the user's root (the rule `commands::fs` applies to every
     // registry): refused, not followed to where the link now points.
-    if crate::commands::fs::is_planted_root(root) {
+    if crate::services::fs_confine::is_planted_root(root) {
         return Err(FilesError::Unavailable);
     }
     let canonical = root.canonicalize().map_err(|_| FilesError::Unavailable)?;
@@ -250,7 +250,7 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
 /// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]). So do the
 /// desktop viewers' absolute-path reads and saves
-/// (`commands::fs::open_confined`, [`ProjectDir::lookup_file`],
+/// (`services::fs_confine::open_confined`, [`ProjectDir::lookup_file`],
 /// [`ProjectDir::open_existing_for_write`]) and mail's "Save to project"
 /// (`commands::mail`), hence the crate-wide visibility.
 #[cfg(unix)]

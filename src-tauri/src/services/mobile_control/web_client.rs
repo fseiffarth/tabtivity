@@ -1462,7 +1462,7 @@ async fn handle_raw_call(ctx: &CoreCtx, role: Role, id: u64, header: RawCallHead
         return Answer::Text(ret_frame(id, &Err(Value::String("write_file_bytes: missing path".into()))));
     };
     let project_id = decode(crate::brand::FILE_PROJECT_HEADER).filter(|p| !p.is_empty());
-    let own_folder_unlinked = decode(crate::commands::fs::NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
+    let own_folder_unlinked = decode(crate::services::fs_confine::NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
     let out = crate::commands::fs::write_file_bytes_for(ctx, path, body, project_id, own_folder_unlinked)
         .await
         .map(|()| Value::Null)

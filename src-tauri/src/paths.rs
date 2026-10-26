@@ -924,6 +924,27 @@ pub(crate) fn sanitize_name(name: &str) -> String {
         .join("-")
 }
 
+/// Normalise the caller's scan-exclusion list into the same project-relative,
+/// forward-slash spelling the walks build as they descend.
+///
+/// The list is the user's own (`scan_excluded_paths` in `project.json`, set from
+/// the file tree's "Exclude from scans"), so it is whatever they clicked plus
+/// whatever survived a hand edit: tolerate `./x`, `/x`, `x/`, and Windows
+/// separators rather than silently failing to match one of them.
+pub fn excluded_rel_set(excluded: &[String]) -> std::collections::HashSet<String> {
+    excluded
+        .iter()
+        .map(|raw| raw.replace('\\', "/"))
+        .map(|rel| {
+            rel.trim()
+                .trim_matches('/')
+                .trim_start_matches("./")
+                .to_string()
+        })
+        .filter(|rel| !rel.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
