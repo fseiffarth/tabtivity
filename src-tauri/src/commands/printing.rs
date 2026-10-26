@@ -32,7 +32,9 @@
 //!     table that reads as "no printers".
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_os = "windows"))]
+use std::time::Instant;
 
 use serde::Serialize;
 

@@ -810,6 +810,8 @@ pub fn iso_now() -> String {
 /// Convert a Unix timestamp to UTC calendar fields:
 /// (year, month, day, hour, minute, second). Allocation-free, so the crash
 /// handler may call it; a timestamp chrono cannot represent reads as the epoch.
+/// Only the Unix crash handler (`lib.rs`) calls it.
+#[cfg(any(unix, test))]
 pub(crate) fn epoch_to_utc(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     use chrono::{Datelike, Timelike};
     let t = i64::try_from(secs)
