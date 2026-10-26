@@ -26,7 +26,7 @@ import {
   type TerminalOutputRange,
 } from "../../lib/terminal/terminalBus";
 import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
-import { terminalPalette } from "../../lib/terminal/terminalPalette";
+import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
@@ -535,6 +535,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         fontFamily:
           "'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Cascadia Mono', Consolas, Menlo, monospace",
         theme: terminalTheme(colorSchemeRef.current),
+        minimumContrastRatio: TERMINAL_MIN_CONTRAST,
       });
       const fit = new FitAddon();
       built.loadAddon(fit);

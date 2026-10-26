@@ -25,6 +25,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { phoneTerminalTheme } from "../theme";
+import { TERMINAL_MIN_CONTRAST } from "../../../src/lib/terminal/terminalPalette";
 import {
   ANY_FILE_ACCEPT,
   ApiError,
@@ -1539,6 +1540,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       fontSize: 14,
       scrollback: PHONE_SCROLLBACK,
       theme: phoneTerminalTheme(),
+      minimumContrastRatio: TERMINAL_MIN_CONTRAST,
     });
     const fit = new FitAddon(); term.loadAddon(fit); term.open(host.current); fit.fit();
     // A theme picked while the terminal is open repaints it too.
