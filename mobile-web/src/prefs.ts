@@ -33,8 +33,10 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * `hintAgentHold`, `hintAgentDefault` and `hintProjectFiles` suppress individual
  * messages only when their Never show this message again checkbox is ticked.
  * `limitBars` shows the facts row's usage limits as bars rather than
- * percentages, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles";
+ * percentages, off unset. `focusHandsFree` is the Focus composer's hands-free
+ * loop (`shared/handsFree.ts`): a pause sends the dictation after a cancel
+ * window and the mic opens again once the answer is over, off unset. */
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "focusHandsFree";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than

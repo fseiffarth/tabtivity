@@ -371,7 +371,7 @@ mod tests {
     }
 
     /// The speaker is one per process: the tests take turns with it.
-    static SERIAL: Mutex<()> = Mutex::new(());
+    use super::super::session::GATE_SERIAL as SERIAL;
 
     fn setup(ms: u64) -> (CoreCtx, Arc<RecordingEvents>, Said, impl Fn() -> EngineFactory) {
         stop_for_exit(Duration::from_secs(2));

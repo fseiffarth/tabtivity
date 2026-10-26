@@ -64,6 +64,11 @@ import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/termi
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
+import { useReaderReadAloud } from "./ReaderReadAloud";
+import { useAgentTurn } from "../../lib/voice/agentTurn";
+import { useExperimental } from "../../lib/experimental";
+import { useSettingsStore } from "../../stores/settings";
+import { questionSpeech, voicePick } from "../../../mobile-web/src/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
@@ -497,7 +502,27 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, suggestion, chipSlot, actionSlot, onEscape, onStatus, onPulled, pullRef }: {
+/** What the Reader hands its composer for voice (docs/desktop_voice_plan.md
+ * step 4): read-aloud lives with the conversation, the mic with the composer. */
+interface ReaderVoiceLoop {
+  /** The hands-free loop is on: the experimental flag and its chip. */
+  handsFree: boolean;
+  /** Read-aloud owes or is saying an answer (`useReaderReadAloud`). */
+  reading: boolean;
+  /** The newest answer's key in the conversation. */
+  lastAnswer: string | null;
+  /** Answers the question on screen when an utterance picks one of its rows. */
+  pick: (utterance: string) => boolean;
+  stopReading: () => void;
+  /** Why read-aloud could not speak, if it could not. */
+  readProblem: TranslationKey | null;
+  /** The mic listens (or not); `speakOver`: read-aloud may speak over it. */
+  onListening: (listening: boolean, speakOver: boolean) => void;
+  /** The read-aloud and hands-free chips, for the chip row's end. */
+  chips: ReactNode;
+}
+
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -522,6 +547,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   /** The facts row's end, where the chip row goes; over the text box without it. */
   chipSlot: HTMLElement | null;
   actionSlot?: HTMLElement | null;
+  voiceLoop: ReaderVoiceLoop;
   onEscape: () => void;
   onStatus: (panel: ReaderPanel) => void;
   /** These of `queued` left Claude's queue for the composer. */
@@ -662,7 +688,23 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     editDraft(spoken ?? next);
     if (spoken !== null) void send();
   };
-  const voice = useReaderVoice({ tabKey, visible, disabled: sending, onText: dictated });
+  const voice = useReaderVoice({
+    tabKey,
+    ptyId,
+    visible,
+    disabled: sending,
+    handsFree: voiceLoop.handsFree,
+    reading: voiceLoop.reading,
+    questionOpen,
+    lastAnswer: voiceLoop.lastAnswer,
+    onText: dictated,
+    onSend: () => void send(),
+    hasDraft: () => draftRef.current.trim() !== "",
+    pick: voiceLoop.pick,
+    readProblem: voiceLoop.readProblem,
+  });
+  const { onListening } = voiceLoop;
+  useEffect(() => onListening(voice.listening, voice.speakOver), [onListening, voice.listening, voice.speakOver]);
 
   const send = async () => {
     const current = tabRef.current;
@@ -670,6 +712,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // dictated words went into the draft.
     const text = draftRef.current.trim();
     if (!current || !text || sending) return;
+    // Any send stops the voice reading the last answer.
+    voiceLoop.stopReading();
     const panel = STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
       : CONTEXT_AGENTS[current.cmd] && text === "/context" ? "context" : null;
     if (panel) {
@@ -858,6 +902,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     } else if (!e.nativeEvent.isComposing && actionMatches("readerDictate", shortcutOverrides, e)) {
       e.preventDefault();
       voice.toggle();
+    } else if (!e.nativeEvent.isComposing && actionMatches("readerStopSpeaking", shortcutOverrides, e)) {
+      // The voice stops, never the agent's turn; a send window is cancelled.
+      e.preventDefault();
+      voice.cancelSend();
+      voiceLoop.stopReading();
     } else if (slashKey(e) || suggestionKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
@@ -884,6 +933,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onClear={clearChat}
     onCommit={commit}
     actionSlot={actionSlot}
+    extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>
     <div className="terminal-reader-composer">
@@ -1427,6 +1477,96 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     enabled: visible, openEntry: openInboxEntry, settle: settleInbox,
   });
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
+
+  // Voice (docs/desktop_voice_plan.md step 4): read-aloud speaks the session's
+  // new answer once its turn ends; hands-free (experimental) loops the mic
+  // around it. Both speak the session's conversation, not an open subagent's.
+  const voiceSettings = useSettingsStore((s) => s.settings);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const handsFreeFlag = useExperimental("voice_hands_free");
+  const readAloudOn = voiceSettings?.voice_read_aloud ?? false;
+  const handsFreeOn = handsFreeFlag && (voiceSettings?.voice_hands_free_on ?? false);
+  const sessionTurns = useMemo(() => transcriptTurns(entries), [entries]);
+  const lastAnswer = useMemo(() => {
+    for (let index = sessionTurns.length - 1; index >= 0; index -= 1) if (sessionTurns[index].kind === "answer") return sessionTurns[index].key;
+    return null;
+  }, [sessionTurns]);
+  const [voiceListening, setVoiceListening] = useState({ on: false, over: false });
+  const onVoiceListening = useCallback((on: boolean, over: boolean) => {
+    setVoiceListening((prev) => (prev.on === on && prev.over === over ? prev : { on, over }));
+  }, []);
+  const agentTurn = useAgentTurn(ptyId, readAloudOn || handsFreeOn);
+  const readAloud = useReaderReadAloud({
+    readId: ptyId,
+    enabled: readAloudOn,
+    visible,
+    listening: voiceListening.on && !voiceListening.over,
+    turns: sessionTurns,
+    turnEnd: agentTurn.endKey,
+    working: agentTurn.working,
+  });
+  /** Hands-free: a settled utterance that picks a row of the dialog on screen
+   * answers it as a click would. */
+  const pickByVoice = (utterance: string) => {
+    const question = live.question;
+    if (!question || answered || held || picking) return false;
+    const option = voicePick(utterance, question);
+    if (!option) return false;
+    answer(option.index);
+    return true;
+  };
+  const pickRef = useRef(pickByVoice);
+  pickRef.current = pickByVoice;
+  const pickVoice = useCallback((utterance: string) => pickRef.current(utterance), []);
+  // Hands-free with read-aloud: a dialog waiting on the user is read out, its
+  // rows by number, once per dialog, so it can be answered by voice.
+  const spokenQuestion = useRef("");
+  useEffect(() => {
+    if (!live.question || picking) {
+      spokenQuestion.current = "";
+      return;
+    }
+    if (!handsFreeOn || !readAloudOn || !visible || held || spokenQuestion.current === live.signature) return;
+    spokenQuestion.current = live.signature;
+    readAloud.say(`question:${live.signature}`, questionSpeech(live.ask, live.question));
+  }, [live.question, live.signature, live.ask, picking, handsFreeOn, readAloudOn, visible, held, readAloud]);
+  const voiceChips = <>
+    <button
+      type="button"
+      className={`terminal-reader-chip${readAloudOn ? " active" : ""}`}
+      aria-pressed={readAloudOn}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => {
+        if (readAloudOn) readAloud.stop();
+        void updateSettings({ voice_read_aloud: !readAloudOn });
+      }}
+      title={t("terminal.reader.voice.readAloudHint")}
+    >
+      {t("terminal.reader.voice.readAloud")} <UntestedTag id="terminal.reader.voice.readAloud" />
+    </button>
+    {handsFreeFlag && (
+      <button
+        type="button"
+        className={`terminal-reader-chip${handsFreeOn ? " active" : ""}`}
+        aria-pressed={handsFreeOn}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => void updateSettings({ voice_hands_free_on: !handsFreeOn })}
+        title={t("terminal.reader.voice.handsFreeHint")}
+      >
+        {t("terminal.reader.voice.handsFree")} <UntestedTag id="terminal.reader.voice.handsFree" />
+      </button>
+    )}
+  </>;
+  const voiceLoop: ReaderVoiceLoop = {
+    handsFree: handsFreeOn,
+    reading: readAloud.owed,
+    lastAnswer,
+    pick: pickVoice,
+    stopReading: readAloud.stop,
+    readProblem: readAloud.problem,
+    onListening: onVoiceListening,
+    chips: voiceChips,
+  };
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
   /** What ↑ in the composer can take back out of Claude's queue: the prompts
    * still sending while its turn runs. */
@@ -2003,6 +2143,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         suggestion={shownLive.suggestion}
         chipSlot={actionSlot ? null : chipSlot}
         actionSlot={actionSlot}
+        voiceLoop={voiceLoop}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
         onPulled={dropPending}

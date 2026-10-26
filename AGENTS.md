@@ -101,7 +101,7 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   phone_markup, project_boxes, project_transfer, release_signing,
   remote_autoconnect, remote_credentials, remote_projects, root_console,
   server_gateway, server_mode, sharing, tmux_sessions, usage_stats,
-  vm_projects, web_client.
+  vm_projects, voice, web_client.
 - Server version (hosted plan, gateway, daemon, sharing): start at
   `docs/server.md` — status, the user's decisions, open problems, doc map.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.

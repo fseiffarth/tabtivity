@@ -1272,6 +1272,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .voice-feedback { margin:6px 6px 0; padding:9px 11px; border-radius:9px; background:#29253d; color:#e8e3ff; font-size:.86rem; overflow-wrap:anywhere; }
 .voice-feedback.error { background:#3b2027; color:#ffb4c0; }
 .voice-feedback em { margin-left:6px; color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+/* Hands-free's line is the large tap target that cancels the send window or
+   stops the voice reading the answer. */
+button.voice-feedback.hands-free { display:block; box-sizing:border-box; width:calc(100% - 12px); min-height:52px; border:0; text-align:left; font:inherit; font-size:.92rem; cursor:pointer; }
 .danger { color:#ff9aa6; }
 /* The facts row buttons' bottom sheet: a phone list in place of walking a TUI
    dialog with the arrow keys. */
