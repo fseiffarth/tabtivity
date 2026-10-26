@@ -257,6 +257,13 @@ fn try_restrict_dir_to_owner_inheritable(dir: &Path) -> Result<(), String> {
     run_icacls(icacls_restrict_dir_steps(dir, &sid))
 }
 
+/// Test probe: whether `path`'s DACL is protected — it inherits nothing from
+/// its folder, the state [`restrict_to_owner`] leaves a file in.
+#[cfg(all(test, windows))]
+pub(crate) fn dacl_is_protected(path: &Path) -> bool {
+    win::read_dir_dacl(path).is_some_and(|(protected, _)| protected)
+}
+
 /// Run `icacls` once per step, in order, stopping at the first failure.
 #[cfg(windows)]
 fn run_icacls(steps: [Vec<OsString>; 2]) -> Result<(), String> {

@@ -70,7 +70,6 @@ import type {
   MailSyncSummary,
   StagedAttachment,
 } from "../types/mail";
-import { NAMES } from "./brand";
 
 /**
  * Minutes between automatic checks when `mail_check_interval_min` was never
@@ -790,11 +789,6 @@ export async function mailAttachmentSave(
   }
   return invoke<string | null>("mail_attachment_save", { messageId, partId });
 }
-
-/** The project folder a saved attachment lands in, mirroring the backend's
- *  `commands::projects::EMAILS_DIR`. `tabtivity-`prefixed so ignoring it in git can
- *  never swallow a folder the project itself owns. */
-export const APP_EMAILS_DIR = NAMES.emailsDir;
 
 /**
  * OUT (mail → project): save the attachment into the given project's

@@ -62,8 +62,9 @@ fn desktop_clock_24h(desktop: &str) -> Option<bool> {
     None
 }
 
+/// `gsettings get <schema> <key>`, trimmed; `None` when it cannot run or fails.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn gsettings_get(schema: &str, key: &str) -> Option<String> {
+pub(crate) fn gsettings_get(schema: &str, key: &str) -> Option<String> {
     let output = std::process::Command::new("gsettings")
         .args(["get", schema, key])
         .stdin(std::process::Stdio::null())

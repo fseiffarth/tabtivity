@@ -481,10 +481,12 @@ pub fn docker_exec_args(
     a.push(name.to_string());
     a.push("sh".to_string());
     a.push("-c".to_string());
-    // `pidfile` is built from `storage::project_key` output — shell-safe by construction.
     let bin = container_path(&crate::services::agent_bin::bin_dir().to_string_lossy());
-    let bin = bin.replace('\'', "'\"'\"'");
-    a.push(format!("export PATH='{bin}':\"$PATH\"; echo $$ > {pidfile}; exec \"$@\""));
+    a.push(format!(
+        "export PATH={}:\"$PATH\"; echo $$ > {}; exec \"$@\"",
+        crate::quote::posix(&bin),
+        crate::quote::posix(pidfile)
+    ));
     a.push("sh".to_string());
     a.push(cmd.to_string());
     a.extend(cmd_args.iter().cloned());
@@ -1551,10 +1553,7 @@ pub fn project_dir_for(project_id: &str) -> Option<String> {
     if storage::is_reserved_scope(project_id) {
         return None;
     }
-    let list_path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.iter().find(|e| e.id == project_id)?;
-    entry.directory().map(str::to_string)
+    crate::services::remote::project_entry(project_id).ok()?.directory().map(str::to_string)
 }
 
 /// The project id whose tabs at `project_dir` would run **inside a container** —
@@ -1573,8 +1572,7 @@ pub fn project_dir_for(project_id: &str) -> Option<String> {
 /// therefore the same rule that decides where we look for its interpreter, rather
 /// than two conditions that can drift apart.
 pub fn containerized_project_for_dir(project_dir: &str) -> Option<String> {
-    let list_path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
+    let list = crate::services::remote::projects().ok()?;
     let entry = list.iter().find(|e| e.directory() == Some(project_dir.trim()))?;
     if crate::services::remote::remote_target_for(&entry.id).is_some() {
         return None;
@@ -1606,10 +1604,7 @@ pub fn run_in_container(project_id: &str, cwd: &str, script: &str) -> Option<Str
 }
 
 fn project_entry_value(project_id: &str, key: &str) -> Option<serde_json::Value> {
-    let list_path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.iter().find(|e| e.id == project_id)?;
-    entry.extra.get(key).cloned()
+    crate::services::remote::project_entry(project_id).ok()?.extra.get(key).cloned()
 }
 
 /// Detect in-repo container sources for a project: a root `Dockerfile` wins,
@@ -2295,10 +2290,34 @@ mod tests {
         assert_eq!(out[name + 2], "-c");
         assert!(out[name + 3].starts_with("export PATH='"));
         assert!(out[name + 3].contains("/bin"));
-        assert!(out[name + 3].ends_with(concat!("echo $$ > /tmp/", crate::app_slug!(), "-tab-t1-0.pid; exec \"$@\"")));
+        assert!(out[name + 3].ends_with(concat!("echo $$ > '/tmp/", crate::app_slug!(), "-tab-t1-0.pid'; exec \"$@\"")));
         assert_eq!(out[name + 4], "sh");
         // Original command + resume args preserved in order after the wrapper.
         assert_eq!(&out[name + 5..], &["claude", "--resume", "uuid-1"]);
+    }
+
+    /// The wrapper script quotes what it embeds: a pidfile path with a space
+    /// or an apostrophe is written whole, and the command runs with its args.
+    #[cfg(unix)]
+    #[test]
+    fn exec_wrapper_quotes_the_pidfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("tab it's 0.pid");
+        let out = docker_exec_args(
+            "c",
+            "/w",
+            &env(&[]),
+            &env(&[]),
+            &pidfile.to_string_lossy(),
+            "printf",
+            &args(&["%s", "a b"]),
+        );
+        let name = pos(&out, "c").unwrap();
+        let ran = std::process::Command::new(&out[name + 1]).args(&out[name + 2..]).output().unwrap();
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+        assert_eq!(ran.stdout, b"a b");
+        let pid = std::fs::read_to_string(&pidfile).expect("the pid lands at the quoted path");
+        assert!(pid.trim().parse::<u32>().is_ok(), "{pid:?}");
     }
 
     #[test]

@@ -32,7 +32,6 @@
 //!     table that reads as "no printers".
 
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -116,60 +115,28 @@ pub struct PrintSnapshot {
 
 /// Run `bin args…` with a hard time cap, returning `(ok, stdout, stderr)`.
 ///
-/// Reads both pipes on their own threads for `tex.rs`'s reason: a child that
-/// fills a pipe buffer while nobody reads deadlocks, which would make the cap
-/// fire on a perfectly healthy machine with many printers. `LC_ALL=C`/`LANG=C`
+/// Through [`git_bounded::run`] (both pipes drained on threads, the whole
+/// subtree stopped at the cap) so a child that fills a pipe buffer cannot
+/// deadlock the cap on a healthy machine with many printers. `LC_ALL=C`/`LANG=C`
 /// are set on every call because the parsers below read English CUPS output.
 fn run_capped(bin: &str, args: &[&str]) -> Result<(bool, String, String), String> {
-    let mut child = crate::paths::command_no_window(bin)
-        .args(args)
-        .env("LC_ALL", "C")
-        .env("LANG", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{bin}: {e}"))?;
-
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-
-    let deadline = Instant::now() + RUN_TIMEOUT;
-    let status = loop {
-        match child.try_wait().map_err(|e| format!("{bin}: {e}"))? {
-            Some(s) => break Some(s),
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            None => std::thread::sleep(Duration::from_millis(40)),
-        }
-    };
-
-    let stdout = String::from_utf8_lossy(&out_reader.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&err_reader.join().unwrap_or_default()).into_owned();
-    match status {
-        Some(s) => Ok((s.success(), stdout, stderr)),
-        None => Err(format!(
+    use crate::services::git_bounded::{self, Opts, RunError};
+    let mut cmd = crate::paths::command_no_window(bin);
+    cmd.args(args).env("LC_ALL", "C").env("LANG", "C");
+    let opts = Opts { timeout: Some(RUN_TIMEOUT), no_precheck: true, ..Opts::default() };
+    let ran = git_bounded::run(&mut cmd, opts).map_err(|e| match e {
+        RunError::TimedOut(_) => format!(
             "{bin} did not answer within {}s — the print server may be unreachable",
             RUN_TIMEOUT.as_secs()
-        )),
-    }
+        ),
+        e => format!("{bin}: {e}"),
+    })?;
+    let out = ran.output;
+    Ok((
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
 }
 
 /// The message an action reports when the tool ran but refused. CUPS says what

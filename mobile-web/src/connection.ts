@@ -143,6 +143,8 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   // A tab on a remote project's host whose desktop SSH connection is gone:
   // the terminal upgrade's 409 and the closing reason alike.
   host_offline: "mobile.failure.hostOffline",
+  // A machine the ＋ sheet listed that the project no longer has.
+  host_not_found: "mobile.failure.hostNotFound",
   // The sidecar's own refusals (`host.rs`).
   desktop_unavailable: "mobile.unavailable.desktopDownTitle",
   launch_pending: "mobile.failure.launchPending",

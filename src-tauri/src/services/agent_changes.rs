@@ -731,11 +731,7 @@ fn change(path: &str, kind: &str, mut diff: String, at: Option<String>) -> FileC
     }
     let cut = diff.len() > MAX_DIFF_CHARS;
     if cut {
-        let mut end = MAX_DIFF_CHARS;
-        while !diff.is_char_boundary(end) {
-            end -= 1;
-        }
-        let end = diff[..end].rfind('\n').map(|at| at + 1).unwrap_or(0);
+        let end = diff[..diff.floor_char_boundary(MAX_DIFF_CHARS)].rfind('\n').map(|at| at + 1).unwrap_or(0);
         diff.truncate(end);
     }
     FileChange {

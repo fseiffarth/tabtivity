@@ -142,10 +142,14 @@ pub fn ssh_remember_address(address: String) -> Result<(), String> {
         return Err("empty SSH address".to_string());
     }
     crate::services::ssh_common::validate_arg("SSH address", trimmed)?;
-    let existing: Vec<String> =
-        crate::storage::read_json(&ssh_addresses_path()).unwrap_or_default();
-    let merged = merge_recent_address(existing, trimmed);
-    crate::storage::write_json(&ssh_addresses_path(), &merged).map_err(|e| e.to_string())
+    remember_address_in(&ssh_addresses_path(), trimmed)
+}
+
+fn remember_address_in(file: &std::path::Path, address: &str) -> Result<(), String> {
+    crate::storage::patch_private_json(file, Vec::new(), |list: &mut Vec<String>| {
+        *list = merge_recent_address(std::mem::take(list), address);
+        Ok(())
+    })
 }
 
 /// Most-recently-used remote paths to keep, per host. Old entries past this
@@ -195,12 +199,19 @@ pub fn remote_remember_path(host: String, path: String) -> Result<(), String> {
         return Err("empty remote path".to_string());
     }
     crate::services::ssh_common::validate_arg("remote path", trimmed)?;
-    let key = host.to_lowercase();
-    let mut store: std::collections::HashMap<String, Vec<String>> =
-        crate::storage::read_json(&remote_paths_path()).unwrap_or_default();
-    let existing = store.remove(&key).unwrap_or_default();
-    store.insert(key, merge_recent_path(existing, trimmed));
-    crate::storage::write_json(&remote_paths_path(), &store).map_err(|e| e.to_string())
+    remember_path_in(&remote_paths_path(), host.to_lowercase(), trimmed)
+}
+
+fn remember_path_in(file: &std::path::Path, key: String, path: &str) -> Result<(), String> {
+    crate::storage::patch_private_json(
+        file,
+        std::collections::HashMap::new(),
+        |store: &mut std::collections::HashMap<String, Vec<String>>| {
+            let existing = store.remove(&key).unwrap_or_default();
+            store.insert(key, merge_recent_path(existing, path));
+            Ok(())
+        },
+    )
 }
 
 /// File backing the per-host **standard** remote paths set from Settings'
@@ -240,16 +251,27 @@ pub fn remote_set_default_path(host: String, path: String) -> Result<(), String>
     if key.is_empty() {
         return Err("empty host".to_string());
     }
-    let mut store: std::collections::HashMap<String, String> =
-        crate::storage::read_json(&remote_host_defaults_path()).unwrap_or_default();
     let trimmed = path.trim();
-    if trimmed.is_empty() {
-        store.remove(&key);
-    } else {
+    if !trimmed.is_empty() {
         crate::services::ssh_common::validate_arg("remote path", trimmed)?;
-        store.insert(key, trimmed.to_string());
     }
-    crate::storage::write_json(&remote_host_defaults_path(), &store).map_err(|e| e.to_string())
+    set_default_path_in(&remote_host_defaults_path(), key, trimmed)
+}
+
+/// Set `key`'s standard path to `path`, or clear it when `path` is empty.
+fn set_default_path_in(file: &std::path::Path, key: String, path: &str) -> Result<(), String> {
+    crate::storage::patch_private_json(
+        file,
+        std::collections::HashMap::new(),
+        |store: &mut std::collections::HashMap<String, String>| {
+            if path.is_empty() {
+                store.remove(&key);
+            } else {
+                store.insert(key, path.to_string());
+            }
+            Ok(())
+        },
+    )
 }
 
 /// Open a web URL in the user's default browser. Refuses anything that is not an
@@ -870,6 +892,41 @@ pub async fn ssh_mkdir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recents/defaults store that does not parse is left as it is and the
+    /// write fails, rather than being replaced by a one-entry store.
+    #[test]
+    fn recents_and_defaults_never_replace_a_store_they_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let corrupt = "{\"a\":";
+        for name in ["ssh_addresses.json", "remote_paths.json", "remote_host_defaults.json"] {
+            std::fs::write(dir.path().join(name), corrupt).unwrap();
+        }
+        let file = |name: &str| dir.path().join(name);
+        assert!(remember_address_in(&file("ssh_addresses.json"), "me@a.example").is_err());
+        assert!(remember_path_in(&file("remote_paths.json"), "a.example".into(), "/srv").is_err());
+        assert!(set_default_path_in(&file("remote_host_defaults.json"), "a.example".into(), "/srv").is_err());
+        for name in ["ssh_addresses.json", "remote_paths.json", "remote_host_defaults.json"] {
+            assert_eq!(std::fs::read_to_string(file(name)).unwrap(), corrupt, "{name}");
+        }
+
+        let fresh = dir.path().join("fresh");
+        remember_address_in(&fresh.join("ssh_addresses.json"), "me@a.example").unwrap();
+        remember_address_in(&fresh.join("ssh_addresses.json"), "you@b.example").unwrap();
+        let recents: Vec<String> = crate::storage::read_json(&fresh.join("ssh_addresses.json")).unwrap();
+        assert_eq!(recents, vec!["you@b.example", "me@a.example"]);
+        remember_path_in(&fresh.join("remote_paths.json"), "a.example".into(), "/srv").unwrap();
+        let paths: std::collections::HashMap<String, Vec<String>> =
+            crate::storage::read_json(&fresh.join("remote_paths.json")).unwrap();
+        assert_eq!(paths["a.example"], vec!["/srv"]);
+        let defaults = fresh.join("remote_host_defaults.json");
+        set_default_path_in(&defaults, "a.example".into(), "/srv").unwrap();
+        set_default_path_in(&defaults, "b.example".into(), "/home").unwrap();
+        set_default_path_in(&defaults, "a.example".into(), "").unwrap();
+        let map: std::collections::HashMap<String, String> = crate::storage::read_json(&defaults).unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["b.example"], "/home");
+    }
 
     #[test]
     fn only_a_plain_web_url_is_handed_to_the_os() {

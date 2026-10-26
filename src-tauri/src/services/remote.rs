@@ -101,10 +101,19 @@ pub fn remote_target_for_dir(project_dir: &str) -> Option<RemoteTarget> {
 
 /// Parsed `projects.json` plus the `(mtime, len)` it was parsed from — the cache
 /// behind [`read_projects_list`].
-static PROJECTS_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, u64, Arc<ProjectsList>)>> =
-    std::sync::Mutex::new(None);
+static PROJECTS_CACHE: std::sync::Mutex<Option<CachedProjects>> = std::sync::Mutex::new(None);
+
+/// The file the parse came from, its `(mtime, len)`, and the parse.
+type CachedProjects = (std::path::PathBuf, std::time::SystemTime, u64, Arc<ProjectsList>);
+
+/// How old a `projects.json` mtime must be before its parse is cached. File
+/// mtimes tick on a coarse clock (a few ms), so a rewrite of the same length
+/// inside the tick that was just parsed would leave the stamp unchanged and the
+/// cache stale; a younger file is parsed afresh each time instead.
+const PROJECTS_CACHE_SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Read the global `projects.json` list, or `None` if absent/unparseable.
+/// [`projects`] is the same read with the failure told.
 ///
 /// CACHED on the file's `(mtime, len)`, because this is one of the hottest paths
 /// in the backend and it was re-reading and re-parsing the same file every time.
@@ -124,23 +133,58 @@ static PROJECTS_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, u64, Arc<
 /// The value is an `Arc`, so a hit costs one clone of a pointer rather than of
 /// the whole list.
 fn read_projects_list() -> Option<Arc<ProjectsList>> {
-    let list_path = crate::storage::projects_path();
-    let meta = std::fs::metadata(&list_path).ok()?;
-    let stamp = (meta.modified().ok()?, meta.len());
+    projects().ok()
+}
+
+/// The global project registry through the same `(mtime, len)` cache: an absent
+/// file is the empty registry, an unreadable or unparseable one an error (never
+/// an empty list), and a record naming a reserved scope
+/// ([`crate::storage::is_reserved_scope`]) is dropped — a hand-edited or
+/// imported file must not hand `root`'s or the assistant's state to a project.
+/// The one reader of `projects.json`; the `commands::projects` list reader and
+/// [`project_entry`] go through it.
+pub(crate) fn projects() -> Result<Arc<ProjectsList>, String> {
+    projects_at(&crate::storage::projects_path())
+}
+
+/// [`projects`] over the registry file at `list_path`.
+fn projects_at(list_path: &std::path::Path) -> Result<Arc<ProjectsList>, String> {
+    let meta = match std::fs::metadata(list_path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Arc::new(ProjectsList::new())),
+        Err(e) => return Err(e.to_string()),
+    };
+    let stamp = (meta.modified().map_err(|e| e.to_string())?, meta.len());
 
     if let Ok(guard) = PROJECTS_CACHE.lock() {
-        if let Some((mtime, len, list)) = guard.as_ref() {
-            if *mtime == stamp.0 && *len == stamp.1 {
-                return Some(Arc::clone(list));
+        if let Some((path, mtime, len, list)) = guard.as_ref() {
+            if path == list_path && *mtime == stamp.0 && *len == stamp.1 {
+                return Ok(Arc::clone(list));
             }
         }
     }
 
-    let list: Arc<ProjectsList> = Arc::new(crate::storage::read_json(&list_path).ok()?);
+    let mut list: ProjectsList = crate::storage::read_json(list_path).map_err(|e| e.to_string())?;
+    list.retain(|p| !crate::storage::is_reserved_scope(&p.id));
+    let list = Arc::new(list);
+    let settled = stamp.0.elapsed().is_ok_and(|age| age >= PROJECTS_CACHE_SETTLE);
     if let Ok(mut guard) = PROJECTS_CACHE.lock() {
-        *guard = Some((stamp.0, stamp.1, Arc::clone(&list)));
+        *guard = settled.then(|| (list_path.to_path_buf(), stamp.0, stamp.1, Arc::clone(&list)));
     }
-    Some(list)
+    Ok(list)
+}
+
+/// The registry record of `project_id`, or the one "not found" error every
+/// caller reports (a corrupt registry is its own error, never "not found").
+pub(crate) fn project_entry(project_id: &str) -> Result<ProjectEntry, String> {
+    entry_in(&projects()?, project_id)
+}
+
+fn entry_in(list: &[ProjectEntry], project_id: &str) -> Result<ProjectEntry, String> {
+    list.iter()
+        .find(|e| e.id == project_id)
+        .cloned()
+        .ok_or_else(|| format!("project '{project_id}' not found"))
 }
 
 /// A `projects.json` entry's folder — [`ProjectEntry::directory`]: the stored
@@ -744,6 +788,47 @@ mod tests {
             local_file: format!("/state/{id}.json"),
             extra,
         }
+    }
+
+    #[test]
+    fn the_registry_reads_empty_when_absent_and_fails_when_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let list = projects_at(&path).expect("an absent registry is empty");
+        assert!(list.is_empty());
+        assert_eq!(entry_in(&list, "p1").unwrap_err(), "project 'p1' not found");
+
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(projects_at(&path).is_err(), "a corrupt registry is an error, never an empty list");
+    }
+
+    #[test]
+    fn the_registry_drops_reserved_ids_and_finds_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let record = |id: &str| serde_json::to_value(entry(id, Some("/p"), None)).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&vec![record("root"), record("p1")]).unwrap()).unwrap();
+        let list = projects_at(&path).unwrap();
+        assert_eq!(list.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["p1"]);
+        assert_eq!(entry_in(&list, "p1").unwrap().id, "p1");
+        assert!(entry_in(&list, "root").is_err());
+    }
+
+    /// A rewrite of the same length right after a read is seen: the stamp
+    /// (mtime on a coarse clock, length) did not move, so a fresh file is
+    /// never served from the cache.
+    #[test]
+    fn a_same_length_rewrite_is_seen_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let write = |id: &str| {
+            let record = serde_json::to_value(entry(id, Some("/p"), None)).unwrap();
+            std::fs::write(&path, serde_json::to_vec(&vec![record]).unwrap()).unwrap();
+        };
+        write("aaaa");
+        assert_eq!(projects_at(&path).unwrap()[0].id, "aaaa");
+        write("bbbb");
+        assert_eq!(projects_at(&path).unwrap()[0].id, "bbbb");
     }
 
     #[test]

@@ -17,7 +17,6 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   type FontFamily,
-  STANDARD_FAMILIES,
   customFontPath,
   fontKey,
 } from "../../../lib/viewers/deck/model";
@@ -42,11 +41,6 @@ export function loadFontList(): Promise<FontFile[]> {
       .catch(() => []);
   }
   return cached;
-}
-
-/** Drop the memo. Tests only. */
-export function resetFontList(): void {
-  cached = null;
 }
 
 export function useFontList(): FontFile[] {
@@ -127,6 +121,3 @@ export function FontField({ value, onChange, label, missing }: FontFieldProps) {
     </label>
   );
 }
-
-/** The three built-ins, for anywhere that needs to name them. */
-export const BUILT_IN_FAMILIES = STANDARD_FAMILIES;

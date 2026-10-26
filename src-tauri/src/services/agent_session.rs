@@ -2106,7 +2106,6 @@ fn codex_event_label(event: &str) -> Option<(&'static str, bool)> {
 /// to 1–3, every other event defaults to 600 — so a `SessionEnd` lowered from
 /// 10 to 3 keeps its hash. Reproduced against hashes Codex 0.164.0 wrote.
 fn codex_hook_hash(label: &str, matcher: Option<&str>, command: &str, timeout: Option<u64>) -> String {
-    use sha2::{Digest, Sha256};
     let timeout = if label == "session_end" {
         timeout.unwrap_or(1).clamp(1, u64::from(CODEX_SESSION_END_TIMEOUT))
     } else {
@@ -2122,9 +2121,7 @@ fn codex_hook_hash(label: &str, matcher: Option<&str>, command: &str, timeout: O
         identity.push_str(&format!(",\"matcher\":{}", quote(m)));
     }
     identity.push('}');
-    let digest = Sha256::digest(identity.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("sha256:{hex}")
+    format!("sha256:{}", crate::digest::sha256_hex(identity.as_bytes()))
 }
 
 /// A TOML string value [`toml_value`] can hand over verbatim: a literal

@@ -147,14 +147,15 @@ pub fn project_tracked_ids(
 
 /// Persist the project-owned window registry IDs to `.tabtivity/sessions/windows.json`.
 pub fn save_window_session(local_file: &str, registry_ids: &[String]) {
-    if let Some(sessions_dir) = app_sessions_dir(local_file) {
-        let session = WindowSession {
-            project_window_ids: registry_ids.to_vec(),
-            extra: Default::default(),
-        };
-        if let Err(e) = storage::write_json(&sessions_dir.join("windows.json"), &session) {
-            eprintln!("WindowService: write .{SLUG} session: {e}");
-        }
+    let session = WindowSession {
+        project_window_ids: registry_ids.to_vec(),
+        extra: Default::default(),
+    };
+    // Held open from the project folder: a linked `.tabtivity` is refused.
+    let written = crate::services::terminal_service::open_app_sessions_dirs(local_file)
+        .and_then(|(_, sessions_dir)| storage::write_json_in(&sessions_dir, "windows.json", &session));
+    if let Err(e) = written {
+        eprintln!("WindowService: write .{SLUG} session: {e}");
     }
 }
 
@@ -162,11 +163,8 @@ pub fn save_window_session(local_file: &str, registry_ids: &[String]) {
 /// Returns an empty session if the file is absent or unreadable.
 pub fn load_window_session(local_file: &str) -> WindowSession {
     if let Some(sessions_dir) = app_sessions_dir(local_file) {
-        let path = sessions_dir.join("windows.json");
-        if path.exists() {
-            if let Ok(session) = storage::read_json::<WindowSession>(&path) {
-                return session;
-            }
+        if let Ok(Some(session)) = storage::read_tree_json::<WindowSession>(&sessions_dir.join("windows.json")) {
+            return session;
         }
     }
     WindowSession::default()
@@ -510,5 +508,23 @@ mod tests {
             "both popouts, sorted, and no side file tree",
         );
         assert!(all_detached_labels(&registry(vec![])).is_empty());
+    }
+
+    /// A committed `.tabtivity -> elsewhere` link must not get `windows.json`
+    /// written where it points; a plain project gets it.
+    #[cfg(unix)]
+    #[test]
+    fn the_window_session_is_never_written_through_a_linked_app_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join(crate::brand::PROJECT_DIR)).unwrap();
+        let local = dir.path().join("project.json").to_string_lossy().into_owned();
+        save_window_session(&local, &["w1".to_string()]);
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+
+        let plain = tempfile::tempdir().unwrap();
+        let local = plain.path().join("project.json").to_string_lossy().into_owned();
+        save_window_session(&local, &["w1".to_string()]);
+        assert_eq!(load_window_session(&local).project_window_ids, ["w1"]);
     }
 }

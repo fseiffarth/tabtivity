@@ -115,10 +115,7 @@ fn resolve_branch(
     dir: &str,
     branch: Option<&str>,
 ) -> Result<(String, bool), String> {
-    let current = run_git(target, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| stdout_of(&o).trim().to_string())
+    let current = crate::commands::git::stdout(target, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .filter(|s| !s.is_empty());
     match branch {
         Some(b) => {
@@ -569,17 +566,8 @@ fn git_merge_sides_blocking(path: String) -> Result<MergeSides, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
     use std::fs;
-
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = crate::paths::command_no_window("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).to_string()
-    }
 
     fn init(dir: &Path) {
         git(dir, &["init", "-q", "-b", "main"]);
@@ -595,7 +583,7 @@ mod tests {
 
     /// An upstream repo and a clone of it, the clone one commit behind.
     fn behind_pair() -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return None;
         }
         let tmp = tempfile::tempdir().unwrap();

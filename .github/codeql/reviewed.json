@@ -9,10 +9,10 @@
   },
   {
     "path": "src-tauri/src/commands/assistant.rs",
-    "line": 403,
+    "line": 429,
     "source": "assert!(crate::services::agent_session::is_uuid_shaped(&chat.uid), \"{}\", chat.uid);",
     "rule": "rust/cleartext-logging",
-    "sha256": "0f624f7e5c8ad53a9597cf8c80228fe592c2c7753be494de8cf2164333b5e616",
+    "sha256": "b15455e3db79562e954ba7d2721e9384e7e7cd73326ee8014a9a01d4e2e7d8f6",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated chat uid when the uuid-shape assertion fails; a uid is not a credential."
   },
   {
@@ -49,10 +49,10 @@
   },
   {
     "path": "src-tauri/src/services/launch_prep.rs",
-    "line": 1821,
+    "line": 2007,
     "source": "assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), \"{uid:?}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "f5d65d70353e8ff0b393bdf9aca655cd9ee1e32ed9658c89512c2af483e3f90d",
+    "sha256": "31a8ef7f212bcb7fbc3b26de8f21d9b03b7672f3269d7e70f00c64d6817508c0",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the malformed fixture uid being refused."
   },
   {
@@ -193,26 +193,26 @@
   },
   {
     "path": "src-tauri/src/services/terminal_service.rs",
-    "line": 681,
+    "line": 690,
     "source": "eprintln!(\"terminal_service: persisted tab '{}' set {keys} in its env — dropped\", tab.label);",
     "rule": "rust/cleartext-logging",
-    "sha256": "6ee0ed72c3fd544ecd6dc127dff25e90f14ab098bdf754daf21e2d9344c70f53",
+    "sha256": "774a53f9a42fbdc745760fcdcd2fe4e1e9cd174a855dbb5d493ba94a666bc978",
     "reason": "Logs the tab label and the names of the denied env keys it dropped, never their values. The finding's \"uid\" source is the tab id, not a credential."
   },
   {
     "path": "src-tauri/src/services/tmux_local.rs",
-    "line": 795,
+    "line": 819,
     "source": "eprintln!(\"tmux_local: could not write launcher for '{session}': {e}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "7ddc0a694919ea562d8078f73593ada00ff0eaa5beb3ada6605c1b28032f2a02",
+    "sha256": "5164286b51689bfab9025d03f7dd1f0aa15a11fd31a9595edf58d7d0384d0d49",
     "reason": "Logs the tmux session name and an io::Error from writing the launcher script. The session name is a tab-derived identifier, not a credential; the script (which may hold env values) is never logged."
   },
   {
     "path": "src-tauri/src/services/tmux_local.rs",
-    "line": 814,
+    "line": 838,
     "source": "args.insert(at + 1, \"-d\".into());",
     "rule": "rust/cleartext-logging",
-    "sha256": "7ddc0a694919ea562d8078f73593ada00ff0eaa5beb3ada6605c1b28032f2a02",
+    "sha256": "5164286b51689bfab9025d03f7dd1f0aa15a11fd31a9595edf58d7d0384d0d49",
     "reason": "Vec::insert of the literal \"-d\" into the tmux argv; nothing here is logged. The argv carries injected API-key env to the spawned tmux client only, and no caller prints PtyOptions, its args or env."
   },
   {

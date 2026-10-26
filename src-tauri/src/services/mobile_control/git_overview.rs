@@ -105,10 +105,7 @@ fn cap(text: &str) -> String {
     if text.len() <= MAX_TEXT {
         return text.to_string();
     }
-    let mut end = MAX_TEXT - '…'.len_utf8();
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(MAX_TEXT - '…'.len_utf8());
     format!("{}…", &text[..end])
 }
 
@@ -543,6 +540,7 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
 
     const KEY: [u8; 32] = [7; 32];
 
@@ -758,19 +756,9 @@ mod tests {
         assert_eq!(cache.get("p2", now), None);
     }
 
-    fn git(dir: &Path, args: &[&str]) {
-        let out = crate::paths::command_no_window("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-
     #[test]
     fn probe_reads_worktrees_branches_and_one_dirty_row() {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return;
         }
         let tmp = tempfile::tempdir().expect("tmp");

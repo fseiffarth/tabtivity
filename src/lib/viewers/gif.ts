@@ -42,20 +42,6 @@ export interface GifFrame {
   disposal: number;
 }
 
-export interface GifData {
-  /** Logical screen size — every frame's `pixels` buffer is this size. */
-  width: number;
-  height: number;
-  /** At least one; a GIF with zero decodable frames throws instead. */
-  frames: GifFrame[];
-  /** Netscape iteration count: 0 = loop forever; 1 when the extension is
-   *  absent (play once). */
-  loopCount: number;
-  /** True when the file ended mid-stream, a frame was corrupt, or the memory
-   *  cap stopped decoding; `frames` holds what decoded cleanly. */
-  truncated: boolean;
-}
-
 export class GifDecodeError extends Error {
   constructor(message: string) {
     super(message);
@@ -428,21 +414,5 @@ export function openGif(
       if (frame === null) done = true;
       return frame;
     },
-  };
-}
-
-/** Decode a whole GIF upfront (drains {@link openGif}). Throws `GifDecodeError`
- *  when the bytes are not a GIF or no frame decodes. */
-export function decodeGif(bytes: Uint8Array, opts?: { maxPixelBytes?: number }): GifData {
-  const stream = openGif(bytes, opts);
-  const frames: GifFrame[] = [];
-  for (let f = stream.nextFrame(); f !== null; f = stream.nextFrame()) frames.push(f);
-  if (frames.length === 0) throw new GifDecodeError("GIF contains no image frames");
-  return {
-    width: stream.width,
-    height: stream.height,
-    frames,
-    loopCount: stream.loopCount,
-    truncated: stream.truncated,
   };
 }

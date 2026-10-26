@@ -75,13 +75,13 @@ fn install_crash_logger() {
 
     append_to_log(
         &path,
-        &format!("=== STARTED {} commit={} ===", iso_now(), BUILD_COMMIT),
+        &format!("=== STARTED {} commit={} ===", storage::iso_now(), BUILD_COMMIT),
     );
 
     let path2 = path.clone();
     std::panic::set_hook(Box::new(move |info| {
         let bt = std::backtrace::Backtrace::force_capture();
-        let msg = format!("=== PANIC {} ===\n{info}\nbacktrace:\n{bt}\n", iso_now());
+        let msg = format!("=== PANIC {} ===\n{info}\nbacktrace:\n{bt}\n", storage::iso_now());
         append_to_log(&path2, &msg);
         eprintln!("{msg}");
     }));
@@ -113,13 +113,6 @@ fn append_to_log(path: &std::path::Path, msg: &str) {
     {
         let _ = writeln!(f, "{msg}");
     }
-}
-
-/// Human-readable ISO 8601 UTC timestamp with no external dependencies.
-pub(crate) fn iso_now() -> String {
-    let secs = clock::now_secs();
-    let (y, mo, d, h, mi, s) = storage::epoch_to_utc(secs);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
 /// Register async-signal-safe handlers for fatal signals.
@@ -750,7 +743,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
             .connect_web_process_terminated(move |view, reason| {
                 let msg = format!(
                     "=== WEBVIEW '{label}' TERMINATED {} reason={reason:?} ===",
-                    iso_now()
+                    storage::iso_now()
                 );
                 crash_log_append(&msg);
                 eprintln!("{msg}");
@@ -815,7 +808,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
                 };
                 let msg = format!(
                     "=== WEBVIEW '{label}' PROCESS FAILED {} kind={} ({what}) ===",
-                    iso_now(),
+                    storage::iso_now(),
                     kind.0
                 );
                 crash_log_append(&msg);
@@ -866,7 +859,7 @@ fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
         let msg = format!(
             "=== WEBVIEW '{}' TERMINATED {} (WebContent process died) ===",
             webview.label(),
-            iso_now()
+            storage::iso_now()
         );
         crash_log_append(&msg);
         eprintln!("{msg}");
@@ -2864,13 +2857,6 @@ mod tests {
             assert!(bump_renderer_reloads(&mut counts, "main"));
         }
         assert!(!bump_renderer_reloads(&mut counts, "main"));
-    }
-
-    #[test]
-    fn iso_now_uses_z_suffix() {
-        let s = iso_now();
-        assert!(s.ends_with('Z'), "crash-log timestamps end with Z: {s}");
-        assert!(s.contains('T'));
     }
 
     fn crash_line(code: u32, addr: usize, cap: usize) -> (String, usize) {

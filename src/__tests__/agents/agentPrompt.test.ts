@@ -5,7 +5,10 @@
  * available for a tab whose pane has never been opened.
  */
 import { describe, it, expect } from "vitest";
-import { looksLikeDecisionPrompt, stripAnsi } from "../../lib/agents/prompt/prompt";
+import { looksLikeDecisionPromptStripped, stripAnsi } from "../../lib/agents/prompt/prompt";
+
+/** The raw-text form the app composes: strip, then classify. */
+const looksLikeDecisionPrompt = (text: string): boolean => looksLikeDecisionPromptStripped(stripAnsi(text));
 
 describe("looksLikeDecisionPrompt", () => {
   it("detects OpenCode question and review footers without arrow markers or yes/no rows", () => {

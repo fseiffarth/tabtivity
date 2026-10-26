@@ -434,9 +434,7 @@ impl Index {
 
 fn clip_bytes(s: &str, max: usize) -> &str {
     if s.len() <= max { return s; }
-    let mut end = max;
-    while !s.is_char_boundary(end) { end -= 1; }
-    &s[..end]
+    &s[..s.floor_char_boundary(max)]
 }
 fn clip(s: &str, chars: usize) -> String { s.chars().take(chars).collect() }
 

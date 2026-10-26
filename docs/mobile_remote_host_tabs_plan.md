@@ -232,7 +232,11 @@ What the code already gives us (verified 2026-10-24):
   `NotAttachable` (logged at most once per 60 s backoff) and occurrences past
   the hour are recorded missed. This plan does not change it; a test pins
   that no restart is launched for a host tab.
-- **Phone create and reopen are unchanged:** a phone ＋ in a remote project
+- **Phone create and reopen are unchanged:** (superseded for create,
+  2026-10-25: the ＋ sheet's "Runs on" dropdown starts an agent on a host —
+  `CreateTabRequest.host`, resolved by the sidecar from
+  `ResolvedProject::machines`, only while `ssh_exec::master_alive`; the window's
+  `createOnHost` saves it at that location) a phone ＋ in a remote project
   still starts a local agent in the mirror; "Recently closed" still lists
   only local tabs.
 - **Window side.** `MobileBridgeHost.phoneTabs` filters by `phoneReachesTab`,

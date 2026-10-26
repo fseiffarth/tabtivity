@@ -1189,17 +1189,16 @@ pub fn add_minutes(stamp: &str, n: i64) -> String {
     format!("{}T{:02}:{:02}", new_date, within / 60, within % 60)
 }
 
-/// Days from 1970-01-01 to a civil date, by Howard Hinnant's `days_from_civil`.
-/// Constant-time where [`add_days`] would loop, which is what makes a span
-/// between two arbitrary dates affordable.
+/// Days from 1970-01-01 to a civil date. Constant-time where [`add_days`]
+/// would loop, which is what makes a span between two arbitrary dates
+/// affordable. `d` may run past the month's end (31 in February reads as the
+/// 3rd of March); a month or year chrono cannot build reads as the epoch.
 pub(crate) fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
-    let y = i64::from(if m <= 2 { y - 1 } else { y });
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400; // [0, 399]
-    let mp = i64::from((m + 9) % 12); // March is 0
-    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1; // [0, 365]
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    era * 146_097 + doe - 719_468
+    use chrono::Datelike;
+    /// `num_days_from_ce` of 1970-01-01.
+    const UNIX_EPOCH_FROM_CE: i64 = 719_163;
+    chrono::NaiveDate::from_ymd_opt(y, m, 1)
+        .map_or(0, |first| i64::from(first.num_days_from_ce()) - UNIX_EPOCH_FROM_CE + i64::from(d) - 1)
 }
 
 /// Whole days from `a` to `b`, both `"YYYY-MM-DD"` (a `T…` suffix is ignored).
@@ -1246,6 +1245,17 @@ mod tests {
     #[test]
     fn add_days_leaves_garbage_alone() {
         assert_eq!(add_days("not-a-date", 1), "not-a-date");
+    }
+
+    #[test]
+    fn days_from_civil_counts_from_the_epoch() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2021, 1, 1), 18_628);
+        assert_eq!(days_from_civil(2022, 1, 1), 18_993);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 2, 29), 11_016);
+        // A day past the month's end rolls over, as the closed form always did.
+        assert_eq!(days_from_civil(2026, 2, 31), days_from_civil(2026, 3, 3));
     }
 
     #[test]

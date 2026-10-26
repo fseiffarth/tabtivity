@@ -88,10 +88,6 @@ export class DisconnectedError extends Error {
   }
 }
 
-export function isDisconnectedError(error: unknown): error is DisconnectedError {
-  return error instanceof DisconnectedError || (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "disconnected");
-}
-
 /** Test seam: back to the Tauri-window defaults. */
 export function resetLinkStateForTests(): void {
   serverClient = false;

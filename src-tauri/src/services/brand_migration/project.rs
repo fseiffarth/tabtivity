@@ -47,10 +47,7 @@ fn git(root: &Path, args: &[&str]) -> Option<std::process::Output> {
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    let out = git(root, args)?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    crate::commands::git::stdout(None, root, args)
 }
 
 /// The repository's common git dir, absolute; `None` when `root` is not in a
@@ -83,6 +80,13 @@ pub fn migrate_project(pair: &Pair, root: &Path) -> ProjectReport {
     report
 }
 
+/// The most of `packed-refs` the launch sweep reads: a repo with many refs
+/// packs megabytes; one past this (or not a regular file) reads as naming
+/// no old ref.
+const MAX_PACKED_REFS: u64 = 64 << 20;
+/// The most of a project's `.gitignore` the sweep reads.
+const MAX_GITIGNORE: u64 = 4 << 20;
+
 /// Whether anything of the app's under its old name is left in the project,
 /// judged from the file system alone. The launch sweep asks this of every
 /// known project, so a project that is done costs a few `stat`s and no `git`.
@@ -101,8 +105,8 @@ fn needs_work(pair: &Pair, root: &Path) -> bool {
             let old_rule = pair.legacy(Name::PROJECT_DIR_EXCLUDE_RULE);
             old_ns.as_ref().is_some_and(|ns| {
                 has_file_under(&ns.split('/').fold(git_dir.clone(), |dir, part| dir.join(part)))
-                    || std::fs::read_to_string(git_dir.join("packed-refs"))
-                        .is_ok_and(|refs| refs.contains(&format!(" {ns}/")))
+                    || crate::services::home_io::read_record_capped(&git_dir.join("packed-refs"), MAX_PACKED_REFS)
+                        .is_some_and(|refs| refs.contains(&format!(" {ns}/")))
             }) || old_rule.is_some_and(|rule| {
                 crate::services::git_guard::read_info_exclude(&git_dir)
                     .is_ok_and(|rules| rules.is_some_and(|rules| rules.lines().any(|line| line.trim() == rule)))
@@ -237,7 +241,8 @@ fn gitignore_names_old_folder_only(pair: &Pair, root: &Path, git_dir: &Path) -> 
     if !root.join(&new_dir).is_dir() {
         return false;
     }
-    let gitignore = std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
+    let gitignore =
+        crate::services::home_io::read_record_capped(&root.join(".gitignore"), MAX_GITIGNORE).unwrap_or_default();
     let exclude = crate::services::git_guard::read_info_exclude(git_dir)
         .ok()
         .flatten()
@@ -472,44 +477,29 @@ mod tests {
     use super::super::hits;
     use super::super::testing::*;
     use super::*;
+    use crate::test_util::git;
     use crate::brand::LEGACY;
-
-    fn run(root: &Path, args: &[&str]) -> String {
-        let out = crate::commands::git::hookless_git_command_in(root, args)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
-            .output()
-            .expect("git runs");
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
 
     /// A repository as a build named `forms` leaves it: a commit, the app's
     /// folder with an inbox file and a linked worktree, the exclude rule,
     /// and refs in the app's namespace.
     fn seed_repo(root: &Path, forms: &crate::brand::Forms) -> String {
         std::fs::create_dir_all(root).expect("mkdir");
-        run(root, &["init", "-q", "-b", "main"]);
+        git(root, &["init", "-q", "-b", "main"]);
         write(&root.join("a.txt"), "a\n");
-        run(root, &["add", "a.txt"]);
-        run(root, &["commit", "-q", "-m", "first"]);
-        let head = run(root, &["rev-parse", "HEAD"]);
+        git(root, &["add", "a.txt"]);
+        git(root, &["commit", "-q", "-m", "first"]);
+        let head = git(root, &["rev-parse", "HEAD"]);
         write(&root.join(forms.name(Name::INBOX_DIR)).join("from-phone.txt"), "hello\n");
         let worktree = root.join(forms.name(Name::WORKTREES_DIR)).join("feature");
-        run(root, &["worktree", "add", "-q", "-b", "feature", &worktree.to_string_lossy()]);
+        git(root, &["worktree", "add", "-q", "-b", "feature", &worktree.to_string_lossy()]);
         let exclude = root.join(".git").join("info").join("exclude");
         let mut rules = std::fs::read_to_string(&exclude).unwrap_or_default();
         rules.push_str(&format!("# mine\n*.log\n{}\n", forms.name(Name::PROJECT_DIR_EXCLUDE_RULE)));
         write(&exclude, &rules);
-        run(root, &["update-ref", &format!("{}/1700000000/main", forms.name(Name::GIT_REF_BACKUP)), &head]);
-        run(root, &["update-ref", &format!("{}/main", forms.name(Name::GIT_REF_PEER)), &head]);
-        run(root, &["update-ref", &format!("{}/heads/main", forms.name(Name::GIT_REF_INCOMING)), &head]);
+        git(root, &["update-ref", &format!("{}/1700000000/main", forms.name(Name::GIT_REF_BACKUP)), &head]);
+        git(root, &["update-ref", &format!("{}/main", forms.name(Name::GIT_REF_PEER)), &head]);
+        git(root, &["update-ref", &format!("{}/heads/main", forms.name(Name::GIT_REF_INCOMING)), &head]);
         head
     }
 
@@ -522,26 +512,26 @@ mod tests {
         );
         // The worktree under the renamed folder still works, from both ends.
         let worktree = root.join(RENAMED.cur(Name::WORKTREES_DIR)).join("feature");
-        assert_eq!(run(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]), "feature");
-        assert_eq!(run(&worktree, &["status", "--porcelain"]), "");
-        let listed = run(root, &["worktree", "list", "--porcelain"]);
+        assert_eq!(git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]), "feature");
+        assert_eq!(git(&worktree, &["status", "--porcelain"]), "");
+        let listed = git(root, &["worktree", "list", "--porcelain"]);
         assert!(
             listed.contains(&format!("{}/worktrees/feature", RENAMED.cur(Name::PROJECT_DIR))),
             "{listed}"
         );
         assert!(!listed.contains(&LEGACY.name(Name::WORKTREES_DIR)), "{listed}");
         write(&worktree.join("b.txt"), "b\n");
-        run(&worktree, &["add", "b.txt"]);
-        run(&worktree, &["commit", "-q", "-m", "in the worktree"]);
+        git(&worktree, &["add", "b.txt"]);
+        git(&worktree, &["commit", "-q", "-m", "in the worktree"]);
         // The exclude rule follows, the user's own rules stay, and the new
         // folder is ignored.
         let rules = std::fs::read_to_string(root.join(".git").join("info").join("exclude")).expect("exclude");
         assert!(rules.contains("# mine\n*.log\n"));
         assert!(rules.lines().any(|line| line == RENAMED.cur(Name::PROJECT_DIR_EXCLUDE_RULE)));
         assert!(!rules.lines().any(|line| line == LEGACY.name(Name::PROJECT_DIR_EXCLUDE_RULE)));
-        assert_eq!(run(root, &["status", "--porcelain"]), "");
+        assert_eq!(git(root, &["status", "--porcelain"]), "");
         // Every ref moved, at the same commit.
-        let refs = run(root, &["for-each-ref", "--format=%(objectname) %(refname)", "refs/"]);
+        let refs = git(root, &["for-each-ref", "--format=%(objectname) %(refname)", "refs/"]);
         for moved in [
             format!("{}/1700000000/main", RENAMED.cur(Name::GIT_REF_BACKUP)),
             format!("{}/main", RENAMED.cur(Name::GIT_REF_PEER)),
@@ -604,12 +594,12 @@ mod tests {
         std::fs::rename(packed.join(LEGACY.name(Name::PROJECT_DIR)), packed.join("moved-away")).expect("rename");
         let exclude = packed.join(".git").join("info").join("exclude");
         write(&exclude, "*.log\n");
-        run(&packed, &["pack-refs", "--all", "--prune"]);
+        git(&packed, &["pack-refs", "--all", "--prune"]);
         assert!(needs_work(&RENAMED, &packed), "packed refs under the old namespace");
         let report = migrate_project(&RENAMED, &packed);
         assert_eq!(report.refs_moved, 3, "{report:?}");
         assert_eq!(
-            run(&packed, &["rev-parse", &format!("{}/main", RENAMED.cur(Name::GIT_REF_PEER))]),
+            git(&packed, &["rev-parse", &format!("{}/main", RENAMED.cur(Name::GIT_REF_PEER))]),
             head
         );
         assert!(!needs_work(&RENAMED, &packed));
@@ -664,17 +654,17 @@ mod tests {
         let root = machine.home.join("alpha");
         let head = seed_repo(&root, &LEGACY);
         write(&root.join("c.txt"), "c\n");
-        run(&root, &["add", "c.txt"]);
-        run(&root, &["commit", "-q", "-m", "second"]);
-        let second = run(&root, &["rev-parse", "HEAD"]);
+        git(&root, &["add", "c.txt"]);
+        git(&root, &["commit", "-q", "-m", "second"]);
+        let second = git(&root, &["rev-parse", "HEAD"]);
         let new_peer = format!("{}/main", RENAMED.cur(Name::GIT_REF_PEER));
         let old_peer = format!("{}/main", LEGACY.name(Name::GIT_REF_PEER));
-        run(&root, &["update-ref", &new_peer, &second]);
+        git(&root, &["update-ref", &new_peer, &second]);
 
         let report = migrate_project(&RENAMED, &root);
         assert_eq!(report.refs_moved, 2, "{report:?}");
-        assert_eq!(run(&root, &["rev-parse", &new_peer]), second);
-        assert_eq!(run(&root, &["rev-parse", &old_peer]), head);
+        assert_eq!(git(&root, &["rev-parse", &new_peer]), second);
+        assert_eq!(git(&root, &["rev-parse", &old_peer]), head);
     }
 
     /// A repository whose committed `.gitignore` (an older scaffold's) names
@@ -682,12 +672,12 @@ mod tests {
     /// file in that folder, and no exclude rule.
     fn seed_gitignored_repo(root: &Path, forms: &crate::brand::Forms) {
         std::fs::create_dir_all(root).expect("mkdir");
-        run(root, &["init", "-q", "-b", "main"]);
+        git(root, &["init", "-q", "-b", "main"]);
         write(&root.join(".gitignore"), &format!("*.log\n{}\n", forms.name(Name::PROJECT_DIR_EXCLUDE_RULE)));
-        run(root, &["add", ".gitignore"]);
-        run(root, &["commit", "-q", "-m", "first"]);
+        git(root, &["add", ".gitignore"]);
+        git(root, &["commit", "-q", "-m", "first"]);
         write(&root.join(forms.name(Name::PROJECT_DIR)).join("sessions").join("terminals.json"), "{}\n");
-        assert_eq!(run(root, &["status", "--porcelain"]), "");
+        assert_eq!(git(root, &["status", "--porcelain"]), "");
     }
 
     #[test]
@@ -699,7 +689,7 @@ mod tests {
 
         let report = migrate_project(&RENAMED, &root);
         assert!(report.folder_renamed && report.exclude_updated, "{report:?}");
-        assert_eq!(run(&root, &["status", "--porcelain"]), "");
+        assert_eq!(git(&root, &["status", "--porcelain"]), "");
         // The project's own file is untouched; the rule went into info/exclude.
         assert_eq!(std::fs::read_to_string(root.join(".gitignore")).expect("gitignore"), gitignore);
         assert!(!needs_work(&RENAMED, &root));
@@ -715,12 +705,12 @@ mod tests {
         seed_gitignored_repo(&root, &LEGACY);
         std::fs::rename(root.join(LEGACY.name(Name::PROJECT_DIR)), root.join(RENAMED.cur(Name::PROJECT_DIR)))
             .expect("rename");
-        assert_ne!(run(&root, &["status", "--porcelain"]), "");
+        assert_ne!(git(&root, &["status", "--porcelain"]), "");
         assert!(needs_work(&RENAMED, &root));
 
         let report = migrate_project(&RENAMED, &root);
         assert_eq!(report, ProjectReport { exclude_updated: true, ..ProjectReport::default() });
-        assert_eq!(run(&root, &["status", "--porcelain"]), "");
+        assert_eq!(git(&root, &["status", "--porcelain"]), "");
         assert!(!needs_work(&RENAMED, &root));
 
         // A `.gitignore` that already names both folders needs nothing.
@@ -757,7 +747,7 @@ mod tests {
         };
         let said = run_script();
         assert!(said.contains("renamed") && said.contains("exclude"), "{said}");
-        assert_eq!(run(&root, &["status", "--porcelain"]), "");
+        assert_eq!(git(&root, &["status", "--porcelain"]), "");
         let rules = std::fs::read_to_string(root.join(".git").join("info").join("exclude")).expect("exclude");
         assert_eq!(rules, format!("*.tmp\n{}\n", RENAMED.cur(Name::PROJECT_DIR_EXCLUDE_RULE)));
         assert_eq!(run_script(), "");
@@ -888,5 +878,27 @@ mod tests {
         assert_migrated(&root, &head);
         // Idempotent: a second run says nothing.
         assert_eq!(run_script(), "");
+    }
+
+    /// The launch sweep reads `packed-refs` and `.gitignore` of every known
+    /// project: a FIFO planted at either is skipped, never waited on (which
+    /// would stall the sweep for every later project).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_packed_refs_or_gitignore_does_not_stall_the_sweep() {
+        let machine = Machine::new();
+        let root = machine.home.join("fifo-refs");
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir");
+        crate::services::home_io::mkfifo(&root.join(".git").join("packed-refs"));
+        let at = root.clone();
+        assert!(!crate::services::home_io::within_deadline(move || needs_work(&RENAMED, &at)));
+
+        let root = machine.home.join("fifo-ignore");
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir");
+        std::fs::create_dir_all(root.join(RENAMED.cur(Name::PROJECT_DIR))).expect("mkdir");
+        crate::services::home_io::mkfifo(&root.join(".gitignore"));
+        assert!(!crate::services::home_io::within_deadline(move || {
+            gitignore_names_old_folder_only(&RENAMED, &root, &root.join(".git"))
+        }));
     }
 }

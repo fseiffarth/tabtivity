@@ -5,7 +5,7 @@
 //! watcher event, `/proc/<pid>/fd`, `canonicalize`, a process's cwd) is not
 //! the path the test was given.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// How long a test waits for something that should happen soon. Generous on
@@ -46,8 +46,61 @@ pub(crate) fn tempdir_via_symlink() -> (tempfile::TempDir, PathBuf) {
     (dir, if linked { link } else { real })
 }
 
+/// `git <args>` in `dir`, as a fixture runs it: the caller's own `GIT_*`
+/// variables dropped (a git hook running the suite, a shell with `GIT_DIR`
+/// exported), the user's global and system config unread, an identity and
+/// `main` as the first branch pinned, signing and hooks off. The output
+/// whatever the exit status; panics only when git cannot run.
+pub(crate) fn git_output(dir: &Path, args: &[&str]) -> std::process::Output {
+    let mut cmd = crate::paths::command_no_window("git");
+    for name in crate::services::markup_rounds::FOREIGN_GIT_ENV {
+        cmd.env_remove(name);
+    }
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    cmd.args([
+        "-c", "user.name=t",
+        "-c", "user.email=t@example.invalid",
+        "-c", "init.defaultBranch=main",
+        "-c", "commit.gpgsign=false",
+        "-c", "core.hooksPath=",
+    ])
+    .args(args)
+    .current_dir(dir)
+    .env("GIT_CONFIG_NOSYSTEM", "1")
+    .env("GIT_CONFIG_GLOBAL", null)
+    .output()
+    .expect("git runs")
+}
+
+/// [`git_output`], which must succeed: the trimmed stdout. The one copy of
+/// what every git fixture in the unit tests needs.
+pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
+    let out = git_output(dir, args);
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A repository in `dir` with an identity of its own in its config, for the
+/// code under test that commits with the repo's config rather than `-c`.
+pub(crate) fn init_repo(dir: &Path) {
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test User"]);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_pins_the_identity_and_first_branch_whatever_the_global_config_says() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q"]);
+        assert!(tmp.path().join(".git").is_dir());
+        git(tmp.path(), &["commit", "-q", "--allow-empty", "-m", "one"]);
+        assert_eq!(git(tmp.path(), &["log", "-1", "--format=%an <%ae>"]), "t <t@example.invalid>");
+        assert_eq!(git(tmp.path(), &["symbolic-ref", "--short", "HEAD"]), "main");
+    }
 
     #[test]
     fn wait_until_returns_once_the_condition_holds_or_gives_up() {

@@ -113,6 +113,8 @@ struct HostState {
     /// The remote side of the 📁 library: one SFTP session per host over the
     /// desktop's master, while the phone browses (`host_files`).
     host_files: Arc<host_files::HostFiles>,
+    /// Asks `host_live`'s refresher for a round now.
+    host_kick: host_live::HostLiveKick,
 }
 
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
@@ -1433,16 +1435,86 @@ async fn create_tab(
     if let Err(error) = creatable(project, &request.kind) {
         return error;
     }
+    // An agent on one of the project's hosts: the opaque machine id becomes
+    // the window's location word, and only while the desktop holds that
+    // host's master — the window rides it, and never dials or prompts for a
+    // phone.
+    let on_host = request.host.is_some();
+    if let Some(asked) = request.host.take() {
+        let key = host_key(&state);
+        let Some(machine) = project
+            .machines
+            .iter()
+            .find(|machine| machine.runnable && machine_id(&key, &project.raw_id, machine) == asked)
+        else {
+            return api_error(StatusCode::BAD_REQUEST, "host_not_found");
+        };
+        if !master_up(&state, &machine.spec).await {
+            return api_error(StatusCode::CONFLICT, "host_offline");
+        }
+        request.host = Some(machine.location.clone());
+    }
     request.project_id = project.raw_id.clone();
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Create { request_id, request: request.clone() }).await;
     if desktop_down(&response) {
+        // The owner starts tabs on this machine only: a host tab is the
+        // window's to spawn over its own connection.
+        if on_host {
+            return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+        }
         // No window: the owner mints and starts the tab (headless owner
         // plan, H1b); the window attaches to it when it next opens.
         return create_headless(&state, &phone, &project_id, &request).await;
     }
+    if on_host {
+        return answer_created_on_host(&state, &phone, &project_id, response).await;
+    }
     answer_created(&state, &phone, &project_id, response).await
+}
+
+/// The phone's opaque id for one of `raw_id`'s machines
+/// (`ResolvedProject::machines`), as `launch-options` lists it and a create
+/// names it back.
+fn machine_id(host_key: &[u8], raw_id: &str, machine: &super::discovery::HostMachine) -> String {
+    super::discovery::key_id(host_key, "host", &[raw_id, &machine.location])
+}
+
+/// Whether the desktop holds a live SSH master for `spec`'s host: the socket
+/// the refresher last found, else `ssh -G`'s answer (kept by `host_files`),
+/// then `ssh -O check` on it — the strict reading, so anything short of the
+/// master answering is no.
+async fn master_up(state: &HostState, spec: &crate::schema::project::RemoteSpec) -> bool {
+    let known = state.catalog.lock_ok().host_control_path(spec);
+    let Some(path) = state.host_files.control_path(spec, known).await else {
+        return false;
+    };
+    tokio::task::spawn_blocking(move || crate::services::ssh_exec::master_alive(&path, host_live::PROBE_TIMEOUT))
+        .await
+        .unwrap_or(false)
+}
+
+/// The machines a phone-made agent of `project` may start on, for the ＋
+/// sheet: each runnable one under its opaque id, with whether the desktop
+/// is connected to it now. Empty for a project with none (a local one, a
+/// remote one that does not persist its host sessions).
+async fn phone_machines(state: &HostState, project: &super::discovery::ResolvedProject) -> Vec<serde_json::Value> {
+    let key = host_key(state);
+    let runnable: Vec<_> = project.machines.iter().filter(|machine| machine.runnable).collect();
+    let connected = futures_util::future::join_all(runnable.iter().map(|machine| master_up(state, &machine.spec))).await;
+    runnable
+        .into_iter()
+        .zip(connected)
+        .map(|(machine, connected)| {
+            json!({
+                "id": machine_id(&key, &project.raw_id, machine),
+                "label": machine.label,
+                "primary": machine.primary,
+                "connected": connected,
+            })
+        })
+        .collect()
 }
 
 /// The launches a phone's assistant handle may resolve to right now: what the
@@ -1593,6 +1665,44 @@ async fn answer_created(
         _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
     }
 }
+
+/// [`answer_created`] for a tab the window started on a remote host. Its
+/// row turns available only once `host_live` has seen the session in the
+/// host's tmux, so this waits longer and asks the refresher for a round
+/// every [`HOST_KICK_EVERY`] polls instead of waiting out its period. The
+/// phone's `TAB_CREATE_TIMEOUT` stays above the desktop's answer plus this
+/// (`MobileApiDeadlines.test.ts`).
+async fn answer_created_on_host(
+    state: &HostState,
+    phone: &Phone,
+    project_id: &str,
+    response: Result<DesktopResponse, String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Ok(DesktopResponse::Created { tmux_session }) = response else {
+        return answer_created(state, phone, project_id, response).await;
+    };
+    for round in 0..HOST_CREATED_POLLS {
+        if round % HOST_KICK_EVERY == 0 {
+            state.host_kick.notify_one();
+        }
+        if let Ok(next) = catalog_fresh(state, phone) {
+            if let Some(tab) = next
+                .project(project_id)
+                .and_then(|p| p.tabs.iter().find(|t| t.tmux_name == tmux_session && t.public.available))
+            {
+                return (StatusCode::CREATED, Json(json!({ "tab": tab.public })));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(HOST_CREATED_PAUSE_MS)).await;
+    }
+    api_error(StatusCode::GATEWAY_TIMEOUT, "launch_pending")
+}
+
+/// [`answer_created_on_host`]'s budget: 64 polls 125 ms apart (8 s), a
+/// refresher round asked for every 12th (1.5 s).
+const HOST_CREATED_POLLS: u32 = 64;
+const HOST_CREATED_PAUSE_MS: u64 = 125;
+const HOST_KICK_EVERY: u32 = 12;
 
 /// What a phone may send with a reopen: nothing (the newest closed tab), or the
 /// opaque id of one row of the project's `closed` list.
@@ -1881,10 +1991,19 @@ async fn launch_options(
             sign_in,
             local,
             api_key,
-        }) => (
-            StatusCode::OK,
-            Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key })),
-        ),
+        }) => {
+            // Where an agent may start besides the mirror: the sidecar's own
+            // list, since only it knows the masters the desktop holds.
+            let hosts = if matches!(project.create, super::discovery::CreateVerdict::None) {
+                Vec::new()
+            } else {
+                phone_machines(&state, project).await
+            };
+            (
+                StatusCode::OK,
+                Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key, "hosts": hosts })),
+            )
+        }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "desktop_unavailable" {
                 StatusCode::SERVICE_UNAVAILABLE
@@ -3627,6 +3746,7 @@ async fn sign_in_tab(
         local: None,
         assistant: None,
         api_key: false,
+        host: None,
         idempotency_key: body.idempotency_key,
     };
     let project_id = project.public.id.clone();
@@ -3696,6 +3816,7 @@ async fn teleport_tab(
         local: None,
         assistant: None,
         api_key: false,
+        host: None,
         idempotency_key: body.idempotency_key,
     };
     let project_id = project.public.id.clone();
@@ -7543,6 +7664,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
         git_overview: Arc::default(),
         worktree_spots: Arc::default(),
         host_files: Arc::default(),
+        host_kick: Arc::default(),
     };
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     // The user-content origin (plan §3.5): ticketed files on the next port,
@@ -7630,7 +7752,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     // the real entry points only, like the relays (a test serving a host
     // builds its snapshot by hand).
     if BACKGROUND_RELAYS.load(std::sync::atomic::Ordering::Relaxed) {
-        tokio::spawn(host_live::run(state.config.state_dir.clone(), state.auth.clone(), host_live, shutdown_tx.subscribe()));
+        tokio::spawn(host_live::run(state.config.state_dir.clone(), state.auth.clone(), host_live, state.host_kick.clone(), shutdown_tx.subscribe()));
     }
     if matches!(listen, Listen::Loopback { .. }) {
         let publisher_shutdown = shutdown_tx.clone();
@@ -7872,6 +7994,7 @@ mod tests {
                     git_overview: Arc::default(),
                     worktree_spots: Arc::default(),
                     host_files: Arc::default(),
+                    host_kick: Arc::default(),
                 },
             }
         }
@@ -9631,6 +9754,71 @@ mod tests {
         assert_eq!(json(&body)["transcript"]["available"], false, "{body}");
         assert_eq!(json(&body)["transcript"]["reason"], "unsupported", "{body}");
         assert!(host.runner.delivered.lock().unwrap().is_empty(), "nothing typed anywhere");
+    }
+
+    /// The ＋ sheet's machines: `launch-options` lists a remote project's
+    /// runnable hosts under opaque ids (nothing raw), each with whether the
+    /// desktop holds its master; a create naming one the desktop is not
+    /// connected to answers `409 host_offline` and an unknown id `400
+    /// host_not_found`, and neither reaches the window. With no window no
+    /// machine is listed: a host tab is the window's to spawn.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_host_create_names_a_listed_machine_the_desktop_is_connected_to() {
+        let host = host_tab_fixture(true);
+        let state_dir = host.state.config.state_dir.clone();
+        std::fs::create_dir_all(crate::services::remote_sync::default_mirror_dir_in(&state_dir, RAW_PROJECT)).expect("mirror");
+        let cookie = host.pair_device(&signing_key(73)).await.0;
+        let (p, _) = project_and_tab(&host, &cookie).await;
+        let create = |machine: &str, n: u32| {
+            json!({ "project_id": p, "kind": "agent", "agent_id": "claude", "host": machine, "idempotency_key": format!("host-create-{n}-0123456789abcdef") })
+        };
+        let (_, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+        assert!(json(&options).get("hosts").is_none(), "no window, no machines: {options}");
+
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let creates: Arc<Mutex<usize>> = Arc::default();
+        let seen = creates.clone();
+        let desktop = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                let answer = match request {
+                    DesktopRequest::LaunchOptions { .. } => DesktopResponse::LaunchOptions {
+                        worktrees: Vec::new(),
+                        cloud: Vec::new(),
+                        sign_in: Vec::new(),
+                        local: None,
+                        api_key: Vec::new(),
+                    },
+                    DesktopRequest::Create { .. } => {
+                        *seen.lock().unwrap() += 1;
+                        DesktopResponse::Error { code: "unknown_agent".into(), message: "not offered".into() }
+                    }
+                    _ => DesktopResponse::Seen,
+                };
+                admin::write_frame(&mut stream, &answer).await.expect("answer");
+            }
+        });
+        let (status, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{options}");
+        let hosts = json(&options)["hosts"].as_array().cloned().expect("hosts listed");
+        assert_eq!(hosts.len(), 1, "{options}");
+        assert_eq!((hosts[0]["label"].as_str(), hosts[0]["primary"].as_bool()), (Some("primary.example"), Some(true)));
+        assert_eq!(hosts[0]["connected"], false, "no master answers on the fixture's socket");
+        let machine = hosts[0]["id"].as_str().expect("machine id").to_string();
+        for raw in ["remote", "host:", RAW_PROJECT, "/srv/aurora", "cm-primary", "alice"] {
+            assert!(!machine.contains(raw), "{raw} in the id {machine}");
+        }
+        let (status, _, body) = host.send(create_request(&p, &cookie, create(&machine, 1))).await;
+        assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("host_offline")), "{body}");
+        let (status, _, body) = host.send(create_request(&p, &cookie, create("not-a-machine", 2))).await;
+        assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::BAD_REQUEST, Some("host_not_found")), "{body}");
+        assert_eq!(*creates.lock().unwrap(), 0, "the window was never asked");
+        desktop.abort();
     }
 
     /// The plan's pinned close: with no window, closing a host tab removes its

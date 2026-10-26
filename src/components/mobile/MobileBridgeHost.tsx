@@ -12,7 +12,9 @@ import {
   isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
+  workerRunnable,
   type TabEntry,
+  type TabLocation,
 } from "../../stores/tabs";
 import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
@@ -39,7 +41,7 @@ import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUs
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
 import { phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
-import type { CalendarEvent, CalendarTask, ProjectEntry, Subtask, TaskColumn } from "../../types";
+import { resolveProjectDirectory, type CalendarEvent, type CalendarTask, type ProjectEntry, type Subtask, type TaskColumn } from "../../types";
 import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
 import { addDays, monthGrid, toStamp } from "../../lib/calendar/calendarTime";
@@ -141,6 +143,10 @@ interface CreateRequest {
   /** Start the agent on the stored provider API key (`TabEntry.apiKey`), as
    *  the desktop "+"'s "<agent> (API)" row does. */
   api_key?: boolean;
+  /** Start the agent on one of a remote project's hosts: the location word
+   *  (`"remote"` or `"host:<id>"`) the sidecar resolved the phone's opaque
+   *  machine id to, after checking this desktop holds that host's master. */
+  host?: string;
   idempotency_key: string;
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
@@ -897,6 +903,7 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   if (!phoneMayCreate(scope, request.kind)) {
     return { status: "error", code: "not_attachable", message: "A new tab here would run where the phone cannot attach" };
   }
+  if (request.host !== undefined) return createOnHost(scope, request, t);
   const cwd = scope.cwd;
   if (!cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   // The new tab must be in the *shown* scope to get a terminal at all, so the
@@ -1038,6 +1045,65 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
   }
   if (scope.id === ROOT_SCOPE) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, created.key);
+  return { status: "created", tmux_session: created.tmuxSession };
+}
+
+/** The location a phone-made host tab of `project` runs at: the primary for
+ * `"remote"`, a worker the record still names and that holds the code for
+ * `"host:<id>"` (the tab badge's own `workerRunnable`); anything else is none. */
+function phoneHostLocation(project: ProjectEntry | undefined, host: string): TabLocation | null {
+  if (!project?.remote || projectHostKind(project) !== "remote") return null;
+  if (host === "remote") return "remote";
+  const id = host.startsWith("host:") ? host.slice("host:".length) : "";
+  const worker = id ? project.compute_hosts?.find((entry) => entry.id === id) : undefined;
+  return worker && workerRunnable(worker) ? `host:${id}` : null;
+}
+
+/** A plain agent on one of a remote project's hosts, as the tab badge's "Run
+ * on machine" would put it there: saved with that location and the project's
+ * folder as its cwd (the spawn resolves it to the host's `remote_path`), and
+ * spawned over this window's connection, which the sidecar checked is up. The
+ * phone then reaches it as any host tab. Nothing that runs on this machine — a
+ * worktree, a cloud session, a sign-in, a local model, an API key — rides
+ * along. */
+async function createOnHost(scope: MobileScope, request: CreateRequest, t: ReturnType<typeof useT>): Promise<DesktopResponse> {
+  if (
+    request.kind !== "agent" || !request.agent_id || request.worktree || request.cloud || request.task
+    || request.sign_in || request.like_tab || request.teleport || request.local || request.assistant || request.api_key
+  ) {
+    return { status: "error", code: "invalid_request", message: "A host agent names an agent and nothing else" };
+  }
+  const location = phoneHostLocation(scope.project, request.host ?? "");
+  const directory = scope.project ? resolveProjectDirectory(scope.project) : "";
+  if (!location || !directory) return { status: "error", code: "host_not_found", message: "That machine is unavailable" };
+  const choice = (await agentChoices()).find((entry) => entry.public.id === request.agent_id);
+  if (!choice) return { status: "error", code: "unknown_agent", message: "Agent is unavailable" };
+  if (request.mode && !choice.public.modes.includes(request.mode)) {
+    return { status: "error", code: "unsupported_mode", message: "Agent mode is unavailable" };
+  }
+  const spec: Omit<TabEntry, "key"> = { ...buildStaticTabSpec(choice.item, directory, scope.name, t), location };
+  // The phone lists a host tab off its saved record, which keeps only a
+  // resumable agent.
+  if (!isResumableAgentTab(spec)) {
+    return { status: "error", code: "not_attachable", message: "This agent cannot be reached on a host" };
+  }
+  await enterScope(scope);
+  const requestHash = await invoke<string>("mobile_opaque_id", { domain: "request", value: request.idempotency_key });
+  let created: TabEntry;
+  try {
+    created = await useTabsStore.getState().hydrateThenCreateInScope({
+      scope: scope.id,
+      cwd: scope.cwd,
+      localFile: scope.localFile,
+      requestHash,
+      spec,
+    });
+  } catch (error) {
+    return { status: "error", code: "persist_failed", message: String(error) };
+  }
+  if (!created.tmuxSession) {
+    return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
+  }
   return { status: "created", tmux_session: created.tmuxSession };
 }
 

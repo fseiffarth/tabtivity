@@ -14,6 +14,7 @@ import {
   type VoiceLangChoice,
 } from "../../lib/voice/desktopVoice";
 import { useSettingsStore } from "../../stores/settings";
+import { useTauriListener } from "../../hooks/useTauriListener";
 
 /** A chunk the OS voice says whole; short, so a stop is heard at once. */
 const SPEAK_CHUNK = 300;
@@ -64,25 +65,15 @@ export function useReaderReadAloud({ readId, enabled, visible, listening, turns,
   const live = useRef(new Set<string>());
   const offered = voiceInputOffered();
 
-  useEffect(() => {
-    if (!offered) return;
-    let on = true;
-    let off: (() => void) | undefined;
-    void listen<SpeakingEvent>(VOICE_EVENTS.speaking, ({ payload }) => {
+  useTauriListener(() => (offered
+    ? listen<SpeakingEvent>(VOICE_EVENTS.speaking, ({ payload }) => {
       if (!payload.readId.startsWith(`${readId}#`)) return;
       if (payload.state === "started") live.current.add(payload.readId);
       else live.current.delete(payload.readId);
       if (payload.state === "failed" && payload.reason) setProblem(voiceErrorKey(payload.reason));
       setSpeaking(live.current.size > 0);
-    }).then((unlisten) => {
-      if (on) off = unlisten;
-      else unlisten();
-    });
-    return () => {
-      on = false;
-      off?.();
-    };
-  }, [readId, offered]);
+    })
+    : Promise.resolve(() => {})), [readId, offered]);
 
   const lang = () => {
     const tag = voiceLangTag(settings?.voice_lang as VoiceLangChoice | undefined, uiLanguage);

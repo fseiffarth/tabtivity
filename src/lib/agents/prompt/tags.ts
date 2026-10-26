@@ -1,5 +1,5 @@
 /**
- * Tags on collected prompts, and the library search over them.
+ * Tags on collected prompts, and the tag-aware text match the sent-prompt chart uses.
  *
  * A collected prompt is text kept to be sent again; with a few dozen of them
  * the list is a library, and a library is found by what a thing is FOR, not
@@ -8,10 +8,8 @@
  * runs on both sides (`services::agent_prompts::normalize_tag`), so what the
  * editor shows is what the file stores.
  *
- * Pure, like `lib/agents/prompt/filter`: the view holds the filter state and this
- * decides what it means.
+ * Pure: the view holds the filter state and this decides what it means.
  */
-import type { ProjectAgentPrompt } from "../../../stores/agents/agentPrompts";
 
 /** Mirrors the backend's caps: 16 tags per prompt, and a tag is a token. */
 export const MAX_TAGS = 16;
@@ -69,20 +67,6 @@ export function tagCounts(items: { tags?: string[] }[]): { tag: string; count: n
     .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
 
-export interface LibraryFilter {
-  /** Free text over the prompt and its tags. A needle starting with `#`
-   *  matches tags only, the way it is typed in the tag field. */
-  text: string;
-  /** One tag, or "" for every prompt. */
-  tag: string;
-}
-
-export const EMPTY_LIBRARY_FILTER: LibraryFilter = { text: "", tag: "" };
-
-export function isLibraryFilterActive(filter: LibraryFilter): boolean {
-  return filter.text.trim() !== "" || filter.tag !== "";
-}
-
 /** Whether an item carrying `tags` matches a needle, tag-only when it starts
  *  with `#`. Shared with the sent list's text facet. */
 export function matchesTagsOrText(
@@ -96,17 +80,4 @@ export function matchesTagsOrText(
     return tag === "" || (tags ?? []).some((entry) => entry.includes(tag));
   }
   return haystack.toLowerCase().includes(lowered) || (tags ?? []).some((entry) => entry.includes(lowered));
-}
-
-/** Apply a library filter to the collected list, keeping its order. */
-export function filterCollectedPrompts(
-  prompts: ProjectAgentPrompt[],
-  filter: LibraryFilter,
-): ProjectAgentPrompt[] {
-  const needle = filter.text.trim();
-  return prompts.filter((prompt) => {
-    if (filter.tag && !(prompt.tags ?? []).includes(filter.tag)) return false;
-    if (needle && !matchesTagsOrText(prompt.tags, prompt.message, needle)) return false;
-    return true;
-  });
 }

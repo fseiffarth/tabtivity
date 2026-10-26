@@ -16,6 +16,33 @@ import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 
+// Selectors for the guard rules below (esquery). `listen(` straight from
+// `@tauri-apps/api/event` is a leak in a component unless the unlisten is
+// owned by `subscribeTauri`/`useTauriListener` (late-resolving `listen` and
+// StrictMode double-mount are handled there once). `reg` is the one-line local
+// wrapper `const reg = (f) => unsubs.push(subscribeTauri(f))` in CenterPanel and
+// DetachedCenterPanel.
+const LISTEN_SYNTAX = [
+  {
+    selector:
+      "CallExpression[callee.name='listen']:not(CallExpression[callee.name=/^(subscribeTauri|useTauriListener|reg)$/] CallExpression[callee.name='listen'])",
+    message:
+      'A component subscribes through subscribeTauri()/useTauriListener() (src/hooks/useTauriListener.ts), not a bare listen().',
+  },
+]
+// Hand-rolled leaf/parent splitting breaks on Windows paths: use basename/dirname (src/lib/paths.ts).
+const PATH_SYNTAX = [
+  {
+    selector: "CallExpression[callee.property.name='pop'][callee.object.callee.property.name='split'][callee.object.arguments.0.value='/']",
+    message: 'Use basename() from src/lib/paths.ts, not .split("/").pop().',
+  },
+  {
+    selector: "CallExpression[callee.property.name='lastIndexOf'][arguments.0.value='/']",
+    message: 'Use basename()/dirname() from src/lib/paths.ts, not lastIndexOf("/").',
+  },
+]
+const GUARD_SYNTAX = [...LISTEN_SYNTAX, ...PATH_SYNTAX]
+
 export default tseslint.config(
   {
     // Build output, deps, and the Rust side. Vite/Tauri config files are
@@ -108,6 +135,66 @@ export default tseslint.config(
       // Aliasing `this` is how a nested non-arrow function (a Proxy trap, a
       // prototype-style mock) reaches its enclosing instance. Only `self`.
       '@typescript-eslint/no-this-alias': ['error', { allowedNames: ['self'] }],
+    },
+  },
+  {
+    // --- Guard rules (code screen 2026-10-25, section G): the classes of bug
+    // the screen found by hand, kept from coming back. Components only; the
+    // stores and `lib/` own the module-singleton listeners and the path helpers.
+    files: ['src/components/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}'],
+    rules: {
+      // The plugin's `confirm`/`ask`/`message` draw a native box that the
+      // themed shell cannot style or the browser client reproduce: ask through
+      // `useDialogs()` (`PromptDialogs`). `open`/`save` (pickers) stay fine.
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@tauri-apps/plugin-dialog',
+              importNames: ['confirm', 'ask', 'message'],
+              message: 'Ask through useDialogs() (PromptDialogs), not a native dialog.',
+            },
+          ],
+        },
+      ],
+      'no-restricted-syntax': ['error', ...GUARD_SYNTAX],
+    },
+  },
+  {
+    // The quit path runs with no React tree left to host a PromptDialogs
+    // dialog: the VPN-still-active notice is deliberately a native message.
+    files: ['src/components/layout/AppShell.tsx'],
+    rules: {
+      'no-restricted-imports': 'off',
+    },
+  },
+  {
+    // Raw `listen(` leftovers, neither a component lifecycle: detachedDropTargets
+    // resolves its own `listening` promise (D3 handoff); FileViewerPane's
+    // `listenSourceJump` is registered once at startup and hands back its unlisten.
+    files: [
+      'src/components/tabs/detachedDropTargets.ts',
+      'src/components/embed/FileViewerPane.tsx',
+    ],
+    rules: {
+      'no-restricted-syntax': ['error', ...PATH_SYNTAX],
+    },
+  },
+  {
+    // Path splitting reviewed one by one: each is a project-relative or
+    // remote-POSIX path (the `basename`/`dirname` helpers treat `\` as a
+    // separator too) or keeps a trailing separator the helper trims.
+    files: [
+      'src/components/projects/useRemoteBrowse.ts',
+      'src/components/projects/ProjectPill.tsx',
+      'src/components/embed/deck/deckAssets.ts',
+      'src/components/embed/ImageAnnotator.tsx',
+      'src/components/tabs/TabHoverCard.tsx',
+    ],
+    rules: {
+      'no-restricted-syntax': ['error', ...LISTEN_SYNTAX],
     },
   },
   {

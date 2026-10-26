@@ -109,13 +109,6 @@ export function cachedTexPreview(preamble: string, body: string): TexPreview | u
   return cache.get(texPreviewKey(preamble, body));
 }
 
-/** Forget every rendered preview (and release its blob URL). Used when a tab
- *  closes and by the tests. */
-export function clearTexPreviews(): void {
-  for (const entry of cache.values()) if (entry.url) URL.revokeObjectURL(entry.url);
-  cache.clear();
-}
-
 /**
  * Typeset `body` with `preamble`, cached.
  *

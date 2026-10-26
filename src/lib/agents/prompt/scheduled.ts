@@ -15,7 +15,7 @@
  * delete the rule and the mark goes with it, reword either side and the mark
  * drops, which is the honest answer to "is this text scheduled".
  *
- * Pure over already-loaded schedules, like `lib/agents/prompt/filter`: the view
+ * Pure over already-loaded schedules: the view
  * holds the tabs and their rules, this decides what they mean for the list.
  */
 import { sanitizeAgentMessage } from "../../../../shared/agentComposer";

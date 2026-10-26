@@ -242,16 +242,7 @@ pub fn remember(key: &str, answer: ChatUncommitted, now: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = crate::paths::command_no_window("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
+    use crate::test_util::git;
 
     #[test]
     fn status_rows_name_the_kind_of_change_and_skip_ignored_files() {
@@ -289,7 +280,7 @@ mod tests {
 
     #[test]
     fn only_the_chats_files_still_changed_are_counted_per_checkout() {
-        if !crate::commands::git::git_available() {
+        if !crate::commands::git::git_available_blocking() {
             return;
         }
         // Reached through a symlink, as macOS's temp dir is: git reports the

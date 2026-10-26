@@ -134,6 +134,15 @@ pub struct CreateTabRequest {
     /// most; never with a mode, cloud, sign-in, local model or chat.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub api_key: bool,
+    /// A remote project's agent started on one of its hosts rather than in
+    /// the local mirror. From the phone: the opaque machine id
+    /// `launch-options` listed under `hosts`. The sidecar resolves it and
+    /// forwards the window's own location word (`"remote"` for the primary,
+    /// `"host:<id>"` for a worker) — no host name or path crosses. With
+    /// `agent_id` and a mode at most; never with a worktree, cloud session,
+    /// sign-in, local model, chat or API key, which all run on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     pub idempotency_key: String,
 }
 
@@ -235,6 +244,24 @@ impl CreateTabRequest {
                 || self.sign_in.is_some()
                 || self.like_tab.is_some()
                 || self.local.is_some()
+            {
+                return false;
+            }
+        }
+        if let Some(id) = &self.host {
+            if !agent
+                || id.is_empty()
+                || id.len() > 128
+                || self.agent_id.is_none()
+                || self.worktree.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.like_tab.is_some()
+                || self.teleport.is_some()
+                || self.local.is_some()
+                || self.assistant.is_some()
+                || self.api_key
             {
                 return false;
             }
@@ -3240,6 +3267,25 @@ mod tests {
             json!({"assistant": "c1"}),
         ] {
             let mut body = json!({"project_id": "p", "kind": "agent", "agent_id": "a", "api_key": true, "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
+        // An agent on a remote host: a named agent, a mode at most.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "host": "h1", "idempotency_key": key})));
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "mode": "plan", "host": "h1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "host": "h1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "host": "h1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "host": "", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "agent_id": "a", "host": "x".repeat(129), "idempotency_key": key})));
+        for extra in [
+            json!({"worktree": "w1"}),
+            json!({"cloud": "open"}),
+            json!({"sign_in": "default"}),
+            json!({"local": "l1"}),
+            json!({"assistant": "c1"}),
+            json!({"api_key": true}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "agent_id": "a", "host": "h1", "idempotency_key": key});
             body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             assert!(!ok(body), "{extra}");
         }

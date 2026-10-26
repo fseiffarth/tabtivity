@@ -69,6 +69,15 @@ function createPoll(): number {
   return (Number(rounds[1]) * Number(pause[1])) / 1000;
 }
 
+/** Seconds the sidecar may poll for a tab the window started on a remote
+ * host (`answer_created_on_host`), which waits for the host's tmux too. */
+function hostCreatePoll(): number {
+  const rounds = /const HOST_CREATED_POLLS: u32 = (\d+);/.exec(HOST);
+  const pause = /const HOST_CREATED_PAUSE_MS: u64 = (\d+);/.exec(HOST);
+  if (!rounds || !pause) throw new Error("host.rs no longer defines the host create poll");
+  return (Number(rounds[1]) * Number(pause[1])) / 1000;
+}
+
 function callbackTimeout(): number {
   const m = /const CALLBACK_TIMEOUT: Duration = Duration::from_secs\((\d+)\);/.exec(SIGN_IN);
   if (!m) throw new Error("sign_in.rs no longer defines CALLBACK_TIMEOUT");
@@ -83,6 +92,12 @@ describe(`${BRAND.display} Mobile request deadlines`, () => {
   it("waits longer for a tab than the desktop's answer plus the catalog poll can take", () => {
     const budget = connectTimeout() + responseTimeout() + createPoll();
     expect(budget).toBe(17);
+    expect(TAB_CREATE_TIMEOUT / 1000).toBeGreaterThan(budget);
+  });
+
+  it("waits longer for a tab on a remote host than its longer catalog poll", () => {
+    const budget = connectTimeout() + responseTimeout() + hostCreatePoll();
+    expect(budget).toBe(20);
     expect(TAB_CREATE_TIMEOUT / 1000).toBeGreaterThan(budget);
   });
 

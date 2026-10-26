@@ -310,11 +310,7 @@ pub fn clean_url(url: &str) -> String {
     if url.len() <= MAX_URL_BYTES {
         return url;
     }
-    let mut end = MAX_URL_BYTES;
-    while !url.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &url[..end])
+    format!("{}…", &url[..url.floor_char_boundary(MAX_URL_BYTES)])
 }
 
 /// `text` cut to [`MAX_TEXT_BYTES`] at a character boundary; whether it was cut.
@@ -322,11 +318,7 @@ pub fn cap_text(text: &str) -> (&str, bool) {
     if text.len() <= MAX_TEXT_BYTES {
         return (text, false);
     }
-    let mut end = MAX_TEXT_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (&text[..end], true)
+    (&text[..text.floor_char_boundary(MAX_TEXT_BYTES)], true)
 }
 
 /// The text a successful `web_fetch` returns: the fixed untrusted line, the

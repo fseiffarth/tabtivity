@@ -100,7 +100,7 @@ pub async fn list_dir(
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         return list_dir_remote(&target, &rel_path, pool).await;
     }
-    list_dir_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || list_dir_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs directory listing — the pre-Phase-2 behavior, byte-identical.
@@ -154,8 +154,20 @@ const TEXT_PATH_BASES_MAX: usize = 4;
 /// answered either. The returned path is the lexical one (the base as given,
 /// joined), not the canonical one, so it prefix-matches the project directory
 /// the frontend holds. One answer per candidate, in order; `None` = no link.
+///
+/// Every candidate is a canonicalize and a stat, so the lookup runs on a
+/// worker. A worker that fails is an error, not "no links": the frontend
+/// would remember those.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn resolve_text_paths(bases: Vec<String>, candidates: Vec<String>) -> Vec<Option<FileEntry>> {
+pub async fn resolve_text_paths(
+    bases: Vec<String>,
+    candidates: Vec<String>,
+) -> Result<Vec<Option<FileEntry>>, String> {
+    app_core::rt::blocking("fs", move || resolve_text_paths_blocking(bases, candidates)).await
+}
+
+/// The body of [`resolve_text_paths`], on the calling thread.
+pub fn resolve_text_paths_blocking(bases: Vec<String>, candidates: Vec<String>) -> Vec<Option<FileEntry>> {
     let bases: Vec<(PathBuf, PathBuf)> = bases
         .iter()
         .filter(|b| !b.is_empty())
@@ -234,9 +246,17 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 ///
 /// `since_secs` (Unix seconds) keeps only entries modified at or after it; `None`
 /// returns everything. Results are sorted by `modified_secs` descending, then by
-/// name, so the most recent download is first.
+/// name, so the most recent download is first. A listing and a stat per
+/// entry, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_recent_downloads(
+pub async fn list_recent_downloads(
+    paths: Vec<String>,
+    since_secs: Option<u64>,
+) -> Result<Vec<FileEntry>, String> {
+    app_core::rt::try_blocking("fs", move || list_recent_downloads_blocking(paths, since_secs)).await
+}
+
+fn list_recent_downloads_blocking(
     paths: Vec<String>,
     since_secs: Option<u64>,
 ) -> Result<Vec<FileEntry>, String> {
@@ -857,7 +877,7 @@ pub async fn rename_path(
         };
         return remote_rename(pool, &target, &from, &to).await;
     }
-    rename_path_local(&project_dir, &old_rel, &new_name)
+    app_core::rt::try_blocking("fs", move || rename_path_local(&project_dir, &old_rel, &new_name)).await
 }
 
 /// Local-fs rename — the pre-Phase-3 body, byte-identical. Re-validates so it is
@@ -889,7 +909,7 @@ pub async fn delete_file(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_remove_file(pool, &target, &full).await;
     }
-    delete_file_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || delete_file_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs file delete — byte-identical pre-Phase-3 body.
@@ -920,7 +940,8 @@ pub async fn delete_dir(
         let full = join_remote_dir(&target.spec.remote_path, &clean);
         return remote_remove_dir(pool, &target, &full).await;
     }
-    delete_dir_local(&project_dir, &rel_path)
+    // A whole tree goes: on a worker, never the thread driving the command.
+    app_core::rt::try_blocking("fs", move || delete_dir_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs directory-tree delete — byte-identical pre-Phase-3 body.
@@ -950,7 +971,7 @@ pub async fn create_file(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_create_file(pool, &target, &full).await;
     }
-    create_file_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || create_file_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs empty-file create, confined like every project write.
@@ -975,7 +996,7 @@ pub async fn write_project_file(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_write(pool, &target, &full, content.as_bytes()).await;
     }
-    write_project_file_local(&project_dir, &rel_path, &content)
+    app_core::rt::try_blocking("fs", move || write_project_file_local(&project_dir, &rel_path, &content)).await
 }
 
 /// Local-fs text write, confined like every project write.
@@ -1004,7 +1025,7 @@ pub async fn write_project_file_bytes(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_write(pool, &target, &full, &content).await;
     }
-    write_project_file_bytes_local(&project_dir, &rel_path, &content)
+    app_core::rt::try_blocking("fs", move || write_project_file_bytes_local(&project_dir, &rel_path, &content)).await
 }
 
 /// Local-fs byte write, confined like every project write.
@@ -1020,20 +1041,39 @@ pub fn write_project_file_bytes_local(
     write_confined(&target_c, content)
 }
 
+/// Add (`"ignore"`) or drop (`"unignore"`) the `.gitignore` rule for one path
+/// of the project. Reads and writes the project's `.gitignore`, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn update_gitignore_rule(
+pub async fn update_gitignore_rule(
     project_dir: String,
     rel_path: String,
     is_dir: bool,
     action: String,
 ) -> Result<(), String> {
+    app_core::rt::try_blocking("fs", move || update_gitignore_rule_blocking(project_dir, rel_path, is_dir, action)).await
+}
+
+pub fn update_gitignore_rule_blocking(
+    project_dir: String,
+    rel_path: String,
+    is_dir: bool,
+    action: String,
+) -> Result<(), String> {
+    // A read-modify-write of one file: two rule edits at once (they no longer
+    // queue on the window's thread) would each write their own copy and drop
+    // the other's rule.
+    static GITIGNORE_EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _edit = GITIGNORE_EDIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = canonical(&project_dir)?;
     let clean_rel = normalize_project_rel_path(&rel_path)?;
     let target_c = canonical_or_new(&root.join(&clean_rel))?;
     enforce_confinement(&root, &target_c)?;
 
     let gitignore_path = root.join(".gitignore");
-    let existing = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    // A committed `.gitignore` link or FIFO is refused, never followed.
+    let existing = crate::commands::projects::read_project_gitignore(&gitignore_path).map_err(|e| e.to_string())?;
+    let create = existing.is_none();
+    let existing = existing.unwrap_or_default();
     let mut lines: Vec<String> = existing.lines().map(|line| line.to_string()).collect();
     let new_rules = match action.as_str() {
         "ignore" => gitignore_ignore_rules(&clean_rel, is_dir),
@@ -1059,7 +1099,7 @@ pub fn update_gitignore_rule(
     if !next.is_empty() {
         next.push('\n');
     }
-    fs::write(&gitignore_path, next).map_err(|e| e.to_string())
+    crate::commands::projects::write_no_follow(&gitignore_path, next.as_bytes(), create).map_err(|e| e.to_string())
 }
 
 /// Create a new directory inside the project.
@@ -1074,7 +1114,7 @@ pub async fn create_dir(
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
         return remote_mkdir(pool, &target, &full).await;
     }
-    create_dir_local(&project_dir, &rel_path)
+    app_core::rt::try_blocking("fs", move || create_dir_local(&project_dir, &rel_path)).await
 }
 
 /// Local-fs directory create, confined like every project write.
@@ -1277,8 +1317,13 @@ pub fn import_external_file_blocking(
 
 /// Whether a project-relative path currently exists. The drag-drop importer
 /// calls this before copying so it can prompt rename-vs-replace on a collision.
+/// It canonicalizes inside the project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
+pub async fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
+    app_core::rt::try_blocking("fs", move || project_path_exists_blocking(project_dir, rel_path)).await
+}
+
+pub fn project_path_exists_blocking(project_dir: String, rel_path: String) -> Result<bool, String> {
     let root = canonical(&project_dir)?;
     let rel = normalize_project_rel_path(&rel_path)?;
     let target = if rel.is_empty() {
@@ -1500,8 +1545,16 @@ pub fn detect_mime_local(path: &str, scope_id: Option<&str>) -> Result<String, S
 /// This mirrors the *exact* routing `read_file_text`/`read_file_bytes` apply
 /// (`remote_target_for` gates remoteness, `is_under_mirror` picks the side), so
 /// the badge can never disagree with where the bytes were actually read from.
+/// The side is found by canonicalizing both paths, so on a worker; a worker
+/// that fails answers "none" (no badge).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn file_source(path: String, project_id: Option<String>) -> String {
+pub async fn file_source(path: String, project_id: Option<String>) -> String {
+    app_core::rt::blocking("fs", move || file_source_blocking(path, project_id))
+        .await
+        .unwrap_or_else(|_| "none".to_string())
+}
+
+fn file_source_blocking(path: String, project_id: Option<String>) -> String {
     match project_id.as_deref() {
         Some(pid) if crate::services::remote::remote_target_for(pid).is_some() => {
             if crate::services::remote_sync::is_under_mirror(pid, &path) {
@@ -1882,13 +1935,7 @@ pub fn file_mtime_local(path: &str, scope_id: Option<&str>) -> Result<u64, Strin
     let meta = open_confined(&p, &allowed_roots(scope_id), Confined::Stat)?
         .metadata()
         .map_err(|e| e.to_string())?;
-    let secs = meta
-        .modified()
-        .map_err(|e| e.to_string())?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    Ok(secs)
+    Ok(crate::clock::unix_secs(meta.modified().map_err(|e| e.to_string())?))
 }
 
 /// Return a file's size in bytes.
@@ -2811,33 +2858,13 @@ pub struct DirListing {
 /// picker browses the whole local filesystem to choose a destination folder.
 /// Empty `path` starts at the user's home directory. Files are omitted (only
 /// folders); unreadable entries are skipped rather than failing the whole call.
+/// The folder half of [`list_dir_all`], read by the same body.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_dirs(path: String) -> Result<DirListing, String> {
-    let trimmed = path.trim();
-    let base = if trimmed.is_empty() {
-        crate::paths::home_dir()
-    } else {
-        PathBuf::from(trimmed)
-    };
-    // Best-effort canonicalize so `..`/symlinks resolve to a stable absolute
-    // path; fall back to the raw path if it can't be canonicalized.
-    let base = fs::canonicalize(&base).unwrap_or(base);
-
-    let read = fs::read_dir(&base).map_err(|e| format!("cannot read '{}': {e}", base.display()))?;
-    let mut entries: Vec<DirEntry> = read
-        .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .map(|e| DirEntry {
-            name: e.file_name().to_string_lossy().into_owned(),
-            path: display_path(&e.path()),
-        })
-        .collect();
-    entries.sort_by_key(|a| a.name.to_lowercase());
-
-    Ok(DirListing {
-        path: display_path(&base),
-        parent: base.parent().map(display_path),
-        entries,
+pub async fn list_dirs(path: String) -> Result<DirListing, String> {
+    app_core::rt::try_blocking("fs", move || list_local_dir(&path, true)).await.map(|listing| DirListing {
+        path: listing.path,
+        parent: listing.parent,
+        entries: listing.dirs,
     })
 }
 
@@ -2868,7 +2895,15 @@ pub struct FileListing {
 /// Folders and files of a local directory (see [`FileListing`]). Empty `path`
 /// starts at the user's home; unreadable entries are skipped.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_dir_all(path: String) -> Result<FileListing, String> {
+pub async fn list_dir_all(path: String) -> Result<FileListing, String> {
+    app_core::rt::try_blocking("fs", move || list_local_dir(&path, false)).await
+}
+
+/// The one local directory read behind [`list_dirs`] and [`list_dir_all`]:
+/// `..`/links resolved to a stable absolute path where possible (the raw path
+/// otherwise), folders and — unless `dirs_only` — regular files, each sorted
+/// by name. A link is neither: entry types are read without following it.
+pub fn list_local_dir(path: &str, dirs_only: bool) -> Result<FileListing, String> {
     let trimmed = path.trim();
     let base = if trimmed.is_empty() {
         crate::paths::home_dir()
@@ -2880,13 +2915,13 @@ pub fn list_dir_all(path: String) -> Result<FileListing, String> {
     let mut dirs = Vec::new();
     let mut files = Vec::new();
     for entry in read.flatten() {
-        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(kind) = entry.file_type() else { continue };
         let name = entry.file_name().to_string_lossy().into_owned();
-        let path = display_path(&entry.path());
-        if meta.is_dir() {
-            dirs.push(DirEntry { name, path });
-        } else if meta.is_file() {
-            files.push(FileRow { name, path, size: meta.len() });
+        if kind.is_dir() {
+            dirs.push(DirEntry { name, path: display_path(&entry.path()) });
+        } else if kind.is_file() && !dirs_only {
+            let Ok(meta) = entry.metadata() else { continue };
+            files.push(FileRow { name, path: display_path(&entry.path()), size: meta.len() });
         }
     }
     dirs.sort_by_key(|d| d.name.to_lowercase());
@@ -2904,6 +2939,7 @@ pub fn list_dir_all(path: String) -> Result<FileListing, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::init_repo;
     use std::path::PathBuf;
 
     #[test]
@@ -2912,11 +2948,95 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("b.txt"), b"xy").unwrap();
         std::fs::write(dir.path().join("A.md"), b"x").unwrap();
-        let listing = list_dir_all(dir.path().to_string_lossy().into_owned()).unwrap();
+        let listing = list_local_dir(&dir.path().to_string_lossy(), false).unwrap();
         assert_eq!(listing.dirs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["sub"]);
         assert_eq!(listing.files.iter().map(|f| (f.name.as_str(), f.size)).collect::<Vec<_>>(), [("A.md", 1), ("b.txt", 2)]);
         assert!(listing.parent.is_some());
-        assert!(list_dir_all("/definitely/not/here".into()).is_err());
+        assert!(list_local_dir("/definitely/not/here", false).is_err());
+    }
+
+    /// The folder picker's half (`list_dirs`) reads the same body with
+    /// `dirs_only`: the same folders, no files.
+    #[test]
+    fn list_local_dir_dirs_only_drops_the_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Zed")).unwrap();
+        std::fs::create_dir(dir.path().join("alpha")).unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"xy").unwrap();
+        let listing = list_local_dir(&dir.path().to_string_lossy(), true).unwrap();
+        assert_eq!(listing.dirs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["alpha", "Zed"]);
+        assert!(listing.files.is_empty());
+    }
+
+    fn ignore_rule(dir: &Path, rel: &str) -> Result<(), String> {
+        update_gitignore_rule_blocking(dir.to_string_lossy().into_owned(), rel.into(), false, "ignore".into())
+    }
+
+    #[test]
+    fn update_gitignore_rule_edits_the_projects_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        ignore_rule(dir.path(), "a.log").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(), "/a.log\n");
+        ignore_rule(dir.path(), "b.log").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(), "/a.log\n\n/b.log\n");
+    }
+
+    /// A committed `.gitignore -> ~/.bashrc` must not get a rule appended, and
+    /// a dangling one must not create its target.
+    #[cfg(unix)]
+    #[test]
+    fn update_gitignore_rule_never_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("p");
+        std::fs::create_dir(&project).unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "precious\n").unwrap();
+        std::os::unix::fs::symlink(&victim, project.join(".gitignore")).unwrap();
+        assert!(ignore_rule(&project, "a.log").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious\n");
+
+        std::fs::remove_file(project.join(".gitignore")).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, project.join(".gitignore")).unwrap();
+        assert!(ignore_rule(&project, "a.log").is_err());
+        assert!(!elsewhere.exists());
+    }
+
+    /// The command runs on workers now, so two rule edits can overlap; each
+    /// reads, edits and writes the whole file, and without the edit lock the
+    /// later write dropped the earlier one's rule.
+    #[test]
+    fn concurrent_gitignore_rule_edits_keep_every_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..16).map(|i| format!("f{i}.log")).collect();
+        let start = std::sync::Arc::new(std::sync::Barrier::new(names.len()));
+        let workers: Vec<_> = names
+            .iter()
+            .cloned()
+            .map(|name| {
+                let (root, start) = (dir.path().to_path_buf(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    ignore_rule(&root, &name)
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        let text = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        for name in &names {
+            assert!(text.lines().any(|l| l == format!("/{name}")), "lost /{name}:\n{text}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_gitignore_rule_refuses_a_fifo_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::services::home_io::mkfifo(&dir.path().join(".gitignore"));
+        let project = dir.path().to_path_buf();
+        assert!(crate::services::home_io::within_deadline(move || ignore_rule(&project, "a.log")).is_err());
     }
 
     // ── The raw-body write's two decoders ──────────────────────────────────
@@ -3037,7 +3157,7 @@ mod tests {
         // Per component: Windows keeps a joined `/`, the resolved path has `\`.
         let abs_inside = project.join("docs").join("plan.md").to_string_lossy().to_string();
         let abs_outside = tmp.path().join("secret.txt").to_string_lossy().to_string();
-        let got = resolve_text_paths(
+        let got = resolve_text_paths_blocking(
             vec![base],
             vec![
                 "docs/plan.md".into(),
@@ -3067,7 +3187,7 @@ mod tests {
         fs::create_dir_all(sub.join("src")).unwrap();
         fs::write(sub.join("src/lib.rs"), "x").unwrap();
         fs::write(project.join("README.md"), "x").unwrap();
-        let got = resolve_text_paths(
+        let got = resolve_text_paths_blocking(
             vec![sub.to_string_lossy().into(), project.to_string_lossy().into()],
             vec!["src/lib.rs".into(), "README.md".into()],
         );
@@ -3083,7 +3203,7 @@ mod tests {
         fs::create_dir_all(&project).unwrap();
         fs::write(tmp.path().join("secret.txt"), "x").unwrap();
         std::os::unix::fs::symlink(tmp.path().join("secret.txt"), project.join("link.txt")).unwrap();
-        let got = resolve_text_paths(vec![project.to_string_lossy().into()], vec!["link.txt".into()]);
+        let got = resolve_text_paths_blocking(vec![project.to_string_lossy().into()], vec!["link.txt".into()]);
         assert!(got[0].is_none());
     }
 
@@ -3094,7 +3214,7 @@ mod tests {
         fs::create_dir_all(&state).unwrap();
         fs::write(state.join("project.json"), "{}").unwrap();
         let rel = format!("{}/project.json", crate::brand::PROJECT_DIR);
-        let got = resolve_text_paths(vec![tmp.path().to_string_lossy().into()], vec![rel]);
+        let got = resolve_text_paths_blocking(vec![tmp.path().to_string_lossy().into()], vec![rel]);
         assert!(got[0].is_none());
     }
 
@@ -3160,24 +3280,6 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
-    }
-
-    fn init_repo(dir: &Path) {
-        let run = |args: &[&str]| {
-            assert!(
-                crate::paths::command_no_window("git")
-                    .args(args)
-                    .current_dir(dir)
-                    .output()
-                    .expect("git command should run")
-                    .status
-                    .success(),
-                "git {args:?} failed"
-            );
-        };
-        run(&["init"]);
-        run(&["config", "user.email", "test@example.com"]);
-        run(&["config", "user.name", "Test User"]);
     }
 
     #[test]
@@ -3632,8 +3734,8 @@ mod tests {
         let proj = tempfile::tempdir().unwrap();
         std::fs::write(proj.path().join("here.txt"), "x").unwrap();
         let dir = proj.path().to_string_lossy().to_string();
-        assert!(project_path_exists(dir.clone(), "here.txt".into()).unwrap());
-        assert!(!project_path_exists(dir, "missing.txt".into()).unwrap());
+        assert!(project_path_exists_blocking(dir.clone(), "here.txt".into()).unwrap());
+        assert!(!project_path_exists_blocking(dir, "missing.txt".into()).unwrap());
     }
 
     #[test]

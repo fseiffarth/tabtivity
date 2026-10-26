@@ -195,11 +195,7 @@ fn bounded(text: &str) -> String {
     if text.len() <= MAX_VERSION_TEXT {
         return text.to_string();
     }
-    let mut cut = MAX_VERSION_TEXT;
-    while cut > 0 && !text.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}…", &text[..cut])
+    format!("{}…", &text[..text.floor_char_boundary(MAX_VERSION_TEXT)])
 }
 
 /// What a `--version` run printed, or the CLI's own complaint.

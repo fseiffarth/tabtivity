@@ -84,9 +84,9 @@
 
 use std::collections::{HashMap, HashSet};
 use app_core::sync::LockExt;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -148,7 +148,7 @@ const ROUND_CONFIG: &[&str] = &[
 /// Variables a caller's environment (a git hook running the app's tests, a
 /// shell with `GIT_DIR` exported) could carry into a call and point it at
 /// another repo, index or attribute source.
-const FOREIGN_GIT_ENV: &[&str] = &[
+pub(crate) const FOREIGN_GIT_ENV: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
@@ -383,7 +383,7 @@ fn file_digest(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher).ok()?;
-    Some(format!("{:x}", hasher.finalize()))
+    Some(crate::digest::hex(&hasher.finalize()))
 }
 
 /// A git call's failure.
@@ -402,56 +402,16 @@ const LIST_LIMIT: usize = 64 * 1024 * 1024;
 /// Runs `cmd` with `stdin` fed in, its output read whole (at most `limit`
 /// bytes of stdout), killed at [`call_deadline`].
 fn run(mut cmd: Command, stdin: Option<Vec<u8>>, limit: usize) -> Result<Output, RunError> {
-    let deadline = call_deadline();
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { RunError::Missing } else { RunError::Io })?;
-    let writer = match (stdin, child.stdin.take()) {
-        (Some(bytes), Some(mut pipe)) => Some(std::thread::spawn(move || {
-            let _ = pipe.write_all(&bytes);
-        })),
-        _ => None,
-    };
-    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(RunError::Io);
-    };
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.take(limit as u64 + 1).read_to_end(&mut buf);
-        buf
-    });
-    let errors = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.take(64 * 1024).read_to_end(&mut buf);
-        buf
-    });
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
-                // The whole subtree, so no descendant keeps the pipes the
-                // readers below are joined on (#2349).
-                crate::terminal::reap_child_subtree(child.id(), crate::terminal::ReapMode::Immediate);
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
-    let stdout = reader.join().unwrap_or_default();
-    let stderr = errors.join().unwrap_or_default();
-    if let Some(writer) = writer {
-        let _ = writer.join();
-    }
-    match status {
-        Some(status) if stdout.len() <= limit => Ok(Output { status, stdout, stderr }),
-        _ => Err(RunError::Timeout),
+    use crate::services::git_bounded as bounded;
+    let timeout = call_deadline().saturating_duration_since(Instant::now());
+    // No pre-check: the round vets the files it reads itself (a FIFO
+    // `info/attributes` is "no undo", not a failure), and the deadline bounds git.
+    let opts = bounded::Opts { stdin, stdout_cap: Some(limit as u64 + 1), timeout: Some(timeout), no_precheck: true, ..Default::default() };
+    match bounded::run(&mut cmd, opts) {
+        Ok(ran) if !ran.cut => Ok(ran.output),
+        Ok(_) | Err(bounded::RunError::TimedOut(_)) => Err(RunError::Timeout),
+        Err(bounded::RunError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(RunError::Missing),
+        Err(_) => Err(RunError::Io),
     }
 }
 
@@ -1352,11 +1312,9 @@ pub fn begin(state_dir: &Path, root: &Path, owner: Owner, pdf: Option<PdfBefore>
     Ok(id)
 }
 
-fn save(dir: &Path, record: &Record) -> std::io::Result<()> {
-    let text = serde_json::to_vec_pretty(record).map_err(std::io::Error::other)?;
-    let temp = dir.join("round.json.tmp");
-    std::fs::write(&temp, text)?;
-    std::fs::rename(&temp, dir.join("round.json"))
+fn save(dir: &Path, record: &Record) -> Result<(), String> {
+    let text = serde_json::to_vec_pretty(record).map_err(|e| e.to_string())?;
+    crate::storage::write_private_atomic(&dir.join("round.json"), &text)
 }
 
 /// The round `id` of `owner`, with its folder.
@@ -1698,22 +1656,8 @@ fn prune(state_dir: &Path, keep: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
     use std::fs;
-
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let mut cmd = Command::new("git");
-        for name in FOREIGN_GIT_ENV {
-            cmd.env_remove(name);
-        }
-        let out = cmd
-            .args(["-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
 
     const MAIN: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n";
 
@@ -1815,6 +1759,18 @@ mod tests {
             assert_eq!(undo(&state, &id, &phone()), Err(RoundError::Gone));
             assert_eq!(preview_err(&state, &id), RoundError::Gone);
         }
+    }
+
+    /// The record is staged under a fresh name each save, so something left at
+    /// (or planted on) one fixed staging name cannot fail the round.
+    #[test]
+    fn a_round_record_save_does_not_depend_on_a_fixed_staging_name() {
+        let (_tmp, root, state) = repo();
+        let id = begin(&state, &root, phone(), None).unwrap();
+        fs::create_dir(state.join(ROUNDS_DIR).join(&id).join("round.json.tmp")).unwrap();
+        agent_turn(&root);
+        settle(&state, &id, &phone()).unwrap();
+        assert!(record(&state, &id).tree_after.is_some());
     }
 
     fn preview_err(state: &Path, id: &str) -> RoundError {

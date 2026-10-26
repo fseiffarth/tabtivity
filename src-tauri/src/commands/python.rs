@@ -35,8 +35,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::schema::projects::ProjectsList;
-use crate::storage;
 
 /// One interpreter the user could pick, as offered by the dialog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -472,9 +470,7 @@ pub async fn python_interpreter_for(
 /// never consulted: that file is writable by a fenced agent, a container tab, a
 /// `git pull` or byte-sync, and Run would execute what it names on the host.
 fn project_python(project_id: &str) -> Option<String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).ok()?;
-    python_from_entry(list.iter().find(|p| p.id == project_id)?)
+    python_from_entry(&crate::services::remote::project_entry(project_id).ok()?)
 }
 
 fn python_from_entry(entry: &crate::schema::ProjectEntry) -> Option<String> {

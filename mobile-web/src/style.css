@@ -340,6 +340,12 @@ small { color:#9498aa; }
 .new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
 .new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
+/* "Runs on": the label beside a compact select (the base select's chevron),
+   the note under both. */
+.new-tab-machine { display:grid; gap:4px; }
+.new-tab-machine > label { display:flex; align-items:center; gap:8px; min-width:0; }
+.new-tab-machine small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
+.new-tab-machine select { flex:1 1 auto; padding:7px 30px 7px 12px; background-position:right 10px center; font-size:.85rem; text-overflow:ellipsis; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }
@@ -405,6 +411,13 @@ small { color:#9498aa; }
 .home-hint,.project-hint { display:flex; align-items:center; gap:var(--sp-1); margin:6px 0 0 var(--sp-1); color:var(--ink-muted); font-size:var(--fs-foot); line-height:1.35; }
 .home-hint > span,.project-hint > span { flex:1 1 auto; min-width:0; }
 .home-hint > button,.project-hint > button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -6px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.2rem; }
+.hint-message { margin:12px 0; padding:10px 14px; border:1px solid #4a426e; border-radius:14px; background:#211e35; color:#e6e9f2; font-size:var(--fs-sub); line-height:1.45; }
+.hint-message-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.hint-message-head > button { flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -8px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.3rem; }
+.hint-message > p { margin:8px 0; }
+.hint-message > label { display:flex; align-items:center; gap:10px; min-height:var(--hit); cursor:pointer; }
+.hint-message > label > input[type="checkbox"] { flex:0 0 auto; width:20px; height:20px; margin:0; accent-color:#9b8cff; }
+.hint-message-floating { position:fixed; z-index:10; top:calc(64px + env(safe-area-inset-top)); left:max(12px,calc((100vw - var(--screen-measure)) / 2 + 12px)); right:max(12px,calc((100vw - var(--screen-measure)) / 2 + 12px)); margin:0; max-height:calc(100dvh - 90px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow:auto; box-shadow:0 8px 24px rgba(4,5,9,.45); }
 .home-empty,.project-empty { display:grid; justify-items:center; gap:6px; padding:var(--sp-7) var(--sp-4); text-align:center; }
 .home-empty-glyph,.project-empty-glyph { color:#6f7488; font-size:40px; line-height:1; }
 .home-empty strong,.project-empty strong { font-size:var(--fs-headline); }

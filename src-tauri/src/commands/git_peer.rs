@@ -69,7 +69,7 @@ pub async fn git_peer_set_local_authoritative(
     project_id: String,
     enabled: bool,
 ) -> Result<GitPeerState, String> {
-    let _op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -85,6 +85,7 @@ pub async fn git_peer_set_local_authoritative(
         return Ok(state);
     }
     let state = git_peer::detect_and_sync(
+        op,
         pool,
         manifest,
         auto,
@@ -107,13 +108,14 @@ pub async fn git_peer_sync_now(
     ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
-    let _op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let target = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let state = git_peer::detect_and_sync(
+        op,
         pool,
         manifest,
         auto,
@@ -141,13 +143,14 @@ pub async fn git_peer_pair_confirm(
     ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
-    let _op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let state = git_peer::detect_and_sync(
+        op,
         pool,
         manifest,
         auto,
@@ -169,7 +172,8 @@ pub async fn git_peer_pair_confirm(
 pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, String> {
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
-    Ok(git_peer::list_backups(&project_id, &rt.spec))
+    // A `for-each-ref` on each side, one of them over ssh: off the async runtime.
+    app_core::rt::blocking("backups", move || git_peer::list_backups(&project_id, &rt.spec)).await
 }
 
 /// Move a branch back onto a backup ref, on the peer that holds it (#28p D6). The
@@ -181,13 +185,14 @@ pub async fn git_peer_restore_backup(
     peer: String,
     refname: String,
 ) -> Result<GitPeerState, String> {
-    let _op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let state = git_peer::restore_backup(
+        op,
         pool,
         manifest,
         auto,
@@ -223,7 +228,7 @@ pub async fn git_peer_checkout(
     target: String,
     initiating_side: Option<String>,
 ) -> Result<GitPeerState, String> {
-    let _op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
@@ -231,6 +236,7 @@ pub async fn git_peer_checkout(
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let side = initiating_side.unwrap_or_else(|| "local".to_string());
     let state = git_peer::checkout_lockstep(
+        op,
         pool,
         manifest,
         auto,
@@ -256,13 +262,14 @@ pub async fn git_peer_resolve(
     project_id: String,
     authority: String,
 ) -> Result<GitPeerState, String> {
-    let _op = crate::services::sync_op::acquire(&project_id).await?;
+    let op = crate::services::sync_op::acquire(&project_id).await?;
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let state = git_peer::resolve(
+        op,
         pool,
         manifest,
         auto,

@@ -123,14 +123,18 @@ fn encode_project_id(path: &str) -> String {
 /// prompt rather than as a failed fork after the user filled the form in. Also
 /// used by the publish flow (`commands::git_publish`) for the same reason —
 /// publishing to a fresh GitHub/GitLab repo shells out to this same CLI.
+/// The probe spawns a process, so it runs on a worker, never the window's thread.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn provider_cli_available(provider: String) -> Result<bool, String> {
+pub async fn provider_cli_available(provider: String) -> Result<bool, String> {
     let provider = Provider::parse(&provider)?;
-    Ok(crate::paths::command_no_window(provider.cli())
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false))
+    app_core::rt::blocking("git", move || {
+        crate::paths::command_no_window(provider.cli())
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+    .await
 }
 
 /// What a completed fork import reports back: where the tree landed, and the

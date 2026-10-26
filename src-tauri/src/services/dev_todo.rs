@@ -10,7 +10,6 @@
 //! hands back what is on disk now for the view to re-apply its click to. A
 //! click never overwrites an edit it did not see.
 
-use crate::brand::SLUG;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -145,20 +144,24 @@ pub fn read_in(root: &Path, name: &str) -> Result<String, String> {
 }
 
 /// Replace the group's text with `next` if it still reads `expected`. The new
-/// text goes to a sibling temp file first and is renamed over, so an agent
-/// reading the file mid-write sees the old text or the new, never half.
+/// text goes to a fresh sibling temp file first and is renamed over, so an
+/// agent reading the file mid-write sees the old text or the new, never half.
 pub fn write_in(root: &Path, name: &str, expected: &str, next: &str) -> Result<WriteOutcome, String> {
     let path = group_path(root, name)?;
     let current = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     if current != expected {
         return Ok(WriteOutcome::Changed { current });
     }
-    let tmp = path.with_file_name(format!(".{name}.{SLUG}-tmp"));
-    fs::write(&tmp, next).map_err(|e| e.to_string())?;
-    if let Err(e) = fs::rename(&tmp, &path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e.to_string());
-    }
+    // A tracked repo file keeps the mode it has (the staging write is
+    // owner-only otherwise).
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(&path).map_err(|e| e.to_string())?.permissions().mode() & 0o7777
+    };
+    #[cfg(not(unix))]
+    let mode = 0o600;
+    crate::storage::write_private_atomic_mode(&path, next.as_bytes(), mode)?;
     Ok(WriteOutcome::Written)
 }
 
@@ -182,6 +185,7 @@ pub fn write(name: &str, expected: &str, next: &str) -> Result<WriteOutcome, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brand::SLUG;
 
     fn checkout(files: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -238,5 +242,29 @@ mod tests {
         assert_eq!(read_in(dir.path(), "group-a.md").unwrap(), "- [x] a\n");
         let leftovers: Vec<_> = fs::read_dir(dir.path().join("todo")).unwrap().flatten().collect();
         assert_eq!(leftovers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_keeps_the_tracked_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = checkout(&[("group-a.md", "- [ ] a\n")]);
+        let path = dir.path().join("todo").join("group-a.md");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_in(dir.path(), "group-a.md", "- [ ] a\n", "- [x] a\n").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    /// Each write stages under a fresh name: an entry at one fixed staging
+    /// name (a crashed write's, or a planted one) cannot block it.
+    #[test]
+    fn write_does_not_depend_on_a_fixed_staging_name() {
+        let dir = checkout(&[("group-a.md", "- [ ] a\n")]);
+        fs::create_dir(dir.path().join("todo").join(format!(".group-a.md.{SLUG}-tmp"))).unwrap();
+        assert_eq!(
+            write_in(dir.path(), "group-a.md", "- [ ] a\n", "- [x] a\n").unwrap(),
+            WriteOutcome::Written
+        );
+        assert_eq!(read_in(dir.path(), "group-a.md").unwrap(), "- [x] a\n");
     }
 }

@@ -49,11 +49,7 @@ const MAX_PHONES: usize = 50;
 
 fn cap(mut s: String, max: usize) -> String {
     if s.len() > max {
-        let mut end = max;
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        s.truncate(end);
+        s.truncate(s.floor_char_boundary(max));
     }
     s
 }

@@ -205,11 +205,7 @@ fn prune_stale_pending(dir: &Path) {
 
 /// `Screenshot-YYYYMMDD-HHMMSS.png` in UTC — sortable and collision-resistant.
 fn screenshot_filename() -> String {
-    let secs = crate::clock::unix_secs(SystemTime::now()) as i64;
-    let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
-    let tod = secs.rem_euclid(86_400);
-    let (h, mi, s) = (tod / 3600, (tod % 3600) / 60, tod % 60);
-    format!("Screenshot-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}.png")
+    chrono::Utc::now().format("Screenshot-%Y%m%d-%H%M%S.png").to_string()
 }
 
 /// Spawn a capture tool detached and, once it exits, copy the PNG it produced
@@ -293,20 +289,6 @@ fn locate_shot(
         .map(|(_, path)| path)
 }
 
-/// Civil date from days since the Unix epoch (Howard Hinnant's algorithm).
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
 // ── Linux backend (drive an interactive native region tool) ──────────────────
 #[cfg(target_os = "linux")]
 mod platform {
@@ -317,6 +299,8 @@ mod platform {
 
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
+
+    use crate::paths::binary_on_path;
 
     /// Native region-capture tools we know how to drive, in preference order. The
     /// first one present on `PATH` is used when the global Screenshot app has no
@@ -441,16 +425,8 @@ mod platform {
         NATIVE_TOOLS
             .iter()
             .copied()
-            .find(|&tool| on_path(tool) && (tool != "grim" || on_path("slurp")))
+            .find(|&tool| binary_on_path(tool) && (tool != "grim" || binary_on_path("slurp")))
             .map(String::from)
-    }
-
-    /// Whether an executable named `name` exists on `PATH`.
-    fn on_path(name: &str) -> bool {
-        match std::env::var_os("PATH") {
-            Some(path) => std::env::split_paths(&path).any(|dir| dir.join(name).is_file()),
-            None => false,
-        }
     }
 
     pub fn basename(exec: &str) -> String {
@@ -877,12 +853,6 @@ mod tests {
         prune_stale_pending(dir);
         assert!(fresh.is_file());
         assert!(!stale.exists());
-    }
-
-    #[test]
-    fn civil_from_days_known_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(18_993), (2022, 1, 1));
     }
 
     #[cfg(target_os = "linux")]

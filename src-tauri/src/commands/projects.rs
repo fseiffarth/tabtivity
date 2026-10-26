@@ -363,15 +363,10 @@ pub(crate) fn conflict_message(conflict: &ProjectConflict) -> String {
     }
 }
 
+/// The registry as an owned list (reserved ids dropped): a copy of the cached
+/// read, [`crate::services::remote::projects`], for a caller that edits it.
 pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
-    let path = storage::projects_path();
-    if path.exists() {
-        let mut list: ProjectsList = storage::read_json(&path).map_err(|e| e.to_string())?;
-        drop_reserved_projects(&mut list);
-        Ok(list)
-    } else {
-        Ok(vec![])
-    }
+    crate::services::remote::projects().map(|list| ProjectsList::clone(&list))
 }
 
 /// Apply one serialized read-modify-write to the project registry. Existing
@@ -514,7 +509,7 @@ pub fn migrate_panel_prefs_once() {
     }
     let result = patch_projects_list(|list| {
         for entry in list.iter_mut() {
-            let Ok(project) = storage::read_json::<Value>(Path::new(&entry.local_file)) else {
+            let Ok(Some(project)) = storage::read_tree_json::<Value>(Path::new(&entry.local_file)) else {
                 continue;
             };
             for key in PANEL_PREF_KEYS {
@@ -553,13 +548,14 @@ pub(crate) fn patch_project_entry_mirrored<R>(
         Ok((result, entry.local_file.clone()))
     })?;
     let proj_path = PathBuf::from(&local_file);
-    if proj_path.exists() {
-        let mut project: Project = storage::read_json(&proj_path).map_err(|e| {
-            format!(
-                "the registry was updated, but the project's own project.json \
-                 could not be read to mirror the change (it is now stale): {e}"
-            )
-        })?;
+    // Never followed at the name or waited on (a FIFO): the file is the tree's.
+    let read = storage::read_tree_json::<Project>(&proj_path).map_err(|e| {
+        format!(
+            "the registry was updated, but the project's own project.json \
+             could not be read to mirror the change (it is now stale): {e}"
+        )
+    })?;
+    if let Some(mut project) = read {
         patch_project(&mut project, &result);
         storage::write_json_atomic(&proj_path, &project).map_err(|e| e.to_string())?;
     }
@@ -610,8 +606,15 @@ pub fn check_project_site(req: CheckProjectSiteRequest) -> Result<Option<Project
 /// sits at `directory`. The New-project dialog asks before Create so it can say
 /// the project can't be made there; advisory, like `check_project_site` —
 /// `create_project`'s own `claim_new_project_dir` is the gate.
+///
+/// A stat of a path the user typed (a network mount can hang it), so on a
+/// worker; a worker that fails reads as "nothing there", as before.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_folder_exists(directory: String) -> bool {
+pub async fn project_folder_exists(directory: String) -> bool {
+    app_core::rt::blocking("project", move || project_folder_exists_blocking(directory)).await.unwrap_or(false)
+}
+
+pub fn project_folder_exists_blocking(directory: String) -> bool {
     !directory.trim().is_empty() && fs::symlink_metadata(&directory).is_ok()
 }
 
@@ -974,12 +977,7 @@ pub async fn archive_project(project_id: String, archived_at: String) -> Result<
 pub fn archive_project_blocking(project_id: String, archived_at: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
 
-    let list = read_projects_list()?;
-    let idx = list
-        .iter()
-        .position(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
-    let entry = list[idx].clone();
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let remote = entry_is_remote(&entry);
 
     let dest = paths::archive_root().join(&project_id);
@@ -1062,12 +1060,7 @@ pub async fn forget_project(project_id: String) -> Result<(), String> {
 
 pub fn forget_project_blocking(project_id: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?
-        .clone();
+    let entry = crate::services::remote::project_entry(&project_id)?;
     if entry_is_vm(&entry) {
         return Err(concat!("A VM project's disk lives in ", crate::app_name!(), "'s state, so there is no folder to \
                     keep — use \"Delete project…\", which archives the disk with it.")
@@ -1244,25 +1237,24 @@ pub struct UnsyncedReport {
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
 /// Hookless: it inspects a mirror in the background.
 fn git_in(dir: &Path, args: &[&str]) -> String {
-    use crate::services::git_bounded::BoundedOutput;
-    crate::commands::git::hookless_git_command_in(dir, args)
-        .bounded_output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
+    crate::commands::git::stdout(None, dir, args).unwrap_or_default()
 }
 
 /// Inspect an archived remote project's mirror for commits that were never synced
 /// to its host, so the UI can warn before an irreversible permanent delete.
 /// Non-remote projects (and those without a mirror repo) report nothing to lose.
-// `(async)` on a sync fn: tauri runs the body on its blocking pool rather than
-// the main thread. It forks 3 + one `rev-list --count` per branch against the
-// mirror, which as a plain command stalled the window while the archive list's
-// delete warning loaded. Read-only and self-contained (no State/AppHandle), so
-// nothing depends on it running on the main thread; the body is unchanged.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn archived_mirror_unsynced(project_id: String) -> Result<UnsyncedReport, String> {
+///
+/// It forks 3 + one `rev-list --count` per branch against the mirror, which as
+/// a plain command stalled the window while the archive list's delete warning
+/// loaded, so the body runs on the blocking pool. (`tauri::command(async)` on
+/// the sync fn, as it was, only moved it onto an async-runtime worker: Tauri
+/// polls the body inside a spawned future, so the forks pinned that worker.)
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn archived_mirror_unsynced(project_id: String) -> Result<UnsyncedReport, String> {
+    app_core::rt::try_blocking("project", move || archived_mirror_unsynced_blocking(project_id)).await
+}
+
+fn archived_mirror_unsynced_blocking(project_id: String) -> Result<UnsyncedReport, String> {
     validate_project_id(&project_id)?;
     let none = UnsyncedReport {
         total: 0,
@@ -1371,9 +1363,13 @@ fn remote_head_sha(state: &crate::services::git_peer::GitPeerState) -> Option<St
 }
 
 /// Permanently delete an archived project: remove its archive folder and purge
-/// its time-tracking history. Irreversible.
+/// its time-tracking history. Irreversible. A whole tree goes, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn delete_archived_project(project_id: String) -> Result<(), String> {
+pub async fn delete_archived_project(project_id: String) -> Result<(), String> {
+    app_core::rt::try_blocking("project", move || delete_archived_project_blocking(project_id)).await
+}
+
+pub fn delete_archived_project_blocking(project_id: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
     let dest = paths::archive_root().join(&project_id);
     if dest.exists() {
@@ -1386,11 +1382,14 @@ pub fn delete_archived_project(project_id: String) -> Result<(), String> {
 
 /// Permanently delete every archived project (Settings "Clear archive").
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn clear_archive() -> Result<(), String> {
-    for archived in list_archived_projects()? {
-        delete_archived_project(archived.id)?;
-    }
-    Ok(())
+pub async fn clear_archive() -> Result<(), String> {
+    app_core::rt::try_blocking("project", || {
+        for archived in list_archived_projects()? {
+            delete_archived_project_blocking(archived.id)?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Update a project's description in both `projects.json` (the pill list) and
@@ -1578,8 +1577,16 @@ fn plan_dir_rename(
 
 /// Check what renaming a local project's folder to `leaf` would do (see
 /// [`ProjectDirRenamePlan`]). Read-only; backs the rename dialog's live line.
+/// It stats the project's folder and its siblings, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn plan_project_dir_rename(
+pub async fn plan_project_dir_rename(
+    project_id: String,
+    leaf: String,
+) -> Result<ProjectDirRenamePlan, String> {
+    app_core::rt::try_blocking("project", move || plan_project_dir_rename_blocking(project_id, leaf)).await
+}
+
+fn plan_project_dir_rename_blocking(
     project_id: String,
     leaf: String,
 ) -> Result<ProjectDirRenamePlan, String> {
@@ -1676,9 +1683,9 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
 
     // The registry is the source of truth; the rest is best effort, reported.
     let project_file = PathBuf::from(&updated.local_file);
-    if project_file.exists() {
-        let rewritten = storage::read_json::<Value>(&project_file)
-            .map_err(|e| e.to_string())
+    if fs::symlink_metadata(&project_file).is_ok() {
+        let rewritten = storage::read_tree_json::<Value>(&project_file)
+            .and_then(|v| v.ok_or_else(|| "project.json vanished".to_string()))
             .and_then(|mut v| {
                 if storage::rewrite_path_prefix(&mut v, old_s, new_s) {
                     storage::write_json_atomic(&project_file, &v).map_err(|e| e.to_string())
@@ -1791,17 +1798,25 @@ fn source_needs_decision(spec: &SandboxSpec, detected: &DetectedSpecSource) -> b
 /// that no longer matches the live detection (the file changed between the
 /// two calls, or the caller is answering a stale dialog) is refused the same
 /// way — `NeedsConfirmation` again, with the current source.
+///
+/// The detection reads and hashes the project's Dockerfile / devcontainer
+/// config, so the body runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_project_sandbox(
+pub async fn set_project_sandbox(
     project_id: String,
     enabled: bool,
     source_decision: Option<SandboxSourceDecision>,
 ) -> Result<SandboxToggleOutcome, String> {
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    app_core::rt::try_blocking("project", move || set_project_sandbox_blocking(project_id, enabled, source_decision))
+        .await
+}
+
+pub fn set_project_sandbox_blocking(
+    project_id: String,
+    enabled: bool,
+    source_decision: Option<SandboxSourceDecision>,
+) -> Result<SandboxToggleOutcome, String> {
+    let entry = crate::services::remote::project_entry(&project_id)?;
 
     // The trust tiers are exclusive (`docs/vm_projects_plan.md`): a project
     // living inside a VM must never also enable the Docker sandbox — the
@@ -1995,14 +2010,17 @@ fn write_project_sandbox_spec(project_id: &str, spec: &SandboxSpec) -> Result<()
 /// the image exist? For a missing image the report carries the shell command
 /// that provides it, so the frontend can run it in a fresh terminal tab
 /// (one-click, per house convention) instead of telling the user to do it.
-// `(async)` on a sync fn: the three docker probes (`docker --version`,
-// `docker info`, `docker image inspect`) run on tauri's blocking pool instead of
-// the main thread — `docker info` against a wedged daemon hangs rather than
-// failing, and froze the whole window with it. The probes themselves stay
-// unbounded, exactly as before; only the thread they block moved.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn sandbox_preflight(project_id: String) -> crate::services::sandbox::PreflightReport {
-    crate::services::sandbox::preflight_report(&project_id)
+///
+/// The three docker probes (`docker --version`, `docker info`, `docker image
+/// inspect`) run on the blocking pool — `docker info` against a wedged daemon
+/// hangs rather than failing, and on the main thread froze the whole window.
+/// (`tauri::command(async)` on the sync fn, as it was, ran them inside a future
+/// on an async-runtime worker, which such a hang pinned for good.) The probes
+/// themselves stay unbounded, exactly as before; only the thread they block
+/// moved. A pool that fails rejects, which both callers treat as "no advice".
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sandbox_preflight(project_id: String) -> Result<crate::services::sandbox::PreflightReport, String> {
+    app_core::rt::blocking("project", move || crate::services::sandbox::preflight_report(&project_id)).await
 }
 
 /// Set (or clear) the OpenVPN client config on a **remote** project's SSH spec,
@@ -2637,14 +2655,22 @@ pub fn set_project_categories(
 ///
 /// Returns the resulting `git_type`. Mirrors the change into both
 /// `projects.json` and `project.json`, like `set_project_sandbox`.
+///
+/// Removing `.git` or running `git init` takes seconds on a big repo, so the
+/// body runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<String, String> {
+pub async fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<String, String> {
+    app_core::rt::try_blocking("project", move || set_project_git_disabled_blocking(project_id, disabled)).await
+}
+
+pub fn set_project_git_disabled_blocking(project_id: String, disabled: bool) -> Result<String, String> {
+    // One toggle at a time. On the window's thread toggles queued; on workers a
+    // second click would run beside the first — a `git init` racing the
+    // `remove_dir_all` of the same `.git`, or two removals, one failing halfway.
+    static GIT_TOGGLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _toggle = GIT_TOGGLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // projects.json — locate the entry and resolve its on-disk directory.
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let directory = entry
         .directory()
         .map(PathBuf::from)
@@ -2673,11 +2699,8 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
             crate::services::git_init::init_repo(&directory)
                 .map_err(|e| format!("git init failed: {e}"))?;
         }
-        let gitignore = directory.join(".gitignore");
-        if !gitignore.exists() {
-            fs::write(&gitignore, GITIGNORE_DEFAULT)
-                .map_err(|e| format!("failed to write .gitignore: {e}"))?;
-        }
+        write_default_gitignore_if_missing(&directory)
+            .map_err(|e| format!("failed to write .gitignore: {e}"))?;
         "local".to_string()
     };
 
@@ -2698,10 +2721,18 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
 
 // ── Per-project project.json ───────────────────────────────────────────────
 
+///
+/// The file sits in the project tree, so it is read on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn load_project(local_file: String) -> Result<Project, String> {
+pub async fn load_project(local_file: String) -> Result<Project, String> {
+    app_core::rt::try_blocking("project", move || load_project_blocking(local_file)).await
+}
+
+pub fn load_project_blocking(local_file: String) -> Result<Project, String> {
     let path = PathBuf::from(&local_file);
-    let mut project: Project = storage::read_json(&path).map_err(|e| e.to_string())?;
+    // Never followed at the name or waited on (a FIFO an agent planted).
+    let mut project: Project = storage::read_tree_json(&path)?
+        .ok_or_else(|| format!("{}: No such file or directory", path.display()))?;
     if let Some(gt) = project.git_type.as_deref() {
         project.git_type = Some(normalize_git_type(gt));
     }
@@ -2781,13 +2812,17 @@ pub fn workspace_sync(
 
 /// Adopt the layout saved in the project **folder** (`.tabtivity/sessions/`) as this
 /// project's session state. Explicit user action only — see
-/// `terminal_service::adopt_project_tree_session`.
+/// `terminal_service::adopt_project_tree_session`. The layout is read from the
+/// project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn adopt_folder_tab_layout(
+pub async fn adopt_folder_tab_layout(
     project_id: String,
     local_file: String,
 ) -> Result<crate::schema::session::TerminalSession, String> {
-    crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
+    app_core::rt::try_blocking("project", move || {
+        crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
+    })
+    .await
 }
 
 /// Save only the tab layout — into `<state_dir>/sessions/<project_id>/`, plus the
@@ -2849,9 +2884,14 @@ pub fn remote_mirror_root_dir() -> String {
     paths::projects_ssh_root().to_string_lossy().to_string()
 }
 
-/// Open a directory in the OS file manager (Files/Finder/Explorer).
+/// Open a directory in the OS file manager (Files/Finder/Explorer). A stat and
+/// a launcher process, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn open_in_file_manager(path: String) -> Result<(), String> {
+pub async fn open_in_file_manager(path: String) -> Result<(), String> {
+    app_core::rt::try_blocking("project", move || open_in_file_manager_blocking(path)).await
+}
+
+fn open_in_file_manager_blocking(path: String) -> Result<(), String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("Not a directory: {path}"));
@@ -2874,8 +2914,14 @@ pub struct MirrorStatus {
     pub suggested: String,
 }
 
+///
+/// The mirror may sit on any mount, so its stat runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorStatus, String> {
+pub async fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorStatus, String> {
+    app_core::rt::try_blocking("project", move || remote_mirror_status_blocking(project_id, name)).await
+}
+
+fn remote_mirror_status_blocking(project_id: String, name: String) -> Result<MirrorStatus, String> {
     if crate::services::remote::remote_target_for(&project_id).is_none() {
         return Err("not a remote project".to_string());
     }
@@ -2892,9 +2938,14 @@ pub fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorSt
 /// and persist the choice in both `projects.json` (`extra["mirror"]`, the source
 /// of truth `remote_sync::mirror_dir` reads) and the project's `project.json`.
 /// Used when the user relocates a mirror whose folder was deleted. Returns the
-/// resolved absolute path.
+/// resolved absolute path. Creates a folder and writes `project.json`, so on a
+/// worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
+pub async fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
+    app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(project_id, path)).await
+}
+
+fn set_remote_mirror_dir_blocking(project_id: String, path: String) -> Result<String, String> {
     if crate::services::remote::remote_target_for(&project_id).is_none() {
         return Err("not a remote project".to_string());
     }
@@ -3151,8 +3202,13 @@ pub fn generated_dir_name(root: &Path, name: crate::brand::Name) -> String {
 /// The folder a save into the project at `project_dir` defaults to, for the
 /// dialogs that show it: `kind` is `"screenshots"` or `"emails"`. A directory
 /// that is not on this machine (a remote project's) answers the current name.
+/// Two stats in the project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_generated_dir(project_dir: String, kind: String) -> Result<String, String> {
+pub async fn project_generated_dir(project_dir: String, kind: String) -> Result<String, String> {
+    app_core::rt::try_blocking("project", move || project_generated_dir_blocking(project_dir, kind)).await
+}
+
+fn project_generated_dir_blocking(project_dir: String, kind: String) -> Result<String, String> {
     let name = match kind.as_str() {
         "screenshots" => crate::brand::Name::SCREENSHOTS_DIR,
         "emails" => crate::brand::Name::EMAILS_DIR,
@@ -3218,6 +3274,17 @@ pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
         git_scaffold_commit(dir);
     }
     Ok(())
+}
+
+/// The most of a scaffold doc read to tell a legacy stub from the user's own.
+const MAX_SCAFFOLD_DOC_BYTES: u64 = 4 << 20;
+
+/// A scaffold doc (`CLAUDE.md`, …) in the project tree as text, `None` for
+/// anything else: missing, a link, a FIFO (never waited on — the project
+/// list asks this of every project), too large or not UTF-8. `None` is never
+/// a stub, so nothing that is not a plain file of ours is rewritten.
+fn read_scaffold_doc(path: &Path) -> Option<String> {
+    crate::services::home_io::read_record_capped(path, MAX_SCAFFOLD_DOC_BYTES)
 }
 
 /// Create one scaffold file unless something — a file, a folder, a symlink,
@@ -3311,22 +3378,51 @@ fn git_head_unborn(dir: &Path) -> bool {
 /// The `GITIGNORE_DEFAULT` patterns absent from `dir/.gitignore` — a missing
 /// file reports every default. Read-only: this is the migration plan's preview
 /// of what `ensure_gitignore_defaults` would append.
+///
+/// Anything but a regular file at that name (a link, dangling or not, or a
+/// FIFO) is the project's and left alone, as every scaffold path is: it
+/// reports nothing, so the plan and the repair go on with their other steps
+/// instead of failing on it.
 fn missing_gitignore_lines_at(dir: &Path) -> std::io::Result<Vec<String>> {
     let defaults: Vec<&str> = GITIGNORE_DEFAULT
         .lines()
         .filter(|l| !l.is_empty())
         .collect();
     let path = dir.join(".gitignore");
-    if !path.exists() {
-        return Ok(defaults.into_iter().map(str::to_string).collect());
+    if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.file_type().is_file()) {
+        return Ok(Vec::new());
     }
-    let existing = fs::read_to_string(&path)?;
+    let Some(existing) = read_project_gitignore(&path)? else {
+        return Ok(defaults.into_iter().map(str::to_string).collect());
+    };
     let existing_lines: HashSet<&str> = existing.lines().collect();
     Ok(defaults
         .into_iter()
         .filter(|l| !existing_lines.contains(l))
         .map(str::to_string)
         .collect())
+}
+
+/// The most of a project's `.gitignore` Tabtivity reads (and so rewrites).
+const MAX_GITIGNORE_BYTES: u64 = 4 << 20;
+
+/// A project's `.gitignore` as text, `None` when there is none. The project
+/// tree is attacker-controlled (AGENTS.md): a link, FIFO or anything else
+/// that is not a regular file is refused, and the read never follows a link
+/// or blocks. Too large or not UTF-8 is refused too, never read as empty —
+/// every caller writes the result back.
+pub(crate) fn read_project_gitignore(path: &Path) -> std::io::Result<Option<String>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if !meta.file_type().is_file() => {
+            return Err(std::io::Error::other(".gitignore is not a regular file"));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    crate::services::home_io::read_record_capped(path, MAX_GITIGNORE_BYTES)
+        .map(Some)
+        .ok_or_else(|| std::io::Error::other(".gitignore is not a readable UTF-8 file of at most 4 MB"))
 }
 
 /// Append any `GITIGNORE_DEFAULT` pattern missing from `dir/.gitignore` to the
@@ -3340,11 +3436,10 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
         return Ok(vec![]);
     }
     let path = dir.join(".gitignore");
-    if !path.exists() {
-        fs::write(&path, GITIGNORE_DEFAULT)?;
+    let Some(mut updated) = read_project_gitignore(&path)? else {
+        write_no_follow(&path, GITIGNORE_DEFAULT.as_bytes(), true)?;
         return Ok(missing);
-    }
-    let mut updated = fs::read_to_string(&path)?;
+    };
     if !updated.is_empty() && !updated.ends_with('\n') {
         updated.push('\n');
     }
@@ -3352,8 +3447,17 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
         updated.push_str(line);
         updated.push('\n');
     }
-    fs::write(&path, updated)?;
+    write_no_follow(&path, updated.as_bytes(), false)?;
     Ok(missing)
+}
+
+/// Write the default `dir/.gitignore` unless there is something at that name
+/// — a dangling link included, whose target would land outside the project.
+fn write_default_gitignore_if_missing(dir: &Path) -> std::io::Result<()> {
+    match write_no_follow(&dir.join(".gitignore"), GITIGNORE_DEFAULT.as_bytes(), true) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
 }
 
 /// Make sure `dir/.gitignore` ignores one of Tabtivity's own generated folders
@@ -3387,18 +3491,10 @@ pub fn ensure_generated_dir_ignored(dir: &Path, folder: &str) -> std::io::Result
     // `.gitignore -> ~/.bashrc` would otherwise have this append a line to
     // whatever file the link names. Only a real file, or no file, is ours to
     // touch.
-    match fs::symlink_metadata(&path) {
-        Ok(meta) if !meta.file_type().is_file() => {
-            return Err(std::io::Error::other(".gitignore is not a regular file"));
-        }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            write_no_follow(&path, format!("{pattern}\n").as_bytes(), true)?;
-            return Ok(true);
-        }
-        Err(e) => return Err(e),
-    }
-    let existing = fs::read_to_string(&path)?;
+    let Some(existing) = read_project_gitignore(&path)? else {
+        write_no_follow(&path, format!("{pattern}\n").as_bytes(), true)?;
+        return Ok(true);
+    };
     if existing.lines().any(|line| line.trim() == pattern) {
         return Ok(false);
     }
@@ -3415,21 +3511,29 @@ pub fn ensure_generated_dir_ignored(dir: &Path, folder: &str) -> std::io::Result
 /// Write `bytes` to `path` without following a symlink at the final component:
 /// `create_new` refuses anything already there (a dangling link included), and
 /// otherwise `O_NOFOLLOW` refuses a link swapped in after the caller's check.
+/// A FIFO swapped in is refused without waiting for a reader (`O_NONBLOCK`:
+/// `ENXIO`), and an existing file is truncated only once the *opened* inode
+/// is known to be a regular file.
 pub fn write_no_follow(path: &Path, bytes: &[u8], create_new: bool) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = fs::OpenOptions::new();
     options.write(true);
     if create_new {
         options.create_new(true);
-    } else {
-        options.truncate(true);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    options.open(path)?.write_all(bytes)
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+    }
+    if !create_new {
+        file.set_len(0)?;
+    }
+    file.write_all(bytes)
 }
 
 /// Result of repairing one project's scaffold — which pieces were actually
@@ -3514,7 +3618,7 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
             continue;
         }
         // Only an agent doc still holding its untouched legacy stub is rewritten.
-        let Ok(existing) = fs::read_to_string(&p) else {
+        let Some(existing) = read_scaffold_doc(&p) else {
             continue;
         };
         if existing != *content && is_legacy_agent_stub(name, &existing) {
@@ -3573,12 +3677,28 @@ fn scaffold_is_missing_at(target: &Path, with_git: bool) -> bool {
         // An agent doc still holding its untouched legacy stub counts as
         // missing: a repair would change it, so the tag must not claim the
         // scaffold is complete (see `is_legacy_agent_stub`).
-        match fs::read_to_string(&p) {
-            Ok(existing) => is_legacy_agent_stub(name, &existing),
-            Err(_) => !p.exists(),
+        // Anything at the name counts as present — a dangling link too —
+        // because that is what `write_scaffold_file` keeps: `exists()` would
+        // call it missing for good, as no repair ever writes it.
+        match read_scaffold_doc(&p) {
+            Some(existing) => is_legacy_agent_stub(name, &existing),
+            None => fs::symlink_metadata(&p).is_err(),
         }
-    }) || (with_git && !target.join(".gitignore").exists())
-        || !target.join(".claude/settings.json").exists()
+    }) || (with_git && fs::symlink_metadata(target.join(".gitignore")).is_err())
+        || !claude_settings_present(target)
+}
+
+/// Whether `.claude/settings.json` is there by the rule the scaffold keeps
+/// (`scaffold_claude_dir`, `write_scaffold_file`): a `.claude` that is not a
+/// plain folder (a link, dangling or not) is left alone, and so is anything at
+/// `settings.json`. Either counts as present, or no repair would ever clear it.
+fn claude_settings_present(target: &Path) -> bool {
+    let dot_claude = target.join(".claude");
+    match fs::symlink_metadata(&dot_claude) {
+        Ok(meta) if meta.is_dir() => fs::symlink_metadata(dot_claude.join("settings.json")).is_ok(),
+        Ok(_) => true,
+        Err(_) => false,
+    }
 }
 
 /// A single project's scaffold-repair outcome, for the "Repair scaffold
@@ -3596,13 +3716,12 @@ pub struct ProjectScaffoldRepair {
 /// pattern, or `.claude/settings.json` that is missing relative to current
 /// defaults. Safe to run repeatedly — every step is additive/idempotent.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let entry = list
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+pub async fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
+    app_core::rt::try_blocking("project", move || repair_project_scaffold_blocking(project_id)).await
+}
+
+pub fn repair_project_scaffold_blocking(project_id: String) -> Result<ProjectScaffoldRepair, String> {
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let (target, with_git) = scaffold_target_for_entry(&entry)
         .ok_or_else(|| "Project has no local scaffold target".to_string())?;
     let report = repair_project_scaffold_at(&target, with_git).map_err(|e| e.to_string())?;
@@ -3618,16 +3737,17 @@ pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepa
 /// counterpart to `repair_project_scaffold`. Projects whose local target
 /// directory doesn't exist yet (e.g. a remote project whose mirror hasn't
 /// materialized) are silently skipped rather than erroring the whole batch.
-/// Returns only the projects that actually needed a repair.
+/// Returns only the projects that actually needed a repair. Every project's
+/// tree is read and written, so the pass runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, String> {
-    let list_path = storage::projects_path();
-    if !list_path.exists() {
-        return Ok(vec![]);
-    }
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
+pub async fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, String> {
+    app_core::rt::try_blocking("project", repair_all_project_scaffolds_blocking).await
+}
+
+pub fn repair_all_project_scaffolds_blocking() -> Result<Vec<ProjectScaffoldRepair>, String> {
+    let list = crate::services::remote::projects()?;
     let mut results = Vec::new();
-    for entry in &list {
+    for entry in list.iter() {
         let Some((target, with_git)) = scaffold_target_for_entry(entry) else {
             continue;
         };
@@ -3744,8 +3864,14 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
     items
 }
 
+/// What an import of `source_dir` would add (see [`scaffold_preview`]). A stat
+/// per scaffold file in a folder the user picked, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
+pub async fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
+    app_core::rt::try_blocking("project", move || preview_project_scaffold_blocking(source_dir)).await
+}
+
+fn preview_project_scaffold_blocking(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
     let source = PathBuf::from(source_dir);
     if !source.is_dir() {
         return Err("Source folder does not exist".to_string());
@@ -3768,15 +3894,15 @@ fn agents_empty_at(target: &Path) -> bool {
 /// `agents_empty_at`) — drives the one-time agent-tab card that asks the user
 /// to describe the project. A project with no materialized local scaffold
 /// target yet (e.g. a remote project whose mirror hasn't been created)
-/// reports `false` rather than a spurious "empty".
+/// reports `false` rather than a spurious "empty". Reads the project tree, so
+/// on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_agents_empty(project_id: String) -> Result<bool, String> {
-    let list_path = storage::projects_path();
-    if !list_path.exists() {
-        return Ok(false);
-    }
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let Some(entry) = list.into_iter().find(|p| p.id == project_id) else {
+pub async fn project_agents_empty(project_id: String) -> Result<bool, String> {
+    app_core::rt::try_blocking("project", move || project_agents_empty_blocking(project_id)).await
+}
+
+fn project_agents_empty_blocking(project_id: String) -> Result<bool, String> {
+    let Some(entry) = crate::services::remote::projects()?.iter().find(|p| p.id == project_id).cloned() else {
         return Ok(false);
     };
     let Some((target, _)) = scaffold_target_for_entry(&entry) else {
@@ -3796,15 +3922,14 @@ pub fn project_agents_empty(project_id: String) -> Result<bool, String> {
 /// `.git` is likewise excluded: git presence is the separate `git_type` axis. A
 /// project with no materialized local scaffold target yet (e.g. a remote project
 /// whose mirror hasn't been created) reports `false` rather than a spurious
-/// "missing".
+/// "missing". Reads the project tree, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_scaffold_missing(project_id: String) -> Result<bool, String> {
-    let list_path = storage::projects_path();
-    if !list_path.exists() {
-        return Ok(false);
-    }
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let Some(entry) = list.into_iter().find(|p| p.id == project_id) else {
+pub async fn project_scaffold_missing(project_id: String) -> Result<bool, String> {
+    app_core::rt::try_blocking("project", move || project_scaffold_missing_blocking(project_id)).await
+}
+
+fn project_scaffold_missing_blocking(project_id: String) -> Result<bool, String> {
+    let Some(entry) = crate::services::remote::projects()?.iter().find(|p| p.id == project_id).cloned() else {
         return Ok(false);
     };
     let Some((target, with_git)) = scaffold_target_for_entry(&entry) else {
@@ -3886,8 +4011,8 @@ fn migration_steps_at(dir: &Path, with_git: bool) -> std::io::Result<Vec<Migrati
     let mut steps = Vec::new();
     for (name, content) in SCAFFOLD_FILES {
         let p = dir.join(name);
-        match fs::read_to_string(&p) {
-            Ok(existing) => {
+        match read_scaffold_doc(&p) {
+            Some(existing) => {
                 if existing != *content && is_legacy_agent_stub(name, &existing) {
                     steps.push(MigrationStep {
                         id: format!("stub:{name}"),
@@ -3897,7 +4022,7 @@ fn migration_steps_at(dir: &Path, with_git: bool) -> std::io::Result<Vec<Migrati
                     });
                 }
             }
-            Err(_) => {
+            None => {
                 if !p.exists() {
                     steps.push(MigrationStep {
                         id: format!("file:{name}"),
@@ -3959,7 +4084,7 @@ fn apply_migration_steps_at(
                 report.created_files.push((*name).to_string());
             }
         } else if accepted.contains(&format!("stub:{name}")) {
-            if let Ok(existing) = fs::read_to_string(&p) {
+            if let Some(existing) = read_scaffold_doc(&p) {
                 if existing != *content && is_legacy_agent_stub(name, &existing) {
                     write_no_follow(&p, content.as_bytes(), false)?;
                     report.updated_files.push((*name).to_string());
@@ -3988,15 +4113,14 @@ fn apply_migration_steps_at(
 
 /// Dry-run for the "Migrate project" dialog: everything an old project is
 /// missing relative to the current Tabtivity state, one step per piece. Changes
-/// nothing.
+/// nothing. Every scaffold file of the project tree is read, so on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let entry = list
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+pub async fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
+    app_core::rt::try_blocking("project", move || project_migration_plan_blocking(project_id)).await
+}
+
+pub fn project_migration_plan_blocking(project_id: String) -> Result<MigrationPlan, String> {
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let mut steps = Vec::new();
     let entry_details = entry_migration_details(&entry);
     if !entry_details.is_empty() {
@@ -4024,8 +4148,16 @@ pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, Strin
 
 /// Apply the steps the user accepted (by id, from `project_migration_plan`).
 /// Declined steps are simply absent from `accepted` and nothing runs for them.
+/// The scaffold step writes into the project tree, so the body runs on a worker.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn project_migration_apply(
+pub async fn project_migration_apply(
+    project_id: String,
+    accepted: Vec<String>,
+) -> Result<MigrationApplyReport, String> {
+    app_core::rt::try_blocking("project", move || project_migration_apply_blocking(project_id, accepted)).await
+}
+
+pub fn project_migration_apply_blocking(
     project_id: String,
     accepted: Vec<String>,
 ) -> Result<MigrationApplyReport, String> {
@@ -4036,18 +4168,13 @@ pub fn project_migration_apply(
             let entry = list
                 .iter_mut()
                 .find(|p| p.id == project_id)
-                .ok_or_else(|| "Project not found".to_string())?;
+                .ok_or_else(|| format!("project '{project_id}' not found"))?;
             Ok(normalize_entry(entry))
         })?;
     }
     // Re-read after the entry step: normalization can backfill the very
     // `directory` the scaffold target resolves from.
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
-    let entry = list
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+    let entry = crate::services::remote::project_entry(&project_id)?;
     let mut report = ScaffoldRepairReport::default();
     if let Some((target, with_git)) = scaffold_target_for_entry(&entry) {
         if target.is_dir() {
@@ -4557,6 +4684,9 @@ fn finish_import(
         return Err(conflict_message(&conflict));
     }
 
+    // Read before anything is written, so a refused one stops a clean import.
+    let adopted = project_json_to_adopt(&project_file)?;
+
     let mut git_type = normalize_git_type(req.git_type.as_deref().unwrap_or("local"));
 
     // Scaffold only LOCAL imports onto their (local) tree. A remote import's
@@ -4625,8 +4755,7 @@ fn finish_import(
         let _ = std::fs::create_dir_all(mirror);
     }
 
-    let project = if project_file.exists() {
-        let mut existing: Project = storage::read_json(&project_file).unwrap_or_default();
+    let project = if let Some(mut existing) = adopted {
         // The adopted `project.json` came with the folder — a foreign repository, a
         // clone, a fork, or a tree someone else wrote — so anything in it that
         // Tabtivity would later read back as *executable intent* must not be adopted
@@ -4705,21 +4834,50 @@ pub struct ExtendProjectRemoteRequest {
 /// local `mirror` (working copy) in place — files never move — and its `directory`
 /// becomes a local state dir holding `project.json`. The user pushes files to the
 /// (empty) host later via the existing manual sync UI.
+///
+/// The ssh `mkdir`, the file moves and a scaffold commit run on a worker (the
+/// `*_blocking` halves), not on the async runtime's threads, which inline they
+/// held for seconds. Only the host-bound state clear between them is async: it
+/// waits on the project's sync lock, polled rather than held on a pool thread.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extend_project_to_remote(
     ctx: Ctx,
     req: ExtendProjectRemoteRequest,
 ) -> Result<ProjectEntry, String> {
     let manifest = ctx.get::<SyncManifestState>();
+    let prep = app_core::rt::try_blocking("project", move || extend_prepare_blocking(req)).await?;
+    // This project may have been remote before (detached, and now pointed at a different
+    // host — the ordinary way to correct a wrong path). The state dir is keyed by id, so
+    // any host-bound state from that earlier life is sitting right here. Clear it before
+    // we write the new pairing: a manifest describing the OLD host makes byte-sync refuse
+    // to push to the new one while the file tree reports green. Detach clears it too; this
+    // is the belt-and-braces that also rescues a project detached by an older build, which
+    // could not clear it (`remove_dir` cannot empty a non-empty directory).
+    clear_host_bound_state(&prep.req.project_id, manifest).await;
+    app_core::rt::try_blocking("project", move || extend_finish_blocking(prep)).await
+}
+
+/// What [`extend_prepare_blocking`] read and made, for [`extend_finish_blocking`].
+struct ExtendPrep {
+    req: ExtendProjectRemoteRequest,
+    name: String,
+    old_dir: String,
+    old_path: PathBuf,
+    git_backed: bool,
+    project: Project,
+    state_dir: PathBuf,
+    new_directory: String,
+}
+
+/// The guards and reads of [`extend_project_to_remote`], then its first side
+/// effects (the remote root, the state dir) — in that order, so a refused or
+/// unreadable `project.json` stops extend before anything is touched.
+fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
+    let entry = crate::services::remote::project_entry(&req.project_id)?;
     let list = read_projects_list()?;
 
-    let idx = list
-        .iter()
-        .position(|p| p.id == req.project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
-
     // Guard: only local projects can be extended.
-    if list[idx].extra.contains_key("remote") {
+    if entry.extra.contains_key("remote") {
         return Err("Project is already remote".to_string());
     }
 
@@ -4737,12 +4895,12 @@ pub async fn extend_project_to_remote(
     }
 
     // The current local tree becomes the mirror (working copy), unchanged.
-    let old_dir = entry_directory(&list[idx])
+    let old_dir = entry_directory(&entry)
         .ok_or_else(|| "Project has no local directory".to_string())?;
 
     // Whether this project carries git — only then is lockstep meaningful. `none`
     // (or a missing tag) means no repo to keep in step, so we leave lockstep off.
-    let git_backed = list[idx]
+    let git_backed = entry
         .extra
         .get("git_type")
         .and_then(Value::as_str)
@@ -4752,6 +4910,12 @@ pub async fn extend_project_to_remote(
     if !old_path.is_dir() {
         return Err(format!("Local directory '{old_dir}' does not exist"));
     }
+
+    // The project.json this moves into the state dir, read before anything is
+    // touched: one that is refused or does not parse stops extend cleanly.
+    // Read the existing one so tabs/time/created_at/etc. survive.
+    let old_project_file = old_path.join("project.json");
+    let project = read_project_to_move(&old_project_file)?;
 
     // Best-effort create the empty remote root — same as create_project. Failure
     // is non-fatal (key/agent-auth hosts may need it to pre-exist; a password-auth
@@ -4767,26 +4931,28 @@ pub async fn extend_project_to_remote(
     let state_dir = remote_project_state_dir(&req.project_id);
     std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
     let new_directory = state_dir.to_string_lossy().to_string();
+    Ok(ExtendPrep {
+        name: entry.name.clone(),
+        req,
+        old_dir,
+        old_path,
+        git_backed,
+        project,
+        state_dir,
+        new_directory,
+    })
+}
 
-    // This project may have been remote before (detached, and now pointed at a different
-    // host — the ordinary way to correct a wrong path). The state dir is keyed by id, so
-    // any host-bound state from that earlier life is sitting right here. Clear it before
-    // we write the new pairing: a manifest describing the OLD host makes byte-sync refuse
-    // to push to the new one while the file tree reports green. Detach clears it too; this
-    // is the belt-and-braces that also rescues a project detached by an older build, which
-    // could not clear it (`remove_dir` cannot empty a non-empty directory).
-    clear_host_bound_state(&req.project_id, manifest).await;
+/// The rest of [`extend_project_to_remote`], after the host-bound state is
+/// cleared: the moved `project.json`, the registry entry, lockstep.
+fn extend_finish_blocking(prep: ExtendPrep) -> Result<ProjectEntry, String> {
+    let ExtendPrep { req, name, old_dir, old_path, git_backed, mut project, state_dir, new_directory } = prep;
+    let old_project_file = old_path.join("project.json");
 
     // Move project.json from the old (now mirror) tree into the state dir, tagging
-    // it remote. Read the existing one so tabs/time/created_at/etc. survive.
-    let old_project_file = old_path.join("project.json");
-    let mut project: Project = if old_project_file.exists() {
-        storage::read_json(&old_project_file).unwrap_or_default()
-    } else {
-        Project::default()
-    };
+    // it remote.
     project.id = req.project_id.clone();
-    project.name = list[idx].name.clone();
+    project.name = name;
     project.directory = new_directory.clone();
     project.remote = Some(req.remote.clone());
     project.mirror = Some(old_dir.clone());
@@ -4810,7 +4976,7 @@ pub async fn extend_project_to_remote(
         let entry = list
             .iter_mut()
             .find(|entry| entry.id == req.project_id)
-            .ok_or_else(|| "Project not found".to_string())?;
+            .ok_or_else(|| format!("project '{}' not found", req.project_id))?;
         if entry.extra.contains_key("remote") {
             return Err("Project is already remote".to_string());
         }
@@ -4870,26 +5036,48 @@ pub async fn extend_project_to_remote(
 /// its id, tabs, time, categories, git metadata, etc.
 ///
 /// Errors if the project isn't remote, or has no local mirror to fall back to.
+///
+/// The file moves run on a worker (the `*_blocking` halves); only the
+/// host-bound state clear between them is async (the project's sync lock).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_project_from_remote(
     ctx: Ctx,
     project_id: String,
 ) -> Result<ProjectEntry, String> {
     let manifest = ctx.get::<SyncManifestState>();
-    let list = read_projects_list()?;
+    let prep = app_core::rt::try_blocking("project", move || detach_prepare_blocking(project_id)).await?;
 
-    let idx = list
-        .iter()
-        .position(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
+    // Drop everything that was bound to the host we are detaching from. Not merely
+    // hygiene: the project keeps its id, so a later "extend to remote" — the whole point
+    // of detaching, when the old path was wrong — lands on this same state dir and would
+    // otherwise inherit a byte-sync manifest whose bases describe the OLD host. See
+    // `clear_host_bound_state` for what that silently does to the new one.
+    clear_host_bound_state(&prep.project_id, manifest).await;
+
+    app_core::rt::try_blocking("project", move || detach_finish_blocking(prep)).await
+}
+
+/// What [`detach_prepare_blocking`] wrote, for [`detach_finish_blocking`].
+struct DetachPrep {
+    project_id: String,
+    mirror: String,
+    new_project_file: PathBuf,
+    state_local_file: String,
+    state_dir: PathBuf,
+}
+
+/// The guards of [`detach_project_from_remote`], then `project.json` moved
+/// back into the mirror and the saved tabs re-pointed at it.
+fn detach_prepare_blocking(project_id: String) -> Result<DetachPrep, String> {
+    let entry = crate::services::remote::project_entry(&project_id)?;
 
     // Guard: only remote projects can be detached.
-    if !list[idx].extra.contains_key("remote") {
+    if !entry.extra.contains_key("remote") {
         return Err("Project is not remote".to_string());
     }
 
     // The local mirror (working copy) becomes the project directory again.
-    let mirror = list[idx]
+    let mirror = entry
         .extra
         .get("mirror")
         .and_then(Value::as_str)
@@ -4903,14 +5091,10 @@ pub async fn detach_project_from_remote(
     // Move project.json from the state dir back into the (now local) tree,
     // dropping the remote/mirror fields. Read the existing one so tabs/time/
     // created_at/etc. survive.
-    let state_local_file = list[idx].local_file.clone();
-    let mut project: Project = if PathBuf::from(&state_local_file).exists() {
-        storage::read_json(&PathBuf::from(&state_local_file)).unwrap_or_default()
-    } else {
-        Project::default()
-    };
+    let state_local_file = entry.local_file.clone();
+    let mut project = read_project_to_move(Path::new(&state_local_file))?;
     project.id = project_id.clone();
-    project.name = list[idx].name.clone();
+    project.name = entry.name.clone();
     project.directory = mirror.clone();
     project.remote = None;
     project.mirror = None;
@@ -4933,7 +5117,6 @@ pub async fn detach_project_from_remote(
     // layout used to be keyed by `local_file`, so a detach swapped which file was
     // authoritative and the mirror's leftover copy silently won.)
     let state_dir = remote_project_state_dir(&project_id);
-    let state_dir_s = state_dir.to_string_lossy().to_string();
     let new_local_file = new_project_file.to_string_lossy().to_string();
     // project-tree-read: ok — the state-dir `TerminalSession`, edited in place
     // by project id through the workspace service (which moves the scope's
@@ -4942,24 +5125,23 @@ pub async fn detach_project_from_remote(
     if !crate::services::terminal_service::load_terminal_session(&project_id).tab_layout.is_empty() {
         let _ = crate::services::workspace::edit(&project_id, &new_local_file, |session| {
             for tab in session.tab_layout.iter_mut() {
-                if tab.cwd == state_dir_s {
-                    tab.cwd = mirror.clone();
-                } else if let Some(rest) = tab.cwd.strip_prefix(&format!("{state_dir_s}/")) {
-                    tab.cwd = format!("{mirror}/{rest}");
+                if let Some(cwd) = rehome_tab_cwd(&tab.cwd, &state_dir, &mirror) {
+                    tab.cwd = cwd;
                 }
             }
             Ok(())
         });
     }
+    Ok(DetachPrep { project_id, mirror, new_project_file, state_local_file, state_dir })
+}
 
-    // Drop everything that was bound to the host we are detaching from. Not merely
-    // hygiene: the project keeps its id, so a later "extend to remote" — the whole point
-    // of detaching, when the old path was wrong — lands on this same state dir and would
-    // otherwise inherit a byte-sync manifest whose bases describe the OLD host. See
-    // `clear_host_bound_state` for what that silently does to the new one.
-    clear_host_bound_state(&project_id, manifest).await;
-
-    // Remove the old state-dir project.json, its session mirror, and then the state dir.
+/// The rest of [`detach_project_from_remote`], after the host-bound state is
+/// cleared: the registry entry re-pointed, then the state dir dropped.
+fn detach_finish_blocking(prep: DetachPrep) -> Result<ProjectEntry, String> {
+    let DetachPrep { project_id, mirror, new_project_file, state_local_file, state_dir } = prep;
+    // Update the projects.json entry in place, preserving every other extra key
+    // (categories, git_provider, git_type, description, sandbox, …); only then
+    // remove the old state-dir project.json, its session mirror, and the state dir.
     // `.tabtivity/` is why the dir used to survive every detach: `remove_dir` is
     // non-recursive, so it failed on a dir that still held the session mirror, and the
     // project's id was left lying around under `remote-projects/` forever.
@@ -4969,24 +5151,69 @@ pub async fn detach_project_from_remote(
     // mirror, and the user may not have seen it yet). A dir that still holds it must
     // survive; `remove_dir` succeeds only once the dir is genuinely empty, which is
     // exactly that distinction.
-    let _ = std::fs::remove_file(&state_local_file);
-    let _ = std::fs::remove_dir_all(state_dir.join(crate::brand::PROJECT_DIR));
-    let _ = std::fs::remove_dir(&state_dir);
+    repoint_then_drop_state(
+        || {
+            patch_project_entry(&project_id, |entry| {
+                if !entry.extra.contains_key("remote") {
+                    return Err("Project is not remote".to_string());
+                }
+                entry.local_file = new_project_file.to_string_lossy().to_string();
+                entry
+                    .extra
+                    .insert("directory".to_string(), Value::String(mirror));
+                entry.extra.remove("remote");
+                entry.extra.remove("mirror");
+                Ok(entry.clone())
+            })
+        },
+        Path::new(&state_local_file),
+        &state_dir,
+    )
+}
 
-    // Update the projects.json entry in place, preserving every other extra key
-    // (categories, git_provider, git_type, description, sandbox, …).
-    let updated = patch_project_entry(&project_id, |entry| {
-        if !entry.extra.contains_key("remote") {
-            return Err("Project is not remote".to_string());
-        }
-        entry.local_file = new_project_file.to_string_lossy().to_string();
-        entry
-            .extra
-            .insert("directory".to_string(), Value::String(mirror));
-        entry.extra.remove("remote");
-        entry.extra.remove("mirror");
-        Ok(entry.clone())
-    })?;
+/// The folder's own `project.json` an import adopts, `Ok(None)` when there is
+/// none. Read without following a link or waiting on a FIFO; one that is
+/// refused — a link, a FIFO, one too large or not UTF-8 — is an error, since
+/// the import writes its project over it: taken for blank, a regular file past
+/// the size cap would lose its time and description. One that does not parse
+/// is replaced by a blank project, as it always was.
+fn project_json_to_adopt(path: &Path) -> Result<Option<Project>, String> {
+    Ok(storage::read_tree_json_text(path)?.map(|text| serde_json::from_str(&text).unwrap_or_default()))
+}
+
+/// The `project.json` extend or detach moves, or a fresh one when there is
+/// none. The original is deleted once the copy is written, so a file that
+/// is refused or does not parse is an error, never a blank project (which
+/// would lose its time, created_at and description).
+fn read_project_to_move(path: &Path) -> Result<Project, String> {
+    storage::read_tree_json(path).map(Option::unwrap_or_default)
+}
+
+/// A saved tab's cwd under the remote state dir, re-pointed at the same place
+/// under `mirror`; `None` for a cwd elsewhere. Compared by path components, so
+/// either separator matches on Windows.
+fn rehome_tab_cwd(cwd: &str, state_dir: &Path, mirror: &str) -> Option<String> {
+    let rest = Path::new(cwd).strip_prefix(state_dir).ok()?;
+    if rest.as_os_str().is_empty() {
+        Some(mirror.to_string())
+    } else {
+        Some(Path::new(mirror).join(rest).to_string_lossy().into_owned())
+    }
+}
+
+/// Detach's last step: `repoint` the registry entry at the mirror, then drop
+/// the state-dir `project.json`, its session mirror and (once empty) the
+/// state dir. In that order, like extend: a refused patch or a crash leaves
+/// a harmless leftover, never a registry entry pointing at a deleted file.
+fn repoint_then_drop_state<R>(
+    repoint: impl FnOnce() -> Result<R, String>,
+    state_local_file: &Path,
+    state_dir: &Path,
+) -> Result<R, String> {
+    let updated = repoint()?;
+    let _ = std::fs::remove_file(state_local_file);
+    let _ = std::fs::remove_dir_all(state_dir.join(crate::brand::PROJECT_DIR));
+    let _ = std::fs::remove_dir(state_dir);
     Ok(updated)
 }
 
@@ -5187,17 +5414,7 @@ mod tests {
     /// it still works from both ends.
     #[test]
     fn a_renamed_folder_repairs_the_worktree_inside_it() {
-        fn git(dir: &Path, args: &[&str]) -> String {
-            let out = crate::commands::git::hardened_git_command_in(dir, args)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
-                .output()
-                .expect("git runs");
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
+        use crate::test_util::git;
         let tmp = tempfile::tempdir().unwrap();
         // Resolved (macOS' /var symlink), without Windows' `\\?\` prefix.
         let root = PathBuf::from(crate::commands::fs::display_path(&tmp.path().canonicalize().unwrap()));
@@ -6206,8 +6423,8 @@ mod tests {
         // An unchanged name is answered without a second lookup.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(generated_dir_name_for(&PAIR, dir.path(), name), PAIR.cur(name));
-        assert_eq!(project_generated_dir(dir.path().to_string_lossy().into_owned(), "emails".into()).unwrap(), EMAILS_DIR);
-        assert!(project_generated_dir(String::new(), "other".into()).is_err());
+        assert_eq!(project_generated_dir_blocking(dir.path().to_string_lossy().into_owned(), "emails".into()).unwrap(), EMAILS_DIR);
+        assert!(project_generated_dir_blocking(String::new(), "other".into()).is_err());
     }
 
     #[test]
@@ -6254,6 +6471,258 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
         assert!(ensure_generated_dir_ignored(dir.path(), EMAILS_DIR).is_err());
         assert!(!elsewhere.exists());
+    }
+
+    /// Scaffold repair appends the default patterns to the project's own
+    /// `.gitignore`: a committed `.gitignore -> ~/.bashrc` must not get them.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_gitignore_defaults_never_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, "precious\n").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).unwrap();
+        assert_eq!(ensure_gitignore_defaults(dir.path()).unwrap(), Vec::<String>::new());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious\n");
+
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
+        assert_eq!(ensure_gitignore_defaults(dir.path()).unwrap(), Vec::<String>::new());
+        assert!(!elsewhere.exists());
+    }
+
+    /// A planted FIFO `.gitignore` is left alone, never waited on.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_gitignore_is_left_alone_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::services::home_io::mkfifo(&dir.path().join(".gitignore"));
+        let root = dir.path().to_path_buf();
+        assert!(crate::services::home_io::within_deadline(move || missing_gitignore_lines_at(&root)).unwrap().is_empty());
+        let root = dir.path().to_path_buf();
+        assert!(crate::services::home_io::within_deadline(move || ensure_gitignore_defaults(&root)).unwrap().is_empty());
+    }
+
+    /// A linked `.gitignore` is left alone like every scaffold path, not a
+    /// failure of the whole repair or migration plan: the other steps
+    /// (`.claude/settings.json`) still run, and the project stops reading as
+    /// missing its scaffold once they have.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_gitignore_does_not_stop_the_rest_of_the_scaffold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        fs::create_dir(&dir).unwrap();
+        fs::create_dir(dir.join(".git")).unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".gitignore")).unwrap();
+
+        let steps = migration_steps_at(&dir, true).unwrap();
+        assert!(!steps.iter().any(|step| step.id == "gitignore"));
+        assert!(steps.iter().any(|step| step.id == "claude_settings"));
+
+        let report = repair_project_scaffold_at(&dir, true).unwrap();
+        assert!(report.gitignore_lines_added.is_empty());
+        assert!(dir.join(".claude").join("settings.json").is_file());
+        assert!(!elsewhere.exists());
+        assert!(!scaffold_is_missing_at(&dir, true), "a dangling link counts as present");
+
+        // A dangling `.claude` or `settings.json` link is left alone by the
+        // repair, so it must not read as missing for good either.
+        fs::remove_dir_all(dir.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".claude")).unwrap();
+        repair_project_scaffold_at(&dir, true).unwrap();
+        assert!(!scaffold_is_missing_at(&dir, true), "a linked .claude is left alone");
+        fs::remove_file(dir.join(".claude")).unwrap();
+        fs::create_dir(dir.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".claude").join("settings.json")).unwrap();
+        repair_project_scaffold_at(&dir, true).unwrap();
+        assert!(!scaffold_is_missing_at(&dir, true), "a dangling settings.json is left alone");
+        assert!(!elsewhere.exists());
+    }
+
+    /// Re-enabling git writes the default `.gitignore` only where there is
+    /// nothing: a dangling link would otherwise create its target outside the
+    /// project.
+    #[cfg(unix)]
+    #[test]
+    fn the_default_gitignore_is_never_written_through_a_dangling_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(".gitignore")).unwrap();
+        let _ = write_default_gitignore_if_missing(dir.path());
+        assert!(!elsewhere.exists());
+
+        let dir = tempfile::tempdir().unwrap();
+        write_default_gitignore_if_missing(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join(".gitignore")).unwrap(), GITIGNORE_DEFAULT);
+        fs::write(dir.path().join(".gitignore"), "mine\n").unwrap();
+        write_default_gitignore_if_missing(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join(".gitignore")).unwrap(), "mine\n");
+    }
+
+    /// Extend and detach delete the `project.json` they move: one that does not
+    /// parse must stop them, not be replaced by a blank project (losing its
+    /// time, created_at and description).
+    #[test]
+    fn an_unparsable_project_json_stops_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("project.json");
+        assert_eq!(read_project_to_move(&file).unwrap().id, Project::default().id);
+        fs::write(&file, "{ not json").unwrap();
+        assert!(read_project_to_move(&file).is_err());
+        fs::write(&file, r#"{"id":"p1","name":"P","directory":"d","description":"kept"}"#).unwrap();
+        let project = read_project_to_move(&file).unwrap();
+        assert_eq!(project.description.as_deref(), Some("kept"));
+    }
+
+    /// Extend reads the `project.json` it moves out of the project folder: a
+    /// link there is not read through (its target would be adopted into the
+    /// state dir), a dangling one is not taken for "none", and a FIFO is
+    /// refused without waiting on it.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_project_json_stops_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        fs::write(&elsewhere, r#"{"id":"x","name":"X","directory":"d","description":"not yours"}"#).unwrap();
+        let linked = dir.path().join("project.json");
+        std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+        assert!(read_project_to_move(&linked).is_err());
+        fs::remove_file(&elsewhere).unwrap();
+        assert!(read_project_to_move(&linked).is_err(), "a dangling link is not a missing file");
+
+        let fifo = dir.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || read_project_to_move(&fifo)).is_err());
+    }
+
+    /// An import writes its project over the folder's `project.json`: a
+    /// regular one past the size cap must stop it, not be taken for blank and
+    /// overwritten (losing its time and description). One that does not parse
+    /// is still replaced by a blank project, as it always was.
+    #[test]
+    fn an_oversized_project_json_stops_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("project.json");
+        assert!(project_json_to_adopt(&file).unwrap().is_none());
+        fs::write(&file, r#"{"id":"p1","name":"P","directory":"d","description":"kept"}"#).unwrap();
+        assert_eq!(project_json_to_adopt(&file).unwrap().unwrap().description.as_deref(), Some("kept"));
+        fs::write(&file, "{ not json").unwrap();
+        assert_eq!(project_json_to_adopt(&file).unwrap().unwrap().id, Project::default().id);
+
+        // Sparse: past the cap without writing 64 MB.
+        let big = fs::File::create(&file).unwrap();
+        big.set_len(storage::MAX_TREE_JSON_BYTES + 1).unwrap();
+        drop(big);
+        assert!(project_json_to_adopt(&file).is_err());
+        assert_eq!(fs::metadata(&file).unwrap().len(), storage::MAX_TREE_JSON_BYTES + 1);
+    }
+
+    /// A linked or FIFO `project.json` stops the import too (the write would
+    /// refuse it anyway), and `load_project` refuses either without
+    /// following the link or waiting on the FIFO.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_project_json_is_not_adopted_or_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        fs::write(&elsewhere, r#"{"id":"x","name":"X","directory":"d"}"#).unwrap();
+        let linked = dir.path().join("project.json");
+        std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+        assert!(project_json_to_adopt(&linked).is_err());
+        assert!(load_project_blocking(linked.to_string_lossy().into_owned()).is_err());
+
+        let fifo = dir.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        let at = fifo.clone();
+        assert!(crate::services::home_io::within_deadline(move || project_json_to_adopt(&at)).is_err());
+        assert!(crate::services::home_io::within_deadline(move || load_project_blocking(fifo.to_string_lossy().into_owned())).is_err());
+    }
+
+    /// `write_no_follow` rewrites only a regular file: a FIFO swapped in after
+    /// the caller's check is refused at once, never waited on for a reader.
+    #[cfg(unix)]
+    #[test]
+    fn write_no_follow_refuses_a_fifo_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join(".gitignore");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || write_no_follow(&fifo, b"x\n", false)).is_err());
+
+        let plain = dir.path().join("plain");
+        fs::write(&plain, "a much longer old text\n").unwrap();
+        write_no_follow(&plain, b"new\n", false).unwrap();
+        assert_eq!(fs::read_to_string(&plain).unwrap(), "new\n", "an existing file is truncated first");
+    }
+
+    /// The project list asks every project whether its scaffold is complete,
+    /// reading its agent docs: a FIFO planted as `CLAUDE.md` must not hang it,
+    /// nor the migration plan or the repair.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_agent_doc_does_not_block_the_scaffold_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::services::home_io::mkfifo(&dir.path().join("CLAUDE.md"));
+        let root = dir.path().to_path_buf();
+        crate::services::home_io::within_deadline(move || scaffold_is_missing_at(&root, false));
+        let root = dir.path().to_path_buf();
+        let steps = crate::services::home_io::within_deadline(move || migration_steps_at(&root, false)).unwrap();
+        assert!(!steps.iter().any(|step| step.path.as_deref() == Some("CLAUDE.md")), "the FIFO is left alone");
+        let root = dir.path().to_path_buf();
+        let accepted: HashSet<String> = ["stub:CLAUDE.md".to_string()].into();
+        crate::services::home_io::within_deadline(move || apply_migration_steps_at(&root, false, &accepted)).unwrap();
+        let root = dir.path().to_path_buf();
+        let report = crate::services::home_io::within_deadline(move || repair_project_scaffold_at(&root, false)).unwrap();
+        assert!(!report.updated_files.iter().any(|f| f == "CLAUDE.md"));
+    }
+
+    /// Detach removes the state-dir `project.json` only once the registry
+    /// points at the mirror: a refused patch leaves the project as it was.
+    #[test]
+    fn detach_drops_the_state_only_after_the_registry_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path().join("remote-projects").join("p1");
+        fs::create_dir_all(&state_dir).unwrap();
+        let file = state_dir.join("project.json");
+        fs::write(&file, "{}").unwrap();
+        let refused: Result<(), String> =
+            repoint_then_drop_state(|| Err("Project is not remote".to_string()), &file, &state_dir);
+        assert!(refused.is_err());
+        assert!(file.is_file(), "the state-dir project.json survives a failed patch");
+
+        let mut moved = false;
+        repoint_then_drop_state(
+            || {
+                moved = file.is_file();
+                Ok(())
+            },
+            &file,
+            &state_dir,
+        )
+        .unwrap();
+        assert!(moved, "the registry moves while the state is still there");
+        assert!(!state_dir.exists());
+    }
+
+    /// Tab cwds are compared by path components, so a cwd written with the
+    /// platform's own separator (`\` on Windows) is re-pointed too.
+    #[test]
+    fn a_tab_cwd_under_the_state_dir_moves_to_the_mirror() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path().join("remote-projects").join("p1");
+        let mirror = tmp.path().join("mirror");
+        let mirror_s = mirror.to_string_lossy().into_owned();
+        let at = |p: &Path| p.to_string_lossy().into_owned();
+        assert_eq!(rehome_tab_cwd(&at(&state_dir), &state_dir, &mirror_s), Some(mirror_s.clone()));
+        assert_eq!(
+            rehome_tab_cwd(&at(&state_dir.join("sub").join("deep")), &state_dir, &mirror_s),
+            Some(at(&mirror.join("sub").join("deep")))
+        );
+        assert_eq!(rehome_tab_cwd(&at(&tmp.path().join("other")), &state_dir, &mirror_s), None);
+        // A sibling whose name only starts with the state dir's is not under it.
+        assert_eq!(rehome_tab_cwd(&format!("{}-x", at(&state_dir)), &state_dir, &mirror_s), None);
     }
 
     #[test]
@@ -6363,7 +6832,7 @@ mod tests {
         let fresh = tmp.path().join("parent/fresh");
         claim_new_project_dir(&fresh).unwrap();
         assert!(fresh.is_dir());
-        assert!(project_folder_exists(fresh.to_string_lossy().to_string()));
+        assert!(project_folder_exists_blocking(fresh.to_string_lossy().to_string()));
 
         let err = claim_new_project_dir(&fresh).unwrap_err();
         assert!(err.contains("already exists"), "{err}");
@@ -6374,8 +6843,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
 
         assert!(claim_new_project_dir(Path::new("")).is_err());
-        assert!(!project_folder_exists(String::new()));
-        assert!(!project_folder_exists(
+        assert!(!project_folder_exists_blocking(String::new()));
+        assert!(!project_folder_exists_blocking(
             tmp.path().join("nope").to_string_lossy().to_string()
         ));
     }
@@ -6386,7 +6855,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(tmp.path().join("missing"), &link).unwrap();
-        assert!(project_folder_exists(link.to_string_lossy().to_string()));
+        assert!(project_folder_exists_blocking(link.to_string_lossy().to_string()));
         assert!(claim_new_project_dir(&link).is_err());
         assert!(!tmp.path().join("missing").exists());
     }
@@ -6787,5 +7256,144 @@ mod tests {
         assert_eq!(project.description.as_deref(), Some("keep me"));
         assert_eq!(project.git_type.as_deref(), Some("local"));
         assert_eq!(project.created_at.as_deref(), Some("2020-01-01"));
+    }
+
+    /// Sync commands that may stay sync in the files B1 (code screen 2026-10-25)
+    /// moved off the window's thread: each touches only the app's own state
+    /// dir (the registry, a session, the time log, the archive list) — plus,
+    /// for the registry setters, the one `project.json` mirror write — or
+    /// nothing at all. A sync command runs on the main thread, so one that
+    /// walks the project tree, stats a user-picked path or spawns a process
+    /// freezes the window while it works.
+    const SYNC_COMMANDS_ALLOWED: &[(&str, &str)] = &[
+        ("projects.rs", "get_project_panel_prefs"),
+        ("projects.rs", "set_project_panel_prefs"),
+        ("projects.rs", "check_project_site"),
+        ("projects.rs", "get_projects"),
+        ("projects.rs", "save_projects"),
+        ("projects.rs", "list_archived_projects"),
+        ("projects.rs", "set_project_description"),
+        ("projects.rs", "set_project_name"),
+        ("projects.rs", "set_project_sandbox_spec"),
+        ("projects.rs", "set_project_remote_control"),
+        ("projects.rs", "set_project_schedule_mcp"),
+        ("projects.rs", "set_project_git_push_mcp"),
+        ("projects.rs", "set_project_openvpn"),
+        ("projects.rs", "set_project_auto_connect"),
+        ("projects.rs", "set_project_persist_sessions"),
+        ("projects.rs", "set_project_mobile_access"),
+        ("projects.rs", "set_project_remote_label"),
+        ("projects.rs", "set_project_remote_user"),
+        ("projects.rs", "set_project_run_host"),
+        ("projects.rs", "add_compute_host"),
+        ("projects.rs", "remove_compute_host"),
+        ("projects.rs", "patch_compute_host"),
+        ("projects.rs", "set_project_categories"),
+        ("projects.rs", "load_tab_session"),
+        ("projects.rs", "workspace_snapshot"),
+        ("projects.rs", "workspace_sync"),
+        ("projects.rs", "save_tab_layout"),
+        ("projects.rs", "root_work_dir"),
+        ("projects.rs", "projects_root_dir"),
+        ("projects.rs", "remote_mirror_root_dir"),
+        ("projects.rs", "get_time_today"),
+        ("git.rs", "git_worktree_selection_supported"),
+    ];
+
+    /// The sync Tauri commands of `src/commands/<file>`: `(name, body)` of the
+    /// `fn` after each `tauri::command` attribute that is not `async`. The body
+    /// runs to the closing `}` in column 0 (a command is a top-level item).
+    fn sync_commands_in(file: &str) -> Vec<(String, String)> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("commands").join(file);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            // `tauri::command(async)` on a sync fn counts as sync: Tauri polls
+            // the body inside a future on an async-runtime worker, so blocking
+            // work there pins that worker instead of the window.
+            if !line.trim_start().starts_with("#[cfg_attr(feature = \"desktop\", tauri::command") {
+                continue;
+            }
+            let Some(at) = (i + 1..lines.len()).find(|&j| lines[j].contains("fn ")) else { continue };
+            let sig = lines[at].trim();
+            if sig.contains("async fn ") {
+                continue;
+            }
+            let name = sig.split("fn ").nth(1).unwrap_or("");
+            let name: String = name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let end = (at..lines.len()).find(|&j| lines[j] == "}").unwrap_or(lines.len() - 1);
+            out.push((name, lines[at..=end].join("\n")));
+        }
+        out
+    }
+
+    /// Every `src/commands/*.rs` file name.
+    fn command_files() -> Vec<String> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("commands");
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.ends_with(".rs"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// Sync commands outside the B1 files whose body may name `remove_dir_all`,
+    /// `.output(` or `ollama_http`: `(file, fn, why)`. Empty today — every one
+    /// of those is on a worker (`async` over a `*_blocking` body).
+    const SYNC_BODY_ALLOWED: &[(&str, &str, &str)] = &[];
+
+    /// B1's guard, over every `commands/*.rs` (code screen 2026-10-25, G):
+    /// a sync command runs on the window's thread (or pins an async worker), so
+    /// none may walk a tree, spawn a process or ask Ollama.
+    ///  - In the files B1 moved off the window's thread (`projects.rs`, `fs.rs`,
+    ///    `git.rs`, `git_fork.rs`) a new sync command is either `async` over a
+    ///    `*_blocking` body (`app_core::rt::try_blocking`) or, when it touches
+    ///    only the state dir, a row in [`SYNC_COMMANDS_ALLOWED`].
+    ///  - Anywhere else a sync command's body must not name `remove_dir_all`,
+    ///    `.output(` or `ollama_http` ([`SYNC_BODY_ALLOWED`] for a reasoned
+    ///    exception). Work a body hands to a helper is not seen: review it.
+    #[test]
+    fn sync_commands_keep_disk_and_process_work_off_the_windows_thread() {
+        const B1_FILES: [&str; 4] = ["projects.rs", "fs.rs", "git.rs", "git_fork.rs"];
+        let mut unexpected = Vec::new();
+        let mut seen = Vec::new();
+        let mut blocking = Vec::new();
+        let mut body_used = Vec::new();
+        for file in command_files() {
+            for (name, body) in sync_commands_in(&file) {
+                if B1_FILES.contains(&file.as_str()) {
+                    match SYNC_COMMANDS_ALLOWED.iter().find(|(f, n)| *f == file && *n == name) {
+                        Some(row) => seen.push(*row),
+                        None => unexpected.push(format!("{file}: {name}")),
+                    }
+                    continue;
+                }
+                let Some(token) = ["remove_dir_all", ".output(", "ollama_http"].into_iter().find(|t| body.contains(t)) else {
+                    continue;
+                };
+                match SYNC_BODY_ALLOWED.iter().find(|(f, n, _)| *f == file && *n == name) {
+                    Some(row) => body_used.push(*row),
+                    None => blocking.push(format!("{file}: {name} ({token})")),
+                }
+            }
+        }
+        assert!(unexpected.is_empty(), "sync commands that should be async over a *_blocking body: {unexpected:?}");
+        assert!(blocking.is_empty(), "sync commands doing tree, process or Ollama work on the window's thread — make them async over a *_blocking body, or allow one in SYNC_BODY_ALLOWED with its reason: {blocking:?}");
+        let stale: Vec<_> = SYNC_COMMANDS_ALLOWED.iter().filter(|row| !seen.contains(row)).collect();
+        assert!(stale.is_empty(), "SYNC_COMMANDS_ALLOWED rows that match no sync command any more: {stale:?}");
+        let stale: Vec<_> = SYNC_BODY_ALLOWED.iter().filter(|row| !body_used.contains(row)).collect();
+        assert!(stale.is_empty(), "SYNC_BODY_ALLOWED rows that match no sync command any more: {stale:?}");
+    }
+
+    #[test]
+    fn the_sync_command_scan_sees_attribute_bodies_and_skips_async() {
+        // The scan reads real files; pin that it finds the known sync and async shapes.
+        let projects = sync_commands_in("projects.rs");
+        assert!(projects.iter().any(|(n, body)| n == "get_projects" && body.ends_with('}')));
+        assert!(!projects.iter().any(|(n, _)| n == "project_folder_exists"), "an async command is not a sync one");
+        assert!(command_files().iter().any(|f| f == "ollama.rs"));
     }
 }

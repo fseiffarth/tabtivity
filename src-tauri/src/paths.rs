@@ -172,6 +172,23 @@ pub fn system_executable(bin: &str) -> Option<PathBuf> {
     }
 }
 
+/// `[pkexec, program]` for an elevated spawn, both from [`system_executable`]:
+/// pkexec looks a bare name up on the caller's `PATH`, so a planted
+/// `~/.local/bin/kill` would run as root once polkit approved. `Err` is the
+/// name of the one that has no root-owned copy.
+#[cfg(target_os = "linux")]
+pub fn pkexec_argv(program: &str) -> Result<[PathBuf; 2], String> {
+    elevated_argv(program, system_executable)
+}
+
+/// [`pkexec_argv`] over a resolver. Never answers a bare name.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn elevated_argv(program: &str, resolve: impl Fn(&str) -> Option<PathBuf>) -> Result<[PathBuf; 2], String> {
+    let pkexec = resolve("pkexec").ok_or_else(|| "pkexec".to_string())?;
+    let program_path = resolve(program).ok_or_else(|| program.to_string())?;
+    Ok([pkexec, program_path])
+}
+
 /// The program to spawn for one of Tabtivity's own helpers ([`TRUSTED_HELPERS`]):
 /// its root-owned system copy when there is one. `None` for any other name,
 /// and for a helper the system lacks (Homebrew's tmux, a per-user Git for
@@ -553,11 +570,17 @@ pub fn command_for_program(program: &Path) -> Command {
 
 /// Spawn a process whose result is intentionally ignored, retaining the Child
 /// in a background waiter so it cannot become a zombie or leak process handles.
-pub fn spawn_reaped(mut cmd: Command) -> std::io::Result<u32> {
+pub fn spawn_reaped(cmd: Command) -> std::io::Result<u32> {
+    spawn_reaped_then(cmd, |_| {})
+}
+
+/// [`spawn_reaped`], then `on_exit` runs on the waiter thread with whether the
+/// process exited successfully (`false` when waiting on it failed).
+pub fn spawn_reaped_then(mut cmd: Command, on_exit: impl FnOnce(bool) + Send + 'static) -> std::io::Result<u32> {
     let mut child: Child = cmd.spawn()?;
     let pid = child.id();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        on_exit(child.wait().map(|s| s.success()).unwrap_or(false));
     });
     Ok(pid)
 }
@@ -813,6 +836,17 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    /// Elevation takes both programs from the resolver, by absolute path, and
+    /// refuses when either is missing rather than handing pkexec a bare name.
+    #[test]
+    fn elevated_argv_never_falls_back_to_a_bare_name() {
+        let root = if cfg!(windows) { Path::new(r"C:\sys") } else { Path::new("/sys-bin") };
+        let argv = elevated_argv("kill", |bin: &str| Some(root.join(bin))).unwrap();
+        assert_eq!(argv, [root.join("pkexec"), root.join("kill")]);
+        assert_eq!(elevated_argv("kill", |bin: &str| (bin != "pkexec").then(|| root.join(bin))).unwrap_err(), "pkexec");
+        assert_eq!(elevated_argv("kill", |bin: &str| (bin != "kill").then(|| root.join(bin))).unwrap_err(), "kill");
+    }
+
     fn env<'a>(values: &'a [(&str, &str)]) -> impl FnMut(&str) -> Option<String> + 'a {
         let map = values.iter().copied().collect::<HashMap<_, _>>();
         move |key| map.get(key).map(|value| (*value).to_string())
@@ -1021,6 +1055,20 @@ mod tests {
 
         let exe = command_for_program_for(OsKind::Windows, Path::new(r"C:\tools\fmt.exe"));
         assert_eq!(exe.get_program(), OsStr::new(r"C:\tools\fmt.exe"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_reaped_then_reports_the_exit_to_the_callback() {
+        for (bin, want) in [("true", true), ("false", false)] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let pid = spawn_reaped_then(Command::new(bin), move |ok| {
+                let _ = tx.send(ok);
+            })
+            .expect("spawn");
+            assert!(pid > 0);
+            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(want), "{bin}");
+        }
     }
 
     /// `ssh` runs a config's `Match exec` in a child of its own: a deadline

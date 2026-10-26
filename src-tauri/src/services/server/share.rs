@@ -332,21 +332,22 @@ fn set_remote(dir: &Path, hub: &Path) -> Result<(), String> {
 pub fn exclude_app_dir(dir: &Path) -> Result<(), String> {
     let common = git_in(dir, None, &["rev-parse", "--git-common-dir"])?;
     let common = if Path::new(&common).is_absolute() { PathBuf::from(&common) } else { dir.join(&common) };
-    let info = common.join("info");
-    let file = info.join("exclude");
-    let existing = std::fs::read_to_string(&file).unwrap_or_default();
     let rule = brand::PROJECT_DIR_EXCLUDE_RULE;
-    if existing.lines().any(|l| l.trim() == rule) {
-        return Ok(());
-    }
-    std::fs::create_dir_all(&info).map_err(|e| e.to_string())?;
-    let mut next = existing;
-    if !next.is_empty() && !next.ends_with('\n') {
+    // A linked `info` or `exclude`, or a FIFO there, is refused, never
+    // followed or waited on (#2347).
+    crate::services::git_guard::edit_info_exclude(&common, |existing| {
+        if existing.lines().any(|l| l.trim() == rule) {
+            return None;
+        }
+        let mut next = existing.to_string();
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(rule);
         next.push('\n');
-    }
-    next.push_str(rule);
-    next.push('\n');
-    std::fs::write(&file, next).map_err(|e| e.to_string())
+        Some(next)
+    })
+    .map(|_| ())
 }
 
 /// Paths under the app's folder that commits in `range` (rev-list args)
@@ -805,10 +806,7 @@ fn page_bounds(text: &str) -> Vec<(usize, usize)> {
     let mut bounds = Vec::new();
     let mut start = 0;
     while start < text.len() {
-        let mut end = (start + REVIEW_PAGE_BYTES).min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = text.floor_char_boundary(start + REVIEW_PAGE_BYTES);
         bounds.push((start, end));
         start = end;
     }
