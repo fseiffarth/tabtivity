@@ -2,7 +2,9 @@
 //! `Settings.ai_off`, set by the side panel's power button. While AI is off,
 //! nothing starts new AI work — no agent spawn, no input typed into an agent,
 //! no scheduled prompt, completion or mail AI call. Agents already running
-//! keep running; only what would reach them is refused.
+//! keep running; only what would reach them is refused. Switched off for a
+//! while (`Settings.ai_off_until`), it is on again once that instant passes,
+//! with nothing written: every reader compares against the clock.
 //!
 //! The window and the Mobile sidecar both read `settings.json`, so both obey
 //! the one file. A read is a `stat` while the file is unchanged: `pty_write`
@@ -10,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The refusal every gate returns, for the frontend to recognise.
 pub const AI_OFF: &str = "ai_off";
@@ -29,13 +31,24 @@ pub fn check() -> Result<(), String> {
     }
 }
 
+/// Whether a switch set to `off`, until `until` (Unix milliseconds; `None`:
+/// until switched back on), is off right now.
+pub fn off_now(off: Option<bool>, until: Option<u64>) -> bool {
+    off == Some(true) && until.is_none_or(|until| now_ms() < until)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 /// The last reading, keyed by the file's identity on disk. The inode is the
 /// sharpest part: `settings.json` is replaced by rename at every write
 /// (`storage`), so a toggle within one mtime tick still changes it.
 struct Reading {
     path: PathBuf,
     identity: (Option<SystemTime>, u64, u64),
-    off: bool,
+    off: Option<bool>,
+    until: Option<u64>,
 }
 
 #[cfg(unix)]
@@ -60,16 +73,17 @@ pub fn is_off_at(path: &Path) -> bool {
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(r) = last.as_ref() {
         if r.path == path && r.identity == identity && identity.0.is_some() {
-            return r.off;
+            return off_now(r.off, r.until);
         }
     }
-    let off = std::fs::read(path)
+    let value = std::fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|v| v.get("ai_off").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false);
-    *last = Some(Reading { path: path.to_path_buf(), identity, off });
-    off
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let field = |key: &str| value.as_ref().and_then(|v| v.get(key));
+    let off = field("ai_off").and_then(serde_json::Value::as_bool);
+    let until = field("ai_off_until").and_then(serde_json::Value::as_u64);
+    *last = Some(Reading { path: path.to_path_buf(), identity, off, until });
+    off_now(off, until)
 }
 
 /// What of `data` still reaches an agent while AI is off: `None` when all of
@@ -184,6 +198,20 @@ mod tests {
         assert!(!is_off_at(&path));
         write(&path, "{\"ai_off\": true}");
         assert!(is_off_at(&path));
+    }
+
+    #[test]
+    fn a_timed_switch_is_on_again_once_its_instant_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let later = now_ms() + 3_600_000;
+        write(&path, &format!("{{\"ai_off\":true,\"ai_off_until\":{later}}}"));
+        assert!(is_off_at(&path));
+        write(&path, "{\"ai_off\":true,\"ai_off_until\":1}");
+        assert!(!is_off_at(&path));
+        assert!(off_now(Some(true), None));
+        assert!(!off_now(None, Some(later)));
+        assert!(!off_now(Some(false), Some(later)));
     }
 
     #[test]

@@ -127,6 +127,16 @@ Known limits, left as they are:
 - **No-op note.** The "AI is off" note is a pill that stays up while off, not
   the throttled note first planned.
 
+### Timed off (2026-10-26)
+
+A click on ⏻ while AI is on opens a menu: off until switched back on, off for
+1, 2, 3, 5 or 12 hours, or a custom number of hours. While off, a click still
+switches straight back on. A timed off writes `ai_off_until` (Unix ms) beside
+`ai_off`; nothing is written when it runs out — every reader compares the
+clock (`ai_switch::off_now`, `aiOffIn`): `useAiOff` re-renders and `whenAiOn`
+wakes at the instant, the sidecar's terminal tick tells the phone within a
+second. The tooltip names the end time. The phone still has no switch.
+
 ## Steps
 
 1. **Backend switch.** Gates: cargo test, both clippies, the daemon build.

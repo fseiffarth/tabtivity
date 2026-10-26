@@ -47,6 +47,12 @@ function powerButton(container: HTMLElement): HTMLButtonElement {
   return button;
 }
 
+function menuItem(label: string): HTMLButtonElement {
+  const item = [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu-item")].find((b) => b.textContent?.startsWith(label));
+  if (!item) throw new Error(`no menu row "${label}"`);
+  return item;
+}
+
 describe("edge rail AI switch", () => {
   it("switches AI off and back on through the settings", async () => {
     let container!: HTMLElement;
@@ -58,14 +64,61 @@ describe("edge rail AI switch", () => {
     expect(button.classList.contains("off")).toBe(false);
 
     await act(async () => { fireEvent.click(button); });
-    expect(invoke).toHaveBeenCalledWith("patch_settings", expect.objectContaining({ patch: { ai_off: true } }));
+    expect(invoke).not.toHaveBeenCalledWith("patch_settings", expect.anything());
+    await act(async () => { fireEvent.click(menuItem("Switch off until I switch it back on")); });
+    expect(invoke).toHaveBeenCalledWith("patch_settings", expect.objectContaining({ patch: { ai_off: true, ai_off_until: null } }));
     expect(aiIsOff()).toBe(true);
     expect(powerButton(container).getAttribute("aria-pressed")).toBe("true");
     expect(powerButton(container).classList.contains("off")).toBe(true);
 
     await act(async () => { fireEvent.click(powerButton(container)); });
-    expect(invoke).toHaveBeenLastCalledWith("patch_settings", expect.objectContaining({ patch: { ai_off: false } }));
+    expect(invoke).toHaveBeenLastCalledWith("patch_settings", expect.objectContaining({ patch: { ai_off: false, ai_off_until: null } }));
     expect(aiIsOff()).toBe(false);
+  });
+
+  it("switches AI off for a few hours, or for a custom number of them", async () => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<RailAiSwitch />));
+    });
+    const before = Date.now();
+    await act(async () => { fireEvent.click(powerButton(container)); });
+    await act(async () => { fireEvent.click(menuItem("Off for 2 h")); });
+    const timed = stored.ai_off_until ?? 0;
+    expect(stored.ai_off).toBe(true);
+    expect(timed - before).toBeGreaterThanOrEqual(2 * 3_600_000);
+    expect(timed - Date.now()).toBeLessThanOrEqual(2 * 3_600_000);
+    expect(aiIsOff()).toBe(true);
+    expect(powerButton(container).title).toMatch(/^AI is off until /);
+
+    await act(async () => { fireEvent.click(powerButton(container)); });
+    expect(stored.ai_off).toBe(false);
+    await act(async () => { fireEvent.click(powerButton(container)); });
+    await act(async () => { fireEvent.click(menuItem("Custom…")); });
+    const hours = document.querySelector<HTMLInputElement>(".menu-form input");
+    if (!hours) throw new Error("no hours field");
+    await act(async () => { fireEvent.change(hours, { target: { value: "1,5" } }); });
+    await act(async () => { fireEvent.keyDown(hours, { key: "Enter" }); });
+    expect(stored.ai_off).toBe(true);
+    expect((stored.ai_off_until ?? 0) - Date.now()).toBeGreaterThan(89 * 60_000);
+    expect((stored.ai_off_until ?? 0) - Date.now()).toBeLessThanOrEqual(90 * 60_000);
+  });
+
+  it("is on again once a timed switch runs out, and wakes its waiters", async () => {
+    vi.useFakeTimers();
+    try {
+      useSettingsStore.setState({ settings: { ai_off: true, ai_off_until: Date.now() + 60_000 } as Settings });
+      expect(aiIsOff()).toBe(true);
+      let resumed: boolean | null = null;
+      void whenAiOn(new AbortController().signal).then((on) => { resumed = on; });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(resumed).toBeNull();
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(aiIsOff()).toBe(false);
+      expect(resumed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recognises the backend's refusal", () => {

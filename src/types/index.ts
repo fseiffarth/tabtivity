@@ -671,6 +671,9 @@ export interface Settings {
   /** The AI switch (edge rail ⏻, `lib/aiSwitch.ts`): `true` stops every new
    *  AI use machine-wide. Backend-enforced (`services::ai_switch`). */
   ai_off?: boolean;
+  /** With `ai_off`: the instant (Unix ms) AI is on again by itself; unset or
+   *  `null` means off until switched back on. */
+  ai_off_until?: number | null;
   /** A fenced root-console agent sees every project, box folder and remote
    *  mirror read-only (default off: a widening). The mail `attach` argument
    *  needs it; recorded per root tab at spawn. */

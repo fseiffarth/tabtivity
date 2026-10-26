@@ -625,6 +625,11 @@ pub struct Settings {
     /// agents, scheduled prompts, completions, mail AI. Unset is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_off: Option<bool>,
+    /// When the AI switch was set for a while (the rail menu's "for 1 h"…):
+    /// the instant, in Unix milliseconds, it counts as on again. Unset with
+    /// `ai_off` means off until switched back on (`ai_switch::off_now`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_off_until: Option<u64>,
     /// Let a fenced **root** agent read every project (local directories, box
     /// folders, remote mirrors) read-only. Default off: one poisoned project can
     /// then reach the others through an agent with open network access.

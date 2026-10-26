@@ -31,6 +31,7 @@ import type { TranslationKey } from "./i18n";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settings";
 import { experimentalEnabled } from "./experimental";
+import { aiOffIn, useAiOff } from "./aiSwitch";
 import type { Settings } from "../types";
 import type {
   MailAiClassifyReport,
@@ -676,7 +677,7 @@ export function mailAiFeatureOn(
   feature: MailAiFeature,
 ): boolean {
   // Not while the AI switch is off (`lib/aiSwitch.ts`); the settings stay as set.
-  return account?.ai?.[feature] === true && mailAiResolvable(settings) && settings?.ai_off !== true;
+  return account?.ai?.[feature] === true && mailAiResolvable(settings) && !aiOffIn(settings);
 }
 
 /** {@link mailAiFeatureOn} as a store subscription — the call site for a
@@ -686,8 +687,9 @@ export function useMailAiFeature(
   account: MailAccount | null | undefined,
   feature: MailAiFeature,
 ): boolean {
-  const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings) && s.settings?.ai_off !== true);
-  return resolvable && account?.ai?.[feature] === true;
+  const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings));
+  const aiOff = useAiOff();
+  return resolvable && !aiOff && account?.ai?.[feature] === true;
 }
 
 /**
