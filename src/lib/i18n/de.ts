@@ -5198,6 +5198,7 @@ export const dict: Dict = {
   "terminal.reader.voice.err.denied": "Der Zugriff aufs Mikrofon wurde verweigert. Erlaube ihn in den Datenschutzeinstellungen des Systems.",
   "terminal.reader.voice.err.busy": "Ein anderes Programm benutzt das Mikrofon.",
   "terminal.reader.voice.err.device": "Das Mikrofon funktioniert nicht mehr.",
+  "terminal.reader.voice.err.silent": "Das Mikrofon scheint stummgeschaltet zu sein: Es liefert nur Stille. Hebe die Stummschaltung auf oder wähle in den Klangeinstellungen des Systems einen anderen Eingang.",
   "terminal.reader.voice.err.model": "Das Sprachmodell konnte nicht laufen.",
   "terminal.reader.voice.err.failed": "Das Diktat ist fehlgeschlagen.",
   "terminal.reader.voice.err.noSpeechServer": "Keine Systemstimme zum Vorlesen: installiere speech-dispatcher.",

@@ -226,6 +226,10 @@ const PARTIAL_EVERY: Duration = Duration::from_millis(1000);
 const PARTIAL_TAIL_SAMPLES: usize = 5 * RATE as usize;
 /// `voice:level` at most this often (≤ 20 Hz).
 const LEVEL_EVERY: Duration = Duration::from_millis(50);
+/// A mic muted in the OS (or on its cable) still opens and delivers digital
+/// silence: this long with every sample below one 16-bit step is "muted".
+const SILENT_AFTER_SAMPLES: usize = 3 * RATE as usize;
+const SILENT_PEAK: f32 = 1e-5;
 /// After a stop, how long the queued finals may take.
 const DRAIN_LIMIT: Duration = Duration::from_secs(30);
 
@@ -298,6 +302,9 @@ struct Listener {
     level_n: usize,
     last_level: Instant,
     was_paused: bool,
+    /// Samples in a row at digital silence, and whether the user was told.
+    silent: usize,
+    silent_told: bool,
 }
 
 impl Listener {
@@ -318,6 +325,24 @@ impl Listener {
         }
     }
 
+    /// Warns once when the mic has delivered only silence for a while, and
+    /// says `listening` again when sound returns, which clears the warning.
+    fn watch_silence(&mut self, samples: &[f32]) {
+        if samples.iter().all(|s| s.abs() <= SILENT_PEAK) {
+            self.silent += samples.len();
+            if self.silent >= SILENT_AFTER_SAMPLES && !self.silent_told {
+                self.silent_told = true;
+                self.to_owner(EV_ERROR, ErrorEvent { session: self.config.session, code: VoiceError::MicSilent });
+            }
+        } else {
+            self.silent = 0;
+            if self.silent_told {
+                self.silent_told = false;
+                self.state("listening", None);
+            }
+        }
+    }
+
     fn audio(&mut self, samples: &[f32], after_gap: bool) {
         if self.control.paused() {
             if !self.was_paused {
@@ -330,8 +355,10 @@ impl Listener {
         }
         if self.was_paused {
             self.was_paused = false;
+            self.silent = 0;
             self.state("listening", None);
         }
+        self.watch_silence(samples);
         if after_gap {
             // The voice spoke over part of it: what was said before goes in.
             if let Some(audio) = self.vad.flush() {
@@ -435,6 +462,8 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
         level_n: 0,
         last_level: Instant::now(),
         was_paused: false,
+        silent: 0,
+        silent_told: false,
     };
     listener.state("preparing", None);
 
@@ -722,6 +751,38 @@ mod tests {
         assert!(events.payloads(EV_VAD).is_empty());
         let states: Vec<_> = events.payloads(EV_STATE).iter().map(|s| s["state"].clone()).collect();
         assert_eq!(states, ["preparing", "paused", "stopped"]);
+    }
+
+    #[test]
+    fn a_muted_mic_is_warned_about_once_and_keeps_listening() {
+        let events = RecordingEvents::new();
+        let (factory, _) = factory();
+        let source = FakeSource { audio: vec![0.0; 4 * RATE as usize], gap_at: None, fail_start: None };
+        let (control, thread) = spawn(&events, config(3), source, factory);
+        wait_for(&events, EV_ERROR, 1);
+        std::thread::sleep(Duration::from_millis(200));
+        control.stop();
+        thread.join().unwrap();
+        let errors = events.payloads(EV_ERROR);
+        assert_eq!(errors, [serde_json::json!({ "session": 3, "code": "mic-silent" })]);
+        let states: Vec<_> = events.payloads(EV_STATE).iter().map(|s| s["state"].clone()).collect();
+        assert_eq!(states, ["preparing", "listening", "stopped"]);
+        assert!(events.payloads(EV_STATE).last().unwrap().get("reason").is_none());
+    }
+
+    #[test]
+    fn sound_after_the_warning_says_listening_again() {
+        let events = RecordingEvents::new();
+        let (factory, _) = factory();
+        let mut audio = vec![0.0; 3 * RATE as usize + 1600];
+        audio.extend(tone(300, 220.0, 0.2));
+        let (control, thread) = spawn(&events, config(3), FakeSource { audio, gap_at: None, fail_start: None }, factory);
+        wait_for(&events, EV_STATE, 3);
+        control.stop();
+        thread.join().unwrap();
+        assert_eq!(events.payloads(EV_ERROR).len(), 1);
+        let states: Vec<_> = events.payloads(EV_STATE).iter().map(|s| s["state"].clone()).collect();
+        assert_eq!(states[..3], ["preparing", "listening", "listening"]);
     }
 
     #[test]

@@ -133,6 +133,16 @@ describe("dictating into the Chat's composer", () => {
     expect(runInstallInTab).toHaveBeenCalledWith("Speech model", "bash '/s/voice/fetch-model.sh'", expect.any(String));
   });
 
+
+  it("warns about a muted mic, and drops the warning when sound returns", async () => {
+    await composer(host);
+    await startMic();
+    emit("voice:error", { session: 11, code: "mic-silent" });
+    expect(screen.getByRole("alert").textContent).toContain("seems to be muted");
+    emit("voice:state", { session: 11, state: "listening" });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop dictating" })).toBeTruthy();
+  });
   it("says why the mic would not open", async () => {
     invoke.mockImplementation((command: string) => command === "voice_listen_start"
       ? Promise.reject("no-device")

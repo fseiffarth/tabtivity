@@ -5338,6 +5338,7 @@ export const enSource = {
   "terminal.reader.voice.err.denied": "The microphone was refused. Allow it in the system's privacy settings.",
   "terminal.reader.voice.err.busy": "Another program is using the microphone.",
   "terminal.reader.voice.err.device": "The microphone stopped working.",
+  "terminal.reader.voice.err.silent": "The microphone seems to be muted: it delivers only silence. Unmute it or choose another input in the system's sound settings.",
   "terminal.reader.voice.err.model": "The speech model could not run.",
   "terminal.reader.voice.err.failed": "Dictation failed.",
   "terminal.reader.voice.err.noSpeechServer": "No system voice to read aloud with: install speech-dispatcher.",

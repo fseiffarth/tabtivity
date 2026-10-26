@@ -99,7 +99,11 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
         headset: settings?.voice_headset ?? false,
       }, {
         onPreparing: () => setPhase("preparing"),
-        onStart: () => setPhase("listening"),
+        // Also the backend's "sound is back" after a muted-mic warning.
+        onStart: () => {
+          setProblem(null);
+          setPhase("listening");
+        },
         onSegment: (open) => { if (!open) setHeard(""); },
         onPartial: (text) => setHeard(text),
         onFinal: (text) => {
@@ -212,6 +216,7 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
           {line}
           {listening && !heard && !problem && <UntestedTag id="terminal.reader.voice.spokenSend" />}
           {(heard || phase === "preparing") && !problem && <UntestedTag id="terminal.reader.voice.dictate" />}
+          {problem === "terminal.reader.voice.err.silent" && <UntestedTag id="terminal.reader.voice.silent" />}
         </div>
       )}
     </div>

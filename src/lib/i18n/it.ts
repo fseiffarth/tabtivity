@@ -5174,6 +5174,7 @@ export const dict: Dict = {
   "terminal.reader.voice.err.denied": "L’accesso al microfono è stato negato. Consentilo nelle impostazioni di privacy del sistema.",
   "terminal.reader.voice.err.busy": "Un altro programma sta usando il microfono.",
   "terminal.reader.voice.err.device": "Il microfono ha smesso di funzionare.",
+  "terminal.reader.voice.err.silent": "Il microfono sembra disattivato: fornisce solo silenzio. Riattivalo o scegli un altro ingresso nelle impostazioni audio del sistema.",
   "terminal.reader.voice.err.model": "Il modello vocale non è riuscito a funzionare.",
   "terminal.reader.voice.err.failed": "La dettatura non è riuscita.",
   "terminal.reader.voice.err.noSpeechServer": "Nessuna voce di sistema per leggere ad alta voce: installa speech-dispatcher.",
