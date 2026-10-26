@@ -229,6 +229,12 @@ fresh chat (`assistant_new_chat`) and then remove every other chat of the
 scope, so the scope holds the chat both surfaces show. A pick whose CLI is
 blocked shows its card and leaves the chat alone.
 
+**Clear is Relaunch.** `/clear` typed into the CLI would go nowhere, so in a
+Tabby chat the Reader's Clear chip and a typed `/clear` call
+`replaceAssistantChat` (`stores/assistantScope`), the head's Relaunch path. The
+composer offers no Plan, Goal or Commit (no slash commands, no files) and is
+drawn as an agent tab's (`.card-composer`), its chips inside the text box.
+
 **The model switches in place.** A chat's slash commands are off, so the
 Reader's usual chips that type `/model`, `/effort` or `/status` cannot reach
 it. In a Tabby chat the Reader's model chip and the head's model dropdown list

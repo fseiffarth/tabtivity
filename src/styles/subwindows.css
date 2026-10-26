@@ -3317,11 +3317,11 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-topbar-actions .terminal-reader-chip { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border-color)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel)); }
 .reader-topbar-actions .terminal-reader-commit-menu { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; z-index: 3; }
-.terminal-reader.has-topbar .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
-.terminal-reader.has-topbar .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
-.terminal-reader.has-topbar .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
-.terminal-reader.has-topbar .terminal-reader-send { right: 10px; bottom: 10px; }
-.terminal-reader.has-topbar .terminal-reader-mic { right: 42px; bottom: 12px; }
+.terminal-reader.card-composer .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
+.terminal-reader.card-composer .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
+.terminal-reader.card-composer .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+.terminal-reader.card-composer .terminal-reader-send { right: 10px; bottom: 10px; }
+.terminal-reader.card-composer .terminal-reader-mic { right: 42px; bottom: 12px; }
 .terminal-reader-error {
   flex: none;
   padding: 0 14px 8px;

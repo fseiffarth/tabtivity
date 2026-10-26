@@ -2779,7 +2779,7 @@ async function moveTabWorktree(
 }
 
 /** A Tabby chat the phone's model chip may switch, with the models its CLI can
- * run (`assistantModelRows` — the desktop Reader's chip lists the same), or
+ * run (`assistantModelRows` — the desktop Tabby's model dropdown lists the same), or
  * the refusal to answer with. Any other tab's `/model` is its CLI's own. */
 async function assistantChat(projectId: string, tmuxSession: string): Promise<
   | { scope: MobileScope; tab: TabEntry; launch: AssistantLaunch; rows: AssistantModelRow[]; models: string[] }
