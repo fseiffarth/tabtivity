@@ -172,7 +172,7 @@ impl Fixture {
         // Shell tabs are off the phone unless switched on.
         std::fs::write(
             state_dir.join("settings.json"),
-            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+            serde_json::json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
         )
         .expect("write settings");
         let folder = state_dir.join("boxes").join("paper");
@@ -715,7 +715,7 @@ fn headless_host(launch: headless::HeadlessLaunch) -> Fixture {
     // shells too, so the fixture opts in.
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+        serde_json::json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
     )
     .expect("write settings");
     host.state.spawner = HeadlessSpawner { launch, installed: Arc::new(|_| true), ..HeadlessSpawner::default() };
@@ -3814,7 +3814,7 @@ async fn a_create_request_for_another_project_is_refused_before_any_state_is_rea
     // An unknown project resolves to nothing rather than to a raw id.
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+        serde_json::json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
     )
     .expect("settings");
     let (status, _, answer) = host
@@ -4266,7 +4266,7 @@ async fn the_file_search_answers_sealed_rows_and_trails_while_the_drawer_is_on()
 
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        serde_json::json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
     )
     .unwrap();
     let (status, _, body) = host.send(get_as(&format!("{base}/search?q=NOTES"), &cookie)).await;
@@ -4314,7 +4314,7 @@ async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_off
 
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
     )
     .unwrap();
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
@@ -4345,7 +4345,7 @@ async fn a_local_project_has_no_remote_side_of_the_files() {
     let cookie = host.pair_device(&signing_key(73)).await.0;
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
     )
     .unwrap();
     let (p, _) = project_and_tab(&host, &cookie).await;
@@ -4367,7 +4367,7 @@ async fn upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it() {
     let switches = |files: bool, uploads: bool| {
         std::fs::write(
             host.state.config.state_dir.join("settings.json"),
-            json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_uploads": uploads } }).to_string(),
+            json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_uploads": uploads } }).to_string(),
         )
         .unwrap();
     };
@@ -4475,7 +4475,7 @@ async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
     let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
     )
     .unwrap();
     let upload = |name: &str, bytes: Vec<u8>| {
@@ -4922,7 +4922,7 @@ async fn a_server_daemon_answers_markup_from_its_own_asks() {
 
     // The phone's Local models on a server: the administrator's phone
     // only (§3.3), by the gateway's role header.
-    std::fs::write(state.config.state_dir.join("settings.json"), json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true } }).to_string()).unwrap();
+    std::fs::write(state.config.state_dir.join("settings.json"), json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true } }).to_string()).unwrap();
     let role = |role: Option<&str>| {
         let mut headers = HeaderMap::new();
         if let Some(role) = role {
@@ -5630,7 +5630,7 @@ async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
     std::fs::write(host.root.join("paper.pdf"), "%PDF-1.7\n%%EOF\n").expect("pdf");
     std::fs::write(
         host.state.config.state_dir.join("settings.json"),
-        json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "shell_tabs": true } }).to_string(),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "shell_tabs": true } }).to_string(),
     )
     .expect("settings");
     let (listed, listed_id) = host.pair_device(&signing_key(81)).await;

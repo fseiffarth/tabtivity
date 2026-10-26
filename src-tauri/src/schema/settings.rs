@@ -1222,6 +1222,13 @@ impl Settings {
         })
     }
 
+    /// An experiment a profile gets without asking (`ON_BY_DEFAULT` in
+    /// `src/lib/experimental.ts`): unset means on; an explicit `false` still
+    /// turns it off.
+    fn experimental_on_by_default(flag: Option<bool>) -> bool {
+        flag.unwrap_or(true)
+    }
+
     /// Whether the experimental Copilot completion entry point is on — the one
     /// spelling of the rule for the backend's policy (`services::copilot::policy`)
     /// and the session teardown on a settings change. It alone never authorizes
@@ -1240,14 +1247,14 @@ impl Settings {
     /// Whether the experimental mail client is on — the one gate its overlay
     /// host asks (`src/components/mail/MailOverlay.tsx`).
     pub fn mail_client(&self) -> bool {
-        self.experimental(self.mail_client)
+        Self::experimental_on_by_default(self.mail_client)
     }
 
     /// Whether the experimental chat assistant is on — the one gate the
-    /// commands, the spawn and the web lane ask, read per request. Same rule
-    /// as every experimental flag ([`Self::experimental`]).
+    /// commands, the spawn and the web lane ask, read per request. On by
+    /// default ([`Self::experimental_on_by_default`]).
     pub fn assistant_enabled(&self) -> bool {
-        self.experimental(self.assistant)
+        Self::experimental_on_by_default(self.assistant)
     }
 
     /// Whether a paired phone may use the assistant: the flag on and the
@@ -1451,8 +1458,12 @@ mod tests {
         assert!(!marked_debug.python_run_debug());
         assert!(!marked_debug.deck_presenter());
         assert!(!marked_debug.web_browser());
-        assert!(!marked_debug.mail_client());
         assert!(!marked_debug.copilot_completion());
+        // Mail and the assistant are on by default, marked or not.
+        assert!(marked_debug.mail_client());
+        assert!(marked_debug.assistant_enabled());
+        assert!(Settings::default().mail_client());
+        assert!(Settings::default().assistant_enabled());
 
         let ticked = Settings {
             debug: Some(true),
@@ -1970,16 +1981,15 @@ mod default_rule_tests {
         assert_eq!(back["assistant"], true);
     }
 
-    /// The assistant follows the rule of every experimental flag: unset is
-    /// off (Debug mode decides only on a profile not yet marked explicit), an
+    /// The assistant is on by default (unset is on, Debug mode or not), an
     /// explicit value wins. The phone gate adds `assistant_access`, which is
     /// on unless written `false`.
     #[test]
     fn the_assistant_gates_follow_the_flag_and_the_phone_switch() {
-        assert!(!Settings::default().assistant_enabled());
-        assert!(!Settings::default().assistant_phone_open());
+        assert!(Settings::default().assistant_enabled());
+        assert!(Settings::default().assistant_phone_open());
         let marked = Settings { debug: Some(true), experimental_explicit: Some(true), ..Default::default() };
-        assert!(!marked.assistant_enabled());
+        assert!(marked.assistant_enabled());
         let unmarked_debug = Settings { debug: Some(true), ..Default::default() };
         assert!(unmarked_debug.assistant_enabled());
         let on = Settings { assistant: Some(true), ..Default::default() };

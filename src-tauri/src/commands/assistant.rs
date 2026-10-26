@@ -398,8 +398,9 @@ mod tests {
     fn the_flag_gates_every_command() {
         assert_eq!(gate(false), Err(OFF.to_string()));
         assert_eq!(gate(true), Ok(()));
-        // An absent settings block is off.
-        assert!(!Settings::default().assistant_enabled());
+        // An absent settings block is on: the assistant ships switched on.
+        assert!(Settings::default().assistant_enabled());
+        assert!(!settings_with(r#"{"assistant": false}"#).assistant_enabled());
     }
 
     #[test]

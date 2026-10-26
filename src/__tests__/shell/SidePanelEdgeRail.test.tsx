@@ -254,6 +254,8 @@ describe("side panel rail — docked (default)", () => {
   });
 
   it("offers no Tabby tab with the experimental switch off", async () => {
+    // On by default, so off is an explicit `false`.
+    reset({ assistant: false });
     await mount();
     expect(screen.queryByTitle("Show the Tabby panel")).toBeNull();
   });

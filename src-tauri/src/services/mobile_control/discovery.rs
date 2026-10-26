@@ -940,14 +940,13 @@ pub(super) fn is_assistant_scope_id(id: &str) -> bool {
 }
 
 /// Whether the chat assistant is the phone's right now: the experimental flag
-/// on and `[MOBILE_HOST_KEY].assistant_access` not `false` (unset is on — it
+/// on (unset is on) and `[MOBILE_HOST_KEY].assistant_access` not `false` (unset is on — it
 /// holds no right a phone should not reach). Read per catalog load, like
 /// [`root_open`], so turning either off unlists the scope and an open chat
 /// detaches at `pty_bridge`'s next re-check. Raw JSON, the sidecar's way;
 /// [`crate::schema::Settings::assistant_phone_open`] is the same rule on the
-/// typed settings and a test holds the two together (including the debug
-/// fallback of a profile not yet marked `experimental_explicit`). Missing or
-/// unreadable settings refuse.
+/// typed settings and a test holds the two together. The flag is on by
+/// default (unset → on). Missing or unreadable settings refuse.
 pub fn assistant_open(state_dir: &Path) -> bool {
     let Some(settings) = fs::read(state_dir.join("settings.json"))
         .ok()
@@ -964,7 +963,10 @@ pub fn assistant_open(state_dir: &Path) -> bool {
             Some(_) => None,
         }
     };
-    let (Some(flag_on), Some(explicit), Some(debug)) = (flag("assistant"), flag("experimental_explicit"), flag("debug")) else {
+    // `experimental_explicit` and `debug` no longer decide (the assistant is on
+    // by default), but a wrong-typed value still fails the typed parse, so it
+    // still closes this reader.
+    let (Some(flag_on), Some(_), Some(_)) = (flag("assistant"), flag("experimental_explicit"), flag("debug")) else {
         return false;
     };
     let host = settings.get(crate::brand::MOBILE_HOST_KEY);
@@ -975,7 +977,7 @@ pub fn assistant_open(state_dir: &Path) -> bool {
     }) else {
         return false;
     };
-    flag_on.unwrap_or_else(|| !explicit.unwrap_or(false) && debug.unwrap_or(false)) && access != Some(false)
+    flag_on.unwrap_or(true) && access != Some(false)
 }
 
 /// The assistant scope's per-phone list, `[MOBILE_HOST_KEY].assistant_devices`:
