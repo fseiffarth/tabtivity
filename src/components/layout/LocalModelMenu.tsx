@@ -13,7 +13,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
-import { ModelsGlyph } from "../header/HeaderGlyphs";
+import { BrainGlyph } from "../header/HeaderGlyphs";
 import { LOCAL_MODEL_MENU_ID, useAutoloadNotice, useModelsHub } from "../models/useModelsHub";
 import { AgentChips, LocalModelsSection, MachineMeters, MODEL_ROLES } from "../models/ModelsHubSections";
 
@@ -342,11 +342,7 @@ export function LocalModelMenu() {
           reveal();
         }}
       >
-        {/* A processor chip — on-device compute — drawn rather than typed, like
-            the 🔔: the 🧠 it replaces was a colour emoji that ignored the theme
-            and sat apart from the ✉ 🗓 ☑ beside it. The menu's own copy names
-            it by its title, "Models & agents". */}
-        <ModelsGlyph className="local-model-icon" />
+        <BrainGlyph className="local-model-icon" />
         {installed && (
           <span
             className={`local-model-status-dot ${status}`}

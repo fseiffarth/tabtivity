@@ -1641,9 +1641,9 @@ export function LocalModelsSection({
  * The Machine group: CPU, RAM and GPU, each the *device's* figure. Its own
  * group, and the dropdown's last, because it is neither an agent nor a model:
  * it is what the machine has left for whichever of them you pick. The overlay
- * shows it as the strip above its Local models tab.
+ * shows it below the overview tiles and above its Local models tab.
  */
-export function MachineMeters({ hub, layout = "menu" }: { hub: ModelsHub; layout?: "menu" | "overlay" }) {
+export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "gpus" | "machine">; layout?: "menu" | "overlay" }) {
   const t = useT();
   const { gpus, machine } = hub;
   const { used: gpuUsed, total: gpuTotal } = gpuTotals(gpus);

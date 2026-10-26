@@ -274,6 +274,7 @@ export const UNTESTED = {
   "localModel.skillsLibrary": { area: "layout", what: "LocalModelMenu · Skills library…" },
   "localModel.manageAgents": { area: "layout", what: "LocalModelMenu · Manage CLIs… opens the Models & agents overlay's Agents & CLIs tab" },
   "localModel.manageLocalModels": { area: "layout", what: "LocalModelMenu · Manage local models… / Install Ollama… opens the overlay's Ollama tab" },
+  "modelsOverlay.machine": { area: "layout", what: "ModelsOverlay · live CPU, RAM and GPU machine meters below the four overview cards" },
   "modelsOverlay.title": { area: "layout", what: "ModelsOverlay · Models & agents (header button click; overview tile grid with live summaries, back button, tiled agent cards, Escape, focus return)" },
   "localModelMenu.1": { area: "layout", what: "LocalModelMenu · MCP", tested: "2026-09-20" },
   "localModelMenu.2": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },

@@ -128,11 +128,22 @@ export function VpnGlyph({ className }: { className: string }) {
   );
 }
 
-/** A processor chip — on-device compute — for the Models & agents button
- *  (`layout/LocalModelMenu`) and the overlay it opens (`models/ModelsOverlay`).
- *  The one glyph here NOT on the shared 16-unit `Glyph` grid: it keeps the
- *  24-unit drawing and 1.4 stroke it had inline in the button, so the button
- *  (sized to 19px by `svg.local-model-icon`) stays pixel-identical. */
+/** A brain — the Models & agents hub, including hosted and local models.
+ *  Shares the rail's 16-unit grid, outline height and stroke weight. */
+export function BrainGlyph({ className }: { className: string }) {
+  return (
+    <Glyph className={className}>
+      <g {...STROKE}>
+        <path d="M8 4a2 2 0 0 0-3.9-.6 2.5 2.5 0 0 0-2 3.9 2.7 2.7 0 0 0 .5 4.7A2.5 2.5 0 0 0 8 12V4Z" />
+        <path d="M8 4a2 2 0 0 1 3.9-.6 2.5 2.5 0 0 1 2 3.9 2.7 2.7 0 0 1-.5 4.7A2.5 2.5 0 0 1 8 12V4Z" />
+        <path d="M4.1 3.4v1.8M11.9 3.4v1.8M2.1 7.3h1.4A1.5 1.5 0 0 1 5 8.8M13.9 7.3h-1.4A1.5 1.5 0 0 0 11 8.8M5.2 11a2.8 2.8 0 0 1 2.8 2M10.8 11A2.8 2.8 0 0 0 8 13" />
+      </g>
+    </Glyph>
+  );
+}
+
+/** A processor chip — the Local models section keeps its compute icon.
+ *  Retains its original 24-unit drawing and 1.4 stroke. */
 export function ModelsGlyph({ className }: { className: string }) {
   return (
     <svg

@@ -18,15 +18,15 @@ import type { InstalledSkill } from "../../types/skills";
 import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { ArrowLeftIcon, ArrowRightIcon, InboxIcon, SparkleIcon, TerminalIcon } from "../common/icons/Icon";
-import { ModelsGlyph } from "../header/HeaderGlyphs";
+import { BrainGlyph, ModelsGlyph } from "../header/HeaderGlyphs";
 import { AgentsPanel, OllamaPanel } from "../layout/SettingsSubPanels";
 import { SkillsLibraryView } from "../skills/SkillsLibraryView";
 import { AgentChips, LocalModelsSection, MachineMeters } from "./ModelsHubSections";
-import { useModelsHub, type HubAgentInfo } from "./useModelsHub";
+import { useMachineMeters, useModelsHub, type HubAgentInfo } from "./useModelsHub";
 import { storageKey } from "../../lib/brand";
 
 /**
- * The **Models & agents overlay** — what a click on the header's processor-chip
+ * The **Models & agents overlay** — what a click on the header's brain
  * button (`layout/LocalModelMenu`) opens. The hover dropdown stays as it was;
  * this is the room it points into: everything the dropdown does, plus what it
  * used to send to Settings for (installing and removing agent CLIs, installing
@@ -197,7 +197,7 @@ function ModelsOverlay() {
             </button>
           )}
           <div className="root-overlay-mark app-overlay-mark models-overlay-mark" title={moveHint}>
-            <ModelsGlyph className="models-overlay-glyph" />
+            <BrainGlyph className="models-overlay-glyph" />
             <span className="app-overlay-label models-overlay-label">{t("modelsOverlay.title")}</span>
             <UntestedTag id="modelsOverlay.title" />
           </div>
@@ -308,6 +308,8 @@ function OverviewGrid({
 }) {
   const t = useT();
   const quiesce = useQuiesce();
+
+  const machineMeters = useMachineMeters(true);
 
   const [agents, setAgents] = useState<HubAgentInfo[] | null>(null);
   useEffect(() => {
@@ -459,6 +461,10 @@ function OverviewGrid({
           {MODELS_OVERLAY_SECTIONS.map((id) => (
             <SectionTile key={id} id={id} summary={summary[id]} onOpen={() => onOpen(id)} />
           ))}
+        </div>
+        <div className="models-home-machine">
+          <UntestedTag id="modelsOverlay.machine" />
+          <MachineMeters hub={machineMeters} layout="overlay" />
         </div>
       </div>
     </div>
