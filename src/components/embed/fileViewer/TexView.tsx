@@ -623,7 +623,7 @@ export function TexView({
       }
       const { line, column } = offsetToLineCol(text, caret);
       // Pick the record (box / wrapped row) the clicked column lands in.
-      const rect = pickSyncRect(await synctexView(pdf, path, line), sourceColumnFraction(text, line, column));
+      const rect = pickSyncRect(await synctexView(pdf, path, line, scope), sourceColumnFraction(text, line, column));
       if (rect) {
         if (!opts.afterCompile) openPdf(pdf);
         // Pass the clicked word + neighbours so the PDF narrows the line box to
@@ -632,13 +632,13 @@ export function TexView({
       } else if (opts.afterCompile) {
         usePdfSyncStore.getState().requestReload(pdf);
       }
-      const raw = await synctexStatus(pdf);
+      const raw = await synctexStatus(pdf, scope);
       const moved = opts.saved != null && editedAboveLine(opts.saved, text, line);
       const status = moved ? withUnsavedSource(raw, path) : raw;
       const kind = syncNoticeKind(status, rect != null);
       if (kind) setSyncNote({ kind, files: status?.newer_sources ?? [] });
     },
-    [remoteSource, path, openPdf],
+    [remoteSource, path, openPdf, scope],
   );
 
   // SyncTeX forward search on demand: reveal the caret's box in the PDF without
