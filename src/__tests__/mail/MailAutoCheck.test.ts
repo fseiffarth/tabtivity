@@ -30,7 +30,7 @@ describe("backgroundCheckBlocked", () => {
   });
 
   it("matches the backend's AuthFailed text, which crosses IPC as a string", () => {
-    const engine: string = readFileSync("src-tauri/src/services/mail_engine.rs", "utf8");
+    const engine: string = readFileSync("src-tauri/src/services/mail/mail_engine.rs", "utf8");
     const display = engine.match(/MailError::AuthFailed => write!\(\s*f,\s*(?:concat!\()?"([^"\\]*)/);
     expect(display).not.toBeNull();
     expect(isAuthRejection(display![1])).toBe(true);
