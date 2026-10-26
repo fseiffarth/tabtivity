@@ -157,3 +157,112 @@ All green on `756b9fd3` (own `CARGO_TARGET_DIR` = `<worktree>/target`,
 - Confirm when convenient (from the plan): a project-opened row whose window
   can't be seen and whose family died is kept delist-only rather than
   vanishing.
+
+## A3 — frontend honesty (Phase 3)
+
+Commits: `dcbd253c` (code, tests, i18n, help, QA rows) + `05d37191` (a
+stale-path test fix, see Gotchas) + the commit adding this section. Branch
+`worktree-agent-a9a73212bba58156e`, on A1a's `bfe5480f`. Disjoint from A1b
+(no `apps.rs`/`ide.rs`/`window_service.rs`/`project_runtime.rs` edits).
+
+### What landed
+
+- **Backend.** `WorkspaceCapabilities` gains `wayland_session: bool`;
+  `capabilities_of(backend, wayland_session)` stays pure, the command passes
+  `platform::session_is_wayland()`. `null_backend_reports_it_cannot_park`
+  extended (flag passed through, snake_case JSON keys). No new command → no
+  `command_class` row; `the_generated_command_classes_ts_is_current` passed
+  in the lib run.
+- **`src/lib/workspaceCaps.ts`** (new): `parseWorkspaceCaps` (null unless
+  `can_park` is a boolean; a missing `wayland_session` → `false`, so an
+  older backend never triggers the Wayland line), `loadWorkspaceCaps` (one
+  module-level promise per session, failures → `null`), `useWorkspaceCaps`,
+  `useCanPark`, `rowStaysVisible(caps, windowId)` (pure per-row rule:
+  `canPark && waylandSession && window_id == null` → `"wayland"`),
+  `resetWorkspaceCaps` (test seam, as `superKey.ts`).
+- **Settings.** `WorkspaceParkingNote` uses `useCanPark()` (Linux only, as
+  before); its stray doc comment moved onto it.
+  `settings.workspaceNoParking` reworded in all five dictionaries (names
+  GNOME X11/Wayland, Cinnamon, KDE X11; Wayland = XWayland windows only).
+- **Apps view** (`ProjectFilesView.tsx`, `view === "windows"`): rows are now
+  `Fragment`s so a muted `file-tree-empty` line can follow a row without
+  wrapping `.file-entry`. New keys `projectFilesView.noParkingNote`,
+  `projectFilesView.waylandStaysVisible` (+ `UntestedTag` and `untested.ts`
+  rows with those ids).
+- **Help** `docs/help/project-desktop.md`: table reworded, plus one
+  paragraph on GNOME/Cinnamon workspace settings being set and restored.
+- **QA** `todo/group-c-workspace.md` #22: seven 🖐️ items with ✅/❌ pairs
+  (all four platforms on the PyCharm switch item, Linux X11/Wayland where
+  only those apply — the file's precedent).
+
+### Choices beyond the plan's letter
+
+- **`!can_park` is said once for the list**, not on every row (one muted
+  line above the rows, Linux only). Per row it would repeat the same
+  sentence N times; the per-row line is kept for the Wayland case, where it
+  distinguishes rows.
+- **Help table sibling fix:** the old row "KDE Plasma (Wayland) — one
+  virtual desktop per project" was wrong (`wayland_kde.rs`: show/hide are
+  no-ops, `can_park` false), and "Linux, X11 — hidden desktop" was wrong for
+  XFCE/X11 (→ `null`). Rows are now KDE X11 + Cinnamon / GNOME (X11 and
+  Wayland) / KDE Wayland, XFCE and others.
+- The Wayland line also shows on a pid-0 windowless row (hand-off/OS-default
+  open) — true there too: nothing can hide it.
+
+### Gotchas
+
+- The plan file is untracked in the main checkout, not in any branch; A3
+  read it from there.
+- `src/__tests__/mail/MailAutoCheck.test.ts` read
+  `services/mail_engine.rs`, moved to `services/mail/` by `dd8cb0f1`: the
+  only failing vitest test on the base. Fixed in `05d37191` (path only).
+- Render tests of `ProjectFilesView` with a catch-all `invoke` mock must
+  answer `git_repo_root` with `null`, not `[]` (an unhandled `p.replace`
+  rejection otherwise).
+- The worktree's isolation check refuses compound shell lines (`$PWD`,
+  `&&` around `rtk`, `cd` into the main checkout); use literal paths and
+  simple commands.
+
+### Gates (on `05d37191`)
+
+- `npm run build`: green (tsc + desktop, mobile, web bundles).
+- `npm test -- --reporter=dot`: 955 files, 9506 tests — 9505 passed + the
+  mail test above, which passes after `05d37191` (5/5 re-run). New: 5 in
+  `files/AppsViewParking.test.tsx` (first Apps-view render test: Wayland
+  line only on windowless rows, nothing on X11, one list line when nothing
+  parks, silence on `{}`, pid-0 IDE row has "Remove from list"); 3 added to
+  `projects/WorkspaceParkingNote.test.tsx` (pre-field backend, `{}`, one
+  fetch for two mounts).
+- `npm run lint`: 0 errors, 28 warnings — none new (the two in
+  `ProjectFilesView.tsx` are the existing `refresh`/`refreshGit` deps).
+- `cargo test -q -p tabtivity --lib`: 4742 passed, 7 ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings`: clean.
+- `scripts/brand-check.sh`, `git diff --check`, `scripts/privacy-check.sh`
+  (staged): pass.
+- Not run: `cargo test` for the daemon build (`--no-default-features --test
+  server_secrets`) — `workspace.rs`'s change is in code both builds compile,
+  covered by the no-default-features clippy; `scripts/ci-local.sh`;
+  `npm run backend:stale` (main agent, after merge).
+
+### Wanted filemap rows (apply at merge)
+
+- `docs/filemap_frontend.md`, new row near the other `lib/` rows:
+  "`lib/workspaceCaps.ts` | `workspace_capabilities` fetched once per session
+  (`useWorkspaceCaps`/`useCanPark`; `null` on the browser client's `{}` or an
+  older backend) + `rowStaysVisible`: under Wayland a row without a window id
+  (not XWayland) stays on screen on a project switch."
+- `files/ProjectFilesView.tsx` row: Apps view "says once when the desktop
+  parks nothing and marks Wayland rows it can't hide (`lib/workspaceCaps`)".
+- `docs/filemap_backend.md` `commands/workspace.rs` row: `workspace_capabilities`
+  also answers `wayland_session`.
+
+### Flagged for user
+
+- Nothing live-verified; both new lines wear `UntestedTag`
+  (`projectFilesView.noParkingNote`, `projectFilesView.waylandStaysVisible`).
+- Decide when convenient: the "parks nothing" note is one line per list
+  rather than per row (see Choices).
+- The help table claims GNOME parks on X11 and Wayland — true only once A2
+  lands and the owed live facts (Mutter honouring `_NET_WM_DESKTOP` from
+  XWayland) hold.
