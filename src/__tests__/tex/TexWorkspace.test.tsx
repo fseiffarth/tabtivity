@@ -964,7 +964,7 @@ it("skips Markdown parsing and image reads while hidden or editing", async () =>
 
 it("flushes a replaced viewer to its original scoped path and ignores late completion", async () => {
   cleanup();
-  const { useEditableFile } = await import("../../components/embed/FileViewerPane");
+  const { useEditableFile } = await import("../../components/embed/fileViewer/editableFile");
   const { FileScopeContext } = await import("../../lib/files/fileAccess");
   const { useSettingsStore } = await import("../../stores/settings");
   const settings = useSettingsStore.getState().settings!;

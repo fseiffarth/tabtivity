@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ModeToggle, ViewerHeader, useReadonlyFile } from "./FileViewerPane";
+import { ModeToggle } from "./fileViewer/toolbar";
+import { ViewerHeader } from "./fileViewer/ViewerHeader";
+import { useReadonlyFile } from "./fileViewer/editableFile";
 import { useT } from "../../lib/i18n";
 import { useProjectsStore } from "../../stores/projects";
 import { resolveProjectDirectory } from "../../types";

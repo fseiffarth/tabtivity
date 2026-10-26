@@ -33,7 +33,7 @@ import { useExperimental } from "../../../lib/experimental";
 import { emptyDeck } from "../../../lib/viewers/deck/model";
 import { deckPathForPdf, serializeDeck } from "../../../lib/viewers/deck/sidecar";
 import { jumpToSource } from "../fileViewer/sourceJump";
-import { SaveButton } from "../FileViewerPane";
+import { SaveButton } from "../fileViewer/toolbar";
 import { useViewerState } from "../fileViewer/viewerState";
 import { canRecompileTexSource, recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import { isServerClient } from "../../../lib/transport/linkState";

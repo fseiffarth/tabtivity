@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ViewerHeader } from "./FileViewerPane";
+import { ViewerHeader } from "./fileViewer/ViewerHeader";
 import { useViewerState } from "./fileViewer/viewerState";
 import { useFileScope, readFileBytes } from "../../lib/files/fileAccess";
 import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";

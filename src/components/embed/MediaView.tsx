@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ViewerHeader } from "./FileViewerPane";
+import { ViewerHeader } from "./fileViewer/ViewerHeader";
 import { useFileScope, readFileBytes } from "../../lib/files/fileAccess";
 import { basename } from "../../lib/paths";
 import { useT } from "../../lib/i18n";
