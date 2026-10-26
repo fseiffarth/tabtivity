@@ -863,6 +863,30 @@ fn moving_a_message_changes_its_folder() {
 }
 
 #[test]
+fn a_move_without_a_destination_uid_drops_the_row_for_the_next_sync() {
+    let (_d, store) = store();
+    let inbox = folder("a1", "INBOX");
+    let archive = folder("a1", "Archive");
+    store.upsert_folder(&inbox).unwrap();
+    store.upsert_folder(&archive).unwrap();
+    let mapped = header(&inbox, 1, "mapped", "2026-07-01T09:00:00Z");
+    let unmapped = header(&inbox, 2, "unmapped", "2026-07-01T10:00:00Z");
+    store.upsert_header(&mapped).unwrap();
+    store.upsert_header(&unmapped).unwrap();
+
+    store
+        .move_messages(&[mapped.id.clone(), unmapped.id.clone()], &archive.id, &[(1, 42)])
+        .unwrap();
+    assert_eq!(store.header(&mapped.id).unwrap().unwrap().uid, 42);
+    assert!(store.header(&unmapped.id).unwrap().is_none());
+    let total = |f: &str| {
+        store.headers_page(f, 0, 10, None, MailSort::Date, true, false).unwrap().total
+    };
+    assert_eq!(total(&inbox.id), 0);
+    assert_eq!(total(&archive.id), 1);
+}
+
+#[test]
 fn moving_a_message_preserves_its_local_id_and_mark_across_sync() {
     let (_d, store) = store();
     let inbox = folder("a1", "INBOX");

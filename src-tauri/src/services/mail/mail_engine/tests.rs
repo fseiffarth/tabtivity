@@ -40,8 +40,11 @@ fn move_uids_follow_copyuid_order_and_reject_invalid_mappings() {
     assert!(move_uid_pairs(&[Uid(1)], &[UidRange(1..=u32::MAX)], 1).is_err());
     assert!(move_uid_pairs(&[Uid(0)], &[Uid(1)], 1).is_err());
     assert!(move_uid_pairs(&[Uid(1)], &[UidRange(1..=2)], 2).is_err());
-    assert!(validate_move_uids(&[1, 2], &[(1, 9)]).is_err());
+    // Partial or absent COPYUID: moved, destination UIDs unknown.
+    assert!(validate_move_uids(&[1, 2], &[(1, 9)]).is_ok());
+    assert!(validate_move_uids(&[1, 2], &[]).is_ok());
     assert!(validate_move_uids(&[1, 2], &[(1, 9), (2, 9)]).is_err());
+    assert!(validate_move_uids(&[1, 2], &[(1, 9), (1, 10)]).is_err());
     assert!(validate_move_uids(&[1, 2], &[(1, 9), (3, 10)]).is_err());
 }
 

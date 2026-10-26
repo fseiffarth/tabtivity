@@ -2150,6 +2150,7 @@ impl MailStore {
     ) -> Result<(), String> {
         let mut conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut dropped = false;
         for id in message_ids {
             let source_uid: u32 = tx
                 .query_row("SELECT uid FROM messages WHERE id = ?1", params![id], |r| r.get(0))
@@ -2158,15 +2159,28 @@ impl MailStore {
                 .iter()
                 .find(|p| p.0 == source_uid)
                 .map(|p| p.1)
-                .filter(|uid| *uid > 0)
-                .ok_or_else(|| "missing destination UID for moved message".to_string())?;
-            tx.execute(
-                "UPDATE messages SET folder_id = ?1, uid = ?3 WHERE id = ?2",
-                params![dest_folder_id, id, dest_uid],
-            )
-            .map_err(|e| e.to_string())?;
+                .filter(|uid| *uid > 0);
+            match dest_uid {
+                Some(dest_uid) => {
+                    tx.execute(
+                        "UPDATE messages SET folder_id = ?1, uid = ?3 WHERE id = ?2",
+                        params![dest_folder_id, id, dest_uid],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // Moved, but the server named no destination UID (no UIDPLUS):
+                // the source UID must not be reused there, so the row goes and
+                // the destination's next sync brings the message back.
+                None => {
+                    delete_message_rows(&tx, id)?;
+                    dropped = true;
+                }
+            }
         }
         tx.commit().map_err(|e| e.to_string())?;
+        if dropped {
+            self.prune_blobs_locked(&conn)?;
+        }
         Ok(())
     }
 
@@ -2188,26 +2202,7 @@ impl MailStore {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut removed = 0u32;
         for id in message_ids {
-            tx.execute(
-                "DELETE FROM attachments WHERE message_id = ?1",
-                params![id],
-            )
-            .map_err(|e| e.to_string())?;
-            tx.execute(
-                "DELETE FROM bodies_cache WHERE message_id = ?1",
-                params![id],
-            )
-            .map_err(|e| e.to_string())?;
-            // The consent went with the message; a later row under a reused
-            // id must not inherit it.
-            tx.execute(
-                "DELETE FROM agent_marks WHERE message_id = ?1",
-                params![id],
-            )
-            .map_err(|e| e.to_string())?;
-            removed += tx
-                .execute("DELETE FROM messages WHERE id = ?1", params![id])
-                .map_err(|e| e.to_string())? as u32;
+            removed += delete_message_rows(&tx, id)?;
         }
         tx.commit().map_err(|e| e.to_string())?;
         self.prune_blobs_locked(&conn)?;
@@ -4037,6 +4032,22 @@ fn configure(conn: &Connection) {
     conn.pragma_update(None, "journal_mode", "WAL").ok();
     conn.pragma_update(None, "foreign_keys", "ON").ok();
     conn.pragma_update(None, "temp_store", "MEMORY").ok();
+}
+
+/// One message's row, cached body, attachment rows and agent marks; the
+/// caller prunes the blobs once its transaction committed.
+fn delete_message_rows(conn: &Connection, id: &str) -> Result<u32, String> {
+    conn.execute("DELETE FROM attachments WHERE message_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM bodies_cache WHERE message_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    // The consent went with the message; a later row under a reused
+    // id must not inherit it.
+    conn.execute("DELETE FROM agent_marks WHERE message_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(conn
+        .execute("DELETE FROM messages WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())? as u32)
 }
 
 /// The AAD row key for `staged`, whose primary key is composite. NUL-joined,

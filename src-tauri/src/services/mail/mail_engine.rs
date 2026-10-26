@@ -123,15 +123,17 @@ fn move_uid_pairs(
     Ok(source.into_iter().zip(dest).collect())
 }
 
+/// A mapping may be partial — a server without UIDPLUS sends no COPYUID, and a
+/// UID that was already gone is left out — since the MOVE itself succeeded; the
+/// store drops the unmapped rows and the destination's next sync re-adds them.
+/// A pair naming a UID that was not asked for, or a repeated UID, is refused.
 fn validate_move_uids(uids: &[u32], pairs: &[(u32, u32)]) -> Result<(), MailError> {
     use std::collections::HashSet;
     let expected: HashSet<u32> = uids.iter().copied().collect();
     let sources: HashSet<u32> = pairs.iter().map(|p| p.0).collect();
     let destinations: HashSet<u32> = pairs.iter().map(|p| p.1).collect();
-    if sources != expected || sources.len() != pairs.len() || destinations.len() != pairs.len() {
-        return Err(MailError::Protocol(
-            "the server did not confirm destination UIDs for every moved message; check mail to refresh".into(),
-        ));
+    if !sources.is_subset(&expected) || sources.len() != pairs.len() || destinations.len() != pairs.len() {
+        return Err(MailError::Protocol("invalid IMAP MOVE UID mapping".into()));
     }
     Ok(())
 }
