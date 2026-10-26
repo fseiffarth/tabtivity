@@ -596,6 +596,28 @@ describe("the desktop Reader's live screen", () => {
     expect(readReaderLive(plainBuffer(PERMISSION), "Claude").screen).toEqual([]);
   });
 
+  it("reads OpenCode 2's mini start screen as its input frame, not a stray screen", () => {
+    // 2.1.3, as a local-model tab draws it before the first prompt.
+    const idle = readReaderLive(plainBuffer([
+      "▪ oc mini v2.1.3 · ~/projects/app",
+      "",
+      "┃ Ask anything, / for commands, @ for context…",
+      "",
+      "Build · gemma4:26b · Ollama (local) · ctrl+p menu",
+    ]), "gemma4:26b · OpenCode", 120);
+    expect(idle.stray).toBe(false);
+    expect(idle.working).toBeNull();
+    expect(idle.status).toEqual({ mode: "build", model: "gemma4:26b" });
+    const busy = readReaderLive(plainBuffer([
+      "› Read a.txt and tell me its content in one sentence.",
+      "┃",
+      "🯦 esc interrupt · Build · gemma4:e4b · 7.7K (6%) · Ollama · ctrl+p menu",
+    ]), "gemma4:e4b · OpenCode", 120);
+    expect(busy.stray).toBe(false);
+    expect(busy.working).not.toBeNull();
+    expect(busy.status).toEqual({ mode: "build", model: "gemma4:e4b", context: "94%" });
+  });
+
   it("reads the CLIs' real first-run screens as their own questions", () => {
     const theme = readReaderLive(plainBuffer(CLAUDE_THEME), "Claude", 120);
     expect(theme.question?.options).toHaveLength(7);

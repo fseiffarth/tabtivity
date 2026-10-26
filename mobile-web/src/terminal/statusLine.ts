@@ -29,6 +29,7 @@ import {
   isOpenCodePlaceholder,
   openCodeComposer,
   openCodeFullFooter,
+  openCodeMiniRow,
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
@@ -60,6 +61,9 @@ export interface StatusLineLike {
   /** The row's styled runs, where the caller has them: OpenCode's full TUI
    * says only by colour where its model's name ends and its provider's begins. */
   spans?: readonly { text: string; color?: string }[];
+  /** Columns of box edge `readableScreen` took off the row's front: OpenCode
+   * 2's `┃` input box is told from the output above it by this. */
+  edge?: number;
 }
 
 /** The input prompt after `readableScreen` stripped the box frame: `>`, `›` or
@@ -323,6 +327,8 @@ function openCodeFrame(
   if (index < 0 || index < lines.length - SEARCH_WINDOW) return null;
   const row = openCodeStatusRow(lines[index].text);
   if (!row) {
+    const v2 = openCodeMiniV2Frame(lines, index);
+    if (v2) return v2;
     const full = openCodeFullFrame(lines, index);
     if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
     // The start screen's own footer sits under the box's.
@@ -340,6 +346,41 @@ function openCodeFrame(
   if (row.context) status.context = row.context;
   if (row.model) status.model = row.model;
   if (!status.model) {
+    for (let above = start - 1; above >= 0; above -= 1) {
+      const footer = openCodeTurnFooter(lines[above].text);
+      if (!footer) continue;
+      if (footer.model) status.model = footer.model;
+      break;
+    }
+  }
+  return { start, status };
+}
+
+/**
+ * OpenCode 2's `mini` live area, whose status row is `index`
+ * (`openCodeMiniRow`): the `┃` box above it — its placeholder, a draft, or,
+ * empty, nothing `readableScreen` keeps — and the blank rows around it. The
+ * model, where the row had no room for it, comes from the last turn footer
+ * (`Build · gemma4:e4b · 16.9s`), as `--mini`'s does.
+ */
+function openCodeMiniV2Frame(
+  lines: readonly StatusLineLike[],
+  index: number,
+): { start: number; status: SessionStatus } | null {
+  const row = openCodeMiniRow(lines[index].text);
+  if (!row) return null;
+  let start = index;
+  while (start > 0) {
+    const above = lines[start - 1];
+    if (!above.text.trim() || (above.edge ?? 0) > 0 || isOpenCodePlaceholder(above.text)) start -= 1;
+    else break;
+  }
+  const status: SessionStatus = {};
+  if (row.mode) status.mode = row.mode;
+  if (row.model) status.model = row.model;
+  if (row.variant) status.effort = row.variant;
+  if (row.context) status.context = row.context;
+  if (!status.model || status.model.endsWith("…")) {
     for (let above = start - 1; above >= 0; above -= 1) {
       const footer = openCodeTurnFooter(lines[above].text);
       if (!footer) continue;

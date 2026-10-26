@@ -7,6 +7,7 @@ import {
   joinOpenCodeWraps,
   openCodeDialogCloseKeys,
   mergeOpenCodePage,
+  openCodeMiniRow,
   openCodePickKeys,
   OpenCodePickerWalk,
   readOpenCodePicker,
@@ -190,7 +191,80 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
   });
 });
 
+/** OpenCode 2's `mini` status rows, captured from 2.1.3 at the widths named. */
+describe(`${BRAND.display} Mobile OpenCode 2 mini status`, () => {
+  it("reads the idle row, wide and narrow", () => {
+    expect(openCodeMiniRow("Build · gemma4:26b · Ollama (local) · ctrl+p menu"))
+      .toEqual({ busy: false, mode: "build", model: "gemma4:26b" });
+    expect(openCodeMiniRow("Build · gemma4:e4b · 7.8K (6%) · Ollama · ctrl+p menu"))
+      .toEqual({ busy: false, mode: "build", model: "gemma4:e4b", context: "94%" });
+    // 30 columns: no menu, no context.
+    expect(openCodeMiniRow("Build · gemma4:e4b · Ollama")).toEqual({ busy: false, mode: "build", model: "gemma4:e4b" });
+    expect(openCodeMiniRow("Plan · Muse Spark [high] · 12% ctx · $0.02 · ctrl+p menu"))
+      .toEqual({ busy: false, mode: "plan", model: "Muse Spark", variant: "high", context: "88%" });
+  });
+
+  it("reads the working row behind its spinner", () => {
+    expect(openCodeMiniRow("🯦 esc interrupt · Build · gemma4:e4b · 7.7K (6%) · Ollama · ctrl+p menu"))
+      .toEqual({ busy: true, mode: "build", model: "gemma4:e4b", context: "94%" });
+    expect(openCodeMiniRow("🯧 esc stop · Build · gemma4:e4b · Ollama")).toEqual({ busy: true, mode: "build", model: "gemma4:e4b" });
+    expect(agentWorking(lines("› Say hi.", "🯧 esc stop · Build · gemma4:e4b · Ollama"))).toBe(true);
+    expect(agentWorking(lines("› Say hi.", "🯦 esc interrupt · Build · gemma4:e4b · Ollama · ctrl+p menu"))).toBe(true);
+    expect(agentWorking(lines("Build · gemma4:e4b · Ollama · ctrl+p menu"))).toBe(false);
+  });
+
+  it("is not the banner, a turn's footer, or prose", () => {
+    expect(openCodeMiniRow("▪ oc mini v2.1.3 · ~/projects/app")).toBeNull();
+    expect(openCodeMiniRow("Build · gemma4:e4b · 16.9s")).toBeNull();
+    expect(openCodeMiniRow("The file a.txt contains the single word \"hello\".")).toBeNull();
+    expect(openCodeMiniRow("one · two · three · four")).toBeNull();
+  });
+
+  it("finds the frame the Chat used to call a stray screen", () => {
+    // The start screen, at 120 columns, as `readableScreen` leaves it.
+    const start = lines(
+      "▪ oc mini v2.1.3 · ~/projects/app",
+      "",
+      "Ask anything, / for commands, @ for context…",
+      "",
+      "Build · gemma4:26b · Ollama (local) · ctrl+p menu",
+    );
+    expect(sessionStatus(start, "gemma4:26b · OpenCode")).toEqual({ mode: "build", model: "gemma4:26b" });
+    expect(inputFrameStart(start, "gemma4:26b · OpenCode")).toBe(1);
+    expect(inputFrameStart(start, "Claude")).toBe(start.length);
+  });
+
+  it("takes the box's wrapped placeholder into the frame, and nothing above it", () => {
+    const box = (text: string): ReadableLine => ({ ...line(text), edge: 2 });
+    const screen = [
+      ...lines("› Say hi.", "", "Hi there!", "", "Build · gemma4:e4b · 2.1s", ""),
+      box("Ask anything, / for"),
+      box("commands, @ for context…"),
+      line("Build · gemma4:e4b · Ollama"),
+    ];
+    expect(inputFrameStart(screen, "OpenCode")).toBe(5);
+  });
+
+  it("names the model from the turn footer where the row cut it", () => {
+    expect(sessionStatus(lines("Hi there!", "", "Build · gemma4:e4b · 2.1s", "", "Build · gemm… · Ollama"), "OpenCode"))
+      .toEqual({ mode: "build", model: "gemma4:e4b" });
+  });
+});
+
 describe(`${BRAND.display} Mobile OpenCode mini turns`, () => {
+  it("drops OpenCode 2's banner and turn footer", () => {
+    const turns = chatTurns(lines(
+      "▪ oc mini v2.1.3 · ~/projects/app",
+      "› Read a.txt and tell me its content in one sentence.",
+      "",
+      "The file a.txt contains the single word \"hello\".",
+      "",
+      "Build · gemma4:e4b · 16.9s",
+    ), "OpenCode", 120);
+    expect(turns.map((turn) => turn.role)).toEqual(["user", "agent"]);
+    expect(texts(turns[1].lines)).toEqual(["The file a.txt contains the single word \"hello\"."]);
+  });
+
   it("drops the banner, the tool calls and the turn footer", () => {
     const turns = chatTurns(lines(
       "█▀▀█  OpenCode",
