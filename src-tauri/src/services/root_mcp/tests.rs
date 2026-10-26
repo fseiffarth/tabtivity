@@ -232,7 +232,7 @@ fn an_assistant_spawn_gets_the_web_and_help_lanes_alone_and_only_when_everything
         assert!(lane_tokens(&spawn).is_empty(), "{runtime:?}");
     }
     // The flag: off, an unreadable file. (Absent is on.)
-    for body in [json!({"assistant": false, "schedule_mcp": true})] {
+    for body in [json!({"assistant": false, "schedule_mcp": true}), json!({"assistant": false, "debug": true, "schedule_mcp": true})] {
         settings(body);
         let mut spawn = chat(AssistantCli::Claude);
         grant_lanes(&mut spawn, true, Some(&serving), &store, state);
