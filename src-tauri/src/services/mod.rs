@@ -1,3 +1,5 @@
+pub mod calendar;
+pub use calendar::{caldav, calendar_alarms, calendar_recurrence, todo_board};
 pub mod mcp;
 pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
 pub mod api;
@@ -33,14 +35,6 @@ pub mod exec_trust;
 // registry, and download quarantine. See docs/browser_plan_{b,c}.md.
 pub mod brand_migration;
 pub mod browser_engine;
-// CalDAV accounts (docs/caldav_plan.md): the WebDAV transport half. Hand-rolled
-// on reqwest + roxmltree; iCalendar itself is still parsed by src/lib/calendar/ics.ts.
-pub mod caldav;
-// Recurrence expansion and to-do board routing, the backend twins of
-// `src/lib/calendar/recurrence.ts` and `src/lib/todoBoard.ts`, so the Mobile
-// sidecar answers a month and the board with no window (headless owner, H0).
-pub mod calendar_recurrence;
-pub mod todo_board;
 // What the phone's composer may attach from the desktop: recent screenshots and
 // pictures by opaque id, copied into the project inbox on request.
 pub mod desktop_images;
@@ -125,10 +119,6 @@ pub mod workspace;
 // The single-client timer lease (headless owner plan, H2, interim): one
 // window fires schedules, alarms and syncs at a time.
 pub mod timer_lease;
-// Calendar reminders' due set and their cross-process fired record (headless
-// owner plan, H2): the window claims before showing, the sidecar pushes with
-// no window open.
-pub mod calendar_alarms;
 pub mod token_stats;
 // The UI's main threads (this process's, each renderer's) asked to rtkit for
 // nice -10, so the work agent tabs start cannot outrank typing.
