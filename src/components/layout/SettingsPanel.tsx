@@ -67,13 +67,11 @@ import {
   type SteeringKeyMap,
 } from "../../lib/shortcuts/steeringBindings";
 import { livePanelToggleLabel } from "../../lib/shortcuts/shortcutHint";
-import {
-  AgentsPanel,
-  FileTypeSettings,
-  GlobalAppsSettings,
-  OllamaPanel,
-  RemoteHostsSettings,
-} from "./SettingsSubPanels";
+import { AgentsPanel } from "../settings/AgentsPanel";
+import { FileTypeSettings } from "../settings/FileTypeSettings";
+import { GlobalAppsSettings } from "../settings/GlobalAppsSettings";
+import { OllamaPanel } from "../settings/OllamaPanel";
+import { RemoteHostsSettings } from "../settings/RemoteHostsSettings";
 import { Dropdown } from "../common/Dropdown";
 import { AssistantSettings } from "../assistant/AssistantSettings";
 import { VoiceSettings } from "./VoiceSettings";

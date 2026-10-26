@@ -28,7 +28,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { AgentsPanel } from "../../components/layout/SettingsSubPanels";
+import { AgentsPanel } from "../../components/settings/AgentsPanel";
 import { BRAND } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);

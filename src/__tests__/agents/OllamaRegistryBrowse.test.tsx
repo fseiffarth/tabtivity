@@ -42,7 +42,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
 }));
 
-import { OllamaPanel } from "../../components/layout/SettingsSubPanels";
+import { OllamaPanel } from "../../components/settings/OllamaPanel";
 import { __resetOllamaActivityForTests } from "../../stores/agents/ollamaActivity";
 
 const last = () => h.searches[h.searches.length - 1];
