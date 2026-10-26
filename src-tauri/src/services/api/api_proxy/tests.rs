@@ -800,7 +800,7 @@ async fn codex_cli_talks_to_the_proxy() {
     command.env_clear().env("HOME", home.path()).env("CODEX_HOME", home.path().join(".codex"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("OPENAI_API_KEY", &token)
-        .args(super::super::agent_api_keys::codex_proxy_args(&base_url_on(port, Provider::OpenAi)))
+        .args(crate::services::agent_api_keys::codex_proxy_args(&base_url_on(port, Provider::OpenAi)))
         .args(["exec", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "Reply hi without tools."])
         .current_dir(home.path()).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(45), command.output()).await.unwrap().unwrap();

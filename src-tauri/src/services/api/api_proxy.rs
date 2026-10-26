@@ -82,7 +82,7 @@ use axum::response::Response;
 use axum::Router;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use super::agent_api_keys::Provider;
+use crate::services::agent_api_keys::Provider;
 
 /// Largest request body forwarded. Anthropic's own Messages limit is 32 MB; a
 /// long Claude conversation with images runs to several MiB.
@@ -347,8 +347,8 @@ pub fn stored_for(provider: Provider) -> Option<StoredKey> {
         _ => {}
     }
     let generation = KEY_GENERATION.load(Ordering::Acquire);
-    let read = super::agent_api_keys::get_key(provider)
-        .map(|key| StoredKey { key, workspace: super::agent_api_keys::get_workspace(provider) });
+    let read = crate::services::agent_api_keys::get_key(provider)
+        .map(|key| StoredKey { key, workspace: crate::services::agent_api_keys::get_workspace(provider) });
     let mut cache = keys().lock_ok();
     if KEY_GENERATION.load(Ordering::Acquire) == generation {
         cache.insert(
@@ -396,7 +396,7 @@ fn admin_key_for(cli: &'static str) -> Result<(zeroize::Zeroizing<String>, Optio
     if let Some(held) = admin_keys().lock_ok().get(cli).filter(|h| h.at.elapsed() < ADMIN_KEY_FRESH) {
         return Ok((held.key.clone(), held.broker.clone()));
     }
-    match super::server::agent_keys::for_proxy(cli) {
+    match crate::services::server::agent_keys::for_proxy(cli) {
         Ok(Some(found)) => {
             let answer = (found.key.clone(), found.broker.clone());
             admin_keys().lock_ok().insert(cli, AdminCached { key: found.key, broker: found.broker, at: Instant::now() });
@@ -674,7 +674,7 @@ async fn check_key_at(
         return Err("this is a Claude subscription token, not an API key — create an API key in the Anthropic Console (it starts with sk-ant-api)".into());
     }
     let workspace = workspace.filter(|_| provider == Provider::Anthropic);
-    if workspace.is_some_and(|w| !super::agent_api_keys::workspace_shape_ok(w)) {
+    if workspace.is_some_and(|w| !crate::services::agent_api_keys::workspace_shape_ok(w)) {
         return Err("not a workspace id (it starts with wrkspc_)".into());
     }
     let untested = KeyCheck::Save { workspace: workspace.map(str::to_string) };
@@ -748,7 +748,7 @@ async fn key_models_at(base: &str, provider: Provider, stored: &StoredKey, https
     if !status.is_success() {
         return None;
     }
-    super::opencode_models::listed_ids(provider, &body)
+    crate::services::opencode_models::listed_ids(provider, &body)
 }
 
 /// A GET of `path` with `key` in the provider's own header (and, for
@@ -808,7 +808,7 @@ async fn list_workspaces(client: &reqwest::Client, base: &str, key: &str) -> Vec
         .map(|page| {
             page.data
                 .into_iter()
-                .filter(|w| w.archived_at.is_none() && super::agent_api_keys::workspace_shape_ok(&w.id))
+                .filter(|w| w.archived_at.is_none() && crate::services::agent_api_keys::workspace_shape_ok(&w.id))
                 .map(|w| Workspace { name: if w.name.is_empty() { w.id.clone() } else { w.name }, id: w.id })
                 .collect()
         })

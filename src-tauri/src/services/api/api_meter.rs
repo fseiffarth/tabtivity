@@ -83,7 +83,7 @@ use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
-use super::agent_api_keys::Provider;
+use crate::services::agent_api_keys::Provider;
 use super::api_prices::{AnthropicUsage, Charge, GeminiUsage, OpenAiUsage};
 
 /// Nesting tracked frame by frame; deeper levels are only counted.

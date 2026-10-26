@@ -1,3 +1,5 @@
+pub mod api;
+pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod agent;
 pub use agent::{agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec, agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home, agent_install, agent_latest, agent_prompts, agent_relocate, agent_session, agent_shim, agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant, assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat, model_rows, opencode_models, opencode_session, opencode_store, transcript_watch};
 pub mod git;
@@ -24,10 +26,6 @@ pub mod markup_rounds;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub use app_core::services::fence_scope;
-pub mod api_proxy;
-pub mod api_meter;
-pub mod api_prices;
-pub mod api_usage;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
 pub mod tar_stream;
 // The AI switch: the side panel's power button, read by every AI gate.
@@ -76,9 +74,6 @@ pub mod local_loss;
 // proxy's remembered port and the phone's sign-in relay judge the owner, not
 // the address.
 pub mod loopback_owner;
-// The API proxy's remembered port when someone else holds it: who, which keyed
-// tmux agents name it (ended), and the notice the window shows once.
-pub mod api_proxy_port;
 // Hosted plan §3.3: every registered Tauri command's class (core / client /
 // admin / off) and the test that fails when one is added without a row.
 pub mod command_class;

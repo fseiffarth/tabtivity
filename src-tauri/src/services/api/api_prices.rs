@@ -46,7 +46,7 @@
 //!
 //! `AppHandle`-free and pure.
 
-use super::agent_api_keys::Provider;
+use crate::services::agent_api_keys::Provider;
 
 /// The most recent update to the tables below (individual source dates above),
 /// (shown in Manage CLIs).
