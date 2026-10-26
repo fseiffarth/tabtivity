@@ -707,7 +707,7 @@ pub fn enforce_spawn_authority(opts: &mut PtyOptions) {
     // sandbox spec must not silently govern a tab that can also reach the
     // other members' trees — a half-applied boundary would read as a whole
     // one. The box editor surfaces the trust notice instead.
-    if crate::commands::boxes::box_id_of_scope(&project_id).is_some() {
+    if crate::services::box_store::box_id_of_scope(&project_id).is_some() {
         if opts.sandbox {
             eprintln!(
                 "sandbox: box-scoped tab '{}' resolved to sandbox: false (boxes run uncontained)",

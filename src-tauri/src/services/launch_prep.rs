@@ -817,8 +817,8 @@ pub async fn prepare(
         // project's root, or a remote member's local mirror — the co-accessible
         // set the box exists to create. An unknown box fails closed, same
         // posture as an unknown project below.
-        if let Some(box_id) = crate::commands::boxes::box_id_of_scope(&pid) {
-            let roots = crate::commands::boxes::box_allowed_roots(box_id)
+        if let Some(box_id) = crate::services::box_store::box_id_of_scope(&pid) {
+            let roots = crate::services::box_store::box_allowed_roots(box_id)
                 .ok_or_else(|| format!("terminal: unknown box scope '{pid}'"))?;
             if !roots.iter().any(|root| cwd_within(&opts.cwd, root)) {
                 return Err(format!(
@@ -857,8 +857,8 @@ pub async fn prepare(
     // (`services::agent_shim`): its project or box, else the root console.
     let scope = crate::services::agent_home::scope_of(opts.project_id.as_deref());
     let project_dir = opts.project_id.as_deref().filter(|_| !assistant).map(|pid| {
-        let box_folder = crate::commands::boxes::box_id_of_scope(pid).and_then(|id|
-            crate::commands::boxes::get_boxes().ok()?.into_iter().find(|b| b.id == id)?.folder);
+        let box_folder = crate::services::box_store::box_id_of_scope(pid).and_then(|id|
+            crate::services::box_store::read_boxes().ok()?.into_iter().find(|b| b.id == id)?.folder);
         let remote = crate::services::remote::remote_target_for(pid);
         let local = crate::services::sandbox::project_dir_for(pid).unwrap_or_default();
         let mirror = crate::services::remote_sync::mirror_dir(pid).to_string_lossy().into_owned();

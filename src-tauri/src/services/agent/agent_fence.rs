@@ -286,8 +286,8 @@ pub fn compute_fence_roots(
     if is_assistant_scope(scope_id) {
         return Some(Vec::new());
     }
-    if let Some(box_id) = crate::commands::boxes::box_id_of_scope(scope_id) {
-        return crate::commands::boxes::compute_box_allowed_roots(boxes, projects, box_id)
+    if let Some(box_id) = crate::services::box_store::box_id_of_scope(scope_id) {
+        return crate::services::box_store::compute_box_allowed_roots(boxes, projects, box_id)
             .map(dedupe_paths)
             .map(|roots| drop_planted(roots, boxes, projects));
     }
@@ -305,7 +305,7 @@ pub fn compute_fence_roots(
         .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
     {
         if let Some(box_roots) =
-            crate::commands::boxes::compute_box_allowed_roots(boxes, projects, &b.id)
+            crate::services::box_store::compute_box_allowed_roots(boxes, projects, &b.id)
         {
             roots.extend(box_roots);
         }
@@ -341,7 +341,7 @@ pub fn attach_roots(
     id: &str,
     state_dir: &Path,
 ) -> Option<Vec<PathBuf>> {
-    if crate::commands::boxes::box_id_of_scope(id).is_some() || is_assistant_scope(id) {
+    if crate::services::box_store::box_id_of_scope(id).is_some() || is_assistant_scope(id) {
         return None;
     }
     let mut roots = compute_fence_roots(boxes, projects, id, true)?;
@@ -570,8 +570,8 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
     let (boxes, projects) = read_lists();
     let mut roots = compute_fence_roots(&boxes, &projects, scope_id, local_only)?;
 
-    if let Some(box_id) = crate::commands::boxes::box_id_of_scope(scope_id) {
-        roots = crate::commands::boxes::box_allowed_roots(box_id)?;
+    if let Some(box_id) = crate::services::box_store::box_id_of_scope(scope_id) {
+        roots = crate::services::box_store::box_allowed_roots(box_id)?;
     } else {
         let project = projects.iter().find(|p| p.id == scope_id)?;
         if local_only && project.extra.contains_key("remote") {
@@ -581,7 +581,7 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
             .iter()
             .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
         {
-            roots.extend(crate::commands::boxes::box_allowed_roots(&b.id)?);
+            roots.extend(crate::services::box_store::box_allowed_roots(&b.id)?);
         }
     }
     Some(drop_planted(dedupe_paths(roots), &boxes, &projects))

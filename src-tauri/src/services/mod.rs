@@ -109,6 +109,8 @@ pub mod process_lease;
 pub mod project_runtime;
 // The projects.json write side: serialized read-modify-write + entry patches.
 pub mod project_registry;
+// The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
+pub mod box_store;
 pub mod prompt_blame;
 pub mod remote;
 pub use remote::{remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
