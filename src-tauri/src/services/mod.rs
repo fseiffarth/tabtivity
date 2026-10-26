@@ -1,15 +1,29 @@
-pub mod calendar;
-pub use calendar::{caldav, calendar_alarms, calendar_recurrence, todo_board};
-pub mod mcp;
-pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
+// Groups of modules in subfolders (docs/filemap_backend.md). Every module is
+// re-exported under its old name, so `crate::services::agent_fence` and
+// friends still resolve; `remote` and `root_mcp` are their own group's root file.
+pub mod agent;
+pub use agent::{
+    agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec,
+    agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
+    agent_install, agent_latest, agent_prompts, agent_relocate, agent_session, agent_shim,
+    agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
+    assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
+};
 pub mod api;
 pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
-pub mod agent;
-pub use agent::{agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec, agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home, agent_install, agent_latest, agent_prompts, agent_relocate, agent_session, agent_shim, agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant, assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat, model_rows, opencode_models, opencode_session, opencode_store, transcript_watch};
+pub mod calendar;
+pub use calendar::{caldav, calendar_alarms, calendar_recurrence, todo_board};
 pub mod git;
 pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_init, git_peer, git_release};
 pub mod mail;
-pub use mail::{mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine, mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store, mail_thunderbird};
+pub use mail::{
+    mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine,
+    mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store,
+    mail_thunderbird,
+};
+pub mod mcp;
+pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
