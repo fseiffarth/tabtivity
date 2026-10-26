@@ -74,7 +74,7 @@ export function TerminalPromptStrip({
    * lists (`TerminalReaderChats`). */
   /** `onHost`: the tab runs on a remote project's host, whose copy of the
    * conversation the chat reads. */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void }; cwd?: string; onHost?: boolean };
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: boolean };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -299,6 +299,8 @@ export function TerminalPromptStrip({
             </button>
             {reader.changes && <button type="button" role="tab" aria-selected={reader.changes.open}
               tabIndex={reader.changes.open ? 0 : -1}
+              disabled={!reader.changes.open && reader.changes.empty}
+              title={!reader.changes.open && reader.changes.empty ? t("terminal.reader.changesNone") : undefined}
               onClick={() => { if (!reader.changes?.open) reader.changes?.onToggle(); }}>
               {t("terminal.reader.changes")}
             </button>}
@@ -318,7 +320,8 @@ export function TerminalPromptStrip({
             onMouseDown={keepFocus}
             onClick={reader.changes.onToggle}
             aria-pressed={reader.changes.open}
-            title={t(reader.changes.open ? "terminal.reader.changesHideHint" : "terminal.reader.changesHint")}
+            disabled={!reader.changes.open && reader.changes.empty}
+            title={t(reader.changes.open ? "terminal.reader.changesHideHint" : !reader.changes.empty ? "terminal.reader.changesHint" : "terminal.reader.changesNone")}
           >
             {t("terminal.reader.changes")}
             <UntestedTag id="terminal.reader.changes" />

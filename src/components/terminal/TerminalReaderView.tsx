@@ -983,7 +983,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, onShowChat, navigationSlot, actionSlot }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, probeChanges = false, onChangesKnown, onShowChat, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -999,6 +999,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** This pane's Diffs tab is selected (`TerminalView`'s own, never another
    * pane's): the chat stays mounted under it, hidden. */
   changesOpen?: boolean;
+  /** Read whether the conversation on screen changed any file, for the
+   * Diffs tab to grey out when it has nothing to show. */
+  probeChanges?: boolean;
+  onChangesKnown?: (has: boolean) => void;
   /** Select this pane's Chat tab — leaving Diffs, or the terminal. */
   onShowChat?: () => void;
   navigationSlot?: HTMLElement | null;
@@ -1393,6 +1397,38 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       stop();
     };
   }, [visible, scope, cwd, subToken, subLimit, sessionId, chatId, learnPaths, remoteHost]);
+
+  // Whether the Diffs tab has anything to show: one change read, watched like
+  // the chat's. While the tab is open it reads for itself.
+  const onChangesKnownRef = useRef(onChangesKnown);
+  onChangesKnownRef.current = onChangesKnown;
+  useEffect(() => {
+    if (!probeChanges || changesOpen) return;
+    let cancelled = false;
+    let probeVersion: string | undefined;
+    const stop = watchedReads(async (watch) => {
+      const current = tabRef.current;
+      if (!current) return false;
+      const args = readerRequest(scope, current, cwd, probeVersion, 0, subToken, chatId);
+      if (!args) {
+        onChangesKnownRef.current?.(false);
+        return false;
+      }
+      const next = await invoke<{ available: boolean; changes: unknown[]; version?: string; unchanged?: boolean; watched?: boolean }>(
+        "agent_tab_changes", { ...args, limit: 1, watch },
+      ).catch(() => null);
+      if (cancelled) return next?.watched === true;
+      if (next && !next.unchanged) {
+        probeVersion = next.version;
+        onChangesKnownRef.current?.(next.available && next.changes.length > 0);
+      } else if (!next) onChangesKnownRef.current?.(false);
+      return next?.watched === true;
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [probeChanges, changesOpen, scope, cwd, subToken, chatId, sessionId]);
 
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card

@@ -5114,6 +5114,7 @@ export const dict: Dict = {
   "terminal.changes.after": "Nachher",
   "terminal.reader.changesHint": "Die Änderungen dieser Unterhaltung im Diffs-Tab prüfen",
   "terminal.reader.changesHideHint": "Zurück zum Chat",
+  "terminal.reader.changesNone": "Diese Unterhaltung hat noch keine Datei geändert",
   "terminal.changes.title": "Änderungen",
   "terminal.changes.summary": "{files} Dateien · {edits} Änderungen",
   "terminal.changes.files": "Geänderte Dateien",

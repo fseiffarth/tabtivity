@@ -2298,6 +2298,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
    * (per CLI) — a full-pane view must not take over every pane of the CLI,
    * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
   const [changesPicked, setChangesPicked] = useState(false);
+  /** The conversation on screen changed a file (`TerminalReaderView`'s probe):
+   * until it did, the Diffs tab is greyed out. */
+  const [changesKnown, setChangesKnown] = useState(false);
   // Diffs reads the conversation's files here, which a host tab's are not.
   const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
   const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
@@ -2458,7 +2461,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
-          changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, onToggle: () => {
+          changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, empty: !changesKnown, onToggle: () => {
             if (changesOn) showReaderChat();
             else setChangesPicked(true);
           } } : undefined,
@@ -2491,6 +2494,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         focused={focused && readerOn && !changesOn}
         shown={readerOn}
         changesOpen={changesOn}
+        probeChanges={visible && readerTopBar && changesOffered(readerAgent) && !readerOnHost}
+        onChangesKnown={setChangesKnown}
         onShowChat={showReaderChat}
         navigationSlot={readerNavigationSlot}
         actionSlot={readerActionSlot}

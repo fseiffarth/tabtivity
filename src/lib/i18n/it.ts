@@ -5090,6 +5090,7 @@ export const dict: Dict = {
   "terminal.changes.after": "Dopo",
   "terminal.reader.changesHint": "Esamina le modifiche di questa conversazione nella scheda Diff",
   "terminal.reader.changesHideHint": "Torna alla chat",
+  "terminal.reader.changesNone": "Questa conversazione non ha ancora modificato alcun file",
   "terminal.changes.title": "Modifiche",
   "terminal.changes.summary": "{files} file · {edits} modifiche",
   "terminal.changes.files": "File modificati",

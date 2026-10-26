@@ -5251,6 +5251,7 @@ export const enSource = {
   "terminal.reader.files": "Files ({count})",
   "terminal.reader.changesHint": "Review this conversation's changes in the Diffs tab",
   "terminal.reader.changesHideHint": "Back to chat",
+  "terminal.reader.changesNone": "This conversation has not changed any file yet",
   "terminal.changes.split": "Split view",
   "terminal.changes.unified": "Unified view",
   "terminal.changes.before": "Before",
