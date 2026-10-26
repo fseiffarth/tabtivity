@@ -383,7 +383,7 @@ windows = { version = "0.62", features = [
     # The user's regional time picture (`GetLocaleInfoEx`) for the default
     # 12/24-hour clock (`commands/os_clock.rs`).
     "Win32_Globalization",
-    # Native screen capture (BitBlt the virtual screen → PNG) in `screenshot.rs`.
+    # Icon bitmap readback (`GetDIBits`) in `commands/apps.rs`.
     "Win32_Graphics_Gdi",
     # Interface byte counters for the network pane (`GetIfTable2` + the Ndis
     # types its rows use) in `commands/network.rs`.

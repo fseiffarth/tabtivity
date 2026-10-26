@@ -294,7 +294,6 @@ export const UNTESTED = {
   "rootReview.icsImport": { area: "layout", what: "RootReviewStrip · Calendar file staged by calendar_import_ics" },
   "rootReview.setting": { area: "layout", what: "SettingsPanel · Review root-agent writes" },
   "rootReview.title": { area: "layout", what: "RootReviewStrip · Agent proposals" },
-  "screenshotSave.title": { area: "layout", what: "ScreenshotSaveOverlay · Save screenshot" },
   "settings.agentFenceCargoCredentials": { area: "layout", what: "SettingsSubPanels · Allow Cargo registry credential files" },
   "settings.agentFencePlatformAccepted": { area: "layout", what: "SettingsSubPanels · Windows: withdraw the accepted 'agents run with your full rights'" },
   "settings.copilotFenceAuth": { area: "layout", what: "SettingsSubPanels · Copilot sign-in for fenced tabs (kept in Tabtivity's keyring, passed as COPILOT_GITHUB_TOKEN)" },

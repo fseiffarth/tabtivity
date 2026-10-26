@@ -3501,17 +3501,6 @@ export const enSource = {
   "globalApp.role.screenshot": "Screenshot",
   "globalApp.role.screen_recorder": "Screen Recorder",
   "globalApp.role.chat": "Chat",
-  "screenshotSave.title": "Save screenshot",
-  "screenshotSave.preview": "Screenshot preview",
-  "screenshotSave.clipboardNote": "Already on the clipboard. Choose where to file it, or discard it \u2014 discarding keeps the clipboard copy.",
-  "screenshotSave.project": "Project",
-  "screenshotSave.folder": "Folder",
-  "screenshotSave.name": "File name",
-  "screenshotSave.save": "Save",
-  "screenshotSave.discard": "Discard",
-  "screenshotSave.noProject": "No project to save into \u2014 the shot stays on the clipboard.",
-  "screenshotSave.saved": "Screenshot saved to {path}",
-  "screenshotSave.failed": "Couldn't save the screenshot: {msg}",
   "header.rootProject": "Root project — for work that belongs to no project: {app}'s own control terminal and folder",
   // The file-drag ghost's options legend + the divider scroll-link toggle
   // (layout/CenterPanel) and the debug TTY-rate readout (layout/SidePanel).

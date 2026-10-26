@@ -1814,57 +1814,6 @@
   cursor: var(--cur-default, default);
 }
 
-/* The screenshot save overlay (ScreenshotSaveOverlay) rides the delete dialog's
-   chrome for the same reason SyncConfirmDialog does, and adds only the preview
-   and the destination fields. Wider than a delete prompt because it carries an
-   image: a shot you cannot recognize is one you cannot decide about. */
-.screenshot-save-dialog {
-  width: min(520px, calc(100vw - 32px));
-}
-
-.screenshot-save-preview {
-  width: 100%;
-  /* Capped so a 4K grab cannot push the fields off screen; the image is a
-     recognition aid, not the document. */
-  max-height: 40vh;
-  object-fit: contain;
-  background: var(--control-bg);
-  border: 1px solid var(--border-subtle);
-}
-
-.screenshot-save-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.screenshot-save-fields label {
-  display: grid;
-  grid-template-columns: 84px 1fr;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.screenshot-save-fields input,
-.screenshot-save-fields select {
-  min-width: 0;
-  padding: 5px 6px;
-  font-family: inherit;
-  font-size: 12px;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-
-.screenshot-save-fields input:focus,
-.screenshot-save-fields select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
 /* The byte-sync transfer confirmation (SyncConfirmDialog) rides the delete
    dialog's chrome and adds only what it needs: a muted note line, and the list of
    files whose content the transfer would end — which is danger-toned because it

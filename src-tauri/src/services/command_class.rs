@@ -368,7 +368,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/clipboard.rs
     ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
-    ("copy_png_bytes_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
@@ -864,11 +863,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("root_mcp_session_access", Core),
     ("root_mcp_session_revoke", Core),
     ("root_mcp_status", Core),
-    // commands/screenshot.rs
-    ("capture_screenshot", Client),
-    ("discard_pending_screenshot", Client),
-    ("read_pending_screenshot", Client),
-    ("save_pending_screenshot", Client),
     // commands/search.rs
     ("project_search", Core),
     // commands/settings.rs
@@ -1136,7 +1130,6 @@ mod tests {
         assert_eq!(class_of("complete_text"), Some(Core));
         assert_eq!(class_of("copilot_complete"), Some(Core));
         assert_eq!(class_of("copy_text_to_clipboard"), Some(Client));
-        assert_eq!(class_of("capture_screenshot"), Some(Client));
         assert_eq!(class_of("openvpn_connect"), Some(Admin));
         assert_eq!(class_of("vm_boot"), Some(Admin));
         assert_eq!(class_of("keyring_unlock"), Some(Off(OffReason::OsKeychain)));

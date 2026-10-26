@@ -6,6 +6,16 @@ Status: **plan only** (2026-10-23), nothing built. TODO #2425 in
 and the screenshot staging flow (`src-tauri/src/commands/screenshot.rs`,
 `ScreenshotSaveOverlay`).
 
+> **2026-10-26 — the "built" pieces below were deleted.** The code screen
+> (`docs/code_screen_plan.md`, step 15) removed the unreachable capture chain:
+> `commands/screenshot.rs` (`capture_screenshot` and the pending-shot commands,
+> the per-OS backends), `ScreenshotSaveOverlay`, `stores/screenshotPending.ts`,
+> `lib/window/screenshot.ts`, `copy_png_bytes_to_clipboard` and the clipboard
+> image-out helpers. Its trigger had gone with the header launcher (f1aa440a)
+> and the PDF region capture. Building this plan starts from `git show
+> <step-15 commit>^:src-tauri/src/commands/screenshot.rs` and the overlay, not
+> from live code. The phone's "From the desktop" list is unaffected.
+
 ---
 
 ## 1. Context

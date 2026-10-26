@@ -147,7 +147,7 @@ describe("the browser transport", () => {
 
   it("refuses client and off commands locally, by the generated class table", async () => {
     const { socket, invoke } = connected();
-    await expect(invoke("capture_screenshot", {})).rejects.toMatchObject({ code: "client", command: "capture_screenshot" });
+    await expect(invoke("save_clipboard_image", {})).rejects.toMatchObject({ code: "client", command: "save_clipboard_image" });
     await expect(invoke("save_settings", {})).rejects.toMatchObject({ code: "off", reason: "whole-document-save" });
     expect(socket.textFrames()).toEqual([]);
     // A client command with a browser form is answered here.
