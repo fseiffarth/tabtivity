@@ -39,6 +39,7 @@ export const UNTESTED = {
   "sidePanel.ideToggle": { area: "shell", what: "Side panel as a VS Code-style docked bar: always-on rail, click-to-toggle, Ctrl+B, snap-close sash, Auto-hide mode" },
   "settings.closeSubwindowOnLastTab": { area: "shell", what: "Closing a subwindow's last tab leaves it standing empty (+ opens the next tab there, × closes it); Settings → Layout toggle closes it with the tab instead" },
   "centerPanel.openTab": { area: "shell", what: "Empty workspace · Open a tab opens the empty group's new-tab menu" },
+  "centerPanel.addProject": { area: "shell", what: "No project open · empty panel says so and Add a project opens the New project dialog" },
   "desktop.settingsNavigation": { area: "shell", what: "Grouped settings pages, per-page scroll restoration, and the left-hand search box: ranked results per setting (synonyms, English in any language; e.g. \"claude api\" → Anthropic API key) that open the page, unfold the setting's group, scroll to it and highlight it" },
   "desktop.modalFocus": { area: "common", what: "Modal focus containment, restoration and nested Escape" },
   "desktop.projectForms": { area: "projects", what: "Project form sections, field guidance and pinned actions" },
