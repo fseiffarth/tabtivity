@@ -112,6 +112,17 @@ describe("resolving paths", () => {
     expect(again.get("docs/plan.md")?.path).toBe("/p/docs/plan.md");
   });
 
+  it("remembers no answer from a lookup that failed", async () => {
+    // `resolve_text_paths` rejects when its worker fails: no links this time,
+    // and the next pass asks again instead of reading "none" from the cache.
+    invoke.mockRejectedValueOnce("fs task failed");
+    expect((await resolvePathCandidates(["/p"], ["docs/plan.md"])).size).toBe(0);
+    invoke.mockResolvedValueOnce([file("/p/docs/plan.md")]);
+    const again = await resolvePathCandidates(["/p"], ["docs/plan.md"]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(again.get("docs/plan.md")?.path).toBe("/p/docs/plan.md");
+  });
+
   it("asks nothing without folders", async () => {
     expect((await resolvePathCandidates([], ["a/b.md"])).size).toBe(0);
     expect(invoke).not.toHaveBeenCalled();

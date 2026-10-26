@@ -235,6 +235,83 @@ pub fn alive(_proc: &Proc) -> bool {
     true
 }
 
+/// What a liveness probe of one pid found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidState {
+    /// The probe succeeded: the process exists (a zombie still counts) and, on
+    /// Windows, has not exited.
+    Alive,
+    /// Positively no such process (`ESRCH`; on Windows no process under that
+    /// pid, or one that has exited). The only state that licenses deleting
+    /// something on the pid's behalf.
+    Gone,
+    /// Cannot tell: a process that exists but may not be probed (`EPERM`: the
+    /// root-run OpenVPN daemon for an unprivileged probe; Windows access
+    /// denied), a pid the platform cannot signal (out of `pid_t` range), or a
+    /// probe that failed. Each caller maps it to the side it can afford.
+    Unknown,
+}
+
+/// Probe `pid` without delivering anything (`kill(pid, 0)`; Windows: open the
+/// process and read its exit code). Pid 0 is [`PidState::Gone`] (`kill(0, 0)`
+/// would answer for the caller's whole process group); a pid beyond `pid_t`
+/// is [`PidState::Unknown`] (a cast would turn it into a negative group id).
+pub fn pid_state(pid: u32) -> PidState {
+    if pid == 0 {
+        return PidState::Gone;
+    }
+    #[cfg(unix)]
+    {
+        let Ok(raw) = libc::pid_t::try_from(pid) else {
+            return PidState::Unknown;
+        };
+        // SAFETY: `kill` takes no pointers; signal 0 only probes for
+        // existence and permission.
+        if unsafe { libc::kill(raw, 0) } == 0 {
+            return PidState::Alive;
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => PidState::Gone,
+            _ => PidState::Unknown,
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        const STILL_ACTIVE: u32 = 259;
+        // HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED): an elevated or protected
+        // process exists but refuses the query.
+        const ACCESS_DENIED: i32 = 0x8007_0005_u32 as i32;
+        // A handle to an already-exited process still opens, so the exit code
+        // decides, not the open.
+        unsafe {
+            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                Ok(handle) => {
+                    let mut code: u32 = 0;
+                    let state = if GetExitCodeProcess(handle, &mut code).is_err() {
+                        PidState::Unknown
+                    } else if code == STILL_ACTIVE {
+                        PidState::Alive
+                    } else {
+                        PidState::Gone
+                    };
+                    let _ = CloseHandle(handle);
+                    state
+                }
+                Err(e) if e.code().0 == ACCESS_DENIED => PidState::Unknown,
+                Err(_) => PidState::Gone,
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        PidState::Unknown
+    }
+}
+
 /// pid, start time, `comm`: one process image. An `exec` changes the `comm`
 /// (and may change the environment), so it is read again.
 type ProcKey = (u32, u64, String);
@@ -311,6 +388,28 @@ mod tests {
 
     fn proc_(pid: u32, ppid: u32, comm: &str) -> Proc {
         Proc { pid, ppid, comm: comm.to_string(), start: u64::from(pid) * 10 }
+    }
+
+    #[test]
+    fn pid_state_tells_alive_gone_and_unprobeable_apart() {
+        assert_eq!(pid_state(std::process::id()), PidState::Alive);
+        assert_eq!(pid_state(0), PidState::Gone);
+        let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
+            .args(if cfg!(windows) { vec!["/C", "exit"] } else { vec![] })
+            .spawn()
+            .expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        // Reaped, so the number is free again (a reuse in this instant would
+        // only turn it Alive; `Unknown` never happens for a free number).
+        assert_ne!(pid_state(pid), PidState::Unknown);
+        #[cfg(unix)]
+        {
+            // Out of `pid_t` range: never cast into a negative group id.
+            assert_eq!(pid_state(u32::MAX), PidState::Unknown);
+            // Pid 1 exists; an unprivileged probe is Alive or EPERM-Unknown, never Gone.
+            assert_ne!(pid_state(1), PidState::Gone);
+        }
     }
 
     #[test]

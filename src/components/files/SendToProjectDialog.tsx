@@ -9,6 +9,7 @@ import { loadLastSendTarget, saveLastSendTarget } from "../../lib/projects/sendT
 import { useT } from "../../lib/i18n";
 import { ArrowLeftIcon, ArrowUpIcon, FolderIcon, GlobeIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
+import { dirname } from "../../lib/paths";
 
 /** The item being sent — always a LOCAL absolute path (the dialog is only opened
  *  for local file-tree rows, so `import_external_file` can read it as an ordinary
@@ -36,12 +37,6 @@ interface Props {
 function destRootFor(project: ProjectEntry): string {
   if (project.remote) return resolveLocalMirror(project) ?? "";
   return resolveProjectDirectory(project);
-}
-
-/** The parent of a project-relative folder (`""` for a top-level folder). */
-function parentRel(rel: string): string {
-  const idx = rel.lastIndexOf("/");
-  return idx < 0 ? "" : rel.slice(0, idx);
 }
 
 /**
@@ -215,7 +210,7 @@ export function SendToProjectDialog({ source, fromProjectId, onClose }: Props) {
                 <button
                   type="button"
                   disabled={rel === ""}
-                  onClick={() => loadFolder(selected, parentRel(rel))}
+                  onClick={() => loadFolder(selected, dirname(rel))}
                   title={t("folderPicker.upOneFolder")}
                 >
                   <ArrowUpIcon /> {t("folderPicker.up")}

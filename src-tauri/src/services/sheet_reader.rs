@@ -554,11 +554,7 @@ impl Grid {
 /// Cut a cell's text to [`MAX_CELL_BYTES`] on a character boundary.
 fn truncate_cell(mut text: String) -> String {
     if text.len() > MAX_CELL_BYTES {
-        let mut end = MAX_CELL_BYTES;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
+        text.truncate(text.floor_char_boundary(MAX_CELL_BYTES));
         text.push('…');
     }
     text

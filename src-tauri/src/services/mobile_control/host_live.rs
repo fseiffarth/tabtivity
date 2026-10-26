@@ -85,6 +85,12 @@ impl HostLive {
 /// The slot the refresher writes and every catalog load reads.
 pub type SharedHostLive = Arc<Mutex<HostLive>>;
 
+/// Wakes the refresher for a round now rather than at the next [`ROUND`]: a
+/// route that just had the window start a tab on a host waits for that
+/// host's session to be seen (`host::answer_created`). Still gated as every
+/// round is — no phone signed in, nothing runs.
+pub type HostLiveKick = Arc<tokio::sync::Notify>;
+
 /// What the phone's attach to a host tab rides on: the host and the literal
 /// socket of its master. Raw, never serialized.
 #[derive(Debug, Clone)]
@@ -284,14 +290,6 @@ fn round(
     live
 }
 
-/// Seconds since the epoch, the timer lease's clock.
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 /// One round against the real state dir and ssh.
 fn round_now(state_dir: &Path, memory: &mut Memory) -> HostLive {
     let targets = super::discovery::host_probe_targets(state_dir);
@@ -300,7 +298,7 @@ fn round_now(state_dir: &Path, memory: &mut Memory) -> HostLive {
         return HostLive::default();
     }
     let lease = crate::services::timer_lease::lease_file(state_dir);
-    let window_up = crate::services::timer_lease::holder_in(&lease, unix_now()).is_some();
+    let window_up = crate::services::timer_lease::holder_in(&lease, crate::clock::now_secs()).is_some();
     let hpc = hpc_hosts(state_dir);
     round(&targets, window_up, hpc.as_ref(), memory, &SshProbe, Instant::now())
 }
@@ -312,6 +310,7 @@ pub async fn run(
     state_dir: PathBuf,
     auth: Arc<Mutex<AuthStore>>,
     live: SharedHostLive,
+    kick: HostLiveKick,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut memory = Memory::default();
@@ -320,6 +319,7 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = tick.tick() => {}
+            () = kick.notified() => last_round = None,
             changed = shutdown.changed() => if changed.is_err() { break },
         }
         if *shutdown.borrow() {

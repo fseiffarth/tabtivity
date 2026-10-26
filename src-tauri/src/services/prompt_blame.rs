@@ -49,10 +49,7 @@ fn git_stdout(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
-    let text = String::from_utf8_lossy(&git_stdout(dir, args)?)
-        .trim()
-        .to_string();
-    (!text.is_empty()).then_some(text)
+    crate::commands::git::stdout(None, dir, args).filter(|text| !text.is_empty())
 }
 
 /// HEAD of a local project's repo, or `None` when there is nothing to record

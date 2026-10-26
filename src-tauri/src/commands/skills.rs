@@ -10,7 +10,7 @@ use crate::services::skills;
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_list_sources() -> Result<Vec<SkillSource>, String> {
-    app_core::rt::try_blocking("skills", || Ok(skills::list_sources())).await
+    app_core::rt::try_blocking("skills", skills::list_sources).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

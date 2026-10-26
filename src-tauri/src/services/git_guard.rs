@@ -292,17 +292,8 @@ pub fn edit_info_exclude(git_dir: &Path, edit: impl FnOnce(&str) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::git;
     use std::fs;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        assert!(ok, "git {args:?} failed in {}", dir.display());
-    }
 
     fn repo() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();

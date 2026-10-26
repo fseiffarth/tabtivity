@@ -501,33 +501,6 @@ pub fn classify(
     Ok(parse_classification(&out))
 }
 
-// ── Today, without a date library ───────────────────────────────────────────
-
-/// Today's date as `YYYY-MM-DD` (UTC). The event/task prompts anchor on this and
-/// on the message's own `Date`, so a UTC day boundary is close enough — the
-/// model is given both anchors and is never trusted as the clock anyway.
-pub fn today_iso() -> String {
-    let secs = crate::clock::now_secs() as i64;
-    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Civil date from days since the Unix epoch (Howard Hinnant's algorithm), the
-/// same one `commands::screenshot` carries — duplicated rather than shared to
-/// keep this module `commands`-light and independently testable.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,15 +807,5 @@ mod tests {
         assert!(parse_classification("{\"priority\":\"none\",\"reason\":\"routine\"}").is_none());
         assert!(parse_classification("{\"priority\":\"weird\"}").is_none());
         assert!(parse_classification("not json").is_none());
-    }
-
-    #[test]
-    fn today_is_a_plausible_iso_date() {
-        let t = today_iso();
-        assert_eq!(t.len(), 10, "{t}");
-        assert_eq!(&t[4..5], "-");
-        assert_eq!(&t[7..8], "-");
-        // Epoch-day arithmetic sanity: 2021-01-01 was day 18628.
-        assert_eq!(civil_from_days(18628), (2021, 1, 1));
     }
 }

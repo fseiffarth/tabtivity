@@ -70,10 +70,17 @@ impl CopyReport {
 /// Copy `src` (a file or a folder, taken as given) to `dest`, which must not
 /// exist yet and whose parent must.
 pub fn copy_tree(src: &Path, dest: &Path) -> io::Result<CopyReport> {
-    copy_tree_with(src, dest, LIMITS)
+    copy_tree_with(src, dest, LIMITS, true)
 }
 
-fn copy_tree_with(src: &Path, dest: &Path, limits: Limits) -> io::Result<CopyReport> {
+/// [`copy_tree`] that leaves every link out (reported as skipped) instead of
+/// recreating it: for a third-party tree whose links mean nothing at the
+/// destination (a skill repository's `notes -> ~/.ssh`).
+pub fn copy_tree_without_links(src: &Path, dest: &Path) -> io::Result<CopyReport> {
+    copy_tree_with(src, dest, LIMITS, false)
+}
+
+fn copy_tree_with(src: &Path, dest: &Path, limits: Limits, keep_links: bool) -> io::Result<CopyReport> {
     let parent = dest.parent().ok_or_else(|| invalid("the destination has no folder"))?;
     let name = dest
         .file_name()
@@ -84,7 +91,7 @@ fn copy_tree_with(src: &Path, dest: &Path, limits: Limits) -> io::Result<CopyRep
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("'{}' already exists", dest.display())));
     }
     let into = ProjectDir::open_root(parent).map_err(|_| other("the destination folder is not available"))?;
-    let mut run = Run { limits, entries: 0, bytes: 0, report: CopyReport::default() };
+    let mut run = Run { limits, keep_links, entries: 0, bytes: 0, report: CopyReport::default() };
     let made = if std::fs::metadata(src)?.is_dir() {
         run.top_dir(src, &into, name)
     } else {
@@ -112,6 +119,7 @@ pub fn discard(dest: &Path) {
 
 struct Run {
     limits: Limits,
+    keep_links: bool,
     entries: usize,
     bytes: u64,
     report: CopyReport,
@@ -149,7 +157,9 @@ impl Run {
                 self.report.skip(path);
                 continue;
             };
-            if meta.is_symlink {
+            if meta.is_symlink && !self.keep_links {
+                self.report.skip(path);
+            } else if meta.is_symlink {
                 self.link(&item, target, &name, path);
             } else if meta.is_dir {
                 let Some(child) = source.open_subdir(&name) else {
@@ -264,6 +274,27 @@ mod tests {
         assert!(src.join("top.txt").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn without_links_skips_every_link_and_stays_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("a")).unwrap();
+        fs::write(src.join("a").join("f.txt"), "f").unwrap();
+        std::os::unix::fs::symlink(tmp.path(), src.join("out")).unwrap();
+        std::os::unix::fs::symlink("f.txt", src.join("a").join("rel")).unwrap();
+
+        let report = copy_tree_without_links(&src, &tmp.path().join("dst")).unwrap();
+        assert_eq!(report.skipped_count, 2);
+        assert_eq!(fs::read_to_string(tmp.path().join("dst").join("a").join("f.txt")).unwrap(), "f");
+        assert!(fs::symlink_metadata(tmp.path().join("dst").join("out")).is_err());
+        assert!(fs::symlink_metadata(tmp.path().join("dst").join("a").join("rel")).is_err());
+
+        let error = copy_tree_with(&src, &tmp.path().join("dst2"), small(2, MAX_BYTES), false).unwrap_err();
+        assert!(error.to_string().contains("too many entries"), "{error}");
+        assert!(!tmp.path().join("dst2").exists());
+    }
+
     #[test]
     fn copies_a_single_file() {
         let tmp = tempfile::tempdir().unwrap();
@@ -296,7 +327,7 @@ mod tests {
             fs::write(src.join(format!("f{n}")), "x").unwrap();
         }
 
-        let error = copy_tree_with(&src, &tmp.path().join("dst"), small(3, MAX_BYTES)).unwrap_err();
+        let error = copy_tree_with(&src, &tmp.path().join("dst"), small(3, MAX_BYTES), true).unwrap_err();
 
         assert!(error.to_string().contains("too many entries"), "{error}");
         assert!(!tmp.path().join("dst").exists());
@@ -311,12 +342,12 @@ mod tests {
         fs::write(src.join("a"), vec![1u8; 600]).unwrap();
         fs::write(src.join("b"), vec![2u8; 600]).unwrap();
 
-        let error = copy_tree_with(&src, &tmp.path().join("dst"), small(100, 1000)).unwrap_err();
+        let error = copy_tree_with(&src, &tmp.path().join("dst"), small(100, 1000), true).unwrap_err();
 
         assert!(error.to_string().contains("larger than the limit"), "{error}");
         assert!(!tmp.path().join("dst").exists());
         // Exactly the limit is fine.
-        copy_tree_with(&src, &tmp.path().join("dst2"), small(100, 1200)).unwrap();
+        copy_tree_with(&src, &tmp.path().join("dst2"), small(100, 1200), true).unwrap();
         assert_eq!(fs::read(tmp.path().join("dst2/b")).unwrap().len(), 600);
     }
 
@@ -327,7 +358,7 @@ mod tests {
         fs::create_dir_all(src.join("a/b/c")).unwrap();
 
         let limits = Limits { entries: 100, bytes: MAX_BYTES, depth: 1 };
-        let error = copy_tree_with(&src, &tmp.path().join("dst"), limits).unwrap_err();
+        let error = copy_tree_with(&src, &tmp.path().join("dst"), limits, true).unwrap_err();
 
         assert!(error.to_string().contains("nested too deeply"), "{error}");
         assert!(!tmp.path().join("dst").exists());

@@ -98,6 +98,15 @@ as the desktop has no transcript of a session on the host. A tab on the host
 has a session to attach to only while the project's **Persistent sessions
 (tmux)** (its pill's menu) is on, the default.
 
+To start an agent on the host instead of in the mirror, pick the machine in
+the ＋ sheet's **Runs on** dropdown: **Desktop (local copy)**, the primary host,
+or a worker that holds the code. A machine the desktop is not connected to is
+greyed out — connect it in the project on the desktop first. With a machine
+picked the sheet offers the plain agents only (worktrees, cloud sessions,
+local models and API-key agents run on this computer), and the new tab opens
+as an **on host** tab. The dropdown needs the desktop window open and the
+project's persistent sessions on.
+
 A **container** or **VM** project is
 listed on the phone with its tabs that run on this computer; the tabs inside the
 container or VM reach the phone in a later version. A VM has files on the phone

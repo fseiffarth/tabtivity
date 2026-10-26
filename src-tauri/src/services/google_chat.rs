@@ -21,7 +21,6 @@ use std::path::Path;
 use rusqlite::Connection;
 use crate::services::agent_sqlite::{Limits, open_read};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::services::agent_chats::FolderChat;
 use crate::services::agent_transcript::{AgentTranscript, transcript_entry};
@@ -57,7 +56,7 @@ fn epoch(text: &str) -> Option<i64> {
 }
 
 fn key(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    crate::digest::sha256_hex(text.as_bytes())
 }
 
 fn stamp(file: &HomeFile) -> Option<String> {
@@ -86,7 +85,7 @@ fn gemini(home: &Path, directory: &str, since: Option<i64>, version: Option<&str
         let real = real.to_string_lossy().into_owned();
         if !directories.contains(&real) { directories.push(real); }
     }
-    let hashes: Vec<String> = directories.iter().map(|dir| format!("{:x}", Sha256::digest(dir.as_bytes()))).collect();
+    let hashes: Vec<String> = directories.iter().map(|dir| crate::digest::sha256_hex(dir.as_bytes())).collect();
     let mut identifiers = hashes.clone();
     // Recent Gemini releases map project paths to short slugs in this registry.
     if let Some(registry) = root.file("projects.json").and_then(|file| bounded_read(&file, 1024 * 1024))
@@ -464,7 +463,7 @@ mod tests {
     }
 
     fn gemini_file(home: &Path, directory: &str, name: &str, record: Value) {
-        let hash = format!("{:x}", Sha256::digest(directory.as_bytes()));
+        let hash = crate::digest::sha256_hex(directory.as_bytes());
         let chats = home.join(".gemini").join("tmp").join(&hash).join("chats");
         std::fs::create_dir_all(&chats).unwrap();
         std::fs::write(chats.join(name), serde_json::to_vec(&record).unwrap()).unwrap();
@@ -476,7 +475,7 @@ mod tests {
         let dir = home.path().join("project");
         let directory = dir.to_str().unwrap();
         gemini_file(home.path(), directory, "session-one.json", json!({
-            "sessionId": "session-one", "projectHash": format!("{:x}", Sha256::digest(directory.as_bytes())),
+            "sessionId": "session-one", "projectHash": crate::digest::sha256_hex(directory.as_bytes()),
             "startTime": "2026-10-15T12:00:00Z", "messages": [
                 {"type": "user", "timestamp": "2026-10-15T12:00:00Z", "content": "expanded private context", "displayContent": [{"text": "fix it"}]},
                 {"type": "gemini", "timestamp": "2026-10-15T12:00:01Z", "model": "gemini-test", "content": [{"thought": true, "text": "private reasoning"}, {"text": "Fixed."}, {"functionCall": {"name": "read_file"}}], "toolCalls": [{"result": "tool output"}]},
@@ -688,7 +687,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let directory = home.path().to_str().unwrap();
         gemini_file(home.path(), directory, "session-one.json", json!({}));
-        let hash = format!("{:x}", Sha256::digest(directory.as_bytes()));
+        let hash = crate::digest::sha256_hex(directory.as_bytes());
         let path = home.path().join(".gemini").join("tmp").join(hash).join("chats").join("session-one.json");
         std::fs::remove_file(&path).unwrap();
         let outside = home.path().join("outside.json");

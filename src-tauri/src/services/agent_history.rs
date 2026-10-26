@@ -671,17 +671,12 @@ fn pi_folder_name(path: &str) -> String {
 }
 
 pub(crate) fn sha256_hex(text: &str) -> String {
-    use sha2::Digest;
-    hex(&sha2::Sha256::digest(text.as_bytes()))
+    crate::digest::sha256_hex(text.as_bytes())
 }
 
 pub(crate) fn md5_hex(text: &str) -> String {
     use md5::Digest;
-    hex(&md5::Md5::digest(text.as_bytes()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::digest::hex(&md5::Md5::digest(text.as_bytes()))
 }
 
 /// One folder name re-pointed, when it is an encoding of an old path.

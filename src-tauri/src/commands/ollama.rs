@@ -299,6 +299,18 @@ pub(crate) fn ollama_http(
     ollama_http_within(method, path, json_body, Duration::from_secs(600))
 }
 
+/// How long a status read (`/api/tags`, `/api/ps`) waits for its answer once
+/// connected. Both are answered from what the server already holds, so a
+/// server that takes longer is wedged, and the 🧠 lamp, the model list and the
+/// phone must say so instead of holding a thread for [`ollama_http`]'s ten
+/// minutes (code screen B2). The locality check asks within the same bound.
+const STATUS_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `GET path` against the configured server within [`STATUS_READ_TIMEOUT`].
+fn ollama_status_read(path: &str) -> Result<String, String> {
+    ollama_http_within("GET", path, None, STATUS_READ_TIMEOUT)
+}
+
 /// [`ollama_http`] with its own read timeout, for a quick question that must
 /// not hold its thread for a pull's ten minutes.
 fn ollama_http_within(
@@ -400,6 +412,11 @@ use app_core::CoreCtx;
 /// running Tabtivity's inherited PATH won't pick it up until a new session.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_is_installed() -> bool {
+    app_core::rt::blocking("probe", ollama_installed).await.unwrap_or(false)
+}
+
+/// The blocking body of [`ollama_is_installed`] (a PATH lookup spawns `which`).
+fn ollama_installed() -> bool {
     if binary_on_path("ollama") {
         return true;
     }
@@ -450,9 +467,16 @@ pub fn ollama_install_cmd() -> &'static str {
 /// Returns the install log on success, or the tail of the output on failure.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_ollama(ctx: Ctx) -> Result<String, String> {
+    let ctx = ctx.0;
+    // The installer runs for minutes: its whole run stays off the runtime.
+    app_core::rt::try_blocking("install", move || install_ollama_blocking(&ctx)).await
+}
+
+/// The blocking body of [`install_ollama`].
+fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
-    if ollama_is_installed().await {
+    if ollama_installed() {
         return Ok("Ollama is already installed.".to_string());
     }
 
@@ -529,7 +553,7 @@ pub async fn install_ollama(ctx: Ctx) -> Result<String, String> {
 
     // The post-install check is the real source of truth: an installer can print a
     // warning to stderr yet still have placed the binary, or vice versa.
-    if !ollama_is_installed().await {
+    if !ollama_installed() {
         return Err(format!(
             "installer ran but `ollama` is still not detected. {fail_hint}, or it \
             may need a fresh session so the install dir is on PATH — run `{cmd}` in \
@@ -619,6 +643,11 @@ pub fn vibe_install_cmd() -> &'static str {
 /// would include it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vibe_is_installed() -> bool {
+    app_core::rt::blocking("probe", vibe_installed).await.unwrap_or(false)
+}
+
+/// The blocking body of [`vibe_is_installed`].
+fn vibe_installed() -> bool {
     if binary_on_path("vibe") {
         return true;
     }
@@ -650,9 +679,15 @@ pub async fn vibe_is_installed() -> bool {
 /// (uv → `uv tool install mistral-vibe`), the POSIX shell on Linux/macOS.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_vibe(ctx: Ctx) -> Result<String, String> {
+    let ctx = ctx.0;
+    app_core::rt::try_blocking("install", move || install_vibe_blocking(&ctx)).await
+}
+
+/// The blocking body of [`install_vibe`].
+fn install_vibe_blocking(ctx: &CoreCtx) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
-    if vibe_is_installed().await {
+    if vibe_installed() {
         return Ok("Vibe is already installed.".to_string());
     }
 
@@ -721,7 +756,7 @@ pub async fn install_vibe(ctx: Ctx) -> Result<String, String> {
     }
 
     // The post-install check is the real source of truth.
-    if !vibe_is_installed().await {
+    if !vibe_installed() {
         return Err(format!(
             "installer ran but `vibe` is still not detected. It may need a new shell so \
             the install dir (`~/.local/bin`) is on PATH — run `{cmd}` in a terminal.\n\n{combined}"
@@ -837,7 +872,7 @@ fn model_capabilities_at(addr: &str, model: &str, digest: &str) -> Vec<String> {
 /// these instead" half of a refusal. Read off this machine rather than a
 /// hardcoded example list, which would age as the registry moves.
 fn tool_capable_models() -> Vec<String> {
-    ollama_http("GET", "/api/tags", None)
+    ollama_status_read("/api/tags")
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["models"].as_array().cloned())
@@ -858,7 +893,7 @@ fn tool_capable_models() -> Vec<String> {
 /// said so. `None` is "could not tell", which every caller reads as "let it
 /// through": see [`model_capabilities`].
 fn model_has_capability(model: &str, cap: &str) -> Option<bool> {
-    let digest = ollama_http("GET", "/api/tags", None)
+    let digest = ollama_status_read("/api/tags")
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["models"].as_array().cloned())
@@ -887,7 +922,7 @@ fn model_has_capability(model: &str, cap: &str) -> Option<bool> {
 /// (`services::mail_ai` passes the one its local-model check used, so a
 /// settings change in between cannot send the probe elsewhere).
 pub(crate) fn capabilities_of_at(addr: &str, model: &str) -> Vec<String> {
-    let digest = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(600))
+    let digest = ollama_http_at(addr, "GET", "/api/tags", None, STATUS_READ_TIMEOUT)
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["models"].as_array().cloned())
@@ -918,12 +953,18 @@ fn model_supports_thinking(model: &str) -> Option<bool> {
 /// with the running-models list from /api/ps.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_ollama_models_detailed() -> Result<Vec<OllamaModelInfo>, String> {
-    let tags_body = ollama_http("GET", "/api/tags", None)?;
+    app_core::rt::try_blocking("models", models_detailed).await
+}
+
+/// The blocking body of [`list_ollama_models_detailed`]: two status reads plus
+/// one `/api/show` per model on a cold capability cache.
+fn models_detailed() -> Result<Vec<OllamaModelInfo>, String> {
+    let tags_body = ollama_status_read("/api/tags")?;
     let tags: serde_json::Value =
         serde_json::from_str(&tags_body).map_err(|e| format!("tags json: {e}"))?;
 
     // What is resident, keyed by name; an /api/ps error reads as "nothing".
-    let running = ollama_http("GET", "/api/ps", None)
+    let running = ollama_status_read("/api/ps")
         .map(|b| ps_entries(&b))
         .unwrap_or_default();
 
@@ -1184,7 +1225,7 @@ fn locality_at(addr: &str, model: &str, tab: bool) -> Result<(), &'static str> {
     if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, tab, now) {
         return verdict;
     }
-    let tags = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(10));
+    let tags = ollama_http_at(addr, "GET", "/api/tags", None, STATUS_READ_TIMEOUT);
     let verdict = judge(tags.as_deref().map_err(String::as_str), model);
     locality_cache().lock().unwrap_or_else(|p| p.into_inner()).put(addr, model, tab, now, verdict);
     verdict
@@ -1274,8 +1315,7 @@ fn installed_match(tags_body: &str, wanted: &str) -> Result<String, &'static str
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_ollama_model(model: String) -> Result<(), String> {
     let body = serde_json::json!({"model": model, "keep_alive": 0}).to_string();
-    ollama_http("POST", "/api/generate", Some(&body))?;
-    Ok(())
+    app_core::rt::try_blocking("unload", move || ollama_http("POST", "/api/generate", Some(&body)).map(drop)).await
 }
 
 // ── Interrupted-pull tracking ─────────────────────────────────────────────
@@ -1294,20 +1334,22 @@ fn read_pending_pulls() -> Vec<String> {
 }
 
 fn mark_pending_pull(model: &str, active: bool) {
-    let mut list = read_pending_pulls();
-    let existed = list.iter().any(|m| m == model);
-    if active {
-        if existed {
-            return;
+    let _ = mark_pending_pull_in(&pending_pulls_path(), model, active);
+}
+
+/// Add or drop `model` in one read-modify-write. A list that does not parse is
+/// an error and stays as it is — never replaced by a one-entry list.
+fn mark_pending_pull_in(path: &std::path::Path, model: &str, active: bool) -> Result<(), String> {
+    crate::storage::patch_private_json(path, Vec::<String>::new(), |list| {
+        if active {
+            if !list.iter().any(|m| m == model) {
+                list.push(model.to_string());
+            }
+        } else {
+            list.retain(|m| m != model);
         }
-        list.push(model.to_string());
-    } else {
-        if !existed {
-            return;
-        }
-        list.retain(|m| m != model);
-    }
-    let _ = crate::storage::write_json(&pending_pulls_path(), &list);
+        Ok(())
+    })
 }
 
 /// Model refs whose download was interrupted (Tabtivity closed/crashed mid-pull).
@@ -1383,6 +1425,11 @@ fn ollama_model_dir_candidates(
 /// first. Each is an interrupted download with no recoverable model name.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_orphan_partial_blobs() -> Vec<PartialBlob> {
+    app_core::rt::blocking("blobs", orphan_partial_blobs).await.unwrap_or_default()
+}
+
+/// The blocking body of [`list_orphan_partial_blobs`]: a walk of the blob dirs.
+fn orphan_partial_blobs() -> Vec<PartialBlob> {
     let mut out: Vec<PartialBlob> = Vec::new();
     for dir in ollama_blob_dirs() {
         let rd = match std::fs::read_dir(&dir) {
@@ -1423,7 +1470,12 @@ pub async fn list_orphan_partial_blobs() -> Vec<PartialBlob> {
 /// anything else — the check matters because the removal may run elevated.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_partial_blob(path: String) -> Result<(), String> {
-    let p = std::path::Path::new(&path);
+    app_core::rt::try_blocking("blobs", move || remove_partial_blob(&path)).await
+}
+
+/// The blocking body of [`delete_partial_blob`] (it may ask for elevation).
+fn remove_partial_blob(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
     let name = p
         .file_name()
         .and_then(|n| n.to_str())
@@ -1488,13 +1540,14 @@ fn remove_blob_files(files: &[std::path::PathBuf]) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn remove_blob_files_elevated(files: &[&std::path::PathBuf]) -> Result<(), String> {
-    if !crate::paths::binary_on_path("pkexec") {
+    // Both by absolute path: pkexec looks a bare `rm` up on this user's PATH.
+    let Ok([pkexec, rm]) = crate::paths::pkexec_argv("rm") else {
         return Err(
             "permission denied: these files belong to the Ollama system service, and pkexec is not available to remove them".into(),
         );
-    }
-    let status = std::process::Command::new("pkexec")
-        .arg("rm")
+    };
+    let status = std::process::Command::new(pkexec)
+        .arg(rm)
         .arg("-f")
         .arg("--")
         .args(files)
@@ -1521,7 +1574,7 @@ fn remove_blob_files_elevated(_files: &[&std::path::PathBuf]) -> Result<(), Stri
 /// Forget an interrupted pull (e.g. the user dismisses it, or it finished).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn clear_pending_ollama_pull(model: String) {
-    mark_pending_pull(&model, false);
+    let _ = app_core::rt::blocking("pulls", move || mark_pending_pull(&model, false)).await;
 }
 
 // ── Pausable pulls ────────────────────────────────────────────────────────
@@ -1562,13 +1615,17 @@ fn take_pause_request(model: &str) -> bool {
 /// cleanup to reclaim instead. Always clears the pending record so the UI settles.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_ollama_pull(model: String) -> Result<(), String> {
-    mark_pending_pull(&model, false);
-    // Drop any committed manifest/blobs (no-op 404 if the pull never got that far).
-    let body = serde_json::json!({ "model": model }).to_string();
-    let _ = ollama_http("DELETE", "/api/delete", Some(&body));
+    let pending = model.clone();
+    app_core::rt::blocking("delete", move || {
+        mark_pending_pull(&pending, false);
+        // Drop any committed manifest/blobs (no-op 404 if the pull never got that far).
+        let body = serde_json::json!({ "model": pending }).to_string();
+        let _ = ollama_http("DELETE", "/api/delete", Some(&body));
+    })
+    .await?;
     // Remove the partial layers this model's pull was fetching.
-    if let Ok(digests) = registry_layer_digests(&model) {
-        delete_partials_for_digests(&digests);
+    if let Ok(digests) = registry_layer_digests(&model).await {
+        app_core::rt::blocking("delete", move || delete_partials_for_digests(&digests)).await?;
     }
     Ok(())
 }
@@ -1576,8 +1633,8 @@ pub async fn delete_ollama_pull(model: String) -> Result<(), String> {
 /// The set of blob digests (`sha256:<hex>`) a model ref is composed of — its
 /// config plus every layer — read from the Ollama registry manifest. Used to map
 /// a paused download back to the specific `-partial` files it created.
-fn registry_layer_digests(model: &str) -> Result<Vec<String>, String> {
-    let v = fetch_registry_manifest(model)?;
+async fn registry_layer_digests(model: &str) -> Result<Vec<String>, String> {
+    let v = fetch_registry_manifest(model).await?;
     let mut out: Vec<String> = Vec::new();
     if let Some(d) = v["config"]["digest"].as_str() {
         out.push(d.to_string());
@@ -1688,7 +1745,9 @@ pub async fn load_ollama_model(
     model: String,
     device: Option<LoadDevice>,
 ) -> Result<(), String> {
-    run_load(&ctx, &model, device.unwrap_or_default())
+    let ctx = ctx.0;
+    // The warm-up returns only once the model is resident: minutes, off the runtime.
+    app_core::rt::try_blocking("load", move || run_load(&ctx, &model, device.unwrap_or_default())).await
 }
 
 /// The load itself, shared by [`load_ollama_model`] and
@@ -1785,7 +1844,7 @@ pub async fn load_installed_ollama_model(
     validate_model_name(&model)?;
     let wanted = model.trim().to_owned();
     app_core::rt::try_blocking("load", move || {
-        let tags = ollama_http("GET", "/api/tags", None).map_err(|e| {
+        let tags = ollama_status_read("/api/tags").map_err(|e| {
             if e == "not_running" {
                 "ollama_not_running".to_owned()
             } else {
@@ -1815,6 +1874,14 @@ pub async fn load_installed_ollama_model(
 /// take minutes for large models.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
+    let ctx = ctx.0;
+    // A pull reads the stream for as long as the download runs: off the runtime.
+    app_core::rt::try_blocking("pull", move || pull_blocking(&ctx, &model)).await
+}
+
+/// The blocking body of [`pull_ollama_model`]. `pause_ollama_pull` reaches it
+/// through [`paused_pulls`], which any thread can set.
+fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
 
     let body = serde_json::json!({"model": model, "stream": true}).to_string();
@@ -1838,10 +1905,10 @@ pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
 
     // Record this as an in-flight pull; a crash/exit now leaves the entry behind
     // so the next launch can offer to resume it. Removed only on success below.
-    mark_pending_pull(&model, true);
+    mark_pending_pull(model, true);
     // Consume any stale pause flag from a previous run so this fresh pull (e.g. a
     // resume) isn't cancelled before it starts.
-    take_pause_request(&model);
+    take_pause_request(model);
 
     let mut reader = BufReader::new(stream);
 
@@ -1873,7 +1940,7 @@ pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
         // Cooperative pause: if the user asked to pause this pull, stop reading and
         // drop the connection. Ollama keeps the partial blobs, and the pending-pull
         // record is left in place so the UI can offer Resume or Delete.
-        if take_pause_request(&model) {
+        if take_pause_request(model) {
             ctx.emit(
                 "ollama-pull-progress",
                 serde_json::json!({ "model": model, "status": "paused" }),
@@ -1915,7 +1982,7 @@ pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
         return Err(format!("HTTP {status_code}"));
     }
     // Completed cleanly — drop it from the interrupted-pull record.
-    mark_pending_pull(&model, false);
+    mark_pending_pull(model, false);
     Ok(())
 }
 
@@ -1956,9 +2023,9 @@ pub struct OllamaModelUpdate {
 }
 
 /// Ask the registry for one model's current manifest digest and push time.
-/// `curl -sSI`, matching `fetch_registry_manifest`'s transport (no shell, args
-/// passed directly, `validate_model_name` already restricting the characters
-/// that reach the URL).
+/// `curl -sSI` bounded by `--max-time` (no shell, args passed directly,
+/// `validate_model_name` already restricting the characters that reach the
+/// URL); its caller runs it off the async runtime.
 fn registry_head(model: &str) -> Result<(String, Option<i64>), String> {
     let url = registry_manifest_url(model)?;
     let output = crate::paths::command_no_window("curl")
@@ -2243,14 +2310,9 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_ollama_model(model: String) -> Result<(), String> {
     let body = serde_json::json!({"model": model}).to_string();
-    ollama_http("DELETE", "/api/delete", Some(&body))?;
-    Ok(())
+    app_core::rt::try_blocking("delete", move || ollama_http("DELETE", "/api/delete", Some(&body)).map(drop)).await
 }
 
-/// Fetch the Ollama registry manifest (config + layers) for a model ref. Shells
-/// out to `curl` (no Rust TLS dep); `model` may be `name`, `name:tag`, or
-/// `namespace/name:tag`, with an absent tag defaulting to `latest`. Shared by the
-/// size hint and the paused-download partial-blob resolver.
 /// Split a model ref into its registry repo path and tag, applying the implicit
 /// `library/` namespace and defaulting the tag to `latest`. Shared by the
 /// manifest and config-blob fetches so both address the exact same repo.
@@ -2277,47 +2339,71 @@ fn registry_manifest_url(model: &str) -> Result<String, String> {
     ))
 }
 
-fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, String> {
-    let url = registry_manifest_url(model)?;
+/// How long one request to the registry or ollama.com may take, connect
+/// included. A manifest, a config blob and a search page are a few KB each.
+const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
 
-    // No shell — args are passed directly, and `validate_model_name` already
-    // restricts the characters that reach the URL. `command_no_window` keeps
-    // `curl` from flashing a console window on Windows (Win10/11 ship curl.exe).
-    let output = crate::paths::command_no_window("curl")
-        .args([
-            "-fsSL",
-            "-H",
-            "Accept: application/vnd.docker.distribution.manifest.v2+json",
-            &url,
-        ])
-        .output()
+/// `GET url` from Ollama's registry or ollama.com: HTTPS only, redirects
+/// followed (the registry hands blobs to a CDN, which `curl -L` followed too),
+/// and bounded by [`REGISTRY_TIMEOUT`]. The `curl` this replaced had no time
+/// limit, so a stalled server held its caller for as long as TCP kept the
+/// connection (code screen B2). `Ok(None)` is an HTTP error status, what
+/// `curl -f` failed on.
+async fn registry_get(url: &str, accept: Option<&str>) -> Result<Option<Vec<u8>>, String> {
+    crate::services::mail_engine::install_crypto_provider();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(REGISTRY_TIMEOUT)
+        .https_only(true)
+        .user_agent(crate::app_name!())
+        .build()
         .map_err(|e| format!("failed to query registry: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!("registry returned no manifest for {model}"));
+    let mut request = client.get(url);
+    if let Some(accept) = accept {
+        request = request.header(reqwest::header::ACCEPT, accept);
     }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
+    Ok(Some(body.to_vec()))
+}
 
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("manifest json: {e}"))
+/// Fetch the Ollama registry manifest (config + layers) for a model ref, through
+/// [`registry_get`]; `model` may be `name`, `name:tag`, or `namespace/name:tag`,
+/// with an absent tag defaulting to `latest`. Shared by the size hint and the
+/// paused-download partial-blob resolver.
+async fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, String> {
+    // `validate_model_name` (inside) already restricts the characters that
+    // reach the URL.
+    let url = registry_manifest_url(model)?;
+    let body = registry_get(&url, Some("application/vnd.docker.distribution.manifest.v2+json"))
+        .await?
+        .ok_or_else(|| format!("registry returned no manifest for {model}"))?;
+    serde_json::from_slice(&body).map_err(|e| format!("manifest json: {e}"))
 }
 
 /// Fetch a registry blob (here: a manifest's config object) by digest. The
 /// `repo` comes from `registry_repo_tag` (already `validate_model_name`d) and the
 /// digest is checked to be a bare `sha256:<hex>`, so nothing user-typed reaches
-/// the URL unvalidated — the same no-shell, argv-only `curl` the manifest uses.
-fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Value, String> {
+/// the URL unvalidated — the same bounded [`registry_get`] the manifest uses.
+async fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Value, String> {
     let hex = digest
         .strip_prefix("sha256:")
         .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| "invalid config digest".to_string())?;
     let url = format!("https://registry.ollama.ai/v2/{repo}/blobs/sha256:{hex}");
-    let output = crate::paths::command_no_window("curl")
-        .args(["-fsSL", &url])
-        .output()
-        .map_err(|e| format!("failed to query registry: {e}"))?;
-    if !output.status.success() {
-        return Err("registry returned no config blob".to_string());
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("config json: {e}"))
+    let body = registry_get(&url, None)
+        .await?
+        .ok_or_else(|| "registry returned no config blob".to_string())?;
+    serde_json::from_slice(&body).map_err(|e| format!("config json: {e}"))
 }
 
 /// A registry tag's headline facts, shown in the browse-registry list before a
@@ -2346,7 +2432,7 @@ pub struct RegistryDetails {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, String> {
     let (repo, _tag) = registry_repo_tag(&model)?;
-    let manifest = fetch_registry_manifest(&model)?;
+    let manifest = fetch_registry_manifest(&model).await?;
 
     // Only the layer bytes are the download; the config blob is a few hundred
     // bytes of metadata, and for a cloud model it is the *only* object — so
@@ -2362,7 +2448,7 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 
     let (mut params, mut quant) = (None, None);
     if let Some(digest) = manifest["config"]["digest"].as_str() {
-        if let Ok(cfg) = fetch_registry_blob(&repo, digest) {
+        if let Ok(cfg) = fetch_registry_blob(&repo, digest).await {
             params = cfg["model_type"]
                 .as_str()
                 .map(str::trim)
@@ -2389,8 +2475,8 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 // Ollama exposes no JSON catalog API, only its server-rendered search page. It
 // used to carry `x-test-*` hooks, but a 2026 redesign dropped them, so we now
 // key off the one anchor the page has always had: each result card's title
-// links to `/library/<name>`. We fetch it with `curl` (no TLS dep, same as
-// `fetch_registry_manifest`) and parse that. This surfaces *every*
+// links to `/library/<name>`. We fetch it with [`registry_get`] (as
+// `fetch_registry_manifest` does) and parse that. This surfaces *every*
 // model in the registry and
 // supports Ollama's own filters: free-text query, capability filter, sort, and
 // pagination for lazy loading. NB: Ollama provides no country/year metadata, so
@@ -2565,19 +2651,12 @@ pub async fn search_ollama_registry(
         url.push_str("&o=newest");
     }
 
-    // No shell — args passed directly; the URL is built only from a validated
-    // capability/sort and a percent-encoded query. `command_no_window` avoids a
-    // console-window flash on Windows.
-    let output = crate::paths::command_no_window("curl")
-        .args(["-fsSL", &url])
-        .output()
-        .map_err(|e| format!("failed to query registry: {e}"))?;
-
-    if !output.status.success() {
-        return Err("ollama.com search request failed".to_string());
-    }
-
-    let html = String::from_utf8_lossy(&output.stdout);
+    // The URL is built only from a validated capability/sort and a
+    // percent-encoded query.
+    let body = registry_get(&url, None)
+        .await?
+        .ok_or_else(|| "ollama.com search request failed".to_string())?;
+    let html = String::from_utf8_lossy(&body);
     Ok(parse_search_html(&html))
 }
 
@@ -2591,7 +2670,12 @@ pub async fn search_ollama_registry(
 /// the running check.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_status() -> &'static str {
-    match ollama_http("GET", "/api/ps", None) {
+    app_core::rt::blocking("status", status_lamp).await.unwrap_or("stopped")
+}
+
+/// The blocking body of [`ollama_status`].
+fn status_lamp() -> &'static str {
+    match ollama_status_read("/api/ps") {
         Err(_) => "stopped",
         Ok(body) => {
             let loaded = serde_json::from_str::<serde_json::Value>(&body)
@@ -2612,7 +2696,7 @@ pub async fn ollama_status() -> &'static str {
 /// unreachable or no model is loaded on the GPU, so callers can treat it as a
 /// plain "GPU bytes in use" gauge that degrades to zero rather than erroring.
 pub fn total_vram_in_use() -> u64 {
-    ollama_http("GET", "/api/ps", None)
+    ollama_status_read("/api/ps")
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["models"].as_array().cloned())
@@ -2785,7 +2869,7 @@ pub async fn ollama_gpu_status() -> OllamaGpuStatus {
 
         // A resident model with no GPU bytes anywhere. `/api/ps` unreachable, or
         // an empty one, leaves this false — "nothing loaded" is not "on the CPU".
-        let loaded = ollama_http("GET", "/api/ps", None)
+        let loaded = ollama_status_read("/api/ps")
             .ok()
             .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
             .and_then(|v| v["models"].as_array().cloned())
@@ -3024,7 +3108,8 @@ fn systemd_ollama_active() -> bool {
 /// is torn down again at exit — see [`shutdown_owned_server`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ensure_ollama_running() -> Result<(), String> {
-    ensure_running(true)
+    // Waits for the server (and for a polkit prompt, if one is shown).
+    app_core::rt::try_blocking("start", || ensure_running(true)).await
 }
 
 /// [`ensure_ollama_running`] for a start nobody is sitting at the desktop for
@@ -3453,11 +3538,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
+    s[..s.floor_char_boundary(max)].to_string()
 }
 
 /// Build the read-only CONTEXT preamble from attached reference files, size-capped
@@ -3813,11 +3894,7 @@ pub async fn complete_text(
 }
 
 fn bounded_completion_prefix(prefix: &str) -> String {
-    let mut start = prefix.len().saturating_sub(16_384);
-    while !prefix.is_char_boundary(start) {
-        start += 1;
-    }
-    prefix[start..].to_string()
+    prefix[prefix.ceil_char_boundary(prefix.len().saturating_sub(16_384))..].to_string()
 }
 
 /// Result of preparing a local Ollama agent for vibe.
@@ -4414,7 +4491,7 @@ fn opencode_ollama_config(addr: &str, loaded: &[String], requested: Option<&str>
 /// `None` when Ollama cannot be asked — an unreachable server leaves the user's
 /// own config alone rather than emptying its model list on a guess.
 pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<String> {
-    let loaded = loaded_model_names(&ollama_http("GET", "/api/ps", None).ok()?)?;
+    let loaded = loaded_model_names(&ollama_status_read("/api/ps").ok()?)?;
     let addr = ollama_addr().ok()?;
     Some(opencode_ollama_config(&addr, &loaded, requested))
 }
@@ -4484,6 +4561,12 @@ pub struct LocalDriverInfo {
 /// is worse than both.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_local_drivers(model: Option<String>) -> Vec<LocalDriverInfo> {
+    // `ollama launch --help`, PATH lookups and a capability read: off the runtime.
+    app_core::rt::blocking("drivers", move || local_drivers(model)).await.unwrap_or_default()
+}
+
+/// The blocking body of [`list_local_drivers`].
+fn local_drivers(model: Option<String>) -> Vec<LocalDriverInfo> {
     let has_launch = ollama_has_launch();
     // `None` — no model given, or Ollama couldn't say — means "don't filter".
     let tools = model
@@ -4538,6 +4621,12 @@ pub struct LocalLaunchSpec {
 /// validated and passed as a discrete arg (no shell), so it can't inject.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_local_launch(agent: String, model: String) -> Result<LocalLaunchSpec, String> {
+    app_core::rt::try_blocking("launch", move || local_launch(agent, model)).await
+}
+
+/// The blocking body of [`prepare_local_launch`]: capability reads against the
+/// server and an `ollama launch --help`.
+fn local_launch(agent: String, model: String) -> Result<LocalLaunchSpec, String> {
     validate_model_name(&model)?;
     let driver = LOCAL_DRIVERS
         .iter()
@@ -4879,6 +4968,25 @@ mod owned_server_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An interrupted-pull list that does not parse keeps its entries: a new
+    /// pull fails to record itself rather than replacing them with its own.
+    #[test]
+    fn a_pending_pull_never_replaces_an_unreadable_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ollama_pending_pulls.json");
+        std::fs::write(&path, "[\"llama3\", ").unwrap();
+        assert!(mark_pending_pull_in(&path, "qwen3", true).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\"llama3\", ");
+
+        std::fs::remove_file(&path).unwrap();
+        mark_pending_pull_in(&path, "llama3", true).unwrap();
+        mark_pending_pull_in(&path, "qwen3", true).unwrap();
+        mark_pending_pull_in(&path, "qwen3", true).unwrap();
+        mark_pending_pull_in(&path, "llama3", false).unwrap();
+        let list: Vec<String> = crate::storage::read_json(&path).unwrap();
+        assert_eq!(list, vec!["qwen3"]);
+    }
 
     #[test]
     fn prose_sentence_stops_preserve_language_punctuation_and_decimals() {
@@ -6547,10 +6655,17 @@ mod phone_control_tests {
     fn the_owner_gate_judges_loopback_listeners_only() {
         // Another machine, and a port nobody listens on: nothing to judge.
         assert_eq!(owner_gate("gpu-box.example:11434"), Ok(()));
-        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = free.local_addr().unwrap().port();
-        drop(free);
+        // A port nothing can listen on while this test runs: the local end of a
+        // live connection. The kernel refuses to bind a listener there (the
+        // connected socket has no SO_REUSEADDR), so no parallel test or other
+        // process can take it between the pick and the probe. A port freed by
+        // dropping a listener could be taken, and a listener that came and went
+        // in between read as an unidentifiable holder.
+        let peer = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let held = std::net::TcpStream::connect(peer.local_addr().unwrap()).unwrap();
+        let port = held.local_addr().unwrap().port();
         assert_eq!(owner_gate(&format!("127.0.0.1:{port}")), Ok(()));
+        drop((held, peer));
         // This test process's own listener, in its own namespace, passes.
         let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         assert_eq!(owner_gate(&format!("127.0.0.1:{}", own.local_addr().unwrap().port())), Ok(()));

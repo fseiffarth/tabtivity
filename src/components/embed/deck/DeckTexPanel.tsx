@@ -10,6 +10,7 @@
 
 import type { Deck, ImageObject } from "../../../lib/viewers/deck/model";
 import { useT } from "../../../lib/i18n";
+import { basename } from "../../../lib/paths";
 
 export interface TexFigureEntry {
   slideIndex: number;
@@ -57,7 +58,7 @@ export function DeckTexPanel({ deck, onJump, onEditTex, onRecompileTex, texBusyI
                 <span className="deck-tex-list-slide">
                   {t("deckTexPanel.slideLabel", { n: slideIndex + 1 })}
                 </span>
-                <span className="deck-tex-list-name">{obj.texSrc.split("/").pop()}</span>
+                <span className="deck-tex-list-name">{basename(obj.texSrc)}</span>
               </button>
               <div className="deck-tex-list-actions">
                 <button

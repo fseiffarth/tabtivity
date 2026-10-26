@@ -164,11 +164,12 @@ describe("Mobile project screen — the ＋'s tap and hold", () => {
 
   it("opens the desktop's default agent on a tap, with no sheet and no mode", async () => {
     serve(AGENTS);
-    const opened: TabRow[] = [];
-    render(<Project id="p" back={() => {}} terminal={(tab) => opened.push(tab)} />);
+    const opened = vi.fn();
+    render(<Project id="p" back={() => {}} terminal={opened} />);
     await screen.findByText("claude 1");
     fireEvent.click(screen.getByRole("button", { name: "New tab" }));
-    await waitFor(() => expect(opened).toHaveLength(1));
+    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+    expect(opened).toHaveBeenCalledWith(NEW_TAB, { launchHint: true });
     expect(screen.queryByRole("dialog", { name: "New tab" })).toBeNull();
     expect(posted()).toHaveLength(1);
     expect(posted()[0]).toMatchObject({ kind: "agent", agent_id: "codex" });

@@ -197,10 +197,6 @@ export function fileSize(path: string, projectId: string | null): Promise<number
   return invoke<number>("file_size", { path, projectId });
 }
 
-export function detectMime(path: string, projectId: string | null): Promise<string> {
-  return invoke<string>("detect_mime", { path, projectId });
-}
-
 /**
  * Turn a raw file-read/stat failure into a sentence a user can act on.
  *

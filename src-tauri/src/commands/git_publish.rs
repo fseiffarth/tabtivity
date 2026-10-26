@@ -883,12 +883,7 @@ fn remote_publish_script(
 /// Find a project entry by id, returning its index and the full (owned) list so
 /// the caller can mutate + persist it.
 fn find_entry(project_id: &str) -> Result<(usize, ProjectsList), String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = if list_path.exists() {
-        storage::read_json(&list_path).map_err(|e| e.to_string())?
-    } else {
-        Vec::new()
-    };
+    let list = crate::commands::projects::read_projects_list()?;
     let idx = list
         .iter()
         .position(|p| p.id == project_id)

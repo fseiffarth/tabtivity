@@ -92,20 +92,20 @@ fn default_sources() -> Vec<SkillSource> {
 }
 
 /// Every configured source, seeding + persisting the default set on first call
-/// (an empty/missing file, not an error — a fresh install has no sources yet).
-pub fn list_sources() -> Vec<SkillSource> {
-    match storage::read_json::<Vec<SkillSource>>(&sources_path()) {
-        Ok(sources) => sources,
-        Err(_) => {
-            let seeded = default_sources();
-            let _ = storage::write_json(&sources_path(), &seeded);
-            seeded
-        }
-    }
+/// (a missing file, not an error — a fresh install has no sources yet). A file
+/// that does not parse (corrupt, or a newer build's) is an error and stays as it
+/// is: the user's added sources are never replaced by the seed.
+pub fn list_sources() -> Result<Vec<SkillSource>, String> {
+    patch_sources(&sources_path(), |sources| Ok(sources.clone()))
 }
 
-fn save_sources(sources: &[SkillSource]) -> Result<(), String> {
-    storage::write_json(&sources_path(), &sources.to_vec()).map_err(|e| e.to_string())
+/// One read-modify-write of the source list, starting from the seed when the
+/// file is missing.
+fn patch_sources<R>(
+    path: &Path,
+    patch: impl FnOnce(&mut Vec<SkillSource>) -> Result<R, String>,
+) -> Result<R, String> {
+    storage::patch_private_json(path, default_sources(), patch)
 }
 
 /// A short, filesystem- and JSON-safe id derived from the URL, so a repeated add
@@ -141,30 +141,35 @@ fn slug_from(url: &str, label: &str) -> String {
 /// same URL is a no-op that returns the existing entry rather than a duplicate.
 pub fn add_source(label: String, url: String) -> Result<SkillSource, String> {
     crate::commands::git::validate_clone_url(&url)?;
-    let mut sources = list_sources();
-    if let Some(existing) = sources.iter().find(|s| s.url == url) {
-        return Ok(existing.clone());
-    }
-    let base = slug_from(&url, &label);
-    let mut id = base.clone();
-    let mut n = 2;
-    while sources.iter().any(|s| s.id == id) {
-        id = format!("{base}-{n}");
-        n += 1;
-    }
-    let entry = SkillSource { id, label, url };
-    sources.push(entry.clone());
-    save_sources(&sources)?;
-    Ok(entry)
+    add_source_in(&sources_path(), label, url)
+}
+
+fn add_source_in(path: &Path, label: String, url: String) -> Result<SkillSource, String> {
+    patch_sources(path, |sources| {
+        if let Some(existing) = sources.iter().find(|s| s.url == url) {
+            return Ok(existing.clone());
+        }
+        let base = slug_from(&url, &label);
+        let mut id = base.clone();
+        let mut n = 2;
+        while sources.iter().any(|s| s.id == id) {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        let entry = SkillSource { id, label, url };
+        sources.push(entry.clone());
+        Ok(entry)
+    })
 }
 
 /// Drop a source and its cached clone. Does not touch anything already
 /// installed into a project — install is a copy, not a link.
 pub fn remove_source(id: String) -> Result<(), String> {
-    let mut sources = list_sources();
-    sources.retain(|s| s.id != id);
     let dir = cache_dir(&id)?;
-    save_sources(&sources)?;
+    patch_sources(&sources_path(), |sources| {
+        sources.retain(|s| s.id != id);
+        Ok(())
+    })?;
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
@@ -177,7 +182,7 @@ pub fn remove_source(id: String) -> Result<(), String> {
 /// private repo that lost access fails instead of hanging on a credential
 /// prompt Tabtivity has no console to answer.
 pub fn refresh_source(id: &str) -> Result<(), String> {
-    let sources = list_sources();
+    let sources = list_sources()?;
     let source = sources
         .into_iter()
         .find(|s| s.id == id)
@@ -372,26 +377,18 @@ fn target_skills_dir(target: &SkillTarget) -> Result<PathBuf, String> {
     }
 }
 
-/// Copy `src` into `dest` recursively. `dest`'s parent is created if needed;
-/// `dest` itself is expected to not exist yet — callers that mean to overwrite
-/// (a re-install) remove it first, so this never merges an old and a new
-/// install's files together. A link in the skill is skipped, not followed: a
-/// repository's `notes -> ~/.ssh` would otherwise copy that folder into the
-/// project.
-fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dest)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dest.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else if kind.is_file() {
-            fs::copy(&from, &to)?;
-        }
+/// Copy the skill folder `src` to `dest`, which must not exist yet (a
+/// re-install removes the old one first, so an old and a new install's files
+/// never merge). The copy is [`tree_copy`]'s, bounded in entries, bytes and
+/// depth; a link in the skill is skipped, not followed: a repository's
+/// `notes -> ~/.ssh` would otherwise copy that folder into the project.
+///
+/// [`tree_copy`]: crate::services::tree_copy
+fn copy_skill(src: &Path, dest: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
     }
-    Ok(())
+    crate::services::tree_copy::copy_tree_without_links(src, dest).map(|_| ())
 }
 
 /// `<target>/.claude/skills/<name>`, for a `name` that is one plain folder
@@ -433,7 +430,7 @@ pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> R
     if fs::symlink_metadata(&dest).is_ok() {
         fs::remove_dir_all(&dest).map_err(|e| e.to_string())?;
     }
-    copy_dir_recursive(&src, &dest).map_err(|e| e.to_string())
+    copy_skill(&src, &dest).map_err(|e| e.to_string())
 }
 
 /// Delete `<target>/.claude/skills/<name>/`.
@@ -490,6 +487,24 @@ fn list_installed_at(dir: &Path) -> Vec<InstalledSkill> {
 mod tests {
     use super::*;
 
+    /// A source list that does not parse is left as it is: neither a read nor
+    /// an add replaces the user's sources with the seed. A missing one is seeded.
+    #[test]
+    fn an_unreadable_source_list_is_never_replaced_by_the_seed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills_sources.json");
+        let unreadable = r#"[{"id":"mine","label":"Mine","url":"https://example.com/s.git"}"#;
+        std::fs::write(&path, unreadable).unwrap();
+        assert!(patch_sources(&path, |s| Ok(s.clone())).is_err());
+        assert!(add_source_in(&path, "Other".into(), "https://example.com/o.git".into()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), unreadable);
+
+        std::fs::remove_file(&path).unwrap();
+        let added = add_source_in(&path, "Other".into(), "https://example.com/o.git".into()).unwrap();
+        let ids: Vec<String> = patch_sources(&path, |s| Ok(s.iter().map(|s| s.id.clone()).collect())).unwrap();
+        assert_eq!(ids, vec!["anthropic".to_string(), added.id]);
+    }
+
     #[test]
     fn parse_skill_md_reads_frontmatter_and_strips_it() {
         let content = "---\nname: pdf-fill\ndescription: Fill PDF forms\n---\n# Body\ntext\n";
@@ -545,7 +560,7 @@ mod tests {
         // without touching global state — so this test drives the copy helper
         // and the project-side read paths directly instead.
         let dest = project_skills_dir(&project_dir).join("pdf-fill");
-        copy_dir_recursive(&skill_dir, &dest).unwrap();
+        copy_skill(&skill_dir, &dest).unwrap();
         assert!(dest.join("SKILL.md").is_file());
         assert!(dest.join("scripts").join("run.py").is_file());
 
@@ -657,7 +672,7 @@ mod tests {
         std::os::unix::fs::symlink(&secret, skill.join("notes")).unwrap();
         std::os::unix::fs::symlink(secret.join("id_key"), skill.join("key")).unwrap();
         let dest = tmp.path().join("dest");
-        copy_dir_recursive(&skill, &dest).unwrap();
+        copy_skill(&skill, &dest).unwrap();
         assert!(dest.join("SKILL.md").is_file());
         assert!(fs::symlink_metadata(dest.join("notes")).is_err(), "a linked folder is not copied");
         assert!(fs::symlink_metadata(dest.join("key")).is_err(), "a linked file is not copied");

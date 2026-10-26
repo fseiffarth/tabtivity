@@ -9,17 +9,6 @@ import { useT, type TranslationKey } from "../../lib/i18n";
  *  the true tally. */
 const MAX_STATUS_BARS = 6;
 
-/** The strip's bars, most urgent state first, one per tab. */
-export function statusBarKinds(c: TabStatusCounts): string[] {
-  const kinds = [
-    ...Array<string>(c.working).fill("working"),
-    ...Array<string>(c.decision).fill("needs-decision"),
-    ...Array<string>(c.done).fill("finished"),
-    ...Array<string>(c.interrupted).fill("interrupted"),
-  ];
-  return kinds.slice(0, MAX_STATUS_BARS);
-}
-
 /** Tooltip spelling out the tally the bars stand for (never truncated). */
 export function statusBarTitle(
   c: TabStatusCounts,

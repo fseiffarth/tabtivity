@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::commands::projects::{entry_directory, entry_is_remote, entry_is_vm, read_projects_list, ImportProjectRequest};
+use crate::commands::projects::{entry_directory, entry_is_remote, entry_is_vm, ImportProjectRequest};
 use crate::schema::projects::ProjectEntry;
 use crate::services::server::hub_wire::{Request, Role, ShareInfo};
 use crate::services::server::share::{self, BranchState, Pushed, Review, ShareRow};
@@ -28,10 +28,6 @@ fn me() -> Result<String, String> {
 
 fn state_dir() -> PathBuf {
     crate::storage::state_dir()
-}
-
-fn entry(project_id: &str) -> Result<ProjectEntry, String> {
-    read_projects_list()?.into_iter().find(|p| p.id == project_id).ok_or_else(|| "Unknown project".to_string())
 }
 
 /// Why `entry` cannot be shared: remote, VM and container projects are
@@ -74,7 +70,7 @@ pub async fn share_list() -> Result<ShareOverview, String> {
 pub async fn share_create(project_id: String) -> Result<ShareInfo, String> {
     let me = me()?;
     app_core::rt::try_blocking("sharing", move || {
-        let entry = entry(&project_id)?;
+        let entry = crate::services::remote::project_entry(&project_id)?;
         if let Some(why) = refusal(&entry) {
             return Err(why.to_string());
         }

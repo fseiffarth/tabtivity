@@ -514,6 +514,30 @@ pub struct ResolvedProject {
     /// remote side of the 📁 library (`host_files`). Raw; never crosses the
     /// browser API.
     pub primary_host: Option<RemoteSpec>,
+    /// The machines a phone-made agent of a remote (not VM) project may start
+    /// on instead of the mirror: the primary, then each worker, in the
+    /// record's order. Empty unless the project wraps its host tabs in tmux
+    /// (`persist_sessions`) and this build lists host tabs — a tab started
+    /// anywhere else would never reach the phone's list. Raw; never crosses
+    /// the browser API (the phone gets opaque ids).
+    pub machines: Vec<HostMachine>,
+}
+
+/// One machine of a remote project, as the phone's ＋ offers it
+/// ([`ResolvedProject::machines`]).
+#[derive(Debug, Clone)]
+pub struct HostMachine {
+    /// The window's location word for a tab there: `"remote"` for the
+    /// primary, `"host:<id>"` for a worker.
+    pub location: String,
+    pub spec: RemoteSpec,
+    /// The record's display name, else the host name.
+    pub label: String,
+    pub primary: bool,
+    /// The machine holds the code: the primary always; a worker that shares
+    /// the primary's folder or keeps a synced copy (the window's
+    /// `workerRunnable`). A worker with neither has no tree to run in.
+    pub runnable: bool,
 }
 
 impl ResolvedProject {
@@ -591,6 +615,31 @@ impl ProjectHosts {
     /// default) the primary, `"host:<id>"` that worker. A worker id that no
     /// longer resolves is no host: the session is wherever it last ran, and
     /// that is not guessed.
+    /// [`ResolvedProject::machines`] for these hosts.
+    fn machines(&self) -> Vec<HostMachine> {
+        if !self.persist {
+            return Vec::new();
+        }
+        let label_of = |spec: &RemoteSpec| {
+            spec.label.as_deref().map(str::trim).filter(|label| !label.is_empty()).unwrap_or(&spec.host).chars().take(120).collect()
+        };
+        let primary = self.primary.iter().map(|spec| HostMachine {
+            location: "remote".to_string(),
+            spec: spec.clone(),
+            label: label_of(spec),
+            primary: true,
+            runnable: true,
+        });
+        let workers = self.workers.iter().filter(|h| !h.id.is_empty()).map(|h| HostMachine {
+            location: format!("host:{}", h.id),
+            spec: h.spec.clone(),
+            label: label_of(&h.spec),
+            primary: false,
+            runnable: h.shared_fs || h.sync_code,
+        });
+        primary.chain(workers).collect()
+    }
+
     fn spec_for(&self, location: Option<&str>) -> Option<&RemoteSpec> {
         match host_location(location)? {
             HostLocation::Primary => self.primary.as_ref(),
@@ -1751,6 +1800,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         folder: true,
         create: CreateVerdict::All,
         primary_host: None,
+        machines: Vec::new(),
     }
 }
 
@@ -1992,6 +2042,12 @@ fn resolve_scope(
         host: source.host,
         folder,
         create: create_verdict(source.host, folder),
+        machines: source
+            .hosts
+            .as_ref()
+            .filter(|_| listing.host_tabs)
+            .map(ProjectHosts::machines)
+            .unwrap_or_default(),
         primary_host: source.hosts.and_then(|hosts| hosts.primary),
     })
 }
@@ -3496,6 +3552,48 @@ mod tests {
 
     fn spec_of(host: &str) -> RemoteSpec {
         serde_json::from_value(serde_json::json!({ "user": "alice", "host": host, "remote_path": "/x" })).unwrap()
+    }
+
+    /// The machines a phone-made agent may start on: the primary then each
+    /// worker, under the window's location words — and none where a tab
+    /// started there would never be listed (no tmux on the host, no host
+    /// tabs in this build, a VM).
+    #[test]
+    fn a_remote_project_offers_its_machines_only_where_host_tabs_are_listed() {
+        let (dir, _) = host_tab_state(None, false);
+        let project = load_hosts(dir.path(), &HostLive::default(), true);
+        let machines: Vec<_> = project.machines.iter().map(|m| (m.location.as_str(), m.label.as_str(), m.primary, m.runnable)).collect();
+        assert_eq!(machines, [("remote", "primary.example", true, true), ("host:w1", "w1.example", false, true)]);
+        assert!(load_hosts(dir.path(), &HostLive::default(), false).machines.is_empty(), "no host tabs in this build");
+        let (off, _) = host_tab_state(Some(false), false);
+        assert!(load_hosts(off.path(), &HostLive::default(), true).machines.is_empty(), "persist_sessions off");
+        let (vm, _) = host_tab_state(None, true);
+        assert!(load_hosts(vm.path(), &HostLive::default(), true).machines.is_empty(), "a VM project");
+    }
+
+    /// A worker's own label names it; one that neither shares the primary's
+    /// folder nor keeps a synced copy has no tree to run in.
+    #[test]
+    fn a_machine_is_named_by_its_label_and_runnable_only_with_the_code() {
+        let worker = |extra: serde_json::Value| {
+            let mut host = serde_json::json!({ "id": "w2", "user": "alice", "host": "w2.example", "remote_path": "/srv/w" });
+            host.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<ComputeHost>(host).unwrap()
+        };
+        let hosts = ProjectHosts {
+            primary: Some(serde_json::from_value(serde_json::json!({ "host": "p.example", "remote_path": "/x", "label": " gpu-1 " })).unwrap()),
+            workers: vec![
+                worker(serde_json::json!({ "label": "gpu-2" })),
+                worker(serde_json::json!({ "sync_code": false })),
+                worker(serde_json::json!({ "sync_code": false, "shared_fs": true })),
+            ],
+            persist: true,
+        };
+        let machines: Vec<_> = hosts.machines().into_iter().map(|m| (m.label, m.runnable)).collect();
+        assert_eq!(
+            machines,
+            [("gpu-1".to_string(), true), ("gpu-2".to_string(), true), ("w2.example".to_string(), false), ("w2.example".to_string(), true)]
+        );
     }
 
     /// Plan step 2: a remote project's host tabs are listed off the session

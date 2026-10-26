@@ -15,6 +15,64 @@ where
     Ok(serde_json::from_str(&content)?)
 }
 
+/// The most of a JSON file in a project folder Tabtivity reads; a
+/// `project.json`'s time log is the only part that grows.
+pub const MAX_TREE_JSON_BYTES: u64 = 64 << 20;
+
+/// A JSON file that may sit in a project folder (attacker-controlled,
+/// AGENTS.md) — a `project.json` — as text, `Ok(None)` only when nothing is
+/// at `path`. A link (dangling or not), a FIFO, or anything else that is not
+/// a regular UTF-8 file of at most [`MAX_TREE_JSON_BYTES`] is an error, never
+/// followed, waited on or taken for "none": a caller that writes the file
+/// back would otherwise replace it with a blank one.
+pub fn read_tree_json_text(path: &Path) -> Result<Option<String>, String> {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Ok(_) => {}
+    }
+    crate::services::home_io::read_record_capped(path, MAX_TREE_JSON_BYTES)
+        .map(Some)
+        .ok_or_else(|| format!("{} is not a readable regular file of at most 64 MB", path.display()))
+}
+
+/// [`read_tree_json_text`], parsed: one that does not parse is an error too.
+pub fn read_tree_json<T>(path: &Path) -> Result<Option<T>, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let Some(text) = read_tree_json_text(path)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("{} could not be read: {e}", path.display()))
+}
+
+/// Write `value` as JSON to `name` in the held project folder `dir`, in place
+/// like [`write_json`]'s project-folder branch: an existing regular file is
+/// emptied and rewritten (inode, owner and mode kept), a missing one is
+/// created. A link at the name (dangling or not), a FIFO or a folder is
+/// refused, never followed or waited on.
+pub(crate) fn write_json_in<T>(
+    dir: &crate::services::mobile_control::files::ProjectDir,
+    name: &str,
+    value: &T,
+) -> Result<(), String>
+where
+    T: serde::Serialize,
+{
+    use crate::services::mobile_control::files::WriteRefusal;
+    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    let mut file = match dir.open_existing_for_write(name) {
+        Ok(Some(file)) => file,
+        Ok(None) => dir.create_file(name).map_err(|e| format!("{name}: {e}"))?,
+        Err(WriteRefusal::Link | WriteRefusal::NotFile) => return Err(format!("{name} is not a regular file")),
+        Err(WriteRefusal::Io(e)) => return Err(format!("{name}: {e}")),
+    };
+    file.write_all(json.as_bytes()).map_err(|e| format!("{name}: {e}"))
+}
+
 /// Serialize and write a JSON file.
 pub fn write_json<T>(path: &Path, value: &T) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -34,8 +92,8 @@ where
 /// written at human or timer pace, not per message, so that is affordable.
 ///
 /// A shared file (a project folder's) is truncated and rewritten in place,
-/// keeping its mode, owner and links: a group-shared project dir stays
-/// readable to its group.
+/// keeping its mode and owner: a group-shared project dir stays readable to
+/// its group. A link or a FIFO at its name is refused (see below).
 fn write_json_file<T>(path: &Path, value: &T, private: bool) -> Result<(), Box<dyn std::error::Error>>
 where
     T: serde::Serialize,
@@ -48,11 +106,26 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    // The file is the project's (attacker-controlled): a link at its name is
+    // refused, never written through, and a FIFO is refused without waiting
+    // for a reader (`ENXIO`). Truncated only once the opened inode is known
+    // to be a regular file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_file()) {
+        return Err(format!("{} is not a regular file", path.display()).into());
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(format!("{} is not a regular file", path.display()).into());
+    }
+    file.set_len(0)?;
     file.write_all(json.as_bytes())?;
     Ok(())
 }
@@ -90,6 +163,34 @@ pub fn patch_json<T, R>(
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
+    patch_json_as(path, default, None, patch)
+}
+
+/// [`patch_json`] for a store [`write_json`] used to write owner-only: one that
+/// names hosts, logins or their paths. Each write is staged like
+/// [`write_private_atomic`]'s — `0600` on Unix (as [`patch_json`]'s already
+/// is), the owner-only ACL on Windows instead of the folder's inherited one.
+pub fn patch_private_json<T, R>(
+    path: &Path,
+    default: T,
+    patch: impl FnOnce(&mut T) -> Result<R, String>,
+) -> Result<R, String>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    patch_json_as(path, default, Some(0o600), patch)
+}
+
+/// The one read-modify-write; `private` as in [`write_atomic`].
+fn patch_json_as<T, R>(
+    path: &Path,
+    default: T,
+    private: Option<u32>,
+    patch: impl FnOnce(&mut T) -> Result<R, String>,
+) -> Result<R, String>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
     let _guard = JSON_MUTATION_LOCK
         .lock_ok();
     // The process-wide lock serialises this process; the file lock serialises
@@ -102,7 +203,14 @@ where
     // that did. A missing file has none, so its first patch always writes.
     let (mut value, on_disk) = if path.exists() {
         let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        // An empty file (a crash mid-write of an older, non-atomic writer)
+        // holds nothing to lose: it starts from `default` like a missing one,
+        // instead of failing every later patch of that store.
+        let value = if content.trim().is_empty() {
+            default
+        } else {
+            serde_json::from_str(&content).map_err(|e| e.to_string())?
+        };
         (value, Some(content))
     } else {
         (default, None)
@@ -117,7 +225,7 @@ where
     if on_disk.as_deref().map(str::as_bytes) == Some(bytes.as_slice()) {
         return Ok(result);
     }
-    write_bytes_atomic_unlocked(path, &bytes).map_err(|e| e.to_string())?;
+    write_atomic(path, &bytes, private, Landing::Replace).map_err(|e| e.to_string())?;
     Ok(result)
 }
 
@@ -680,71 +788,42 @@ pub fn rewrite_path_prefix(value: &mut serde_json::Value, old: &str, new: &str) 
     }
 }
 
-use crate::clock::now_secs;
-
 /// Current date in UTC as "YYYY-MM-DD".
 pub fn today_utc() -> String {
-    let (y, m, d, ..) = epoch_to_utc(now_secs());
-    format!("{y:04}-{m:02}-{d:02}")
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
 /// Current UTC hour as "YYYY-MM-DDTHH" — a sortable stamp whose first ten
 /// characters are exactly [`today_utc`], so an hour bucket always folds into the
 /// right day bucket.
 pub fn hour_utc() -> String {
-    let (y, m, d, h, ..) = epoch_to_utc(now_secs());
-    format!("{y:04}-{m:02}-{d:02}T{h:02}")
+    chrono::Utc::now().format("%Y-%m-%dT%H").to_string()
 }
 
-/// Current timestamp as ISO-8601 UTC string (seconds precision).
+/// Current timestamp as ISO-8601 UTC string (seconds precision), the `+00:00`
+/// form every persisted file carries (`2026-10-25T12:00:00+00:00`). The one
+/// copy: the crash log's stamps use it too.
 pub fn iso_now() -> String {
-    let (y, mo, d, h, mi, s) = epoch_to_utc(now_secs());
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00")
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
 /// Convert a Unix timestamp to UTC calendar fields:
-/// (year, month, day, hour, minute, second).
+/// (year, month, day, hour, minute, second). Allocation-free, so the crash
+/// handler may call it; a timestamp chrono cannot represent reads as the epoch.
 pub(crate) fn epoch_to_utc(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let mut days = secs / 86400;
-    let mut year = 1970u64;
-    loop {
-        let dy = if is_leap_year(year) { 366 } else { 365 };
-        if days < dy {
-            break;
-        }
-        days -= dy;
-        year += 1;
-    }
-    let month_lens: [u64; 12] = [
-        31,
-        if is_leap_year(year) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1u64;
-    for &ml in &month_lens {
-        if days < ml {
-            break;
-        }
-        days -= ml;
-        month += 1;
-    }
-    (year, month, days + 1, h, m, s)
-}
-
-pub(crate) fn is_leap_year(y: u64) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
+    use chrono::{Datelike, Timelike};
+    let t = i64::try_from(secs)
+        .ok()
+        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+        .unwrap_or_default();
+    (
+        t.year() as u64,
+        u64::from(t.month()),
+        u64::from(t.day()),
+        u64::from(t.hour()),
+        u64::from(t.minute()),
+        u64::from(t.second()),
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -883,6 +962,31 @@ mod tests {
         assert!(s.ends_with("+00:00"), "must end with +00:00, got: {s}");
     }
 
+    /// The stamp older files carry (`+00:00`, written by the hand-rolled
+    /// formatter this replaced) and the `Z` form the crash log used to carry
+    /// both parse back, to the same instant, and `iso_now` reads back to now.
+    #[test]
+    fn iso_now_round_trips_in_both_spellings() {
+        let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
+        assert_eq!(parse("2024-06-03T11:34:56+00:00"), 1717414496);
+        assert_eq!(parse("2024-06-03T11:34:56Z"), 1717414496);
+        let before = crate::clock::now_secs() as i64;
+        let now = iso_now();
+        let after = crate::clock::now_secs() as i64;
+        assert_eq!(now.len(), "2024-06-03T11:34:56+00:00".len(), "{now}");
+        assert!((before..=after).contains(&parse(&now)), "{now}");
+        assert_eq!(parse(&now.replace("+00:00", "Z")), parse(&now));
+    }
+
+    #[test]
+    fn epoch_to_utc_matches_chrono_formatting_over_the_leap_years() {
+        for secs in [0u64, 86_399, 951_782_400, 1_078_099_199, 1_709_164_800, 4_107_542_400, 32_503_680_000] {
+            let (y, mo, d, h, mi, s) = epoch_to_utc(secs);
+            let want = chrono::DateTime::from_timestamp(secs as i64, 0).unwrap().format("%Y-%m-%dT%H:%M:%S").to_string();
+            assert_eq!(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"), want);
+        }
+    }
+
     #[test]
     fn iso_now_contains_t_separator() {
         let s = iso_now();
@@ -898,29 +1002,6 @@ mod tests {
             now.starts_with(year),
             "iso_now year must match today: now={now} today={today}"
         );
-    }
-
-    // ── is_leap_year ───────────────────────────────────────────────────────
-
-    #[test]
-    fn year_divisible_by_4_is_leap() {
-        assert!(is_leap_year(2024));
-        assert!(is_leap_year(2000));
-        assert!(is_leap_year(1600));
-    }
-
-    #[test]
-    fn year_divisible_by_100_but_not_400_is_not_leap() {
-        assert!(!is_leap_year(1900));
-        assert!(!is_leap_year(1800));
-        assert!(!is_leap_year(2100));
-    }
-
-    #[test]
-    fn year_not_divisible_by_4_is_not_leap() {
-        assert!(!is_leap_year(2023));
-        assert!(!is_leap_year(2025));
-        assert!(!is_leap_year(1999));
     }
 
     // ── epoch_to_utc ───────────────────────────────────────────────────────
@@ -1076,6 +1157,90 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["plain", "project.json", "settings.json"]);
+    }
+
+    /// A project folder's `project.json` is the project's: a link there
+    /// (`project.json -> ~/.bashrc`) is refused, never written through, and a
+    /// FIFO is refused without waiting for a reader.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_json_file_is_never_written_through_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        fs::write(&victim, "precious\n").unwrap();
+        let linked = tmp.path().join("project.json");
+        std::os::unix::fs::symlink(&victim, &linked).unwrap();
+        assert!(write_json_file(&linked, &serde_json::json!({}), false).is_err());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious\n");
+
+        let dangling = tmp.path().join("other.json");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, &dangling).unwrap();
+        assert!(write_json_file(&dangling, &serde_json::json!({}), false).is_err());
+        assert!(!elsewhere.exists());
+
+        let fifo = tmp.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || {
+            write_json_file(&fifo, &serde_json::json!({}), false).map_err(|e| e.to_string())
+        })
+        .is_err());
+    }
+
+    /// `write_json_in` writes a file of a held project folder in place (mode
+    /// kept), creates a missing one, and refuses a link or FIFO at the name
+    /// without following or waiting on it.
+    #[cfg(unix)]
+    #[test]
+    fn a_json_file_in_a_held_folder_is_written_in_place_and_never_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let held = crate::services::mobile_control::files::ProjectDir::open_root(tmp.path()).unwrap();
+        write_json_in(&held, "a.json", &serde_json::json!({"a": 1})).unwrap();
+        fs::set_permissions(tmp.path().join("a.json"), fs::Permissions::from_mode(0o640)).unwrap();
+        write_json_in(&held, "a.json", &serde_json::json!({"b": 2})).unwrap();
+        let back: serde_json::Value = read_json(&tmp.path().join("a.json")).unwrap();
+        assert_eq!(back, serde_json::json!({"b": 2}));
+        assert_eq!(mode_of(&tmp.path().join("a.json")), 0o640);
+
+        let victim = tmp.path().join("victim");
+        fs::write(&victim, "precious\n").unwrap();
+        std::os::unix::fs::symlink(&victim, tmp.path().join("linked.json")).unwrap();
+        assert!(write_json_in(&held, "linked.json", &serde_json::json!({})).is_err());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious\n");
+        std::os::unix::fs::symlink(tmp.path().join("nowhere"), tmp.path().join("dangling.json")).unwrap();
+        assert!(write_json_in(&held, "dangling.json", &serde_json::json!({})).is_err());
+        assert!(!tmp.path().join("nowhere").exists());
+
+        crate::services::home_io::mkfifo(&tmp.path().join("fifo.json"));
+        assert!(crate::services::home_io::within_deadline(move || {
+            write_json_in(&held, "fifo.json", &serde_json::json!({}))
+        })
+        .is_err());
+    }
+
+    /// `read_tree_json` reads a project folder's JSON: `None` only when
+    /// nothing is there; a link, a FIFO, an over-cap or unparsable file is an
+    /// error.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_json_read_refuses_links_fifos_and_oversized_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("p.json");
+        assert_eq!(read_tree_json::<serde_json::Value>(&file).unwrap(), None);
+        fs::write(&file, r#"{"a":1}"#).unwrap();
+        assert_eq!(read_tree_json::<serde_json::Value>(&file).unwrap(), Some(serde_json::json!({"a": 1})));
+        fs::write(&file, "{ nope").unwrap();
+        assert!(read_tree_json::<serde_json::Value>(&file).is_err());
+        fs::File::create(&file).unwrap().set_len(MAX_TREE_JSON_BYTES + 1).unwrap();
+        assert!(read_tree_json_text(&file).is_err());
+
+        let linked = tmp.path().join("linked.json");
+        std::os::unix::fs::symlink(tmp.path().join("nowhere"), &linked).unwrap();
+        assert!(read_tree_json_text(&linked).is_err(), "a dangling link is not \"nothing there\"");
+        let fifo = tmp.path().join("fifo.json");
+        crate::services::home_io::mkfifo(&fifo);
+        assert!(crate::services::home_io::within_deadline(move || read_tree_json_text(&fifo)).is_err());
     }
 
     // ── reserved scopes ───────────────────────────────────────────────────
@@ -1255,6 +1420,46 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+    }
+
+    #[test]
+    fn patch_json_starts_an_empty_file_from_the_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("data.json");
+        std::fs::write(&path, b"").unwrap();
+
+        patch_json(&path, Vec::<u32>::new(), |values| {
+            values.push(7);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(read_json::<Vec<u32>>(&path).unwrap(), vec![7]);
+    }
+
+    /// A private patch lands a whole, owner-only file — a protected DACL on
+    /// Windows, not the folder's inherited ACL — and refuses a corrupt one.
+    #[test]
+    fn patch_private_json_writes_owner_only_and_keeps_a_corrupt_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hosts.json");
+        patch_private_json(&path, Vec::<String>::new(), |hosts| {
+            hosts.push("a.example".into());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(read_json::<Vec<String>>(&path).unwrap(), vec!["a.example"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        #[cfg(windows)]
+        assert!(crate::services::private_file::dacl_is_protected(&path), "{}", path.display());
+
+        std::fs::write(&path, b"[\"a.ex").unwrap();
+        assert!(patch_private_json(&path, Vec::<String>::new(), |_| Ok(())).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"[\"a.ex");
     }
 
     /// What identifies one written file: a rewrite goes through a fresh temp

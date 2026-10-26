@@ -21,15 +21,6 @@ export const SCREENSHOT_CAPTURE_EVENT = "app:screenshot-capture";
 
 export type ScreenshotCaptureDetail = { claimed: boolean };
 
-/** Offer the screenshot request to any visible in-app claimant (currently the
- *  PDF viewer). Returns true when one claimed it — the caller must then NOT
- *  spawn the external capture tool. */
-export function requestInAppCapture(): boolean {
-  const detail: ScreenshotCaptureDetail = { claimed: false };
-  window.dispatchEvent(new CustomEvent(SCREENSHOT_CAPTURE_EVENT, { detail }));
-  return detail.claimed;
-}
-
 /** The project folder a saved screen grab lands in, mirroring the backend's
  *  `commands::projects::SCREENSHOTS_DIR`. `tabtivity-`prefixed on purpose: a repo
  *  may own a `screenshots/` of its own documentation images, and the scaffold

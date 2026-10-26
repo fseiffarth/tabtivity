@@ -373,8 +373,7 @@ pub fn attach_roots(
 
 fn read_lists() -> (BoxesList, ProjectsList) {
     let boxes = storage::read_json(&storage::state_dir().join("boxes.json")).unwrap_or_default();
-    let projects =
-        storage::read_json(&storage::projects_path()).unwrap_or_default();
+    let projects = crate::services::remote::projects().map(|list| ProjectsList::clone(&list)).unwrap_or_default();
     (boxes, projects)
 }
 

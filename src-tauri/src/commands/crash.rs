@@ -17,7 +17,7 @@ pub fn report_frontend_error(kind: String, message: String, stack: Option<String
     let mut entry = format!(
         "=== FRONTEND {} {} ===\n{}",
         clip(&kind, MAX_KIND),
-        crate::iso_now(),
+        crate::storage::iso_now(),
         clip(&message, MAX_MESSAGE),
     );
     if let Some(stack) = stack.as_deref().filter(|s| !s.trim().is_empty()) {

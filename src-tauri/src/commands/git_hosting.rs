@@ -12,7 +12,6 @@ use serde_json::Value;
 
 use crate::schema::projects::ProjectsList;
 use crate::services::git_credentials;
-use crate::storage;
 
 /// What the frontend gets back about a project's git hosting. The token itself is
 /// never returned — only whether one is stored — so the secret stays out of the
@@ -204,12 +203,7 @@ fn token_origins_for(profile_url: Option<&str>, provider: Option<&str>) -> Vec<S
 /// Find a project entry by id, returning its index and the owned list so the
 /// caller can mutate + persist it. (Mirrors the helper in `commands::git_publish`.)
 fn find_entry(project_id: &str) -> Result<(usize, ProjectsList), String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = if list_path.exists() {
-        storage::read_json(&list_path).map_err(|e| e.to_string())?
-    } else {
-        Vec::new()
-    };
+    let list = crate::commands::projects::read_projects_list()?;
     let idx = list
         .iter()
         .position(|p| p.id == project_id)

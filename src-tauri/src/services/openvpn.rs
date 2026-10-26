@@ -105,27 +105,10 @@ fn interactive_pidfile(config: &str) -> PathBuf {
 /// root, so an unprivileged probe gets EPERM for a perfectly healthy tunnel —
 /// treating that as dead is what keeps a VPN lamp dark while the tunnel is up
 /// (the 28l bug).
-#[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
-    // SAFETY: kill with signal 0 only probes for existence/permission.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-/// Windows analog: no `kill(0)`, so ask the task list. An elevated `openvpn.exe`
-/// is still enumerated for an unelevated query, so there is no EPERM-style trap
-/// here — but a failed probe is treated as *not* alive rather than guessed at.
-#[cfg(target_os = "windows")]
-fn pid_alive(pid: i32) -> bool {
-    let out = crate::paths::command_no_window("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .output();
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
-        Err(_) => false,
-    }
+    use crate::services::proc_table::{pid_state, PidState};
+    // `Unknown` (EPERM, Windows access denied) is the root-run daemon: alive.
+    u32::try_from(pid).is_ok_and(|p| pid_state(p) != PidState::Gone)
 }
 
 /// State of the interactive tunnel registered for `config`.
@@ -258,17 +241,49 @@ fn is_declined(config: &str) -> bool {
 /// connect does (a plain kill would get EPERM).
 #[cfg(target_os = "linux")]
 fn kill_root_pid(pid: i32) {
+    pkexec_kill(pid);
+}
+
+/// `pkexec kill -TERM` a root-owned pid, reporting whether it was delivered (vs.
+/// a refused polkit prompt, or no root-owned `pkexec`/`kill` to run). Already
+/// TERMed (or already gone) counts as delivered without asking again: a second
+/// `pkexec` would only cost the user a second password. See `signalled_pids`.
+#[cfg(target_os = "linux")]
+fn pkexec_kill(pid: i32) -> bool {
     if kill_already_handled(pid) {
-        return;
+        return true;
     }
-    let status = Command::new("pkexec")
-        .arg("kill")
+    let Ok(argv) = pkexec_argv("kill") else { return false };
+    let ok = Command::new(&argv[0])
+        .args(&argv[1..])
         .arg("-TERM")
         .arg(pid.to_string())
-        .status();
-    if matches!(status, Ok(s) if s.success()) {
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok {
         mark_signalled(pid);
     }
+    ok
+}
+
+/// `pkexec <program>`, both by absolute path from the root-owned system dirs
+/// ([`crate::paths::pkexec_argv`]): never a bare name pkexec would look up on
+/// the caller's `PATH`.
+#[cfg(target_os = "linux")]
+fn pkexec_argv(program: &str) -> Result<Vec<String>, String> {
+    crate::paths::elevated_argv(program, system_bin)
+        .map(|argv| argv.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+        .map_err(|bin| format!("no root-owned `{bin}` in the system directories — install {bin} to use VPN-gated projects"))
+}
+
+/// [`crate::paths::system_executable`]; tests on a host without pkexec or
+/// OpenVPN get a stand-in path under `/usr/bin` (nothing is run through it).
+#[cfg(target_os = "linux")]
+fn system_bin(bin: &str) -> Option<PathBuf> {
+    let found = crate::paths::system_executable(bin);
+    #[cfg(test)]
+    let found = found.or_else(|| Some(Path::new("/usr/bin").join(bin)));
+    found
 }
 
 #[cfg(target_os = "macos")]
@@ -277,10 +292,19 @@ fn kill_root_pid(pid: i32) {
         &format!("kill -TERM {pid}"),
         concat!(crate::app_name!(), " needs to stop the OpenVPN tunnel."),
     );
-    let _ = crate::paths::command_no_window("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output();
+    let Ok(mut osascript) = osascript_command(crate::paths::system_executable) else { return };
+    let _ = osascript.arg("-e").arg(&script).output();
+}
+
+/// `osascript` for an administrator prompt, by absolute path from the
+/// root-owned system dirs (`/usr/bin/osascript`): a bare name resolves on the
+/// effective `PATH`, where a planted `~/.local/bin/osascript` could fake the
+/// password dialog and read what the user types. The macOS twin of Linux's
+/// `pkexec_argv`; `resolve` is [`crate::paths::system_executable`].
+#[cfg(any(target_os = "macos", test))]
+fn osascript_command(resolve: impl Fn(&str) -> Option<PathBuf>) -> Result<std::process::Command, String> {
+    let bin = resolve("osascript").ok_or_else(|| "no root-owned `osascript` in the system directories".to_string())?;
+    Ok(crate::paths::command_no_window(bin))
 }
 
 /// Windows analog: `taskkill /F`. A service-started tunnel's `openvpn.exe` runs
@@ -492,7 +516,7 @@ pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
 /// How each OS starts the elevated `openvpn` of [`interactive_connect_argv`].
 #[cfg(target_os = "linux")]
 fn interactive_launcher() -> Result<Vec<String>, String> {
-    Ok(vec!["pkexec".to_string(), "openvpn".to_string()])
+    pkexec_argv("openvpn")
 }
 
 /// Windows: no `pkexec`; `openvpn.exe` must already be running elevated. Resolved
@@ -505,13 +529,17 @@ fn interactive_launcher() -> Result<Vec<String>, String> {
 
 /// macOS: `sudo` on the visible tty (no `pkexec`/polkit on macOS; the user types
 /// the password straight into the terminal). The binary is resolved to an absolute
-/// path because a GUI app's `PATH` lacks the Homebrew prefixes.
+/// path because a GUI app's `PATH` lacks the Homebrew prefixes; `sudo` is the
+/// root-owned system one, never a copy on the user's `PATH` that would read the
+/// password typed into it.
 #[cfg(target_os = "macos")]
 fn interactive_launcher() -> Result<Vec<String>, String> {
+    let sudo = crate::paths::system_executable("sudo")
+        .ok_or_else(|| "no root-owned `sudo` in the system directories".to_string())?;
     let exe = resolve_openvpn()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "openvpn".to_string());
-    Ok(vec!["sudo".to_string(), exe])
+    Ok(vec![sudo.to_string_lossy().into_owned(), exe])
 }
 
 /// Any other OS has no interactive tunnel.
@@ -604,11 +632,12 @@ struct InteractiveArm {
     management: Vec<String>,
 }
 
-/// True if `openvpn` and `pkexec` are both available on `PATH` (both are needed:
-/// OpenVPN to build the tunnel, polkit's `pkexec` to launch it elevated).
+/// True if root-owned `openvpn` and `pkexec` are both in the system directories
+/// (both are needed: OpenVPN to build the tunnel, polkit's `pkexec` to launch it
+/// elevated; a copy on the user's `PATH` is never run as root).
 #[cfg(target_os = "linux")]
 pub fn openvpn_available() -> bool {
-    crate::paths::binary_on_path("openvpn") && crate::paths::binary_on_path("pkexec")
+    crate::paths::system_executable("openvpn").is_some() && crate::paths::system_executable("pkexec").is_some()
 }
 
 /// True if `openvpn.exe` can be located (PATH, a per-user dir, or the standard
@@ -1151,12 +1180,8 @@ pub fn management_args(port: u16, pwfile: &Path) -> Vec<String> {
 /// is armed and teardown keeps the elevated kill.
 #[cfg(unix)]
 fn random_hex(bytes: usize) -> Option<String> {
-    use std::io::Read;
     let mut buf = vec![0u8; bytes];
-    std::fs::File::open("/dev/urandom")
-        .ok()?
-        .read_exact(&mut buf)
-        .ok()?;
+    getrandom::fill(&mut buf).ok()?;
     Some(crate::digest::hex(&buf))
 }
 
@@ -1564,8 +1589,15 @@ pub fn connect_streaming(
         }
     };
 
-    let spawn_result = Command::new("pkexec")
-        .arg("openvpn")
+    let launcher = match pkexec_argv("openvpn") {
+        Ok(argv) => argv,
+        Err(e) => {
+            remove_credfiles();
+            return Err(e);
+        }
+    };
+    let spawn_result = Command::new(&launcher[0])
+        .args(&launcher[1..])
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1780,7 +1812,7 @@ pub fn disconnect(config: &str) -> Result<(), String> {
 fn disconnect_interactive_checked(config: &str) -> bool {
     match interactive_state(config) {
         Interactive::Alive(pid) => {
-            if !kill_root_pid_checked(pid) {
+            if !pkexec_kill(pid) {
                 return false;
             }
             if let Some(pidfile) = interactive_registry().lock_ok().remove(config) {
@@ -1795,28 +1827,6 @@ fn disconnect_interactive_checked(config: &str) -> bool {
         }
         Interactive::None => true,
     }
-}
-
-/// `pkexec kill -TERM` a root-owned pid, reporting whether it was delivered (vs. a
-/// refused polkit prompt). The checked twin of [`kill_root_pid`].
-#[cfg(target_os = "linux")]
-fn kill_root_pid_checked(pid: i32) -> bool {
-    // Already TERMed (or already gone) — the tunnel is down or going down, and a
-    // second `pkexec` would only cost the user a second password. See `signalled_pids`.
-    if kill_already_handled(pid) {
-        return true;
-    }
-    let ok = Command::new("pkexec")
-        .arg("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if ok {
-        mark_signalled(pid);
-    }
-    ok
 }
 
 /// Like [`disconnect`], but reports whether the tunnel actually went down.
@@ -1887,23 +1897,10 @@ fn kill_pidfile(pidfile: &Path) -> bool {
     let Some(pid) = pidfile_pid(pidfile) else {
         return true;
     };
-    // Already TERMed (or already gone): report success without re-elevating, so the
+    // Already TERMed (or already gone): success without re-elevating, so the
     // exit-time `disconnect_all` never re-prompts for a tunnel the on-quit teardown
-    // already took down. See `signalled_pids`.
-    if kill_already_handled(pid) {
-        return true;
-    }
-    let ok = Command::new("pkexec")
-        .arg("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if ok {
-        mark_signalled(pid);
-    }
-    ok
+    // already took down.
+    pkexec_kill(pid)
 }
 
 /// Tear down every live tunnel. Used at app exit; errors are swallowed so
@@ -2753,10 +2750,8 @@ pub fn connect_streaming(
 
     // Blocks until the admin dialog is answered AND openvpn daemonizes (its
     // parent exits) — or fails. "User canceled." on stderr = dialog declined.
-    let output = crate::paths::command_no_window("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output();
+    let output = osascript_command(crate::paths::system_executable)
+        .and_then(|mut cmd| cmd.arg("-e").arg(&script).output().map_err(|e| e.to_string()));
     let output = match output {
         Ok(out) => out,
         Err(e) => {
@@ -3171,7 +3166,11 @@ mod tests {
         let cfg = "/home/u/my work.ovpn";
         let argv = interactive_connect_argv(cfg).unwrap();
         // Elevated via pkexec; passphrase typed interactively (no --askpass file).
-        assert_eq!(&argv[..4], ["pkexec", "openvpn", "--config", cfg]);
+        // Both by absolute path: pkexec resolves a bare name through the caller's PATH.
+        assert!(Path::new(&argv[0]).is_absolute() && Path::new(&argv[1]).is_absolute(), "{argv:?}");
+        assert_eq!(Path::new(&argv[0]).file_stem().unwrap(), "pkexec");
+        assert_eq!(Path::new(&argv[1]).file_stem().unwrap(), "openvpn");
+        assert_eq!(&argv[2..4], ["--config", cfg]);
         // #868: the config's own scripts never run as root — and the override
         // follows the config, so the file's `script-security 2` cannot win.
         assert_eq!(&argv[4..6], ["--script-security", "1"]);
@@ -3933,6 +3932,16 @@ mod tests {
         assert_eq!(applescript_escape(r#"a"b"#), r#"a\"b"#);
         assert_eq!(applescript_escape(r"a\b"), r"a\\b");
         assert_eq!(applescript_escape(r#"\""#), r#"\\\""#);
+    }
+
+    /// The admin prompt's `osascript` is the resolver's absolute path, and no
+    /// root-owned copy refuses instead of running a bare name off `PATH`.
+    #[test]
+    fn osascript_is_never_spawned_by_bare_name() {
+        let sys = if cfg!(windows) { Path::new(r"C:\sys") } else { Path::new("/usr/bin") };
+        let cmd = osascript_command(|bin: &str| Some(sys.join(bin))).unwrap();
+        assert_eq!(Path::new(cmd.get_program()), sys.join("osascript"));
+        assert!(osascript_command(|_: &str| None).is_err());
     }
 
     #[test]

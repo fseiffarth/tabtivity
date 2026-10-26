@@ -21,6 +21,7 @@ import {
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "./icons/FileIcon";
 import { HexagonIcon } from "./icons/Icon";
+import { basename, dirname } from "../../lib/paths";
 
 /**
  * A node in the 3D cloud. In the project cloud it's a project or a box; once a
@@ -273,7 +274,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
 
   const nodes = useMemo<BlobNode[]>(() => {
     if (focus) {
-      const label = focus.rel === "" ? focus.project.name : focus.rel.split("/").pop()!;
+      const label = focus.rel === "" ? focus.project.name : basename(focus.rel);
       const center: BlobNode = { id: "center", kind: "center", project: focus.project, label, rel: focus.rel };
       const fileNodes: BlobNode[] = entries.map((entry) => ({ id: `f:${entry.path}`, kind: "file", entry }));
       return [center, ...fileNodes];
@@ -615,8 +616,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
         dolly.current = 0;
         return null;
       }
-      const parent = f.rel.includes("/") ? f.rel.slice(0, f.rel.lastIndexOf("/")) : "";
-      return { ...f, rel: parent };
+      return { ...f, rel: dirname(f.rel) };
     });
   }, []);
 

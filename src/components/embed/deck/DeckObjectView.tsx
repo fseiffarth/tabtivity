@@ -37,6 +37,7 @@ import {
   lineAngle,
   shapePath,
 } from "../../../lib/viewers/deck/shapes";
+import { basename } from "../../../lib/paths";
 
 /** The metric-compatible stacks the three standard-14 families resolve to. */
 export const FONT_STACKS: Record<string, string> = {
@@ -123,7 +124,7 @@ function body(
         />
       ) : (
         <div className="deck-object-missing" title={obj.src}>
-          {obj.src.split("/").pop()}
+          {basename(obj.src)}
         </div>
       );
 

@@ -8,11 +8,11 @@ use app_lib::commands::project_transfer::{
     preview_project_export, ExportProjectRequest, ImportBundleRequest, MirrorSource,
 };
 use app_lib::commands::projects::{
-    archive_project_blocking, create_project_blocking, delete_archived_project, get_projects,
-    import_project_blocking, list_archived_projects, load_project,
+    archive_project_blocking, clear_archive, create_project_blocking, delete_archived_project_blocking, get_projects,
+    import_project_blocking, list_archived_projects, load_project_blocking,
     restore_archived_project_blocking, save_projects,
     set_project_auto_connect, set_project_description, set_project_remote_control,
-    set_project_sandbox, set_project_sandbox_spec, CreateProjectRequest, ImportProjectRequest,
+    set_project_git_disabled_blocking, set_project_sandbox_blocking, set_project_sandbox_spec, CreateProjectRequest, ImportProjectRequest,
     CLAUDE_SETTINGS, GITIGNORE_DEFAULT, SCAFFOLD_FILES,
 };
 use app_lib::schema::project::{
@@ -711,7 +711,7 @@ fn set_project_description_writes_both_projects_json_and_project_json() {
         );
 
         // project.json (the per-project file) reflects it too.
-        let project = load_project(entry.local_file.clone()).expect("load project");
+        let project = load_project_blocking(entry.local_file.clone()).expect("load project");
         assert_eq!(project.description.as_deref(), Some("updated desc"));
 
         // Clearing the description removes it from both stores.
@@ -723,7 +723,7 @@ fn set_project_description_writes_both_projects_json_and_project_json() {
             .find(|p| p.id == entry.id)
             .expect("entry present");
         assert!(!found.extra.contains_key("description"));
-        let project = load_project(entry.local_file.clone()).expect("load project");
+        let project = load_project_blocking(entry.local_file.clone()).expect("load project");
         assert!(project.description.is_none());
     });
 }
@@ -918,7 +918,7 @@ fn export_import_roundtrip_carries_files_settings_and_tabs() {
             imported.local_file,
             imported_dir.join("project.json").to_string_lossy()
         );
-        let project = load_project(imported.local_file.clone()).expect("load imported project.json");
+        let project = load_project_blocking(imported.local_file.clone()).expect("load imported project.json");
         assert_eq!(project.id, result.entry.id);
         assert_eq!(project.directory, result.directory);
     });
@@ -1258,13 +1258,64 @@ fn permanent_delete_removes_archived_project() {
         archive_project_blocking(id.clone(), "2026-07-01T00:00:00+00:00".to_string()).expect("archive");
         assert_eq!(list_archived_projects().unwrap().len(), 1);
 
-        delete_archived_project(id.clone()).expect("delete forever");
+        delete_archived_project_blocking(id.clone()).expect("delete forever");
         assert!(
             list_archived_projects().unwrap().is_empty(),
             "archive must be empty after permanent delete"
         );
         // Restoring a permanently-deleted project is an error (nothing to read).
         assert!(restore_archived_project_blocking(id).is_err());
+    });
+}
+
+/// "Clear archive" deletes whole trees, so it runs on a worker: the async
+/// command still empties every archived project before it answers.
+#[test]
+fn clear_archive_deletes_every_archived_project_off_the_calling_thread() {
+    with_isolated_home("archive-clear-home", |_| {
+        for name in ["clear-a", "clear-b"] {
+            let target = tempdir_in_test_projects(name);
+            let id = new_local_project(name, target.path()).id;
+            archive_project_blocking(id, "2026-07-01T00:00:00+00:00".to_string()).expect("archive");
+        }
+        assert_eq!(list_archived_projects().unwrap().len(), 2);
+
+        app_core::rt::block_on(clear_archive()).expect("clear archive");
+        assert!(list_archived_projects().unwrap().is_empty());
+    });
+}
+
+/// The git toggle runs on workers now, so a second click no longer queues
+/// behind the first on the window's thread. Two "disable git" at once must
+/// both answer `none` — not one failing halfway through removing a `.git` the
+/// other is removing too.
+#[test]
+fn concurrent_git_disable_toggles_both_succeed() {
+    with_isolated_home("git-toggle-home", |_| {
+        let target = tempdir_in_test_projects("git-toggle");
+        let id = new_local_project("git-toggle", target.path()).id;
+        let objects = target.path().join(".git").join("objects");
+        for dir in 0..40 {
+            let sub = objects.join(format!("{dir:02x}"));
+            fs::create_dir_all(&sub).expect("objects dir");
+            for file in 0..50 {
+                fs::write(sub.join(format!("{file:038x}")), b"x").expect("object");
+            }
+        }
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let toggles: Vec<_> = (0..2)
+            .map(|_| {
+                let (id, start) = (id.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    set_project_git_disabled_blocking(id, true)
+                })
+            })
+            .collect();
+        for toggle in toggles {
+            assert_eq!(toggle.join().expect("toggle thread").as_deref(), Ok("none"));
+        }
+        assert!(!target.path().join(".git").exists());
     });
 }
 
@@ -1284,7 +1335,7 @@ fn set_project_sandbox_preserves_spec_and_confirms_dockerfile() {
         // The project carries a root Dockerfile → enabling must ask first,
         // not adopt it — `docker build` would run its `RUN` steps as root.
         fs::write(target.path().join("Dockerfile"), "FROM debian:stable\n").expect("dockerfile");
-        let outcome = set_project_sandbox(id.clone(), true, None).expect("enable");
+        let outcome = set_project_sandbox_blocking(id.clone(), true, None).expect("enable");
         let source = match outcome {
             SandboxToggleOutcome::NeedsConfirmation { source } => source,
             SandboxToggleOutcome::Applied { .. } => {
@@ -1295,7 +1346,7 @@ fn set_project_sandbox_preserves_spec_and_confirms_dockerfile() {
 
         // A decision naming the wrong hash (stale dialog / changed file) is
         // refused the same way, not silently applied.
-        let stale = set_project_sandbox(
+        let stale = set_project_sandbox_blocking(
             id.clone(),
             true,
             Some(SandboxSourceDecision {
@@ -1310,7 +1361,7 @@ fn set_project_sandbox_preserves_spec_and_confirms_dockerfile() {
         ));
 
         // The matching decision applies it.
-        let spec = match set_project_sandbox(
+        let spec = match set_project_sandbox_blocking(
             id.clone(),
             true,
             Some(SandboxSourceDecision {
@@ -1346,7 +1397,7 @@ fn set_project_sandbox_preserves_spec_and_confirms_dockerfile() {
         };
         set_project_sandbox_spec(id.clone(), tuned).expect("store tuned spec");
 
-        let off = match set_project_sandbox(id.clone(), false, None).expect("disable") {
+        let off = match set_project_sandbox_blocking(id.clone(), false, None).expect("disable") {
             SandboxToggleOutcome::Applied { spec } => spec,
             SandboxToggleOutcome::NeedsConfirmation { .. } => panic!("disable never asks"),
         };
@@ -1357,7 +1408,7 @@ fn set_project_sandbox_preserves_spec_and_confirms_dockerfile() {
             "disable must not wipe the spec"
         );
 
-        let on = match set_project_sandbox(id.clone(), true, None).expect("re-enable") {
+        let on = match set_project_sandbox_blocking(id.clone(), true, None).expect("re-enable") {
             SandboxToggleOutcome::Applied { spec } => spec,
             SandboxToggleOutcome::NeedsConfirmation { .. } => {
                 panic!("an already-decided, unchanged Dockerfile must not re-ask")
@@ -1412,12 +1463,12 @@ fn set_project_sandbox_decline_sticks_until_dockerfile_changes() {
         let id = entry.id.clone();
 
         fs::write(target.path().join("Dockerfile"), "FROM debian:stable\n").expect("dockerfile");
-        let source = match set_project_sandbox(id.clone(), true, None).expect("enable") {
+        let source = match set_project_sandbox_blocking(id.clone(), true, None).expect("enable") {
             SandboxToggleOutcome::NeedsConfirmation { source } => source,
             SandboxToggleOutcome::Applied { .. } => panic!("must ask first"),
         };
 
-        let declined = match set_project_sandbox(
+        let declined = match set_project_sandbox_blocking(
             id.clone(),
             true,
             Some(SandboxSourceDecision {
@@ -1437,8 +1488,8 @@ fn set_project_sandbox_decline_sticks_until_dockerfile_changes() {
         );
 
         // Disable and re-enable: the decline is unchanged content, so no re-ask.
-        set_project_sandbox(id.clone(), false, None).expect("disable");
-        let still_declined = set_project_sandbox(id.clone(), true, None).expect("re-enable");
+        set_project_sandbox_blocking(id.clone(), false, None).expect("disable");
+        let still_declined = set_project_sandbox_blocking(id.clone(), true, None).expect("re-enable");
         assert!(
             matches!(still_declined, SandboxToggleOutcome::Applied { .. }),
             "an unchanged decline must not re-ask"
@@ -1446,13 +1497,13 @@ fn set_project_sandbox_decline_sticks_until_dockerfile_changes() {
 
         // Now the Dockerfile's content changes — even though the container is
         // already enabled, the next enable cycle must ask again.
-        set_project_sandbox(id.clone(), false, None).expect("disable again");
+        set_project_sandbox_blocking(id.clone(), false, None).expect("disable again");
         fs::write(
             target.path().join("Dockerfile"),
             "FROM debian:stable\nRUN echo hi\n",
         )
         .expect("rewrite dockerfile");
-        let reasked = set_project_sandbox(id.clone(), true, None).expect("re-enable after change");
+        let reasked = set_project_sandbox_blocking(id.clone(), true, None).expect("re-enable after change");
         match reasked {
             SandboxToggleOutcome::NeedsConfirmation { source: new_source } => {
                 assert_ne!(
@@ -1588,7 +1639,7 @@ fn set_project_auto_connect_writes_both_copies_and_clears() {
                 .as_bool()
         };
         let on_disk = |local_file: &str| -> Option<bool> {
-            load_project(local_file.to_string())
+            load_project_blocking(local_file.to_string())
                 .expect("load project.json")
                 .remote?
                 .auto_connect

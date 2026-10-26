@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
+import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
+import { HintMessage } from "../components/HintMessage";
 import { apiTarget, localTarget } from "../newTabDefault";
 
 /** How the tap wants the agent started, beyond which agent and mode. */
@@ -17,6 +18,9 @@ export interface NewTabLaunch {
   local?: string;
   /** On the API key the desktop keeps, whatever Manage CLIs says. */
   api_key?: true;
+  /** On one of a remote project's machines: the opaque id `launch-options`
+   *  listed under `hosts`; absent → this computer's copy of the project. */
+  host?: string;
 }
 
 /**
@@ -36,6 +40,13 @@ export interface NewTabLaunch {
  * Both come from `launch-options`, asked once the sheet opens; until it
  * answers, the sheet is the plain one. A cloud New for a CLI that takes its
  * task on the command line swaps the grid for a task box first.
+ *
+ * A remote project the desktop is connected to adds a "Runs on" picker at the
+ * top: this computer's copy, or one of the project's machines (the tab
+ * badge's "Run on machine"). A machine the desktop holds no connection to is
+ * listed but cannot be picked — the phone never dials a host. While a machine
+ * is picked, the sheet offers the plain agents only: a worktree, a cloud
+ * session, a local model and an API key all run on this computer.
  *
  * A desktop with a local (Ollama) model set for tabs adds the desktop "+"'s
  * local-model group under the agents: the same agents, driving that model.
@@ -88,6 +99,8 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
   const [signingIn, setSigningIn] = useState(false);
   /** The picked worktree's id; "" is the project folder. */
   const [where, setWhere] = useState("");
+  /** The picked machine's id; "" is this computer. */
+  const [machine, setMachine] = useState("");
   /** The ☁ New waiting on its task. */
   const [asking, setAsking] = useState<{ agent: AgentRow; launch: CloudLaunchRow } | null>(null);
   const [task, setTask] = useState("");
@@ -97,9 +110,13 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
     getLaunchOptions(projectId, abort.signal).then(setOptions, () => { /* plain sheet */ });
     return () => abort.abort();
   }, [projectId, creates]);
-  const linked = options.worktrees.filter((row) => !row.main);
+  const machines = !headless && agents.length > 0 ? options.hosts ?? [] : [];
+  // A machine that went away (or lost its connection) between two answers
+  // falls back to this computer rather than starting nowhere.
+  const onMachine = machines.some((row) => row.id === machine && row.connected) ? machine : "";
+  const linked = onMachine ? [] : options.worktrees.filter((row) => !row.main);
   const pickAgent = (agent: AgentRow, mode?: string) =>
-    onPick("agent", agent, mode, where ? { worktree: where } : undefined);
+    onPick("agent", agent, mode, onMachine ? { host: onMachine } : where ? { worktree: where } : undefined);
   const pickCloud = (agent: AgentRow, launch: CloudLaunchRow) => {
     if (launch.task) { setTask(""); setAsking({ agent, launch }); return; }
     onPick("agent", agent, undefined, { cloud: launch.action });
@@ -120,6 +137,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
           <button className="primary" disabled={busy || !task.trim()} onClick={() => onPick("agent", asking.agent, undefined, { cloud: asking.launch.action, task: task.trim() })}>{t("mobile.newTab.cloudTaskStart")}</button>
         </div>
       </div> : <>
+      {creates && machines.length > 0 && <MachinePicker machines={machines} value={onMachine} onChange={setMachine} />}
       {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
       {creates && agentsOnly && <p className="sheet-note">{t("mobile.newTab.agentsOnly")}</p>}
       {creates && headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
@@ -127,7 +145,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         {/* Every row that opens a tab is behind `creates`; the file row at the
             foot is not — on a host with no tmux it is the whole sheet. */}
         {creates && <>
-        {shells && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
+        {shells && !onMachine && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
         {linked.length > 0 && agents.length > 0 && !headless && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
           <small>{t("mobile.newTab.where")}{isUntested("mobile.newTab.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
           <button className={where === "" ? "selected" : ""} aria-pressed={where === ""} onClick={() => setWhere("")}>{t("mobile.newTab.projectFolder")}</button>
@@ -138,13 +156,14 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
           {!headless && agent.modes.map((mode) => <button className="mode" disabled={busy} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
           {onDefault && <DefaultStar starred={agent.id === defaultTarget} label={agent.label} onClick={() => onDefault(agent.id, agent.label)} />}
         </div>)}</div>
+        {onDefault && agents.length > 0 && <HintMessage hint="agentDefault" />}
         {starred && <p className="sheet-note">{t("mobile.newTab.defaultNote", { agent: starred })}{isUntested("mobile.project.fabQuick") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
         {/* A desktop that reports no agents still opens shells — say so, rather
             than leaving the sheet looking half-loaded. */}
         {agents.length === 0 && <p className="sheet-note">{t("mobile.newTab.noAgents")}</p>}
-        {options.local && !headless && <LocalModelGroup local={options.local} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
-        {options.api_key && !headless && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
-        {!headless && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
+        {options.local && !headless && !onMachine && <LocalModelGroup local={options.local} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
+        {options.api_key && !headless && !onMachine && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
+        {!headless && !onMachine && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {options.sign_in.length > 0 && !headless && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && <NeedsWindow agents={agents} options={options} linked={linked} />}
         </>}
@@ -158,6 +177,29 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
       </div>
       </>}
     </section>
+  </div>;
+}
+
+/** The "Runs on" dropdown: this computer's copy first, then the project's
+ * machines, the primary named as such. One the desktop is not connected to
+ * stays in the list, disabled and saying why, so the reader sees every
+ * machine the project has and what to do on the desktop to use it. */
+function MachinePicker({ machines, value, onChange }: { machines: HostMachineRow[]; value: string; onChange: (id: string) => void }) {
+  const t = useT();
+  const name = (row: HostMachineRow) => row.primary ? t("mobile.newTab.machinePrimary", { host: row.label }) : row.label;
+  const offline = machines.some((row) => !row.connected);
+  return <div className="new-tab-machine">
+    <label>
+      <small>{t("mobile.newTab.runsOn")}{isUntested("mobile.newTab.machine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">{t("mobile.newTab.thisComputer")}</option>
+        {machines.map((row) => <option key={row.id} value={row.id} disabled={!row.connected}>
+          {row.connected ? name(row) : t("mobile.newTab.machineOffline", { host: name(row) })}
+        </option>)}
+      </select>
+    </label>
+    {value ? <p className="sheet-note">{t("mobile.newTab.machineNote")}</p>
+      : offline ? <p className="sheet-note">{t("mobile.newTab.machineConnectHint")}</p> : null}
   </div>;
 }
 

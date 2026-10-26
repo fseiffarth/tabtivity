@@ -902,11 +902,7 @@ pub fn suggested_bundle_name(name: &str) -> String {
 #[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn preview_project_export(project_id: String) -> Result<ExportPreview, String> {
     validate_project_id(&project_id)?;
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    let entry = &crate::services::remote::project_entry(&project_id)?;
 
     let remote = entry_is_remote(entry);
     let directory = entry_directory(entry);
@@ -1073,11 +1069,7 @@ fn host_tally(spec: &RemoteSpec) -> Result<HostTally, String> {
 #[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn preview_host_export(project_id: String) -> Result<HostTally, String> {
     validate_project_id(&project_id)?;
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    let entry = &crate::services::remote::project_entry(&project_id)?;
     let spec = host_spec(entry)?;
     // Always a gesture: only the dialog calls this, when the user picks the
     // host's copy.
@@ -1340,12 +1332,7 @@ pub fn export_project_blocking(
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<ExportReport, String> {
     validate_project_id(&req.project_id)?;
-    let list = read_projects_list()?;
-    let entry = list
-        .iter()
-        .find(|p| p.id == req.project_id)
-        .ok_or_else(|| format!("project '{}' not found", req.project_id))?
-        .clone();
+    let entry = crate::services::remote::project_entry(&req.project_id)?;
 
     if let Some(reason) = export_blocker(&entry) {
         debug_assert_eq!(reason, "vm");

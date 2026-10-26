@@ -37,7 +37,7 @@
 use std::process::Command;
 
 use app_lib::services::git_peer::{self, ReconcileOpts};
-use app_lib::services::{remote, remote_sync, ssh_exec, sync_auto};
+use app_lib::services::{remote, remote_sync, ssh_exec, sync_auto, sync_op};
 
 /// Print a `GitPeerState` as the one line that matters when reading a case log.
 fn show(state: &git_peer::GitPeerState) {
@@ -156,21 +156,25 @@ async fn main() {
                     allow_pair_overwrite: cmd == "pair-confirm",
                     ..Default::default()
                 };
+                let op = sync_op::acquire(&project_id).await.expect("sync lock");
                 let s =
-                    git_peer::detect_and_sync(&pool, &manifest, &auto, &project_id, &spec, opts)
+                    git_peer::detect_and_sync(op, &pool, &manifest, &auto, &project_id, &spec, opts)
                         .await;
                 show(&s);
             }
-            "resolve" => show_result(
-                git_peer::resolve(&pool, &manifest, &auto, &project_id, &spec, rest).await,
-            ),
+            "resolve" => {
+                let op = sync_op::acquire(&project_id).await.expect("sync lock");
+                show_result(git_peer::resolve(op, &pool, &manifest, &auto, &project_id, &spec, rest).await)
+            }
             "checkout" => {
                 let (tgt, side) = match rest.split_once(char::is_whitespace) {
                     Some((t, s)) => (t, s.trim()),
                     None => (rest, "local"),
                 };
+                let op = sync_op::acquire(&project_id).await.expect("sync lock");
                 show_result(
                     git_peer::checkout_lockstep(
+                        op,
                         &pool,
                         &manifest,
                         &auto,
@@ -202,8 +206,10 @@ async fn main() {
                 let (peer, refname) = rest
                     .split_once(char::is_whitespace)
                     .expect("restore <peer> <ref>");
+                let op = sync_op::acquire(&project_id).await.expect("sync lock");
                 show_result(
                     git_peer::restore_backup(
+                        op,
                         &pool,
                         &manifest,
                         &auto,

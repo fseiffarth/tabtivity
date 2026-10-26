@@ -452,7 +452,7 @@ pub fn webview_renderer_restart(window: tauri::WebviewWindow) -> Result<(), Stri
 fn restart_renderer(window: &tauri::WebviewWindow, label: &str) -> Result<(), String> {
     crate::crash_log_append(&format!(
         "=== WEBVIEW '{label}' RENDERER REPLACED {} (memory watchdog: a reload did not free it) ===",
-        crate::iso_now()
+        crate::storage::iso_now()
     ));
     window
         .with_webview(|webview| {

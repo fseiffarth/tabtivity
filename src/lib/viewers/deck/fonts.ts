@@ -193,11 +193,6 @@ export function cssFontName(path: string): string {
   return `eldeck-${fontKey({ custom: path }).replace(/[^A-Za-z0-9]+/g, "-")}`;
 }
 
-/** Drop the memo. Tests only. */
-export function resetMetrics(): void {
-  cached = null;
-}
-
 // ---------------------------------------------------------------------------
 // Encodability
 // ---------------------------------------------------------------------------
@@ -419,11 +414,6 @@ export function wrapText(
   });
 
   return out;
-}
-
-/** Total laid-out height of `lines`, in points. */
-export function textHeight(lines: readonly WrappedLine[], style: TextStyle): number {
-  return lines.length * style.size * style.lineHeight;
 }
 
 /**

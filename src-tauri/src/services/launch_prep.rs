@@ -217,9 +217,7 @@ fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
 /// rw mount). Absent project id, missing entry, or an absent/unparseable
 /// override falls back to the global setting.
 fn resolve_agent_remote_control(project_id: Option<&str>) -> bool {
-    let list_path = storage::projects_path();
-    let list =
-        storage::read_json::<crate::schema::projects::ProjectsList>(&list_path).unwrap_or_default();
+    let list = crate::services::remote::projects().unwrap_or_default();
     agent_remote_control_effective(&list, project_id, settings_agent_remote_control())
 }
 

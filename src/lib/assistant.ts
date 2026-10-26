@@ -68,9 +68,6 @@ export function readAssistantLaunch(raw: unknown): AssistantLaunch | undefined {
 // is off. The assistant service's own refusals come as `"<code>: <text>"`
 // (`not_offered`, `model_required`, `bad_model`, `no_lane`, `codex_catalog`, …).
 
-/** The error code of every command while the experimental flag is off. */
-export const ASSISTANT_OFF = "assistant_off";
-
 /** The code of a command error: `assistant_off`, `not_offered`, `invalid_url`, … */
 export function assistantErrorCode(err: unknown): string {
   const text = String(err);

@@ -1066,7 +1066,11 @@ pub fn inline_script_hashes(html: &[u8]) -> Vec<String> {
 }
 
 /// `requested` as a relative path with no `..`, no absolute step and no empty
-/// component — or `None`.
+/// component — or `None`. Each component is a [`valid_segment`]; `\` and `:`
+/// are refused on every host (on Windows `dir.join("C:/…")` would leave the
+/// bundle folder), as no bundle file name holds either.
+///
+/// [`valid_segment`]: super::files::valid_segment
 fn safe_relative(requested: &str) -> Option<String> {
     let trimmed = requested.trim_start_matches('/');
     if trimmed.is_empty() {
@@ -1074,7 +1078,7 @@ fn safe_relative(requested: &str) -> Option<String> {
     }
     let mut parts = Vec::new();
     for part in trimmed.split('/') {
-        if part.is_empty() || part == "." || part == ".." || part.contains('\\') || part.contains('\0') {
+        if !super::files::valid_segment(part) || part.contains(['\\', ':']) {
             return None;
         }
         parts.push(part);
@@ -1763,6 +1767,12 @@ mod tests {
         assert_eq!(safe_relative("a//b"), None);
         assert_eq!(safe_relative("a/./b"), None);
         assert_eq!(safe_relative("a\\b"), None);
+        // On Windows `dir.join("C:/…")` replaces the bundle folder, and a `:`
+        // inside a name opens an alternate data stream: refused on every host.
+        assert_eq!(safe_relative("C:/Windows/win.ini"), None);
+        assert_eq!(safe_relative("/C:/Windows/win.ini"), None);
+        assert_eq!(safe_relative("assets/index.js:stream"), None);
+        assert_eq!(safe_relative("a\0b"), None);
     }
 
     #[test]

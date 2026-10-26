@@ -15,11 +15,9 @@ use openssh_sftp_client::Sftp;
 use serde::Serialize;
 
 use crate::schema::project::{VmEgress, VmSpec};
-use crate::schema::projects::ProjectsList;
 use crate::services::remote::RemotePoolState;
 use crate::services::sftp;
 use crate::services::{vm, vm_proxy};
-use crate::storage;
 use crate::tauri_host::Ctx;
 
 /// `vm_status`'s answer: what the pill glyph + VM settings menu render from.
@@ -190,11 +188,7 @@ pub fn vm_set_spec(project_id: String, mut spec: VmSpec) -> Result<VmSpec, Strin
 }
 
 pub(crate) fn project_name(project_id: &str) -> Option<String> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).ok()?;
-    list.into_iter()
-        .find(|e| e.id == project_id)
-        .map(|e| e.name)
+    crate::services::remote::project_entry(project_id).ok().map(|e| e.name)
 }
 
 // ── "Download to…" — the mirrorless per-file/folder exit ───────────────────

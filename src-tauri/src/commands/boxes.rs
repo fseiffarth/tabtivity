@@ -154,15 +154,7 @@ pub(crate) fn reconcile_member_ids(boxes: BoxesList, project_ids: &HashSet<Strin
 /// Read the set of known project ids from `projects.json` (empty if absent).
 /// Used only to reconcile boxes in-memory; never mutates `projects.json`.
 fn known_project_ids() -> HashSet<String> {
-    let path = storage::projects_path();
-    if !path.exists() {
-        return HashSet::new();
-    }
-    let list: crate::schema::projects::ProjectsList = match storage::read_json(&path) {
-        Ok(list) => list,
-        Err(_) => return HashSet::new(),
-    };
-    list.into_iter().map(|p| p.id).collect()
+    crate::services::remote::projects().map(|list| list.iter().map(|p| p.id.clone()).collect()).unwrap_or_default()
 }
 
 /// Resolve a box's ordered member ids to `(name, root_directory)` pairs by
@@ -170,12 +162,7 @@ fn known_project_ids() -> HashSet<String> {
 /// `resolveProjectDirectory`: the `directory` field if present, else the parent
 /// of a `…/project.json` `local_file`. Members that don't resolve are skipped.
 fn member_projects(member_ids: &[String]) -> Vec<(String, PathBuf)> {
-    let path = storage::projects_path();
-    let list: crate::schema::projects::ProjectsList = if path.exists() {
-        storage::read_json(&path).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let list = crate::services::remote::projects().unwrap_or_default();
     member_ids
         .iter()
         .filter_map(|id| {

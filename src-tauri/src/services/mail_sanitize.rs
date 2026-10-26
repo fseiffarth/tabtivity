@@ -713,11 +713,7 @@ fn truncate_elements(html: &str, max: usize) -> String {
         }
         i += 1;
     }
-    let mut cut = i.min(html.len());
-    while cut > 0 && !html.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    let mut out = html[..cut].to_string();
+    let mut out = html[..html.floor_char_boundary(i)].to_string();
     out.push_str("<p class=\"mail-truncated\">…</p>");
     out
 }

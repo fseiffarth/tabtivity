@@ -467,11 +467,7 @@ fn trim_with_hysteresis(buf: &mut String, cap: usize) -> usize {
 /// front before dropping it.
 fn hysteresis_cut(buf: &str, cap: usize) -> Option<usize> {
     if buf.len() > cap * 2 {
-        let mut cut = buf.len() - cap;
-        while cut < buf.len() && !buf.is_char_boundary(cut) {
-            cut += 1;
-        }
-        return Some(cut);
+        return Some(buf.ceil_char_boundary(buf.len() - cap));
     }
     None
 }
@@ -1742,8 +1738,10 @@ impl PtyRegistry {
 
     /// Kill one PTY and its process subtree: [`Self::take`] plus
     /// [`TakenPty::teardown`]. Holds `self` for the whole teardown, a full
-    /// process-table walk included — callers that share the registry behind a
-    /// lock should `take` under it and tear down after releasing it.
+    /// process-table walk included — which is why only tests use it: callers
+    /// that share the registry behind a lock `take` under it and tear down
+    /// after releasing it.
+    #[cfg(test)]
     pub fn kill(&mut self, id: &str) {
         if let Some(taken) = self.take(id) {
             taken.teardown();
@@ -1770,29 +1768,9 @@ impl PtyRegistry {
     /// leaders and orphans everything they spawned. Uses [`ReapMode::Immediate`]
     /// because a delayed escalation thread would die with the exiting process.
     pub fn kill_all(&mut self) {
-        // One process-tree walk over all leaders (their subtrees include the
-        // leader pids themselves, which `child.kill()` below re-kills harmlessly).
-        let leaders: Vec<u32> = self
-            .entries
-            .values()
-            .filter_map(|e| e.child.process_id())
-            .collect();
-        let subtree = doomed_subtree(&leaders);
-
-        for (id, mut e) in self.entries.drain() {
-            e.dead.store(true, Ordering::SeqCst);
-            let _ = e.child.kill();
-            // An attach PTY is a viewer: the tab's own cleanups are not its.
-            if e.meta.attach_of.is_some() {
-                continue;
-            }
-            // Containerized tab: also TERM the in-container process (the docker
-            // exec client we just killed is not it).
-            crate::services::sandbox::kill_tab_process(&id);
-            crate::services::launch_prep::on_tab_gone(&id, e.seq);
-        }
-        reap_pids(subtree, ReapMode::Immediate);
-        invalidate_proc_tree_cache();
+        let ids: Vec<String> = self.entries.keys().cloned().collect();
+        let taken: Vec<TakenPty> = ids.iter().filter_map(|id| self.take(id)).collect();
+        teardown_with(taken, ReapMode::Immediate);
     }
 
     /// True when any live (not-yet-dead) PTY belongs to `scope`. PTY ids are
@@ -1852,12 +1830,19 @@ impl TakenPty {
 /// children reparent to init), in ONE process-table walk for all of them, so
 /// closing a project's ten tabs costs one walk rather than ten.
 pub fn teardown_taken(taken: Vec<TakenPty>) {
+    teardown_with(taken, ReapMode::Graceful);
+}
+
+/// [`teardown_taken`] with the reap mode chosen: app exit must use
+/// [`ReapMode::Immediate`], since a delayed escalation thread would die with
+/// the exiting process.
+fn teardown_with(taken: Vec<TakenPty>, mode: ReapMode) {
     if taken.is_empty() {
         return;
     }
     let leaders: Vec<u32> = taken.iter().filter_map(|t| t.entry.child.process_id()).collect();
     if !leaders.is_empty() {
-        reap_pids(doomed_subtree(&leaders), ReapMode::Graceful);
+        reap_pids(doomed_subtree(&leaders), mode);
     }
     for TakenPty { id, mut entry } in taken {
         let _ = entry.child.kill();

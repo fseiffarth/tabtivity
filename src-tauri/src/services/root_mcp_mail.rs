@@ -515,11 +515,7 @@ fn cap_text(s: &str) -> (String, bool) {
     if s.len() <= MAX_BODY_BYTES {
         return (s.to_string(), false);
     }
-    let mut end = MAX_BODY_BYTES;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    (s[..end].to_string(), true)
+    (s[..s.floor_char_boundary(MAX_BODY_BYTES)].to_string(), true)
 }
 
 /// Wrap a whole tool result. The markers carry a per-call nonce a sender cannot

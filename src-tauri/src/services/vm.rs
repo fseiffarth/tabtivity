@@ -56,7 +56,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::schema::project::{RemoteSpec, VmEgress, VmSpec};
-use crate::schema::projects::ProjectsList;
 use crate::storage;
 
 /// The guest account every VM project runs as; its home holds the tree.
@@ -431,9 +430,7 @@ pub fn is_vm_spec(spec: &RemoteSpec) -> bool {
 /// The `VmSpec` mirrored into a `projects.json` entry's `extra["vm"]`, or
 /// `None` for a non-VM project. The always-local copy, like `sandbox`'s.
 pub fn vm_spec_for(project_id: &str) -> Option<VmSpec> {
-    let list_path = storage::projects_path();
-    let list: ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.into_iter().find(|e| e.id == project_id)?;
+    let entry = crate::services::remote::project_entry(project_id).ok()?;
     let value = entry.extra.get("vm")?;
     serde_json::from_value(value.clone()).ok()
 }
@@ -1229,11 +1226,7 @@ pub fn seed_instance_id(project_id: &str, user_data: &str) -> String {
 }
 
 fn seed_instance_id_for(names: &VmNames, project_id: &str, user_data: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(user_data.as_bytes());
-    let digest = hasher.finalize();
-    let hash_hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    let hash_hex = &crate::digest::sha256_hex(user_data.as_bytes())[..8];
     let id8: String = project_id.chars().take(8).collect();
     format!("{}{id8}-{hash_hex}", names.instance_prefix)
 }
@@ -1696,14 +1689,8 @@ fn read_pidfile(pidfile: &Path) -> Result<u32, String> {
 }
 
 fn pid_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        crate::commands::apps::pid_alive(pid)
-    }
+    // Only a successful probe counts: a pid we may not signal is not our QEMU.
+    crate::services::proc_table::pid_state(pid) == crate::services::proc_table::PidState::Alive
 }
 
 /// Whether `pid` is a live process that is (still) **our** QEMU.

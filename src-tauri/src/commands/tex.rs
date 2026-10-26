@@ -17,7 +17,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Stdio;
 
 use base64::Engine as _;
 use serde::Serialize;
@@ -437,71 +436,34 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("run {bin}: {e}"))?;
-
-    // Drain both pipes on their own threads. A child that fills a pipe buffer
-    // deadlocks if nobody is reading, which would make the timeout fire on
-    // perfectly healthy builds with a lot of log output.
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = std::io::Read::read_to_end(p, &mut buf);
-        }
-        buf
-    });
-
-    let deadline = std::time::Instant::now() + timeout;
-    // Poll fast at first and back off: a fixed 50ms tick added up to 50ms of
-    // pure waiting to every short run, which the hover preview pays per hover —
-    // twice when it also rebuilds a preamble format. A run that is going to take
-    // seconds anyway ends up on the 50ms tick after the first few polls.
-    let mut poll = std::time::Duration::from_millis(2);
-    let status = loop {
-        match child.try_wait().map_err(|e| format!("wait {bin}: {e}"))? {
-            Some(s) => break Some(s),
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
+    // Both pipes are drained on threads (a child that fills a pipe buffer would
+    // deadlock the timeout on a healthy build with a lot of log output), the
+    // wait is bounded, and a stuck build's whole subtree is stopped.
+    use crate::services::git_bounded::{self, Opts, RunError};
+    let opts = Opts { timeout: Some(timeout), no_precheck: true, ..Opts::default() };
+    match git_bounded::run(&mut cmd, opts) {
+        Ok(ran) => {
+            let out = ran.output;
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            if ran.cut {
+                text.push_str(&format!(
+                    "\n! {app} stopped {bin}: it wrote more than {} MiB of output.\n",
+                    git_bounded::DEFAULT_STDOUT_CAP / (1024 * 1024),
+                    app = crate::brand::DISPLAY
+                ));
             }
-            None => {
-                std::thread::sleep(poll);
-                poll = (poll * 2).min(std::time::Duration::from_millis(50));
-            }
+            Ok(RunOut { ok: out.status.success() && !ran.cut, text })
         }
-    };
-
-    let mut text = String::from_utf8_lossy(&out_reader.join().unwrap_or_default()).into_owned();
-    text.push_str(&String::from_utf8_lossy(
-        &err_reader.join().unwrap_or_default(),
-    ));
-
-    match status {
-        Some(s) => Ok(RunOut {
-            ok: s.success(),
-            text,
-        }),
-        None => {
-            text.push_str(&format!(
+        Err(RunError::TimedOut(_)) => Ok(RunOut {
+            ok: false,
+            text: format!(
                 "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
-                timeout.as_secs(), app = crate::brand::DISPLAY
-            ));
-            Ok(RunOut { ok: false, text })
-        }
+                timeout.as_secs(),
+                app = crate::brand::DISPLAY
+            ),
+        }),
+        Err(e) => Err(format!("run {bin}: {e}")),
     }
 }
 
@@ -519,11 +481,7 @@ fn tail(log: &str) -> String {
     if log.len() <= MAX {
         return log.to_string();
     }
-    let mut start = log.len() - MAX;
-    while start < log.len() && !log.is_char_boundary(start) {
-        start += 1;
-    }
-    format!("…\n{}", &log[start..])
+    format!("…\n{}", &log[log.ceil_char_boundary(log.len() - MAX)..])
 }
 
 /// The latexmk flag that selects `engine`'s pdf mode.
@@ -2285,25 +2243,33 @@ fn scan_tex_includes(root: &Path) -> Vec<std::path::PathBuf> {
 /// includes, so a later Compile in a child builds `root` instead of the
 /// fragment. Best-effort: failures to read/write the map are ignored.
 fn record_root_mappings(root: &Path) {
+    record_root_mappings_in(&tex_roots_path(), root);
+}
+
+fn record_root_mappings_in(path: &Path, root: &Path) {
     let root_abs = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let children = scan_tex_includes(&root_abs);
     if children.is_empty() {
         return;
     }
-    let path = tex_roots_path();
-    let mut map: std::collections::HashMap<String, String> =
-        crate::storage::read_json(&path).unwrap_or_default();
     let root_str = root_abs.to_string_lossy().into_owned();
     // Drop stale entries that pointed at this root but are no longer included.
     let child_set: std::collections::HashSet<String> = children
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    map.retain(|child, mapped_root| *mapped_root != root_str || child_set.contains(child));
-    for child in &child_set {
-        map.insert(child.clone(), root_str.clone());
-    }
-    let _ = crate::storage::write_json(&path, &map);
+    // A map that does not parse is left as it is, not replaced by this root's.
+    let _ = crate::storage::patch_private_json(
+        path,
+        std::collections::HashMap::new(),
+        |map: &mut std::collections::HashMap<String, String>| {
+            map.retain(|child, mapped_root| *mapped_root != root_str || child_set.contains(child));
+            for child in &child_set {
+                map.insert(child.clone(), root_str.clone());
+            }
+            Ok(())
+        },
+    );
 }
 
 /// Read the `% !TEX root = …` magic comment from the head of `source`, resolved
@@ -3285,6 +3251,26 @@ mod tests {
         assert!(names.contains("one.tex"), "got: {names:?}");
         assert!(names.contains("two.tex"), "got: {names:?}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A root map that does not parse stays as it is instead of being replaced
+    /// by this one compile's entries; a readable one gains them.
+    #[test]
+    fn record_root_mappings_leaves_an_unreadable_map_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("main.tex");
+        fs::write(&root, "\\input{one}\n").unwrap();
+        fs::write(tmp.path().join("one.tex"), "no includes\n").unwrap();
+        let map_path = tmp.path().join("tex_roots.json");
+        fs::write(&map_path, "{\"a\":").unwrap();
+        record_root_mappings_in(&map_path, &root);
+        assert_eq!(fs::read_to_string(&map_path).unwrap(), "{\"a\":");
+
+        fs::write(&map_path, "{\"elsewhere.tex\":\"other.tex\"}").unwrap();
+        record_root_mappings_in(&map_path, &root);
+        let map: std::collections::HashMap<String, String> = crate::storage::read_json(&map_path).unwrap();
+        assert_eq!(map.len(), 2, "{map:?}");
+        assert_eq!(map["elsewhere.tex"], "other.tex");
     }
 
     #[test]

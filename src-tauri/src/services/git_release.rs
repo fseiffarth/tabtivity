@@ -23,9 +23,10 @@ use serde::Serialize;
 
 use super::git_ci::{self, TipCi};
 use super::git_push_mcp::{
-    classify_remote_error, clean_output, git, join_streams, ls_remote_raw, repo_rewrites_urls, run_capped, validate_sha, Category,
-    Failure, TRANSPORT_TIMEOUT,
+    classify_remote_error, clean_output, git, join_streams, lane_opts, lane_text, ls_remote_raw, repo_rewrites_urls, validate_sha,
+    Category, Failure, TRANSPORT_TIMEOUT,
 };
+use crate::services::git_bounded::RunError;
 use crate::commands::git::{hardened_git_command_in, push_transport_command};
 
 /// What a release would do: tag `head` (the tip of `branch`, already on
@@ -266,17 +267,18 @@ pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, token: Option<&str
     // the fenced agent can write `.git` refs and re-point the local tag at an
     // unpushed commit between this check and the transport.
     let result = pinned_tag_refspec(dir, plan).and_then(|refspec| {
-        let cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
+        let mut cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
         super::git_push_mcp::before_transport();
-        match run_capped(cmd, None, TRANSPORT_TIMEOUT) {
-            Err(None) => Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
-            Err(Some(e)) => Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
+        match crate::services::git_bounded::run(&mut cmd, lane_opts(None, TRANSPORT_TIMEOUT)) {
+            Err(RunError::TimedOut(_)) => Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
+            Err(e) => Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
             Ok(ran) => {
-                let output = clean_output(&join_streams(&ran.stdout, &ran.stderr), token);
-                if ran.success {
+                let (stdout, stderr) = lane_text(&ran.output);
+                let output = clean_output(&join_streams(&stdout, &stderr), token);
+                if ran.output.status.success() {
                     Ok(output)
                 } else {
-                    let category = classify_remote_error(&format!("{}\n{}", ran.stdout, ran.stderr));
+                    let category = classify_remote_error(&format!("{stdout}\n{stderr}"));
                     let message = match category {
                         Category::AuthFailed => "The remote refused the credentials; check the token in Settings → Git Hosting.",
                         Category::Network => "The remote could not be reached; try again later.",
