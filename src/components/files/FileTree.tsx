@@ -1,70 +1,42 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
-import { listen } from "@tauri-apps/api/event";
-import { subscribeTauri } from "../../hooks/useTauriListener";
-import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
-import { useDragStore, type EmbedCap, type FileDragItem } from "../../stores/drag/drag";
-import { commitFileDrop, fileDropGoesToNewWindow } from "../tabs/commitFileDrop";
-import { startDetachedDropSession } from "../tabs/detachedDropTargets";
 import { FileDropContext } from "./fileDropContext";
 import { openTabInScope, useTabScope } from "../../lib/tabs/tabScopeContext";
 import { openFileEntry } from "../../lib/files/openFileEntry";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
-import {
-  startCursorPoll,
-  desktopCursor,
-  desktopCoordinatesSupported,
-  snapshotFrame,
-  physToClient,
-  type PhysPoint,
-  type WindowFrame,
-} from "../../lib/window/coords";
-import { bindDragRelease, dragPlatform, PLATFORM } from "../../lib/window/dragPlatform";
 import { HOST_OS } from "../../lib/platform";
-import { newDropToken, probeDropTarget } from "../../lib/window/dropClaim";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { createDeckFile } from "../../lib/viewers/deck/create";
-import { useProjectsStore } from "../../stores/projects";
-import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
-import { useSyncStore, isPathExcluded, dirSyncAggregate, type SyncFileState, type SyncSkippedFile } from "../../stores/remote/sync";
+import { isPathExcluded, type SyncFileState, type SyncSkippedFile } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useFileClipboardStore } from "../../stores/fileClipboard";
-import { type FileEntry, type InternalViewer, type SortKey, fmtSize, fmtModified, visibleEntries, sortEntries, isHiddenByEnding, internalViewerFor, disabledViewers, fileEntriesEqual, stringMapsEqual, nextSelection, STANDARD_PROJECT_FILES } from "../../lib/viewers/fileUtils";
+import { type FileEntry, type InternalViewer, type SortKey, fmtSize, fmtModified, visibleEntries, internalViewerFor, disabledViewers, fileEntriesEqual, stringMapsEqual, nextSelection } from "../../lib/viewers/fileUtils";
 import {
   dropFileTreeSnapshot,
-  fileTreeSnapshotKey,
   readFileTreeSnapshot,
-  writeFileTreeSnapshot,
 } from "../../lib/projects/fileViewSnapshots";
-import { type TexCapability, type TexCompileResult, getTexCapability, lastLogLine } from "../../lib/viewers/tex/tex";
+import { type TexCompileResult, lastLogLine } from "../../lib/viewers/tex/tex";
 import { basename, dirname, relativePathWithin, resolvePath } from "../../lib/paths";
 import {
   moveDestRel,
   movedEntryAbs,
-  resolveMoveTarget,
-  createSpringLoader,
   type ResolvedMoveTarget,
 } from "../../lib/projects/fileMove";
-import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
-import { DirSizeUnavailable, guardedDirSize, isHostTimeout } from "../../lib/projects/dirSizeGuard";
-import { useFastMode } from "../../lib/agents/fastMode";
+import { resolveProjectDirectory } from "../../types";
 import { isPythonPath } from "../../lib/viewers/python";
 import {
-  checkMainScripts,
   isMainScriptCached,
-  needsMainCheck,
 } from "../../lib/terminal/pythonMainCache";
 import { runPythonFile, pythonRunPlan, placeForFocused } from "../../lib/terminal/pythonRun";
-import { argsFromLines, argsToLines } from "../../lib/terminal/runArgsFormat";
+import { argsFromLines } from "../../lib/terminal/runArgsFormat";
 import { PythonInterpreterSelect } from "../projects/PythonInterpreterSelect";
 import {
   shellRunnerFor,
@@ -72,16 +44,12 @@ import {
   type ScriptShell,
 } from "../../lib/terminal/shellScriptRun";
 import { guardLoginNodeRun } from "../../lib/remote/hpc/hpcGuard";
-import { projectIsOnHpc } from "../../lib/remote/hpc/hpcHost";
 import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
-import { readFileText } from "../../lib/files/fileAccess";
 import { SetDefaultAppDialog } from "./SetDefaultAppDialog";
 import { SendToProjectDialog, type SendSource } from "./SendToProjectDialog";
 import { AddRemarkDialog } from "./AddRemarkDialog";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
-import { normalizeScanPath } from "./ProjectFilesSettings";
 import { FileTreeSearch } from "./FileTreeSearch";
-import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
@@ -96,7 +64,15 @@ import { FileIcon } from "../common/icons/FileIcon";
 import { ArrowDownIcon, ArrowUpIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
-import { BRAND, NAMES, storageKey } from "../../lib/brand";
+import { storageKey } from "../../lib/brand";
+import type { GitStatusMap, MoveTargetAttrs, RowActions } from "./fileTreeTypes";
+import { beginNativeFileDrag, startEntryPointerDrag } from "./fileTreeDrag";
+import { useFileTreeFsWatch, useFileTreeListingState, useFileTreeMountLoad } from "./useFileTreeListing";
+import { useFileTreeEmbedCaps, useFileTreeMountProbes, useFileTreeSearch, useFileTreeTooltip } from "./useFileTreeChrome";
+import { useFileTreePythonMain, useFileTreeRunState } from "./useFileTreeRun";
+import { useFileTreeRemote, useFileTreeSyncStatus } from "./useFileTreeRemote";
+import { ROW_CAP_STEP, useFileTreeRowActions, useFileTreeRows } from "./useFileTreeRows";
+import { useFileTreeDirSizes } from "./useFileTreeSizes";
 
 // The context menu's Delete rows name their keyboard twin (handleTreeKeyDown).
 const DELETE_KEY: ChordDescriptor = { key: "Delete" };
@@ -109,29 +85,10 @@ const GITIGNORED_EXPANDED_KEY = storageKey("fileTree.gitignoredExpanded");
 // hiddenEndings list — see ProjectFilesSettings) — collapsed by default too.
 const HIDDEN_EXT_EXPANDED_KEY = storageKey("fileTree.hiddenExtExpanded");
 
-// How many rows the tree renders at once, and how many more each click of the
-// "show more" footer adds. The rows are not virtualized, so this is the bound on
-// how much DOM one listing can build — see `rowCap` for why an unbounded listing
-// is what makes a big folder freeze the window rather than merely load slowly.
-// A page still overfills the tallest panel, so the cap is invisible in every
-// ordinary folder and only engages where it is the difference between usable
-// and not.
-const ROW_CAP_STEP = 100;
-
-// A stable empty-object fallback for the `python_run_args` selector below — a
-// fresh `{}` literal on every render would change the snapshot's reference
-// identity each time, which `useSyncExternalStore` (what the store hook is
-// built on) reads as "changed" and re-renders forever.
-const EMPTY_PY_ARGS: Record<string, string> = {};
-
 /// How long the pointer must rest on a row before its tooltip opens. Long enough
 /// that sweeping the tree never opens (or measures) anything — see
 /// `handleEntryMouseEnter` for why entry-triggered tooltips were expensive.
 const TOOLTIP_DWELL_MS = 400;
-// Drag-to-move dwell before a hovered folder / crumb / ↑ spring-opens (the
-// tree navigates there and the drag continues). Long enough that sweeping the
-// cursor across folders toward a sibling never opens one by accident.
-const SPRING_LOAD_MS = 650;
 
 function sizeCategory(bytes: number): string {
   if (bytes < 10 * 1024) return "size-small";
@@ -238,7 +195,6 @@ interface Props {
   refreshNonce?: number;
 }
 
-type GitStatusMap = Record<string, string>;
 /** `rowRect` is the right-clicked row's bounding box, captured at open time, so
  *  a glowing frame can float onto it and show which entry the menu targets. */
 type EntryContextMenu = {
@@ -313,23 +269,6 @@ function GitMarker({ status }: { status: string | undefined }) {
   );
 }
 
-
-// Native drag-out (tauri-plugin-drag) needs the OS drag-preview icon as a base64
-// PNG data URL (its icon field rejects a bare path), read synchronously inside
-// the `dragstart` gesture. The backend returns that data URL; cache it
-// process-wide so every file row shares one warm-up (kicked off at mount) and
-// reads it without awaiting.
-let dragIconDataUrl = "";
-let dragIconPromise: Promise<string> | null = null;
-function warmDragIcon(): Promise<string> {
-  if (!dragIconPromise) {
-    dragIconPromise = invoke<string>("drag_preview_icon")
-      .then((p) => (dragIconDataUrl = p))
-      .catch(() => "");
-  }
-  return dragIconPromise;
-}
-
 /** Turn a raw `list_dir` failure into a sentence a user can act on. The common
  *  case, by far, is switching a remote project's file view to "Remote" while
  *  sitting in a folder that only exists in the local mirror (never synced to the
@@ -351,29 +290,6 @@ function describeListError(
     return t("fileTree.errRemoteList");
   }
   return t("fileTree.errOpenFolder");
-}
-
-/** Identity stamped on every `data-move-rel` drop target (see `moveTargetAttrs`). */
-type MoveTargetAttrs = { "data-move-root": string; "data-move-remote": "1" | undefined };
-
-/** The tree's per-row handlers, behind ONE object per tree that never changes
- *  identity (`useRowActions`): the tree rebuilds its closures every render, and
- *  a fresh prop would void every row's memo. Each forwarder reads the latest. */
-interface RowActions {
-  click: (ev: React.MouseEvent, entry: FileEntry) => void;
-  open: (entry: FileEntry, ev: React.MouseEvent) => void;
-  contextMenu: (ev: React.MouseEvent<HTMLDivElement>, entry: FileEntry) => void;
-  dragStart: (ev: React.DragEvent<HTMLDivElement>, entry: FileEntry) => void;
-  pointerDown: (ev: React.PointerEvent, entry: FileEntry, dragTarget: InternalViewer | "embed" | null) => void;
-  mouseEnter: (ev: React.MouseEvent<HTMLDivElement>, entry: FileEntry) => void;
-  mouseLeave: () => void;
-  syncToLocal: (entry: FileEntry) => void;
-  pushToHost: (entry: FileEntry) => void;
-  openSyncMerge: (entry: FileEntry) => void;
-  runShell: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
-  runPython: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
-  /** Right-click on ▶: the run-arguments popover. */
-  openRunArgs: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
 }
 
 interface FileRowProps {
@@ -683,115 +599,15 @@ export function FileTree({
   // Set inside the root console: the tabs this tree opens are root's, not the
   // active project's (see tabScopeContext).
   const tabScope = useTabScope();
-  // The tree is unmounted, not hidden, whenever the side panel closes
-  // (`mountTree={open}`) or the panels are toggled away — so a reveal used to
-  // start from an empty tree and fill itself in over a listing, a git-status
-  // round trip and one recursive walk per folder. `mountSeed` is the last state
-  // this (project, root, folder) was left in: every piece of it below is seeded
-  // from it so the FIRST frame after a reveal is already populated, and the
-  // mount effect then upgrades it with a quiet, diffing refresh. Read once (a
-  // lazy initializer), so a re-render never re-seeds over live state.
-  const [mountSeed] = useState(() =>
-    readFileTreeSnapshot(fileTreeSnapshotKey(projectId, projectDir, initialRelPath ?? "")),
-  );
-  // Consumed by the mount effect: the seeded first pass refreshes instead of
-  // re-listing from scratch. A later run of that effect (a remote pool coming
-  // up) is a real load, so the flag only ever fires once.
-  const seedPending = useRef(!!mountSeed);
-  const snapshotKeyFor = useCallback(
-    (rel: string) => fileTreeSnapshotKey(projectId, projectDir, rel),
-    [projectId, projectDir],
-  );
-  const [rawEntries, setRawEntries] = useState<FileEntry[]>(() => mountSeed?.entries ?? []);
-  // Recursive folder sizes (bytes), keyed by absolute folder path. Filled in
-  // lazily by a per-folder backend call so a big subtree never blocks the
-  // listing — the tree renders immediately and each folder's size appears
-  // once it resolves. `requestedSizes` guards against re-dispatching the same
-  // folder while it's in flight (or after it failed), so fs-watch churn doesn't
-  // trigger a request storm; both reset in `load()` (navigation / refresh) so a
-  // re-listed folder recomputes. Shared between the two size-fetch effects
-  // below (plain `dir_size` for the gitignored section, `dir_size_breakdown`
-  // for everything else) so the same folder is never fetched by both — besides
-  // being wasted work, two independent walks of the same folder can disagree
-  // if it's being actively written to, which would make the ignored split
-  // exceed the total from the other call.
-  // Fast mode withdraws every recursive size walk below (and with it the row
-  // figures and the group totals summed from them). Reactive, so turning it
-  // off re-runs the effects and prices the folders on screen — the dedupe set
-  // was never filled while it was on, so nothing is skipped.
-  const fastMode = useFastMode();
-  const [dirSizes, setDirSizes] = useState<Record<string, number>>(() => mountSeed?.dirSizes ?? {});
-  const requestedSizes = useRef<Set<string>>(new Set());
-  // Which listing the in-flight size calls belong to. Bumped by `load()`, the
-  // only thing that invalidates the cache — so a result is stale ONLY if the
-  // folder was re-listed under it, never merely because the tree re-rendered.
-  // This is load-bearing: the effects below key on `sections`, whose identity
-  // changes on any re-render (`load()` itself sets rawEntries and THEN, a
-  // round-trip later, gitStatuses), and cancelling on that would drop every
-  // size call still in flight — permanently, since `requestedSizes` keeps it
-  // from being re-dispatched. Small folders resolved inside the gap and showed
-  // a size; a big one (the whole point of the feature) never did.
-  const sizeGeneration = useRef(0);
-  // Scan exclusions, normalised once per change into the one spelling the backend
-  // matches on. `scanExcludedList` is what the walk commands receive (it prunes
-  // excluded subtrees *nested inside* a folder being sized); `isScanExcluded`
-  // additionally stops us dispatching a walk for an excluded folder at all.
-  const scanExcludedList = useMemo(
-    () => (scanExcluded ?? []).map(normalizeScanPath).filter(Boolean),
-    [scanExcluded],
-  );
-  const scanExcludedSet = useMemo(() => new Set(scanExcludedList), [scanExcludedList]);
-  const isScanExcluded = useCallback(
-    (rel: string) => scanExcludedSet.has(normalizeScanPath(rel)),
-    [scanExcludedSet],
-  );
-  // The rel path of the most recent `load` call — the folder the tree is
-  // committed to showing. Every async listing/status result checks itself
-  // against it before touching state, so a `refresh` of folder A that lands
-  // after the user has moved on to B can't paint A's rows or A's git letters
-  // under B's breadcrumb (the seeded `load` puts B on screen at once, so a slow
-  // A result used to visibly flash in over it). Seeded from the saved folder
-  // for the same reason `relPath` is: the seeded mount's refresh must pass.
-  const loadTargetRef = useRef<string>(initialRelPath ?? "");
-  // Bytes of a folder's recursive size that are git-ignored, for folders that
-  // are NOT themselves ignored (they sit in the regular/standard section) but
-  // contain ignored content — e.g. a source folder with a build output dir
-  // inside. Filled from the same `dir_size_breakdown` call that fills
-  // `dirSizes` for these folders (one walk, both numbers), so the split can
-  // never exceed the total it was measured against. A folder with no ignored
-  // content is simply absent from this map (nothing to annotate).
-  const [dirIgnoredBytes, setDirIgnoredBytes] = useState<Record<string, number>>(
-    () => mountSeed?.dirIgnoredBytes ?? {},
-  );
-  // Which files can be embedded as a frameless in-tab app (Group K #40). Keyed
-  // by extension (default-app resolution is per-mime/extension), so we only
-  // query the backend once per distinct extension. Only embeddable files get the
-  // drag-to-tab affordance (3D hover + pointer drag); the rest open on dblclick.
-  const [embedByExt, setEmbedByExt] = useState<Record<string, boolean>>({});
-  // Seed from the saved folder (`initialRelPath`) rather than "" so a (re)mount
-  // renders that folder immediately. Starting at "" made every remount paint the
-  // ROOT for one frame — then the mount effect's async `load(initialRelPath)`
-  // would snap back to the saved folder, so a remounting tree visibly flickered
-  // "root ↔ current folder". Reading the prop lazily fixes that for all remount
-  // causes; the mount effect below still runs and just fetches this folder's
-  // listing (relPath is already correct, so there is no root frame).
-  const [relPath, setRelPath] = useState(() => initialRelPath ?? "");
-  // Multi-selection: a set of entry ABSOLUTE paths (`e.path`, the row key), plus
-  // the range anchor. Click selects; shift-click extends a contiguous range;
-  // ctrl/cmd-click toggles a row. Backs bulk delete/move/copy, drag-all, and
-  // open-all. Cleared on folder navigation (in `load`) and pruned when the
-  // listing changes (fs-watch removes a selected file).
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const anchorRef = useRef<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // When a remote listing fails because the folder isn't on the host, this holds
-  // the crumb index (into the path segments) of the FIRST segment that doesn't
-  // exist on the host — everything from here on is local-only. null when the
-  // whole path exists (the normal case) or the source is local. The breadcrumb
-  // tints the on-host prefix and strikes through the local-only tail from it.
-  const [missingCrumbDepth, setMissingCrumbDepth] = useState<number | null>(null);
-  const [gitStatuses, setGitStatuses] = useState<GitStatusMap>(() => mountSeed?.gitStatuses ?? {});
+  const {
+    seedPending, snapshotKeyFor, rawEntries, setRawEntries, fastMode, dirSizes, setDirSizes,
+    requestedSizes, sizeGeneration, scanExcludedList, isScanExcluded, loadTargetRef,
+    dirIgnoredBytes, setDirIgnoredBytes, embedByExt, setEmbedByExt, relPath, setRelPath, selected,
+    setSelected, anchorRef, loading, setLoading, error, setError, missingCrumbDepth,
+    setMissingCrumbDepth, gitStatuses, setGitStatuses,
+  } = useFileTreeListingState({
+    projectId, projectDir, initialRelPath, scanExcluded,
+  });
   const [isDragOver, setIsDragOver] = useState(false);
   const [gitignoredExpanded, setGitignoredExpanded] = useState<boolean>(() => {
     try {
@@ -816,72 +632,20 @@ export function FileTree({
   // the explicit switch. Tracked as state so `draggable` re-evaluates per row
   // when Ctrl is pressed/released.
   const [ctrlHeld, setCtrlHeld] = useState(false);
-  const [tooltip, setTooltip] = useState<{ rect: DOMRect; entry: FileEntry } | null>(null);
-  const tooltipRef = useRef<HTMLDivElement | null>(null);
-  // Vertical-only correction: a row near the bottom of a short docked viewer
-  // (the side panel, a subwindow's file sidebar) still measures its anchor
-  // against the WHOLE app window, so an unclamped `top: tooltip.rect.top`
-  // could push the tooltip's body past the window's bottom edge. Horizontal
-  // placement already picks a side with room (see the style below), so only
-  // this axis needs correcting. Measured off `offsetHeight`, not the element's
-  // current on-screen rect, so a stale shift from a previous tooltip can't
-  // pollute the new measurement.
-  const [tooltipShift, setTooltipShift] = useState(0);
-  useLayoutEffect(() => {
-    if (!tooltip) {
-      setTooltipShift(0);
-      return;
-    }
-    const el = tooltipRef.current;
-    if (!el) {
-      setTooltipShift(0);
-      return;
-    }
-    const overflow = tooltip.rect.top + el.offsetHeight - (window.innerHeight - 8);
-    setTooltipShift(overflow > 0 ? overflow : 0);
-  }, [tooltip]);
-  // Drop a pending dwell timer if the tree unmounts mid-hover, so it can't fire
-  // a setState against a gone component.
-  useEffect(() => () => cancelTooltipTimer(), []);
-  // In-tree search: while `search` is non-empty the tree body is replaced by a
-  // flat result list (FileTreeSearch). `searchMode` picks filename vs. content
-  // search; `searchCase` only applies to content search (name search is fuzzy).
-  // Both backends walk the canonical LOCAL path, so the search box is only shown
-  // for a non-remote-source tree (see `remoteListing` below).
+  const { tooltip, setTooltip, tooltipRef, tooltipShift } = useFileTreeTooltip({
+    cancelTooltipTimer,
+  });
   // Right-click on the breadcrumb turns the path into an editable field (holding
   // the current folder's absolute path) so a path can be typed/pasted to jump —
   // and copies that absolute path to the clipboard. `null` = not editing.
   const [pathEdit, setPathEdit] = useState<string | null>(null);
   const pathEditRef = useRef<HTMLInputElement | null>(null);
-  const [search, setSearch] = useState("");
-  // Search folds away and starts CLOSED: the box + mode pills cost two rows of
-  // tree on every surface that renders FileTree (the side panel is the tight
-  // one), and most sessions browse rather than search. Opening it is one click,
-  // and closing clears the query so the tree comes straight back.
-  const [searchOpenSelf, setSearchOpenSelf] = useState(false);
-  // Who owns the fold: the side panel passes both halves and draws the toggle
-  // in its own toolbar; a bare tree keeps the toggle (and the refresh button)
-  // in the search row.
-  const hostOwnsSearchChrome = onSearchOpenChange !== undefined;
-  const searchOpen = hostOwnsSearchChrome ? !!searchOpenProp : searchOpenSelf;
-  function setSearchOpen(open: boolean) {
-    if (onSearchOpenChange) onSearchOpenChange(open);
-    else setSearchOpenSelf(open);
-  }
-  // Closing must not leave a live query behind: `searching` already ignores it,
-  // but the next open would silently repopulate the results view from a query
-  // nobody typed now. This is an effect on the RESULT rather than a line in the
-  // setter above, because the fold can also be closed from outside the tree
-  // entirely — the side panel's toolbar owns that button and never calls in.
-  useEffect(() => {
-    if (!searchOpen) setSearch("");
-  }, [searchOpen]);
-  const [searchMode, setSearchMode] = useState<"name" | "content">("name");
-  const [searchCase, setSearchCase] = useState(false);
-  // Search scope: false (default) confines the search to the browsed folder
-  // (`relPath`); true searches from the project root. Only meaningful in a
-  // subfolder — at the root the two are identical.
-  const [searchRoot, setSearchRoot] = useState(false);
+  const {
+    search, setSearch, hostOwnsSearchChrome, searchOpen, setSearchOpen, searchMode, setSearchMode,
+    searchCase, setSearchCase, searchRoot, setSearchRoot,
+  } = useFileTreeSearch({
+    searchOpenProp, onSearchOpenChange,
+  });
   // A pending "reveal in tree" (jump-to-path) request from a search result: the
   // parent folder to navigate to and the entry name to select once it lists.
   const [pendingReveal, setPendingReveal] = useState<{ parent: string; name: string } | null>(null);
@@ -954,35 +718,7 @@ export function FileTree({
   // The primary clipboard item — backs the single-file paste-rename prompt and
   // its labels. Multi-item pastes read the full `clipboardEntries` array.
   const clipboard = clipboardEntries[0] ?? null;
-  // TeX toolchain presence (null until probed); absolute paths of .tex files
-  // currently compiling, for the inline build spinner.
-  const [texCap, setTexCap] = useState<TexCapability | null>(null);
-  const [compiling, setCompiling] = useState<Set<string>>(new Set());
-  // Per-file arguments for the ▶ Run button, remembered so a re-run reuses them.
-  // Set via the right-click popover (`argsPopover`, positioned at the cursor).
-  // Same shared, persisted map the open-editor's Run/Debug toolbar reads/writes
-  // (`FileViewerPane.tsx`'s `pyArgs`/`setPyArgs`) — keyed by absolute path in
-  // global settings, not local component state, so it survives this tree
-  // unmounting (side-panel hide/close) and a Tabtivity restart. Shell scripts
-  // (`.sh` & co.) share the map: it is keyed by path, and the name predates them.
-  const runArgsByPath = useSettingsStore((s) => s.settings?.python_run_args ?? EMPTY_PY_ARGS);
-  const setRunArgs = useCallback((path: string, v: string) => {
-    void useSettingsStore.getState().setPythonRunArgs(path, v);
-  }, []);
-  const [argsPopover, setArgsPopover] = useState<{
-    entry: FileEntry;
-    x: number;
-    y: number;
-    draft: string;
-  } | null>(null);
-  const argsPopoverRef = useRef<HTMLDivElement | null>(null);
-  const argsInputRef = useRef<HTMLTextAreaElement | null>(null);
-  useClampToViewport(argsPopoverRef, argsPopover, setArgsPopover);
-  useEffect(() => {
-    if (!argsPopover) return;
-    argsInputRef.current?.focus();
-    argsInputRef.current?.select();
-  }, [argsPopover?.entry.path]);
+  const { texCap, setTexCap, compiling, setCompiling, runArgsByPath, setRunArgs, argsPopover, setArgsPopover, argsPopoverRef, argsInputRef } = useFileTreeRunState();
   const runInBackground = useSettingsStore((s) => s.settings?.run_scripts_in_background ?? true);
   const viewerPrefs = useSettingsStore((s) => s.settings?.viewer_prefs);
   const disabledViewerSet = useMemo(() => disabledViewers(viewerPrefs), [viewerPrefs]);
@@ -992,79 +728,13 @@ export function FileTree({
   const runningScripts = useActivityStore((s) => s.runningScripts);
   const runningRunFiles = useActivityStore((s) => s.runningRunFiles);
   const runScript = useActivityStore((s) => s.runScript);
-  // Mount-free remote (Phase 2): a remote project lists over SFTP and has no
-  // local inotify watcher, so we skip the fs-watch wiring and offer a manual
-  // refresh control instead. Local projects keep live watch-driven updates.
-  const isRemote = useProjectsStore(
-    (s) => !!s.projects.find((p) => p.id === projectId)?.remote,
-  );
-  // The local mirror root for a remote project, resolved the same way
-  // `ProjectFilesPane`/`ProjectFilesView` do (persisted override, else the default
-  // `<state_dir>/mirror`). Used to build the mirror-side absolute path the
-  // three-way merge viewer (`SyncMergeView`) opens a diverged file at — the ± diff
-  // button below routes through it. Null for a local (non-remote) project.
-  const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
-  const mirrorRoot = useMemo(() => {
-    if (!project?.remote) return null;
-    return (
-      resolveLocalMirror(project) ??
-      `${resolveProjectDirectory(project).replace(/[/\\]+$/, "")}/mirror`
-    );
-  }, [project]);
-  // SSH-sync Phase 1: the local mirror source (`syncSource === "local"`) is a
-  // plain LOCAL tree even though its project is remote — it lists/watches the
-  // local mirror dir and is never gated on the SSH pool. Only a remote-SOURCE
-  // tree dispatches its listing over SFTP. `remoteListing` is the flag the
-  // watch/refresh-bar/pool-gate logic below keys on.
-  const treatLocal = syncSource === "local";
-  const remoteListing = isRemote && !treatLocal;
-  // SSH-sync overlay state for the remote source: per-path green/amber/none + the
-  // in-flight transfer progress. Only consulted in the remote-source view.
-  const syncStatus = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
-  // Aggregated sync state for FOLDERS that have no manifest entry of their own.
-  // The manifest tracks files (a directory only gets an entry when it is
-  // explicitly folder-selected / folder-auto-synced); files pulled individually
-  // leave every ancestor folder absent, so a folder row's own-path lookup
-  // defaults to "none" and paints a red "push to host" button even when every
-  // file inside it is green/in-sync. This rolls each tracked file's state up onto
-  // all of its ancestor directories: `any` = the folder contains a tracked file,
-  // `allGreen` = they are all green. A folder with its own entry still uses that
-  // (handled at the lookup site); this only rescues the entry-less ones. Keyed by
-  // project-relative directory path.
-  const dirSyncAgg = useMemo(() => dirSyncAggregate(syncStatus), [syncStatus]);
-  const syncProgress = useSyncStore((s) => (projectId ? s.progressByProject[projectId] : undefined));
-  const refreshSyncStatus = useSyncStore((s) => s.refreshStatus);
-  const syncPull = useSyncStore((s) => s.pull);
-  const syncPush = useSyncStore((s) => s.push);
-  const syncMarkSelected = useSyncStore((s) => s.markSelected);
-  const syncSetAuto = useSyncStore((s) => s.setAuto);
-  const syncAutoPreview = useSyncStore((s) => s.autoPreview);
-  const syncSetExcluded = useSyncStore((s) => s.setExcluded);
-  // A remote project's `list_dir`/`git_file_statuses` dispatch over SSH/SFTP on
-  // the backend. Those are SYNCHRONOUS Tauri commands (they run on the main
-  // thread), so calling them while the pooled connection is down blocks on the
-  // dead SSH session and FREEZES the whole window. Gate every listing on the pool
-  // being "connected": until then the tree shows a disconnected note instead of
-  // issuing any remote call. Reconnect (header lamp / center placeholder) brings
-  // the pool up, flips this true, and the load effect re-runs.
-  const remoteSshState = useRemoteStatusStore((s) =>
-    projectId ? s.byProject[projectId]?.ssh : undefined,
-  );
-  const remoteBlocked = remoteListing && remoteSshState !== "connected";
-  // Whether this project's PRIMARY host is a tagged cluster login node — the host
-  // that owns the files, and so the one every stat loop below walks. Gates the
-  // periodic re-stat, not the explicit one: see the sync-status effect.
-  const settingsForHpc = useSettingsStore((s) => s.settings);
-  const primaryIsHpc = projectIsOnHpc(settingsForHpc, project);
-  // Local-mirror view of a remote project: the NAMES of the browsed folder's
-  // immediate children that exist on the host, from one SFTP readdir per
-  // navigation (only while the pool is live — a host readdir is a main-thread
-  // command that would freeze on a dead session, like every other remote call).
-  // A local child folder absent from this set is local-only — it has never
-  // reached the host — and the tree flags it so "Local" mode doesn't quietly
-  // imply the whole mirror is on the remote. `null` = unknown (not this view, or
-  // disconnected): flag nothing rather than guess.
-  const [hostChildNames, setHostChildNames] = useState<Set<string> | null>(null);
+  const {
+    isRemote, project, mirrorRoot, treatLocal, remoteListing, syncStatus, dirSyncAgg, syncProgress,
+    refreshSyncStatus, syncPull, syncPush, syncMarkSelected, syncSetAuto, syncAutoPreview,
+    syncSetExcluded, remoteSshState, remoteBlocked, primaryIsHpc, hostChildNames, setHostChildNames,
+  } = useFileTreeRemote({
+    projectId, syncSource,
+  });
 
   // Dotfiles always render inline here — there's no separate "hidden" section;
   // any that are actually gitignored, or match a hiddenEndings rule, get
@@ -1087,64 +757,9 @@ export function FileTree({
     [rawEntries, sortKey, descending, hiddenEndings, relPath, hiddenPaths, shownPaths],
   );
 
-  // Whether a visible Python file is a "main" script (has a module-level
-  // `if __name__ == "__main__":` guard) — the Run ▶ button only shows for
-  // those, not for every importable module. It needs the file's content, which
-  // the tree listing doesn't carry, so it is read once per *version* of a file
-  // and the verdict is persisted in settings.json (`lib/terminal/pythonMainCache`).
-  //
-  // Persisting is what makes this affordable on BOTH sides. It used to be a
-  // component-lifetime ref, so every reopen of the viewer re-read every visible
-  // .py — and because that is an SFTP round trip per file on a remote listing,
-  // remote skipped the check entirely and showed ▶ on every .py. That is the
-  // local/remote disagreement this replaces: the same library module offered a
-  // Run button on the host and none on the mirror. Now both sides ask the same
-  // question and pay for the answer once.
-  const pyMainCache = useSettingsStore((s) => s.settings?.python_main_scripts);
-  // Guards against a second scan of files whose read is still in flight (the
-  // cache only learns the answer when it lands). Keyed by path + version, so a
-  // file edited mid-scan is still re-checked.
-  const pyMainInFlight = useRef<Set<string>>(new Set());
-  // Bumped by the ↻ refresh button: re-check every listed .py regardless of its
-  // stamp. The stamp cannot see a same-second write that lands on an identical
-  // size, and "I pressed refresh" is exactly the gesture that should not trust it.
-  const [pyMainNonce, setPyMainNonce] = useState(0);
-  const pyMainNonceSeen = useRef(0);
-  useEffect(() => {
-    // Fast mode stops the *scanning*, not the answers already paid for: the
-    // cache is still read below, so a file whose verdict is known keeps its \u25b6.
-    if (fastMode) return;
-    const forced = pyMainNonceSeen.current !== pyMainNonce;
-    pyMainNonceSeen.current = pyMainNonce;
-    // The ref object's identity never changes, so holding the Set itself is the
-    // same Set the cleanup must clear — and it satisfies the hooks lint, which
-    // can't know that a ref to a plain Set is not a ref to a DOM node.
-    const inFlight = pyMainInFlight.current;
-    const version = (e: FileEntry) => `${e.path}#${e.size}#${e.modified_secs ?? 0}`;
-    const pending = entries
-      .filter((e) => !e.is_dir && isPythonPath(e.path) && !inFlight.has(version(e)))
-      .map((e) => ({ path: e.path, size: e.size, mtime: e.modified_secs ?? 0 }))
-      .filter((f) => forced || needsMainCheck(pyMainCache, f));
-    if (pending.length === 0) return;
-    pending.forEach((f) => inFlight.add(`${f.path}#${f.size}#${f.mtime}`));
-    let cancelled = false;
-    void (async () => {
-      const verdicts = await checkMainScripts(
-        pending,
-        (path) => readFileText(path, projectId),
-        { cancelled: () => cancelled },
-      );
-      if (cancelled) return;
-      // One settings write for the whole folder, not one per file.
-      await useSettingsStore.getState().setPythonMainVerdicts(verdicts);
-    })();
-    return () => {
-      cancelled = true;
-      // A cancelled scan's files were never answered, so they must not stay
-      // marked as in flight or the next listing would skip them forever.
-      pending.forEach((f) => inFlight.delete(`${f.path}#${f.size}#${f.mtime}`));
-    };
-  }, [entries, projectId, pyMainCache, pyMainNonce, fastMode]);
+  const { pyMainCache, pyMainInFlight, setPyMainNonce } = useFileTreePythonMain({
+    entries, projectId, fastMode,
+  });
 
   /** Re-list the current folder, and re-check every .py in it for the Run gate.
    *  Both refresh buttons (the remote bar's and the local breadcrumb's) call this,
@@ -1169,153 +784,11 @@ export function FileTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshNonce]);
 
-  // Per-entry git status resolving the "whole directory is ignored" sentinel the
-  // backend emits under the reserved key "." (git's porcelain never lists an empty
-  // ignored subdir, so those children arrive absent from `gitStatuses`; without
-  // this they'd fall out of the gitignored section — see git.rs `git_file_statuses`).
-  // When the current folder is wholly ignored, every listed child defaults to
-  // "ignored" unless it already carries an explicit status (a force-added tracked
-  // file). Every consumer reads this, never the raw `gitStatuses`, so the tree, the
-  // section split, and the hover card stay consistent.
-  const displayStatuses = useMemo(() => {
-    if (gitStatuses["."] !== "ignored") return gitStatuses;
-    const m: GitStatusMap = {};
-    for (const e of entries) m[e.name] = gitStatuses[e.name] ?? "ignored";
-    return m;
-  }, [gitStatuses, entries]);
-
-  // The four on-screen sections in render order (regular, then the collapsible
-  // scaffold + gitignored + hidden-by-extension groups). Shared by the
-  // renderer and the selection click handler so a shift-range spans exactly
-  // what the user sees. Mirrors the split the render body applies below.
-  const sections = useMemo(() => {
-    // Extension-hidden wins over both other splits — it's an explicit,
-    // per-project user rule (ProjectFilesSettings), more specific than "is
-    // this a scaffold file" or "does git ignore it".
-    const notHiddenExt = entries.filter((e) => !isHiddenByEnding(e, hiddenEndings, relPath, shownPaths));
-    const hiddenExt = entries.filter((e) => isHiddenByEnding(e, hiddenEndings, relPath, shownPaths));
-    const isRoot = !relPath && separateScaffold;
-    const nonStandard = isRoot ? notHiddenExt.filter((e) => !STANDARD_PROJECT_FILES.has(e.name)) : notHiddenExt;
-    const standard = isRoot ? notHiddenExt.filter((e) => STANDARD_PROJECT_FILES.has(e.name)) : [];
-    // The size breakdown is an independent ignored-path scan. If it establishes
-    // that every byte in a folder is ignored, keep that folder out of the normal
-    // section even when the status request was incomplete (for example an older
-    // backend, or Git configured with status.showUntrackedFiles=no). Otherwise
-    // the normal-row size subtracts the ignored bytes and misleadingly shows 0 B.
-    const isIgnored = (e: FileEntry) =>
-      displayStatuses[e.name] === "ignored" ||
-      (e.is_dir &&
-        (dirIgnoredBytes[e.path] ?? 0) > 0 &&
-        dirSizes[e.path] !== undefined &&
-        (dirIgnoredBytes[e.path] ?? 0) >= dirSizes[e.path]);
-    // With the gitignored split off, ignored entries stay in the regular list
-    // rather than moving to a section that is not rendered — the point of the
-    // switch is to see them in place, not to hide them.
-    const regular = separateGitignored ? nonStandard.filter((e) => !isIgnored(e)) : nonStandard;
-    const gitignored = separateGitignored ? nonStandard.filter(isIgnored) : [];
-    // The listing gives every folder size 0, so "Size" must sort on the figure
-    // the row shows: the recursive walk, less its ignored bytes outside the
-    // gitignored / hidden-by-extension groups (mirrors `dirShown` in
-    // renderEntry). An unwalked or scan-excluded folder sorts last.
-    const bySize = (list: FileEntry[], subtractIgnored: boolean) =>
-      sortKey !== "size"
-        ? list
-        : sortEntries(list, "size", descending, (e) => {
-            if (!e.is_dir) return e.size;
-            const total = dirSizes[e.path];
-            if (total === undefined) return undefined;
-            return subtractIgnored ? total - (dirIgnoredBytes[e.path] ?? 0) : total;
-          });
-    return {
-      regular: bySize(regular, true),
-      standard: bySize(standard, true),
-      gitignored: bySize(gitignored, false),
-      hiddenExt: bySize(hiddenExt, false),
-    };
-  }, [
-    entries,
-    relPath,
-    separateScaffold,
-    separateGitignored,
-    displayStatuses,
-    dirSizes,
-    dirIgnoredBytes,
-    hiddenEndings,
-    shownPaths,
-    sortKey,
-    descending,
-  ]);
-
-  // How many rows the tree will actually render, raised a page at a time by the
-  // "show more" footer. Rows are NOT virtualized, and each one is ~16 elements
-  // with ~11 handlers rebuilt on every render of this component — so a folder
-  // holding thousands of files (an ML sweep's `results/` routinely does: one run
-  // per config × per step) builds six figures of DOM and re-reconciles the lot
-  // every time a size lands, a sync status refreshes, or the pointer moves. That
-  // is enough to make the whole window unusable while the CPU still looks idle,
-  // because the cost is layout/paint in a software-rendered webview, not compute.
-  // Capping keeps the cost proportional to what is on screen; the folder is still
-  // fully reachable, one page at a time.
-  const [rowCap, setRowCap] = useState(ROW_CAP_STEP);
-  // A new folder (or a new project) starts back at one page — the cap is about
-  // this listing, not a preference to carry around the tree.
-  useEffect(() => {
-    setRowCap(ROW_CAP_STEP);
-  }, [relPath, projectId]);
-
-  // The rows actually rendered, in on-screen order, clipped to `rowCap` across
-  // the sections as a whole (the budget is spent top-down, so raising the cap
-  // extends the list rather than reshuffling it). Collapsed sections spend
-  // nothing — they render no rows. Section *labels* keep counting the full
-  // `sections` lists, so "gitignored (8316)" still tells the truth about the
-  // folder while only a page of it is on screen.
-  const rowWindow = useMemo(() => {
-    let budget = rowCap;
-    const clip = (list: FileEntry[]) => {
-      const out = budget >= list.length ? list : list.slice(0, Math.max(0, budget));
-      budget -= out.length;
-      return out;
-    };
-    const regular = clip(sections.regular);
-    const standard = scaffoldExpanded ? clip(sections.standard) : [];
-    const gitignored = gitignoredExpanded ? clip(sections.gitignored) : [];
-    const hiddenExt = hiddenExtExpanded ? clip(sections.hiddenExt) : [];
-    const total =
-      sections.regular.length +
-      (scaffoldExpanded ? sections.standard.length : 0) +
-      (gitignoredExpanded ? sections.gitignored.length : 0) +
-      (hiddenExtExpanded ? sections.hiddenExt.length : 0);
-    const shown = regular.length + standard.length + gitignored.length + hiddenExt.length;
-    return { regular, standard, gitignored, hiddenExt, hidden: total - shown };
-  }, [sections, rowCap, scaffoldExpanded, gitignoredExpanded, hiddenExtExpanded]);
-
-  // Flat list of visible row paths in on-screen order — the axis a shift-range
-  // spans. Collapsed sections contribute no rows (they aren't rendered), and
-  // neither do rows beyond the cap: a range must span exactly what the user can
-  // see, or shift-click would silently select rows that aren't on screen.
-  const orderedVisible = useMemo(() => {
-    const paths = rowWindow.regular.map((e) => e.path);
-    paths.push(...rowWindow.standard.map((e) => e.path));
-    paths.push(...rowWindow.gitignored.map((e) => e.path));
-    paths.push(...rowWindow.hiddenExt.map((e) => e.path));
-    return paths;
-  }, [rowWindow]);
-
-  // Prune selected paths that vanished from the listing (fs-watch removed a
-  // file, a folder was deleted, etc.) so stale entries never linger in bulk ops.
-  useEffect(() => {
-    setSelected((prev) => {
-      if (prev.size === 0) return prev;
-      const live = new Set(entries.map((e) => e.path));
-      let changed = false;
-      const next = new Set<string>();
-      for (const p of prev) {
-        if (live.has(p)) next.add(p);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [entries]);
+  const { displayStatuses, sections, setRowCap, rowWindow, orderedVisible } = useFileTreeRows({
+    gitStatuses, entries, hiddenEndings, relPath, shownPaths, separateScaffold, separateGitignored,
+    dirIgnoredBytes, dirSizes, sortKey, descending, projectId, scaffoldExpanded, gitignoredExpanded,
+    hiddenExtExpanded, setSelected,
+  });
 
   function clearSelection() {
     anchorRef.current = null;
@@ -1338,210 +811,13 @@ export function FileTree({
     });
   }
 
-  // Resolve embed capability for any not-yet-known file extension in view. One
-  // backend call per distinct extension; results cached in embedByExt.
-  useEffect(() => {
-    const unknown = new Map<string, string>(); // ext → a sample path
-    for (const e of entries) {
-      if (e.is_dir) continue;
-      const ext = e.extension ?? "";
-      if (!(ext in embedByExt) && !unknown.has(ext)) unknown.set(ext, e.path);
-    }
-    if (unknown.size === 0) return;
-    let cancelled = false;
-    (async () => {
-      // Fire every distinct-extension capability probe concurrently rather than
-      // awaiting each in series (Eff #8): the checks are independent, so the
-      // batch finishes in roughly one round-trip instead of N.
-      const results = await Promise.all(
-        [...unknown].map(async ([ext, path]) => {
-          try {
-            const cap = await invoke<EmbedCap>("embed_capability", { path, handler: null, projectId });
-            return [ext, cap.os_embeddable && cap.app_embeddable] as const;
-          } catch {
-            return [ext, false] as const;
-          }
-        }),
-      );
-      if (!cancelled) setEmbedByExt((m) => ({ ...m, ...Object.fromEntries(results) }));
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries]);
+  useFileTreeEmbedCaps({ entries, embedByExt, setEmbedByExt, projectId });
 
-  // Lazily compute the recursive size of each visible gitignored-section
-  // folder. Fires one backend call per not-yet-requested folder (concurrently
-  // — they're independent) and fills `dirSizes` as each resolves. A failed
-  // call is left unresolved; the `requestedSizes` guard keeps it (and
-  // steady-state re-renders / fs-watch reloads) from re-dispatching. Plain
-  // `dir_size` is enough here — the whole folder is ignored by definition, so
-  // there's no split to compute, unlike the regular/standard effect below.
-  //
-  // Scoped to the RENDERED rows (`rowWindow`), not the whole section: pricing a
-  // folder costs a recursive walk — a `du` over SSH for a remote project — so a
-  // listing holding thousands of subfolders would dispatch thousands of them for
-  // rows that aren't even on screen. `requestedSizes` dedupes, so raising the
-  // render cap prices the newly revealed folders and only those. `active` gates
-  // all three size effects the same way: a hidden tree walks nothing, and the
-  // dedupe set means reactivation prices exactly the still-unpriced folders.
-  useEffect(() => {
-    if (!active || fastMode) return;
-    const pending = rowWindow.gitignored.filter(
-      (e) => e.is_dir && !requestedSizes.current.has(e.path) && !isScanExcluded(relForEntry(e)),
-    );
-    if (pending.length === 0) return;
-    pending.forEach((e) => requestedSizes.current.add(e.path));
-    const gen = sizeGeneration.current;
-    for (const e of pending) {
-      guardedDirSize(projectDir, () =>
-        invoke<number>("dir_size", {
-          projectDir,
-          relPath: relForEntry(e),
-          excluded: scanExcludedList,
-        }),
-      )
-        .then((bytes) => {
-          if (sizeGeneration.current === gen) setDirSizes((m) => ({ ...m, [e.path]: bytes }));
-        })
-        .catch(() => {
-          /* best-effort display aid — leave unresolved on failure */
-        });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowWindow.gitignored, active, fastMode]);
-
-  // Same as the gitignored effect above, for the visible hidden-by-extension
-  // rows — a plain `dir_size` is enough here too, since the group's own
-  // total needs no ignored/non-ignored split.
-  useEffect(() => {
-    if (!active || fastMode) return;
-    const pending = rowWindow.hiddenExt.filter(
-      (e) => e.is_dir && !requestedSizes.current.has(e.path) && !isScanExcluded(relForEntry(e)),
-    );
-    if (pending.length === 0) return;
-    pending.forEach((e) => requestedSizes.current.add(e.path));
-    const gen = sizeGeneration.current;
-    for (const e of pending) {
-      guardedDirSize(projectDir, () =>
-        invoke<number>("dir_size", {
-          projectDir,
-          relPath: relForEntry(e),
-          excluded: scanExcludedList,
-        }),
-      )
-        .then((bytes) => {
-          if (sizeGeneration.current === gen) setDirSizes((m) => ({ ...m, [e.path]: bytes }));
-        })
-        .catch(() => {
-          /* best-effort display aid — leave unresolved on failure */
-        });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowWindow.hiddenExt, active, fastMode]);
-
-  // Lazily compute the recursive size of each visible regular/standard-section
-  // folder, split into ignored vs. non-ignored bytes in the SAME backend walk
-  // that produces the total — so a folder with e.g. a build output dir mixed
-  // in with source can show that split, and the ignored figure can never
-  // exceed the total it was measured against (two independent walks of the
-  // same folder can disagree if it's being actively written to, which is
-  // exactly the kind of folder — build/output dirs — this feature targets).
-  // Fills both `dirSizes` and `dirIgnoredBytes` from one response, sharing
-  // `requestedSizes` with the effect above so no folder is fetched twice.
-  // Scoped to the rendered rows for the same reason that effect is — see there.
-  useEffect(() => {
-    if (!active || fastMode) return;
-    const candidates = [...rowWindow.regular, ...rowWindow.standard];
-    const pending = candidates.filter(
-      (e) => e.is_dir && !requestedSizes.current.has(e.path) && !isScanExcluded(relForEntry(e)),
-    );
-    if (pending.length === 0) return;
-    pending.forEach((e) => requestedSizes.current.add(e.path));
-    const gen = sizeGeneration.current;
-    for (const e of pending) {
-      guardedDirSize(projectDir, () =>
-        invoke<{ total: number; ignored: number }>("dir_size_breakdown", {
-          projectDir,
-          relPath: relForEntry(e),
-          excluded: scanExcludedList,
-        }),
-      )
-        .then(({ total, ignored }) => {
-          if (sizeGeneration.current !== gen) return;
-          setDirSizes((m) => ({ ...m, [e.path]: total }));
-          if (ignored > 0) setDirIgnoredBytes((m) => ({ ...m, [e.path]: ignored }));
-        })
-        .catch((err) => {
-          // The fallback is for a `dir_size_breakdown` that failed for a reason
-          // `dir_size` wouldn't (a backend that hasn't picked up this newer
-          // command, no `git` on PATH) — there, a folder's size matters more than
-          // its ignored split. It is NOT for a host that stopped answering: a
-          // timed-out or breaker-refused call says nothing about the *command*,
-          // so retrying with the other one would just queue a second doomed call
-          // per folder — twice the pile-up the guard exists to prevent.
-          if (err instanceof DirSizeUnavailable || isHostTimeout(err)) return;
-          guardedDirSize(projectDir, () =>
-            invoke<number>("dir_size", {
-              projectDir,
-              relPath: relForEntry(e),
-              excluded: scanExcludedList,
-            }),
-          )
-            .then((bytes) => {
-              if (sizeGeneration.current === gen) setDirSizes((m) => ({ ...m, [e.path]: bytes }));
-            })
-            .catch(() => {
-              /* best-effort display aid — leave unresolved on failure */
-            });
-        });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowWindow.regular, rowWindow.standard, active, fastMode]);
-
-  // Total bytes contained in each section, kept separate rather than merged
-  // into one figure — the point of splitting scaffold/gitignored out visually
-  // is that their weight (e.g. a huge gitignored build dir) shouldn't hide
-  // inside the "real" content total. Sums whatever `dirSizes`/`e.size` already
-  // know; unresolved subfolder sizes count as 0 until their `dir_size` call
-  // lands, same best-effort as the per-row display above. `regular`/`standard`
-  // are non-ignored-only (mirroring the per-row headline number), with the
-  // ignored portion pulled out separately so callers can put it on hover —
-  // `gitignored` needs no such split, it's ignored content in its entirety.
-  const groupSizes = useMemo(() => {
-    const total = (list: FileEntry[]) =>
-      list.reduce((sum, e) => sum + (e.is_dir ? (dirSizes[e.path] ?? 0) : e.size), 0);
-    const ignored = (list: FileEntry[]) =>
-      list.reduce((sum, e) => sum + (e.is_dir ? (dirIgnoredBytes[e.path] ?? 0) : 0), 0);
-    // Whether the sum is still MISSING a folder — the thing that makes it a lower
-    // bound rather than a measurement, and the reason it must not be printed as a
-    // plain figure (see `renderGroupTotal`). Three independent causes, deliberately
-    // folded into one flag because the reader's question is the same for all of
-    // them: a `dir_size` still in flight (on a remote project that is a `du` over
-    // SSH, four at a time), one that failed or was refused by the breaker, and a
-    // folder past the render cap, which is never requested at all. An excluded
-    // folder is NOT missing: it is deliberately unmeasured and contributes 0.
-    const incomplete = (list: FileEntry[]) =>
-      list.some(
-        (e) => e.is_dir && dirSizes[e.path] === undefined && !isScanExcluded(relForEntry(e)),
-      );
-    const regularIgnored = ignored(sections.regular);
-    const standardIgnored = ignored(sections.standard);
-    return {
-      regular: total(sections.regular) - regularIgnored,
-      regularIgnored,
-      regularPartial: incomplete(sections.regular),
-      standard: total(sections.standard) - standardIgnored,
-      standardIgnored,
-      standardPartial: incomplete(sections.standard),
-      gitignored: total(sections.gitignored),
-      gitignoredPartial: incomplete(sections.gitignored),
-      hiddenExt: total(sections.hiddenExt),
-      hiddenExtPartial: incomplete(sections.hiddenExt),
-    };
-    // `relForEntry`/`isScanExcluded` depend only on `relPath`/`scanExcluded`, both
-    // of which force a re-list (and so a fresh `sections`) when they change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections, dirSizes, dirIgnoredBytes]);
+  const { groupSizes } = useFileTreeDirSizes({
+    active, fastMode, rowWindow, sections, requestedSizes, sizeGeneration, isScanExcluded,
+    relForEntry, projectDir, scanExcludedList, dirSizes, setDirSizes, dirIgnoredBytes,
+    setDirIgnoredBytes,
+  });
 
   /**
    * A group header's byte total.
@@ -1589,219 +865,19 @@ export function FileTree({
     return isEmbeddable(e) ? "embed" : null;
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    getTexCapability().then((cap) => { if (!cancelled) setTexCap(cap); });
-    return () => { cancelled = true; };
-  }, []);
+  useFileTreeMountProbes({ setTexCap, setCtrlHeld });
 
-  // Track Ctrl so file rows can switch to native DnD (export/copy to browser or
-  // an external app) while it's held. Also clear on blur/visibility loss so a
-  // release that happens while another window has focus doesn't leave rows stuck
-  // in native-drag mode.
-  useEffect(() => {
-    // Warm the native drag-out preview icon so its path is ready (sync-readable)
-    // by the time the user starts a Ctrl-drag. Only the plugin path (Win/mac)
-    // needs it — the Linux `start_file_drag` embeds the icon backend-side.
-    if (PLATFORM !== "linux") void warmDragIcon();
-    const sync = (e: KeyboardEvent) => {
-      setCtrlHeld(e.ctrlKey);
-    };
-    const clear = () => setCtrlHeld(false);
-    window.addEventListener("keydown", sync);
-    window.addEventListener("keyup", sync);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("keydown", sync);
-      window.removeEventListener("keyup", sync);
-      window.removeEventListener("blur", clear);
-    };
-  }, []);
+  useFileTreeMountLoad({
+    projectDir, remoteBlocked, initialRelPath, seedPending, load, refresh, error, snapshotKeyFor,
+    relPath, rawEntries, gitStatuses, dirSizes, dirIgnoredBytes,
+  });
 
-  useEffect(() => {
-    if (!projectDir) return;
-    // Don't list a disconnected remote project's tree — the sync list_dir/
-    // git_file_statuses commands would block the main thread on the dead SSH pool
-    // and freeze the app. Re-runs once the pool connects (remoteBlocked flips).
-    if (remoteBlocked) return;
-    const rel = initialRelPath ?? "";
-    // Seeded mount (the panel was revealed again): the folder is already on
-    // screen, so upgrade it in place with the quiet, diffing refresh instead of
-    // re-listing from scratch — no loading flash, and nothing repaints where
-    // nothing changed. If the folder no longer lists, fall through to the full
-    // load so the error is shown rather than the stale rows.
-    if (seedPending.current) {
-      seedPending.current = false;
-      // One frame later, not inside this commit: `list_dir`/`git_file_statuses`
-      // are SYNCHRONOUS Tauri commands on the main thread (over SFTP for a
-      // remote project), so dispatching them here would stall the very frame
-      // the seed exists to make instant. The tree is already on screen; the
-      // upgrade can wait for it to paint.
-      let cancelled = false;
-      const frame = requestAnimationFrame(() => {
-        void refresh(rel).then((ok) => {
-          if (!ok && !cancelled) void load(rel);
-        });
-      });
-      return () => {
-        cancelled = true;
-        cancelAnimationFrame(frame);
-      };
-    }
-    load(rel);
-    return undefined;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectDir, remoteBlocked]);
+  useFileTreeSyncStatus({
+    isRemote, projectId, remoteBlocked, relPath, active, refreshSyncStatus, remoteSshState,
+    primaryIsHpc, fastMode, treatLocal, remoteProbeDir, setHostChildNames,
+  });
 
-  // Keep the folder's snapshot current so the NEXT mount (a panel reveal, a
-  // `panelsHidden` toggle) paints it immediately. Written from the live state
-  // rather than at the fetch sites so every source that moves the tree — the
-  // listing, the fs-watch refresh, each folder size as it resolves — is
-  // captured by construction. Skipped while an error is up: a failed listing is
-  // not a state worth restoring, and `load` has already dropped that key.
-  useEffect(() => {
-    if (!projectDir || error) return;
-    writeFileTreeSnapshot(snapshotKeyFor(relPath), {
-      entries: rawEntries,
-      gitStatuses,
-      dirSizes,
-      dirIgnoredBytes,
-    });
-  }, [projectDir, snapshotKeyFor, relPath, rawEntries, gitStatuses, dirSizes, dirIgnoredBytes, error]);
-
-  // SSH-sync Phase 1: keep the sync overlay fresh — re-stat selected files
-  // whenever the tree (re)lists. Runs for both the remote-source tree and the
-  // local-mirror tree (the marker is symmetric); `remoteBlocked` only ever gates
-  // the remote-source case; the mirror tree keeps working offline off the last-
-  // known manifest state (the backend falls back gracefully when the pool is
-  // down — see `sync_status`).
-  useEffect(() => {
-    // `active` doubles as the reactivation catch-up: a hidden tree skips the
-    // refresh, and the flip back to visible re-runs this with fresh sync state.
-    if (isRemote && projectId && !remoteBlocked && active) {
-      void refreshSyncStatus(projectId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRemote, projectId, remoteBlocked, relPath, active]);
-
-  // SSH-sync: the host tree has no change watcher (inotify can't see the SFTP
-  // tree), so a remote-side edit wouldn't flip a file to amber until the user
-  // re-lists — and the local-mirror view has no re-list button at all. Re-stat
-  // the SELECTED files (cheap metadata over the pooled ControlMaster — NOT a
-  // tree re-list) whenever Tabtivity regains focus and on a light interval, so a
-  // remote-only divergence surfaces on its own shortly after it happens instead
-  // of silently going stale. Gated on a live pool so a cold connection never
-  // re-stats (which would report stale green); runs for both the remote-source
-  // and local-mirror views (the amber marker is symmetric).
-  useEffect(() => {
-    // Hidden trees re-stat nothing: the sync markers they'd refresh aren't on
-    // screen, and the mount-refresh effect above catches up on reactivation.
-    if (!isRemote || !projectId || remoteSshState !== "connected" || !active) return;
-    const refresh = () => { void refreshSyncStatus(projectId); };
-    window.addEventListener("focus", refresh);
-    // The 15 s tick is the third periodic walk of a host tree, after the 25 s
-    // byte-sync pass and the 12 s lockstep poll — both of which the HPC tag
-    // already stops for exactly the reason `lib/remote/hpc/hpcHost.ts` gives ("the same walk,
-    // unasked for, forever"). A tagged login node gets no timer here either: an
-    // open file tree is not a standing request to stat a cluster every quarter
-    // minute. What survives is the focus listener and every explicit re-list —
-    // both are gestures, and the amber marker still refreshes on each of them.
-    // Fast mode drops this tick for the HPC tag's reason applied to a preference
-    // rather than a host: an open file tree is not a standing request to stat a
-    // host every quarter minute. The focus listener above and every explicit
-    // re-list survive, so the markers still catch up on a gesture.
-    const id = primaryIsHpc || fastMode
-      ? undefined
-      : window.setInterval(() => {
-          // Only tick while Tabtivity is focused: a backgrounded window doesn't need
-          // to keep re-stat'ing the host every 15 s (the `focus` listener re-stats
-          // on return anyway), which keeps an idle remote project off the wire.
-          if (document.hasFocus()) refresh();
-        }, 15000);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      if (id !== undefined) window.clearInterval(id);
-    };
-  }, [isRemote, projectId, remoteSshState, refreshSyncStatus, primaryIsHpc, active, fastMode]);
-
-  // Local-mirror view: readdir the HOST for the browsed folder so folders that
-  // live only in the local mirror can be flagged (see `hostChildNames`). One
-  // cheap SFTP readdir per navigation, gated on a live pool. If the folder ITSELF
-  // isn't on the host (readdir fails), every local child here is off-host too, so
-  // an empty set is the right answer — it flags them all.
-  useEffect(() => {
-    // `!active`: a hidden tree probes no host; the flags fall back to "unknown"
-    // (no markers) and the reactivation re-run re-probes.
-    if (!treatLocal || !isRemote || !remoteProbeDir || remoteSshState !== "connected" || !active) {
-      setHostChildNames(null);
-      return;
-    }
-    let cancelled = false;
-    const target = relPath;
-    invoke<FileEntry[]>("list_dir", { projectDir: remoteProbeDir, relPath: target })
-      .then((entries) => {
-        if (!cancelled) setHostChildNames(new Set(entries.map((x) => x.name)));
-      })
-      .catch(() => {
-        if (!cancelled) setHostChildNames(new Set());
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [treatLocal, isRemote, remoteProbeDir, remoteSshState, relPath, active]);
-
-  // Live updates: watch the currently-displayed directory on the backend and
-  // re-fetch when it changes, so files created/removed by terminals, agents, or
-  // other processes appear without manual navigation. Re-points to the new
-  // directory whenever relPath changes; tears down on unmount/panel close.
-  //
-  // Active surfaces only: trees stay mounted while hidden (background Files
-  // tabs, backgrounded projects), and the fs-change listener ignores the event's
-  // path — so every mounted tree used to re-list (list_dir + git_file_statuses)
-  // on every event burst anywhere. A hidden tree now stops watching entirely and
-  // catches up with ONE quiet re-list when its surface is next shown (the same
-  // identity-preserving refresh an fs-change triggers, so nothing repaints when
-  // nothing changed). React runs effect cleanups before setups across the tree,
-  // so the deactivating tree's `unwatch_dir` lands before the activating tree's
-  // `watch_dir` claims the single backend watch slot.
-  const sawInactive = useRef(false);
-  useEffect(() => {
-    // Remote projects have no local fs watcher (inotify can't see the SFTP tree);
-    // they refresh manually via the toolbar button. Skip the watch wiring. The
-    // local mirror source IS a real local dir, so it keeps live watch updates.
-    if (!projectDir || remoteListing) return;
-    if (!active) {
-      sawInactive.current = true;
-      return;
-    }
-    if (sawInactive.current) {
-      sawInactive.current = false;
-      void refresh(relPath);
-    }
-    const absDir = relPath ? `${projectDir}/${relPath}` : projectDir;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    // `repoDir` points the backend's `.git` watch at the project's repo, so
-    // add/commit/push (which only write `.git/`) re-read the markers too.
-    invoke("watch_dir", { path: absDir, repoDir: projectDir }).catch(() => {});
-    const unlisten = subscribeTauri(() => listen<string>("fs-change", (event) => {
-      // The payload is the watched folder as asked for (`fs_watch.rs`); the one
-      // backend slot is shared by every tree in every window, so an event for
-      // another tree's folder is not this tree's to re-list (perf plan §3.4).
-      // Its `.git` changes arrive under the same payload, so they still count.
-      if (typeof event?.payload === "string" && event.payload !== absDir) return;
-      // Coalesce the burst of events a single write emits into one reload.
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => refresh(relPath), 250);
-    }));
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      unlisten();
-      invoke("unwatch_dir").catch(() => {});
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectDir, relPath, remoteListing, active]);
+  useFileTreeFsWatch({ projectDir, remoteListing, active, relPath, refresh });
 
   async function load(rel: string) {
     // Never issue the (synchronous, main-thread) remote listing commands while the
@@ -2025,6 +1101,8 @@ export function FileTree({
       }
     });
     setPendingReveal(null);
+    // `anchorRef`/`setSelected` come from `useFileTreeListingState`: stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, pendingReveal, relPath]);
 
   function handleClick(entry: FileEntry) {
@@ -2190,37 +1268,6 @@ export function FileTree({
     setTooltip(null);
   }
 
-  // Start the native OS drag-out (EXPORT/COPY to another app: a browser, Signal,
-  // a file manager, the desktop). Real OLE/NSDragging/GTK drag with an
-  // OS-rendered icon; copy semantics, so files are never MOVED out of the
-  // project. Reached two ways: a dir's HTML5 dragstart (handleEntryDragStart),
-  // and the mid-drag Ctrl handoff inside onEntryPointerDown.
-  function beginNativeFileDrag(paths: string[]) {
-    // Linux uses our own GTK drag (`start_file_drag`): tauri-plugin-drag's GTK
-    // backend hands external targets an EMPTY payload — it tears down its
-    // drag-data-get handler at drop-performed, before the target requests the
-    // text/uri-list data — so a drop into a browser silently did nothing (it
-    // also ships unencoded file:// URIs, which strict consumers discard).
-    if (PLATFORM === "linux") {
-      void invoke("start_file_drag", { paths }).catch((err) =>
-        // Surfaces the most common failure: the backend wasn't rebuilt, so the
-        // command doesn't exist yet — the drag silently no-ops otherwise.
-        console.error(`[${BRAND.slug}] native file drag-out failed:`, err),
-      );
-      return;
-    }
-    const begin = (icon: string) =>
-      startDrag({ item: paths, icon, mode: "copy" })
-        .catch((err) => {
-          // Same visibility for the plugin path (`plugin:drag|start_drag` and
-          // `drag_preview_icon` only exist after a backend rebuild).
-          console.error(`[${BRAND.slug}] native file drag-out failed:`, err);
-        });
-    // The icon data URL is normally warm by drag time; if not, resolve first.
-    if (dragIconDataUrl) void begin(dragIconDataUrl);
-    else void warmDragIcon().then(begin);
-  }
-
   function handleEntryDragStart(e: React.DragEvent<HTMLDivElement>, entry: FileEntry) {
     // WebKitGTK's HTML5 drag-out renders no drag image outside the window and
     // doesn't reliably export the file to other apps, so suppress it and hand
@@ -2235,470 +1282,17 @@ export function FileTree({
     beginNativeFileDrag(paths);
   }
 
-  // Start a pointer-based drag from a file row, mirroring TabBar.onTabPointerDown.
-  // HTML5 native DnD is unreliable on WebKitGTK (it hijacks the pointer stream
-  // and fires pointercancel), so once the pointer crosses a 5px threshold we
-  // drive a "file" drag from plain window listeners. On drop, commitFileDrop
-  // either opens the file as a frameless embed tab (capability permitting) or
-  // falls back to an external launch.
-  //
-  // R6: we e.preventDefault() here to suppress native DnD and the row's
-  // `draggable`/onDragStart is disabled for files (see renderEntry), so both
-  // can't fire. The commit fires from THIS handler's window-pointerup — the
-  // only listener guaranteed to see the release before pointer capture on
-  // WebKitGTK — never from CenterPanel.
+  // The pointer drag a row starts: see `startEntryPointerDrag` (fileTreeDrag.ts).
   function onEntryPointerDown(
     e: React.PointerEvent,
     entry: FileEntry,
     dragTarget: InternalViewer | "embed" | null,
   ) {
-    if (e.button !== 0) return;
-    // A folder is dragged only to move it (`dragTarget` is null for one).
-    // A built-in viewer drives the in-app drop; "embed" means an external
-    // handler, so no viewer. `canTab` is whether this file can land on a tab bar
-    // / new window at all — only such files take the commitFileDrop path on
-    // release. Files without a tab target are still draggable, but ONLY to move
-    // them into a folder (drag-to-move); released anywhere else they do nothing.
-    const viewer = dragTarget === "embed" ? null : dragTarget;
-    const canTab = dragTarget != null;
-    // Multi-selection drag: if the pressed row belongs to a >1 selection, the
-    // whole selection is dragged; otherwise just this row. `dragEntries` (files
-    // + folders) drives drag-to-move; `dragFiles` (file members only, with their
-    // built-in viewer resolved) is the tab/window drop payload — folders can move
-    // but never become tabs. A release over a tab bar / split / new window
-    // creates tabs when `canDrop`: for a single drag only a viewer/embed file
-    // qualifies (unchanged); for a multi drag any file member becomes an embed
-    // tab.
-    const isMultiDrag = selected.has(entry.path) && selected.size > 1;
-    const dragEntries = isMultiDrag ? entries.filter((en) => selected.has(en.path)) : [entry];
-    const dragFiles: FileDragItem[] = dragEntries
-      .filter((en) => !en.is_dir)
-      .map((en) => ({ path: en.path, name: en.name, viewer: internalViewerFor(en, disabledViewerSet) ?? undefined }));
-    const canDrop = isMultiDrag ? dragFiles.length > 0 : canTab;
-    const draggedDirRels = dragEntries.filter((en) => en.is_dir).map(relForEntry);
-    // Ctrl held → the user wants to EXPORT/COPY this file out to another app
-    // (Signal, a browser, a file manager). The row arms HTML5 `draggable` while
-    // `ctrlHeld` (see renderEntry); its onDragStart suppresses the broken
-    // WebKitGTK drag and hands off to the native OS drag (handleEntryDragStart).
-    // Bail out here without preventDefault so that gesture takes over instead of
-    // the pointer drag-to-tab.
-    if (e.ctrlKey) return;
-    // Let the inline run (▶) button own its own clicks — don't seed a drag or
-    // swallow the click when the press lands on it.
-    if ((e.target as HTMLElement).closest(".file-run-btn")) return;
-    e.preventDefault();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const pointerId = e.pointerId;
-    const captureEl = e.currentTarget as HTMLElement;
-    let dragging = false;
-    // #42: an open popout of the current scope is a valid drop target — releasing
-    // the file over one docks it there as an embed tab instead of spawning a new
-    // window. SAME shared session the tab drag (TabBar) uses, so a file dragged
-    // over a popout behaves exactly like one dragged over the main window.
-    const detached = startDetachedDropSession();
-
-    // Latest in-window client coords ("outside this window" test) and the latest
-    // physical desktop cursor (cross-window hit-test, poll-driven — see lib/window/coords;
-    // DOM screenX/Y units diverge across WebKitGTK/WebView2/WKWebView).
-    let lastClient = { x: startX, y: startY };
-    let lastPhys: PhysPoint | null = null;
-    let stopPoll: (() => void) | null = null;
-
-    // Mid-drag Ctrl → arms the native OS EXPORT drag (copy the file(s) out to
-    // whatever app the cursor ends up over). Ctrl *before* the press is the
-    // multi-select toggle, so export is armed by pressing Ctrl AFTER the drag
-    // is underway — symmetric with Shift, which modifies the drop while
-    // already dragging (see DragGhost's modifier highlight). Mirrors that:
-    // holding Ctrl only MARKS the ghost's "copy out" option; the in-app hover
-    // (ghost, folder highlight, popout hover) keeps running unchanged.
-    //
-    // The gesture then switches between two modes at the WINDOW BOUNDARY, and
-    // can switch back and forth as often as the user likes:
-    //  - leaving the window with Ctrl held → the OS drag takes over the still-
-    //    held button (GTK can only BEGIN a drag while the button is physically
-    //    down, so the crossing is the last moment this is possible), and a
-    //    release out there drops into the external app.
-    //  - coming back INTO the window → the OS drag is cancelled and the in-app
-    //    ghost/hover resumes, so re-entering never leaves the user staring at
-    //    an OS drag icon over Tabtivity's own window.
-    // While the OS owns the drag the webview sees no pointer events at all, so
-    // the boundary test runs off the OS-cursor poll (physical px → this
-    // window's client px via the frame snapshot), which keeps ticking
-    // regardless of who holds the pointer grab.
-    let nativeActive = false;
-    let frame: WindowFrame | null = null;
-    // The `tabtivity:file-drag-ended` subscription (registered below, once the
-    // gesture is real) and whether the gesture has already ended — `listen` is
-    // async, so it can resolve after cleanup and must then unsubscribe at once.
-    let unlistenEnded: (() => void) | null = null;
-    let gestureOver = false;
-    const inWindow = (c: { x: number; y: number }) =>
-      c.x >= 0 && c.y >= 0 && c.x < window.innerWidth && c.y < window.innerHeight;
-    const toNativeDrag = () => {
-      if (!dragging || nativeActive) return;
-      nativeActive = true;
-      // The in-app drop targets are meaningless while the OS owns the drag.
-      spring.cancel();
-      setMoveTarget(null);
-      detached.hover(null, { x: 0, y: 0 }, entry.name);
-      beginNativeFileDrag(dragEntries.map((en) => en.path));
-    };
-    const backToInAppDrag = () => {
-      if (!nativeActive) return;
-      nativeActive = false;
-      void invoke("cancel_file_drag").catch(() => {});
-    };
-    // Ctrl, tracked as gesture state rather than read off each pointer event.
-    // Cancelling the GTK drag hands the pointer back, but NOT the implicit grab
-    // the original pointerdown had: the webview then sees plain mousemove while
-    // the cursor is over the window and NOTHING once it leaves. So after one
-    // handoff, `PointerEvent.ctrlKey` stops arriving exactly where the next
-    // handoff would need it — hence a flag the key events maintain, plus the
-    // cursor poll below as the position source. (The keydown arm also covers
-    // Ctrl pressed while the cursor already sits outside the window.)
-    let ctrlDown = false;
-    const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key !== "Control") return;
-      ctrlDown = true;
-      if (dragging && !inWindow(lastClient)) toNativeDrag();
-    };
-    const onKeyUp = (ev: KeyboardEvent) => {
-      if (ev.key === "Control") ctrlDown = false;
-    };
-
-    const onMove = (ev: PointerEvent) => {
-      if (!dragging) {
-        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
-        dragging = true;
-        useDragStore.getState().startFileDrag({
-          label: isMultiDrag ? `${dragEntries.length} items` : entry.name,
-          pointerX: ev.clientX,
-          pointerY: ev.clientY,
-          filePath: entry.path,
-          fileName: entry.name,
-          viewer: viewer ?? undefined,
-          files: isMultiDrag ? dragFiles : undefined,
-        });
-        // Built-in viewers render in-app and need no external handler, so skip
-        // the embed-capability probe for them. For other embeddable files,
-        // prefetch the capability so the drop can resolve embed-vs-external.
-        if (!viewer && !entry.is_dir) {
-          invoke<EmbedCap>("embed_capability", { path: entry.path, handler: null, projectId })
-            .then((cap) => useDragStore.getState().setEmbedCap(cap))
-            .catch(() => useDragStore.getState().setEmbedCap(null));
-        }
-        // Begin resolving popout drop targets now that a real drag is underway.
-        void detached.resolve();
-        // Capture the terminal pointer event on engines that don't keep delivering
-        // it past the source window's HWND (Win/mac); WebKitGTK keeps the implicit
-        // grab, so the flag leaves capture off there.
-        if (dragPlatform.needsPointerCapture) {
-          try {
-            captureEl.setPointerCapture(pointerId);
-          } catch {
-            /* capture is best-effort; the OS-cursor poll does not depend on it */
-          }
-        }
-        // This window's geometry, for mapping the polled OS cursor back into
-        // client px while the OS drag owns the pointer (see `nativeActive`).
-        void snapshotFrame()
-          .then((f) => {
-            frame = f;
-          })
-          .catch(() => {});
-        // Poll the OS cursor (physical desktop px) to drive the popout hover past
-        // the main viewport — DOM pointermove may not cross the OS window boundary.
-        stopPoll = startCursorPoll((p) => {
-          lastPhys = p;
-          // The poll is the SOLE arbiter of the window boundary, in BOTH
-          // directions. DOM pointer events can't be: once the OS drag has run
-          // even once, the implicit grab is gone, so they stop at the window
-          // edge — exactly where the crossing has to be detected.
-          const c = frame ? physToClient(frame, p) : null;
-          if (nativeActive) {
-            if (!c) return;
-            // The OS owns the pointer: this poll is also the only position
-            // source, so keep the ghost tracking the cursor for the moment it
-            // comes back in — whereupon the OS drag is cancelled and the
-            // in-app hover takes over again.
-            lastClient = c;
-            useDragStore.getState().move(c.x, c.y);
-            if (inWindow(c)) backToInAppDrag();
-            return;
-          }
-          if (c && ctrlDown && !inWindow(c)) {
-            toNativeDrag();
-            return;
-          }
-          detached.hover(detached.at(p), p, entry.name);
-        });
-      }
-      // While the OS drag owns the pointer, a stray DOM move must not fight the
-      // poll for the ghost position or revive the in-app drop targets.
-      if (nativeActive) return;
-      ctrlDown = ev.ctrlKey;
-      lastClient = { x: ev.clientX, y: ev.clientY };
-      useDragStore.getState().move(ev.clientX, ev.clientY);
-      hitTestMove(ev.clientX, ev.clientY);
-      // Inside a detached popout, CenterPanel's window-wide drop authority isn't
-      // there to resolve the pane under the cursor — do it here so the popout's
-      // split/merge preview lights up and the release has a target to commit to.
-      // (In the main window CenterPanel owns this; `fileDrop` is null there.)
-      if (fileDrop) fileDrop.resolveTarget(ev.clientX, ev.clientY);
-    };
-
-    // Drag-to-move: highlight the folder row / breadcrumb / up button under the
-    // cursor as the destination. The drag ghost is pointer-events:none, so
-    // elementFromPoint reaches the rows beneath it — including rows of OTHER
-    // mounted trees (a box member root, a Files tab of another project), so
-    // every target carries its own tree's identity and `resolveMoveTarget`
-    // decides what a drop there means: a same-tree move (dropping onto the
-    // file's current folder is a no-op), a cross-project move (local↔local
-    // only), or nothing. Runs on every pointermove, and once more after a
-    // spring-load navigation lands (the rows under a still cursor changed).
-    function hitTestMove(x: number, y: number) {
-      const overEl = document.elementFromPoint(x, y) as HTMLElement | null;
-      const moveEl = overEl?.closest<HTMLElement>("[data-move-rel]") ?? null;
-      const target = moveEl
-        ? {
-            rel: moveEl.getAttribute("data-move-rel") ?? "",
-            root: moveEl.getAttribute("data-move-root") ?? projectDir,
-            remote: moveEl.getAttribute("data-move-remote") === "1",
-          }
-        : null;
-      const resolved = resolveMoveTarget(target, {
-        root: projectDir,
-        folderRel: relPath,
-        remote: remoteListing,
-        draggedDirRels,
-      });
-      setMoveTarget(resolved, resolved?.crossRoot ? moveEl : null);
-      // Spring-loading: hovering a folder row / crumb / ↑ of THIS tree navigates
-      // there after a dwell, so the drag can reach folders the current listing
-      // doesn't show. Same tree only — another tree's `load` is out of reach
-      // from here. Not the folder already listed (nothing to open), and not a
-      // folder that is itself being dragged (it can't hold itself).
-      const springKey =
-        target && target.root === projectDir && target.rel !== relPathRef.current
-          ? target.rel
-          : null;
-      spring.hover(
-        springKey !== null &&
-          !dragEntries.some((de) => de.is_dir && relForEntry(de) === springKey)
-          ? springKey
-          : null,
-        { x, y },
-      );
-    }
-    const spring = createSpringLoader({
-      delayMs: SPRING_LOAD_MS,
-      onOpen: (rel) => {
-        if (gestureOver || nativeActive) return;
-        void load(rel).then(() => {
-          // The listing under the (unmoved) cursor changed: re-resolve the drop
-          // target against the new rows once React has painted them, so the
-          // highlight and a release without further movement agree with what
-          // the user sees.
-          requestAnimationFrame(() => {
-            if (!gestureOver && !nativeActive) hitTestMove(lastClient.x, lastClient.y);
-          });
-        });
-      },
-    });
-
-    // Tear down the move listener, poll, popout highlight, and pointer capture —
-    // however the gesture resolves.
-    const cleanup = () => {
-      gestureOver = true;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      spring.cancel();
-      setMoveTarget(null);
-      stopPoll?.();
-      unlistenEnded?.();
-      unlistenEnded = null;
-      // Clear the popout highlight + tear down the panes listener. `targetAt`
-      // still hit-tests the cached pane geometry for the commit below.
-      detached.dispose();
-      if (dragPlatform.needsPointerCapture) {
-        try {
-          captureEl.releasePointerCapture(pointerId);
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-
-    const commitRelease = async (shiftKey: boolean) => {
-      const releasedAt = Date.now();
-      // The OS owns the drag: it is dropping into an external app, and the
-      // in-app drop targets don't apply. `tabtivity:file-drag-ended` ends the
-      // gesture instead (a stray pointerup here must not ALSO spawn a tab or a
-      // window on top of the export).
-      if (nativeActive) return;
-      // Read the drop-target folder BEFORE cleanup() runs — cleanup calls
-      // setMoveTarget(null), which nulls moveTargetRef.current, so reading it
-      // afterwards always saw null and silently dropped every drag-to-move (the
-      // file just stayed put). See git dfcb6e0, which introduced the read below
-      // the cleanup() call.
-      const moveTarget = moveTargetRef.current;
-      cleanup();
-      // A release on the row the drag began on still fires its click, which on
-      // a folder would navigate into it. Swallow that one click.
-      if (dragging) dragClickGuard.current = Date.now();
-      if (!dragging) {
-        // Never moved → a plain click does NOT open. Opening a file is a
-        // double-click (onDoubleClick → handleClick); dragging it onto a tab bar
-        // is the other gesture. So a single click is a no-op here.
-        return;
-      }
-      // Drag-to-move takes precedence: released over a folder / breadcrumb in the
-      // tree → relocate the file(s) there. This is the one gesture available to
-      // ALL files (even those with no tab/viewer target). When a multi-selection
-      // is being dragged, every selected file moves. A cross-root target
-      // (another project's tree in a box view, or another project's Files tab)
-      // moves INTO that project — `move_path` confines each side to its own
-      // root, so the two-root call is the supported shape.
-      if (moveTarget != null) {
-        useDragStore.getState().end();
-        for (const de of dragEntries) {
-          await moveEntryToFolder(relForEntry(de), de.name, moveTarget, de.path);
-        }
-        return;
-      }
-      const d = useDragStore.getState().drag;
-      if (d == null) return;
-      // A file with no tab/viewer/embed target can only be moved (handled above);
-      // released anywhere else it does nothing — never leak it out as an external
-      // open or an empty embed tab. (Multi drags qualify when any file member can
-      // become a tab — see `canDrop`.)
-      if (!canDrop) {
-        useDragStore.getState().end();
-        return;
-      }
-      // Inside a detached popout: commit against the pane resolved above by the
-      // injected controller (a new embed tab into that pane, streamed to the main
-      // window as an `add` edit). The main window's cross-window branches below —
-      // dock into ANOTHER popout, spawn a new standalone window — don't apply
-      // here (a popout can't own the main tab store), so this is the whole commit.
-      if (fileDrop) {
-        fileDrop.commit(d, projectDir);
-        useDragStore.getState().end();
-        return;
-      }
-      // Final physical cursor at release (a fresh read; falls back to the last
-      // poll reading if the IPC fails). This is the canonical cross-window space.
-      const phys = (await desktopCursor().catch(() => null)) ?? lastPhys;
-      // Released over an open popout → dock the file into it as an embed tab,
-      // landing in the SPECIFIC pane the popout resolved under the cursor (mirrors
-      // a tab dragged onto a popout). BUT only if the popout is actually the front
-      // window at the drop point: its bounds can geometrically contain the cursor
-      // while it sits BEHIND the main window (the press raised the main window) or
-      // another app. Docking into a popout the user can't see is wrong — treat an
-      // occluded popout like a release into empty space so a NEW window opens.
-      // Shift forces a brand-new standalone window even when released over a
-      // front popout — the explicit "don't dock here, give me a fresh window"
-      // override the user asked for.
-      const overDetached = phys ? detached.at(phys) : null;
-      const overFrontDetached =
-        !shiftKey &&
-        overDetached &&
-        (await invoke<boolean>("detached_window_frontmost", {
-          registryId: overDetached.label,
-        }).catch(() => true));
-      if (overDetached && overFrontDetached && phys) {
-        commitFileDrop(d, projectId, projectDir, null, {
-          scope: overDetached.scope,
-          groupId: overDetached.groupId,
-          target: detached.targetAt(overDetached, phys),
-        });
-        useDragStore.getState().end();
-        return;
-      }
-      // Released OUTSIDE the main window (e.g. dragged onto another monitor):
-      // open the file in its own standalone detached window at the cursor. Client
-      // coords outside [0,inner) is the signal. The new window's bounds feed Rust
-      // `.position(x,y)`, which is PHYSICAL → use the physical cursor, not DOM
-      // screen coords.
-      //
-      // A popout under the cursor is NOT treated as "outside" here: a FRONT popout
-      // was already docked into above; an OCCLUDED popout (behind the main window)
-      // means the main window is what's actually under the cursor, so the release
-      // must fall through to the in-window split — spawning a new window the user
-      // can't see they're aiming at is exactly the bug this avoids.
-      //
-      // Shift forces a new window even when released INSIDE the main window: the
-      // split/dock preview was suppressed during the drag (see CenterPanel's
-      // pointer-move handler), so the only sensible commit is a fresh window.
-      const outside = fileDropGoesToNewWindow({
-        shiftKey,
-        lastClient,
-        viewport: { w: window.innerWidth, h: window.innerHeight },
-      });
-      // No desktop geometry (native Wayland): `phys` is null, so the popout
-      // hit-test above could not run — but a popout may well be under the
-      // cursor. Ask this scope's windows to claim the release
-      // (`lib/window/dropClaim`), exactly as a tab dragged out of the bar does;
-      // the popout that receives the pointer answers with the pane under it.
-      if (outside && !shiftKey && !phys && !(await desktopCoordinatesSupported())) {
-        const scope = useTabsStore.getState().scope;
-        const claim = await probeDropTarget({
-          token: newDropToken(getCurrentWindow().label),
-          scope,
-          sourceLabel: getCurrentWindow().label,
-          tabKey: "",
-          label: d.label,
-          releasedAt,
-        });
-        if (claim?.groupId) {
-          commitFileDrop(d, projectId, projectDir, null, {
-            scope,
-            groupId: claim.groupId,
-            target: claim.target ?? undefined,
-          });
-          useDragStore.getState().end();
-          return;
-        }
-      }
-      const detachBounds =
-        outside && phys
-          ? {
-              x: Math.round(phys.x - 80),
-              y: Math.round(phys.y - 8),
-              w: 900,
-              h: 640,
-            }
-          : null;
-      commitFileDrop(d, projectId, projectDir, detachBounds);
-      useDragStore.getState().end();
-    };
-
-    // Escape / blur / a genuine pointercancel (Win/mac) aborts: tear down and drop
-    // any in-flight drag without committing.
-    const onAbort = () => {
-      cleanup();
-      if (dragging) useDragStore.getState().end();
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    const unbindRelease = bindDragRelease({
-      onCommit: (shiftKey) => void commitRelease(shiftKey),
-      onAbort,
-    });
-    // Once the OS drag owns the pointer, the webview never sees the release, so
-    // the backend reports the drop (or the user's abort) that ends the whole
-    // gesture. NOT fired by the cancel we ourselves issue on re-entry — that
-    // hands control back to the in-app drag, which is still very much alive.
-    // `listen` is async: the gesture can already be over when it resolves, and
-    // `subscribeTauri` unlistens then.
-    unlistenEnded = subscribeTauri(() => listen(NAMES.fileDragEndedEvent, () => {
-      unbindRelease();
-      onAbort();
-    }));
+    startEntryPointerDrag({
+      selected, entries, disabledViewerSet, relForEntry, setMoveTarget, projectId, projectDir,
+      relPath, remoteListing, relPathRef, load, fileDrop, moveTargetRef, dragClickGuard,
+      moveEntryToFolder,
+    }, e, entry, dragTarget);
   }
 
   function relForEntry(entry: FileEntry): string {
@@ -2724,63 +1318,12 @@ export function FileTree({
     setMoveTargetRel((prev) => (prev === ownRel ? prev : ownRel));
   }
 
-  // Identity stamped on every `data-move-rel` drop target, so a drag that
-  // started in a DIFFERENT tree (box member roots, another project's Files tab)
-  // knows which root — and which side, local or remote — a drop here lands in.
-  // Every `data-move-rel` site must spread this; `FileMove.test.ts` enforces it.
-  const moveTargetAttrs = useMemo<MoveTargetAttrs>(
-    () => ({
-      "data-move-root": projectDir,
-      "data-move-remote": remoteListing ? "1" : undefined,
-    }),
-    [projectDir, remoteListing],
-  );
-
-  // The one stable handler object every row gets (see `RowActions`). The
-  // tree's closures are rebuilt each render; the forwarders read the latest
-  // set, refreshed after every commit, so the rows' memo holds.
-  const latestRows = useRef<RowActions | null>(null);
-  useLayoutEffect(() => {
-    latestRows.current = {
-      click: handleRowClick,
-      open: handleOpen,
-      contextMenu: showEntryContextMenu,
-      dragStart: handleEntryDragStart,
-      pointerDown: onEntryPointerDown,
-      mouseEnter: handleEntryMouseEnter,
-      mouseLeave: handleEntryMouseLeave,
-      syncToLocal: (entry) => void syncEntryToLocal(entry),
-      pushToHost: (entry) => void pushEntryToHost(entry),
-      openSyncMerge,
-      runShell: runShellScript,
-      runPython: runPythonScript,
-      openRunArgs: (ev, entry) =>
-        setArgsPopover({
-          entry,
-          x: ev.clientX,
-          y: ev.clientY,
-          draft: argsToLines(runArgsByPath[entry.path] ?? ""),
-        }),
-    };
+  const { moveTargetAttrs, rowActions } = useFileTreeRowActions({
+    projectDir, remoteListing, handleRowClick, handleOpen, showEntryContextMenu,
+    handleEntryDragStart, onEntryPointerDown, handleEntryMouseEnter, handleEntryMouseLeave,
+    syncEntryToLocal, pushEntryToHost, openSyncMerge, runShellScript, runPythonScript,
+    setArgsPopover, runArgsByPath,
   });
-  const rowActions = useMemo<RowActions>(
-    () => ({
-      click: (ev, entry) => latestRows.current?.click(ev, entry),
-      open: (entry, ev) => latestRows.current?.open(entry, ev),
-      contextMenu: (ev, entry) => latestRows.current?.contextMenu(ev, entry),
-      dragStart: (ev, entry) => latestRows.current?.dragStart(ev, entry),
-      pointerDown: (ev, entry, dragTarget) => latestRows.current?.pointerDown(ev, entry, dragTarget),
-      mouseEnter: (ev, entry) => latestRows.current?.mouseEnter(ev, entry),
-      mouseLeave: () => latestRows.current?.mouseLeave(),
-      syncToLocal: (entry) => latestRows.current?.syncToLocal(entry),
-      pushToHost: (entry) => latestRows.current?.pushToHost(entry),
-      openSyncMerge: (entry) => latestRows.current?.openSyncMerge(entry),
-      runShell: (ev, entry) => latestRows.current?.runShell(ev, entry),
-      runPython: (ev, entry) => latestRows.current?.runPython(ev, entry),
-      openRunArgs: (ev, entry) => latestRows.current?.openRunArgs(ev, entry),
-    }),
-    [],
-  );
 
   // Relocate a dragged file into a folder shown in a tree (drag-to-move). The
   // target may belong to THIS tree or — cross-root — to another project's tree

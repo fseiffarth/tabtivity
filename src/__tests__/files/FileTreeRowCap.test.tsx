@@ -41,8 +41,8 @@ import { SidePanel } from "../../components/layout/SidePanel";
 
 const mockUseProjectsStore = vi.mocked(useProjectsStore);
 
-// Mirrors ROW_CAP_STEP in FileTree.tsx. Kept as a literal rather than exported
-// from the component: the test is asserting the user-visible contract ("a page
+// Mirrors ROW_CAP_STEP in useFileTreeRows.ts. Kept as a literal rather than
+// imported from there: the test is asserting the user-visible contract ("a page
 // at a time"), so it should fail if the page size silently changes.
 const CAP = 100;
 // Two full pages plus a short one, so the last click can assert that the footer
