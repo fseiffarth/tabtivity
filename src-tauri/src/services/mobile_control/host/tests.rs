@@ -5783,3 +5783,25 @@ fn an_agent_notice_lookup_carries_the_scopes_phone_list() {
     limit_to(&host, "projects.json", &["d1"]);
     assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, Some(vec!["d1".to_string()]));
 }
+
+/// The phone's chat shows the running shells like the desktop's, but the
+/// command line never crosses the browser API: what the agent said the shell
+/// does and whether it runs in the background do.
+#[test]
+fn a_phone_transcript_keeps_the_running_shells_without_their_command_lines() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell};
+    let mut transcript = AgentTranscript {
+        shells: vec![
+            RunningShell { command: "cat ~/.ssh/config".into(), description: Some("Check the config".into()), cut: true, ..Default::default() },
+            RunningShell { command: "npm run dev".into(), background: true, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    empty_shell_commands(&mut transcript);
+    let wire = serde_json::to_value(&transcript).unwrap();
+    assert_eq!(wire["shells"][0]["description"], "Check the config");
+    assert_eq!(wire["shells"][1]["background"], true);
+    assert!(!wire.to_string().contains("ssh"), "{wire}");
+    assert!(!wire.to_string().contains("npm run dev"), "{wire}");
+    assert!(wire["shells"][0].get("cut").is_none());
+}

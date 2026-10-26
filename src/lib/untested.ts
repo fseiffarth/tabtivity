@@ -585,6 +585,7 @@ export const UNTESTED = {
   "mobile.subagent.workingFacts": { area: "mobile", what: "Terminal · Reader · an open subagent's working row shows how long it has worked (counting on each second) and the tokens its newest request carried, as the session's own row does (e.g. Haiku is working… 1m 5s · 12.3k tokens)" },
   "mobile.focus.pinnedPrompt": { area: "mobile", what: "Terminal · Reader pins the newest prompt at the top once its bubble scrolls away; tap scrolls back to it", tested: "2026-09-23" },
   "mobile.focus.workingFacts": { area: "mobile", what: "Terminal · Reader elapsed time and tokens while the agent works", tested: "2026-09-23" },
+  "mobile.focus.shells": { area: "mobile", what: "Terminal · Chat · while Claude runs a shell command (Bash tool), a Shell is running… line under the working row says what it does (the agent's own description; the command itself never reaches the phone), as the desktop Chat shows; a command sent to the background shows as Background shell running… even while the agent is idle, until it ends; an open subagent shows its own shells (Claude only)" },
   "mobile.model.effort": { area: "mobile", what: "Terminal · Antigravity effort step in the model sheet", tested: "2026-09-23" },
   "mobile.model.cursor": { area: "mobile", what: "Terminal · Cursor tab: the model chip lists Cursor's /model rows (all of them, past its ten-row window) and a tap applies the model" },
   "mobile.home.reorder": { area: "mobile", what: "Home · Drag to reorder the project list" },

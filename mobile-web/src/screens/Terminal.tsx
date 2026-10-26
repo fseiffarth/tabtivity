@@ -1,6 +1,7 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
+import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
@@ -2063,6 +2064,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const subagentPosition = openStep ? siblingPosition(openStep) : { index: -1, count: 0 };
   /** The open subagent at work: it has not reported back, and the session is
    * at work or it runs in the background. Its row names the subagent's own
+  const shellsUntested = isUntested("mobile.focus.shells") ? t("mobile.focus.untested") : "";
    * model, not the session's. */
   const subagentWorking = openSubagentRunning(subagentPath, sessionEntries, sessionBusy);
   const subagentModel = workingModelName(subTranscript?.model);
@@ -2132,6 +2134,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} />
         : <div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>}
+          <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}
@@ -2327,6 +2330,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                     {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                     <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                     {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
+                  <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   </div>}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0

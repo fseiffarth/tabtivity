@@ -4469,16 +4469,26 @@ async fn tab_changes(
 /// A transcript as the phone may see it: the shell commands the desktop
 /// Reader shows beside its working row are command lines, and the folders the
 /// agent and its subagents work in are paths, neither of which crosses the
-/// browser API. A subagent's folder in a linked worktree of the tab's project
+/// browser API. The running shells do, as the agent's own few words on each
+/// and whether it is in the background; their command lines are emptied. A subagent's folder in a linked worktree of the tab's project
 /// crosses as that worktree's name and branch instead (`worktree` on its
 /// `agent` entry), as the tab cards name it.
+/// The running shells keep what the agent said they do and whether they run in
+/// the background; the command line, and that it was cut, stay on the desktop.
+fn empty_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript) {
+    for shell in &mut transcript.shells {
+        shell.command.clear();
+        shell.cut = false;
+    }
+}
+
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
-    transcript.shells.clear();
+    empty_shell_commands(&mut transcript);
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
