@@ -5,7 +5,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(nul
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
 
 import { useAgentModelsStore } from "../../stores/agents/agentModels";
-import { useProjectsStore, type ProjectEntry } from "../../stores/projects";
+import { useProjectsStore } from "../../stores/projects";
+import type { ProjectEntry } from "../../types";
 import type { TabEntry } from "../../stores/tabs";
 
 /** A tab card's prompt lines and model tag are read off the tab's transcript;
