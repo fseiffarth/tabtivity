@@ -500,7 +500,7 @@ fn calendar_context(before: &Value, after: &Value, rows: &[Row]) -> Result<Vec<V
 /// `CalDavCalendarRef::calendar_id`). No file is no account; one that cannot
 /// be read or parsed is an `Err`, which [`touches_caldav`] counts as touching.
 fn caldav_calendar_ids(state: &Path) -> Result<std::collections::HashSet<String>, String> {
-    let path = crate::commands::caldav::accounts_path_in(state);
+    let path = crate::services::caldav::accounts_path_in(state);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
@@ -1512,7 +1512,7 @@ mod tests {
 
     /// Point a CalDAV account at `calendar_id` (`<state>/caldav/accounts.json`).
     fn sync_calendar(f: &Fixture, calendar_id: &Value) {
-        let path = crate::commands::caldav::accounts_path_in(f.dir.path());
+        let path = crate::services::caldav::accounts_path_in(f.dir.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, json!({ "version": 1, "accounts": [{
             "id": "acc", "base_url": "https://dav.example/", "user": "me",
@@ -1583,7 +1583,7 @@ mod tests {
     fn an_unreadable_accounts_file_stages_the_write() {
         let f = Fixture::new();
         f.mode("off");
-        let path = crate::commands::caldav::accounts_path_in(f.dir.path());
+        let path = crate::services::caldav::accounts_path_in(f.dir.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(f.call("root:a", "todo_add", json!({"title":"x"}))["staged"], true);

@@ -302,7 +302,7 @@ pub(crate) fn compute_allowed_roots(
     // co-accessible set the box exists to create. An unknown box stays empty
     // (fail closed), and the root work dir is never folded in: a box viewer is
     // not the root scope.
-    if let Some(box_id) = scope_id.and_then(crate::commands::boxes::box_id_of_scope) {
+    if let Some(box_id) = scope_id.and_then(crate::services::box_store::box_id_of_scope) {
         let Some(b) = boxes.iter().find(|b| b.id == box_id) else {
             return Vec::new();
         };

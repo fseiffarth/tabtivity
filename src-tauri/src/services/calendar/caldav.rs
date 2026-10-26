@@ -37,6 +37,12 @@ use roxmltree::Document;
 
 use crate::schema::caldav::{CalDavChanges, CalDavCollection, CalDavResource, CalDavWrite};
 
+/// `accounts.json` under a given state directory — for the root agent's review
+/// path, which is handed its state directory rather than reading the global.
+pub fn accounts_path_in(state: &std::path::Path) -> std::path::PathBuf {
+    state.join("caldav").join("accounts.json")
+}
+
 // ── Namespaces ──────────────────────────────────────────────────────────────
 
 pub const NS_DAV: &str = "DAV:";

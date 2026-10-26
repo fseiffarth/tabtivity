@@ -3024,7 +3024,7 @@ fn time_summary(stores: &Stores, args: &Value) -> Result<Value, String> {
                 continue;
             }
             // Tabtivity's own window time is not any project's work.
-            if id == crate::commands::timer::APP_TIMER_ID {
+            if id == crate::brand::APP_TIMER_ID {
                 if stores.access.projects.all { app += secs; }
                 continue;
             }
