@@ -100,8 +100,11 @@ describe("the document attribute", () => {
 });
 
 describe("a withdrawn surface (the header resource readout)", () => {
+  // The rows are off by default; these tests switch them on.
+  const ROWS = { show_cpu_usage: true, show_ram_usage: true, show_gpu_usage: true } as const;
+
   it("renders its figures and polls for them when fast mode is off", async () => {
-    setSettings({ fast_mode: false });
+    setSettings({ ...ROWS, fast_mode: false });
     render(<AppResourceDisplay />);
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true });
@@ -112,7 +115,7 @@ describe("a withdrawn surface (the header resource readout)", () => {
   it("asks for no GPU reading while the GPU row is hidden", async () => {
     // The backend skips its Ollama/GPU reads on `gpu: false`; a readout that
     // never shows the row must not pay for them every 2.5 s.
-    setSettings({ fast_mode: false, show_gpu_usage: false });
+    setSettings({ ...ROWS, fast_mode: false, show_gpu_usage: false });
     render(<AppResourceDisplay />);
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: false });
@@ -120,7 +123,7 @@ describe("a withdrawn surface (the header resource readout)", () => {
   });
 
   it("renders nothing AND asks the backend nothing when fast mode is on", async () => {
-    setSettings({ fast_mode: true });
+    setSettings({ ...ROWS, fast_mode: true });
     const { container } = render(<AppResourceDisplay />);
     // The cost is the poll, not the pixels: a version that merely hid the row
     // would pass an "is it visible" assertion and buy nothing at all.
@@ -130,11 +133,11 @@ describe("a withdrawn surface (the header resource readout)", () => {
   });
 
   it("comes back in place when fast mode is switched off", async () => {
-    setSettings({ fast_mode: true });
+    setSettings({ ...ROWS, fast_mode: true });
     const { container } = render(<AppResourceDisplay />);
     expect(container.firstChild).toBeNull();
 
-    setSettings({ fast_mode: false });
+    setSettings({ ...ROWS, fast_mode: false });
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true });
     });

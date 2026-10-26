@@ -3429,7 +3429,7 @@ export const dict: Dict = {
   "intro.done.reopen": "Öffne diese Einführung jederzeit wieder über das Zahnrad-Menü → Erste Schritte.",
   "intro.done.startWith": "Nach deinen Antworten ein guter erster Schritt:",
   "remoteFeatures.title": "Nutzt du VPN oder Remote-Maschinen?",
-  "remoteFeatures.help": "{app} kann einen OpenVPN-Tunnel steuern und dich mit SSH-Maschinen verbinden, auf denen du kein Projekt hast, beides von der Kopfzeile aus. Beides ist standardmäßig aus — schalte ein, was du brauchst. Beides lässt sich jederzeit über die Einstellungen umschalten.",
+  "remoteFeatures.help": "{app} kann einen OpenVPN-Tunnel steuern und dich mit SSH-Maschinen verbinden, auf denen du kein Projekt hast, beides von der Kopfzeile aus. Beides ist standardmäßig an — schalte aus, was du nicht brauchst. Beides lässt sich jederzeit über die Einstellungen umschalten.",
   "remoteFeatures.continue": "Weiter",
   "lessons.title": "Lektionen",
   "lessons.intro": "Kurze geführte Rundgänge zu häufigen Aufgaben. Wähle eine aus — sie zeigt dir alles Schritt für Schritt.",

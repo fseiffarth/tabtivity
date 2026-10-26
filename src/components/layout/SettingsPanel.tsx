@@ -1881,7 +1881,7 @@ export function SettingsDialog({
                 anything: the calendar is shipped, not experimental. */}
             <ToggleCard
               label={<>{t("settings.calendarGlobalApp")} <UntestedTag id="settings.calendarGlobalApp" /></>}
-              checked={settings?.calendar_global_app ?? false}
+              checked={settings?.calendar_global_app ?? true}
               onChange={(e) => void updateSettings({ calendar_global_app: e.target.checked })}
               help={t("settings.calendarGlobalAppHelp")}
             />
@@ -1891,7 +1891,7 @@ export function SettingsDialog({
                 board is a second view of the store above, not a second store. */}
             <ToggleCard
               label={<>{t("settings.todoBoard")} <UntestedTag id="settings.todoBoard" /></>}
-              checked={settings?.todo_board ?? false}
+              checked={settings?.todo_board ?? true}
               onChange={(e) => void updateSettings({ todo_board: e.target.checked })}
               help={t("settings.todoBoardHelp")}
             />
@@ -2120,12 +2120,12 @@ export function SettingsDialog({
             <SettingsCard>
               <ToggleRow
                 label={t("settings.vpnEnabled")}
-                checked={settings?.vpn_enabled ?? false}
+                checked={settings?.vpn_enabled ?? true}
                 onChange={(e) => void updateSettings({ vpn_enabled: e.target.checked })}
               />
               <ToggleRow
                 label={t("settings.machinesEnabled")}
-                checked={settings?.machines_enabled ?? false}
+                checked={settings?.machines_enabled ?? true}
                 onChange={(e) => void updateSettings({ machines_enabled: e.target.checked })}
               />
               <p className="settings-help">{t("settings.remoteFeaturesHelp")}</p>
@@ -2248,17 +2248,17 @@ export function SettingsDialog({
             <SettingsCard>
               <ToggleRow
                 label={t("settings.showCpu")}
-                checked={settings?.show_cpu_usage ?? true}
+                checked={settings?.show_cpu_usage ?? false}
                 onChange={(e) => void updateSettings({ show_cpu_usage: e.target.checked })}
               />
               <ToggleRow
                 label={t("settings.showRam")}
-                checked={settings?.show_ram_usage ?? true}
+                checked={settings?.show_ram_usage ?? false}
                 onChange={(e) => void updateSettings({ show_ram_usage: e.target.checked })}
               />
               <ToggleRow
                 label={t("settings.showGpu")}
-                checked={settings?.show_gpu_usage ?? true}
+                checked={settings?.show_gpu_usage ?? false}
                 onChange={(e) => void updateSettings({ show_gpu_usage: e.target.checked })}
               />
               <p className="settings-help">{t("settings.resourceMonitorHelp")}</p>

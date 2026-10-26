@@ -240,7 +240,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_default_reminder_minutes: Option<i64>,
     /// Calendar: put a 📅 button in the header that opens the calendar overlay,
-    /// badged with the events left today.
+    /// badged with the events left today. Absent means on.
     ///
     /// The twin of the header's mail button, with no experimental gate above
     /// it: the calendar is a shipped feature and its store reads one local file,
@@ -248,7 +248,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_global_app: Option<bool>,
     /// To-do board: put a ☑ button in the header that opens the global todo
-    /// board overlay, badged with what is due today.
+    /// board overlay, badged with what is due today. Absent means on.
     ///
     /// A plain setting for `calendar_global_app`'s reasons — the board's cards
     /// *are* `calendar.json`'s tasks, so it reads a shipped local file and
@@ -930,8 +930,8 @@ pub struct Settings {
     /// written and an older settings file without it still loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_scrollback_rows: Option<u32>,
-    /// Header resource-monitor row toggles. Each defaults ON when unset so the
-    /// pill shows CPU/RAM/GPU by default; flip one off to hide that row. Shown in
+    /// Header resource-monitor row toggles. Each defaults OFF when unset, so the
+    /// pill shows no CPU/RAM/GPU until one is switched on. Shown in
     /// every build (independent of `debug`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_cpu_usage: Option<bool>,

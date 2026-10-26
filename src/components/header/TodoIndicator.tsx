@@ -62,7 +62,7 @@ const SECTION_ROWS = 6;
 export function TodoIndicator() {
   const t = useT();
   const use24h = useUse24h();
-  const enabled = useSettingsStore((s) => s.settings?.todo_board ?? false);
+  const enabled = useSettingsStore((s) => s.settings?.todo_board ?? true);
   const tasks = useCalendarStore((s) => s.tasks);
   const calendars = useCalendarStore((s) => s.calendars);
   const overlayOpen = useTodoStore((s) => s.overlayOpen);

@@ -61,6 +61,8 @@ vi.mock("../../stores/projects", () => {
       { getState: () => state },
     ),
     listenProjectRuntimeSwitched: vi.fn().mockResolvedValue(() => {}),
+    // Machines is on by default, so the launch sweep runs and reaches this.
+    retryAutoConnectAfterVpn: vi.fn(),
   };
 });
 vi.mock("../../stores/settings", async () => {

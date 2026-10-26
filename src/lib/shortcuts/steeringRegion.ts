@@ -42,9 +42,9 @@ export function steeringAppEnabled(app: SteeringApp, settings: Settings | null |
     case "mail":
       return experimentalEnabled(settings, "mail_client");
     case "calendar":
-      return settings?.calendar_global_app ?? false;
+      return settings?.calendar_global_app ?? true;
     case "todo":
-      return settings?.todo_board ?? false;
+      return settings?.todo_board ?? true;
   }
 }
 

@@ -46,8 +46,8 @@ describe("header icon order", () => {
   });
 
   it("setHeaderPin only changes what differs", () => {
-    expect(setHeaderPin(undefined, "vpn", false)).toEqual({});
-    expect(setHeaderPin(undefined, "vpn", true)).toEqual({ vpn: true });
-    expect(setHeaderPin({ vpn: true }, "vpn", false)).toEqual({});
+    expect(setHeaderPin(undefined, "battery", false)).toEqual({});
+    expect(setHeaderPin(undefined, "battery", true)).toEqual({ battery: true });
+    expect(setHeaderPin({ battery: true }, "battery", false)).toEqual({});
   });
 });

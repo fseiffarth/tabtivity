@@ -83,8 +83,8 @@ account. Tabtivity supports modern Curve25519 keys only, not RSA.
 
 Events, reminders, and `.ics` import and export, with CalDAV sync that merges
 by resource instead of replacing what is already there. Open it from the
-header's calendar indicator or `+` → Calendar. Drag in the grid to create an
-event.
+header's calendar indicator (shown by default) or `+` → Calendar. Drag in the
+grid to create an event.
 
 A CalDAV server address must start with `https://`. Plain `http://` is refused,
 because your password and calendar would cross the network unencrypted; for a
@@ -100,7 +100,8 @@ you are asked which version to keep.
 ## To-do board
 
 A board of cards in columns over the same to-dos the calendar keeps — steps,
-tags and due dates included. Open it from the header's board indicator.
+tags and due dates included. Open it from the header's board indicator, shown
+by default.
 
 ## Browser
 

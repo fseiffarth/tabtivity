@@ -302,12 +302,12 @@ export interface Settings {
   /** Calendar: minutes-before reminder pre-filled on a new event. `0` = none. */
   calendar_default_reminder_minutes?: number;
   /** Calendar: put a 📅 button in the header that opens the calendar overlay,
-   *  badged with the events left today. Default false. The twin of the header's
+   *  badged with the events left today. Default true (absent → shown). The twin of the header's
    *  mail button, with no experimental gate above it — the calendar is a shipped
    *  feature and reads nothing off the network. */
   calendar_global_app?: boolean;
   /** To-do board: put a ☑ button in the header that opens the global todo board
-   *  overlay, badged with what is due today. Default false.
+   *  overlay, badged with what is due today. Default true (absent → shown).
    *
    *  A plain setting rather than an experimental flag, for `calendar_global_app`'s
    *  reasons: the board reads one already-shipped local file (`calendar.json` —
@@ -771,12 +771,11 @@ export interface Settings {
    *  toggle and the connect path would otherwise read "nothing saved" over a
    *  perfectly good saved credential (see `lib/keyring.ts`). */
   vpn_saved_configs?: string[];
-  /** When true, the header's OpenVPN indicator is shown. Default OFF — most
-   *  projects are local-only, so the machine-wide tunnel control stays hidden
-   *  until asked for (the first-run `RemoteFeaturesPrompt`, or Settings). */
+  /** When true, the header's OpenVPN indicator is shown. Default ON (unset →
+   *  shown); the first-run `RemoteFeaturesPrompt` or Settings switch it off. */
   vpn_enabled?: boolean;
-  /** When true, the header's global-machines indicator is shown. Default OFF,
-   *  same reasoning as `vpn_enabled`. */
+  /** When true, the header's global-machines indicator is shown. Default ON,
+   *  like `vpn_enabled`. */
   machines_enabled?: boolean;
   /** True once the first-run "Using VPN or remote machines?" prompt has been
    *  shown/answered, so it never re-asks automatically. */

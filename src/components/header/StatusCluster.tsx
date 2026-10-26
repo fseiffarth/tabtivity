@@ -29,8 +29,8 @@ import {
 } from "../../stores/headerStatus";
 import { useT } from "../../lib/i18n";
 
-// Code-split (perf plan §6): the Machines menu is off by default (Settings'
-// "Remote features") and renders nothing while off, so its module graph loads
+// Code-split (perf plan §6): the Machines menu renders nothing while switched
+// off (Settings' "Remote features"; on by default), so its module graph loads
 // only once `machines_enabled` is on. Once mounted it stays mounted: switching
 // the feature off is its own `!enabled` branch (no menu, header report
 // cleared), and a "sign in in a terminal" add/edit still waiting keeps its
@@ -91,9 +91,9 @@ export function StatusCluster() {
   const onBattery = usePowerStore((s) => s.onBattery);
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
-  // Off by default; the lazy Machines menu is mounted from its first switch-on
+  // On by default; the lazy Machines menu is mounted from its first switch-on
   // and then kept (above).
-  const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? false);
+  const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
   const [machinesMounted, setMachinesMounted] = useState(machinesEnabled);
   if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);

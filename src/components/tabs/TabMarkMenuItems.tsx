@@ -67,7 +67,7 @@ export function TabMarkMenuItems({
   onDone: () => void;
 }) {
   const t = useT();
-  const boardOn = useSettingsStore((s) => s.settings?.todo_board ?? false);
+  const boardOn = useSettingsStore((s) => s.settings?.todo_board ?? true);
   const calendarLoaded = useCalendarStore((s) => s.loaded);
   const cardExists = useCalendarStore((s) => !!tab.todoId && s.tasks.some((task) => task.id === tab.todoId));
   useEffect(() => {

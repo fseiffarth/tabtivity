@@ -3444,7 +3444,7 @@ export const enSource = {
   "intro.done.reopen": "Reopen this intro any time from the gear menu → How to start.",
   "intro.done.startWith": "Based on your answers, a good first step:",
   "remoteFeatures.title": "Using VPN or remote machines?",
-  "remoteFeatures.help": "{app} can control an OpenVPN tunnel and connect to SSH machines you don't have a project on, both from the header. Both are off by default — turn on whichever you'll use. Either can be flipped any time from Settings.",
+  "remoteFeatures.help": "{app} can control an OpenVPN tunnel and connect to SSH machines you don't have a project on, both from the header. Both are on by default — turn off whichever you won't use. Either can be flipped any time from Settings.",
   "remoteFeatures.continue": "Continue",
   "lessons.title": "Lessons",
   "lessons.intro": "Short guided walkthroughs for common tasks. Pick one — it points things out step by step, and hands you the controls when there's something to try: do it and the lesson moves on.",

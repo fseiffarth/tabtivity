@@ -3428,7 +3428,7 @@ export const dict: Dict = {
   "intro.done.reopen": "Rouvrez cette introduction à tout moment depuis le menu de la roue dentée → Comment démarrer.",
   "intro.done.startWith": "D’après vos réponses, une bonne première étape :",
   "remoteFeatures.title": "Utilisez-vous un VPN ou des machines distantes ?",
-  "remoteFeatures.help": "{app} peut contrôler un tunnel OpenVPN et se connecter à des machines SSH sur lesquelles vous n'avez pas de projet, tous deux depuis l'en-tête. Les deux sont désactivés par défaut — activez celui que vous utiliserez. L'un ou l'autre peut être basculé à tout moment depuis les Paramètres.",
+  "remoteFeatures.help": "{app} peut contrôler un tunnel OpenVPN et se connecter à des machines SSH sur lesquelles vous n'avez pas de projet, tous deux depuis l'en-tête. Les deux sont activés par défaut — désactivez celui que vous n'utiliserez pas. L'un ou l'autre peut être basculé à tout moment depuis les Paramètres.",
   "remoteFeatures.continue": "Continuer",
   "lessons.title": "Leçons",
   "lessons.intro": "De courtes visites guidées pour les tâches courantes. Choisissez-en une — elle vous montrera tout étape par étape.",

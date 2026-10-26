@@ -264,9 +264,9 @@ export function MachinesOverlayHost() {
 function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const t = useT();
   const isOverlay = surface === "overlay";
-  // Off by default (Settings' "Remote features") — most projects are local-only,
-  // so this fleet-wide SSH list stays out of the header until asked for.
-  const enabled = useSettingsStore((s) => s.settings?.machines_enabled ?? false);
+  // On by default (Settings' "Remote features"); switched off, this fleet-wide
+  // SSH list leaves the header.
+  const enabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   // The whole settings object (not one flag) because the HPC tag is a map keyed
   // by SSH target: the row reads its own machine's entry, and writing one has to

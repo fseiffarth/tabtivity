@@ -23,7 +23,7 @@ import { storageKey } from "../../lib/brand";
  * same board while still being left behind by a project switch, which is exactly
  * the redundancy that retired the mail tab.
  *
- * One gate, `todo_board`, off by default and with no experimental flag above it:
+ * One gate, `todo_board`, on by default and with no experimental flag above it:
  * the board's cards *are* the calendar's tasks, so it reads one shipped local
  * file and reaches nothing. Switching the gate off takes the surface away rather
  * than leaving it on screen over a button that is no longer there — the same
@@ -44,7 +44,7 @@ import { storageKey } from "../../lib/brand";
  */
 export function TodoOverlayHost() {
   const t = useT();
-  const enabled = useSettingsStore((s) => s.settings?.todo_board ?? false);
+  const enabled = useSettingsStore((s) => s.settings?.todo_board ?? true);
   const open = useTodoStore((s) => s.overlayOpen);
 
   const live = enabled && open;
