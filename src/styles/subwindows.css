@@ -3319,7 +3319,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs { display: inline-flex; align-items: center; flex: none; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
 .reader-view-tabs > button { padding: 5px 11px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius); background: transparent; cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--accent); }
-.reader-view-tabs > button:disabled { opacity: 0.45; cursor: not-allowed; }
+.reader-view-tabs > button:disabled { opacity: 0.45; cursor: var(--cur-not-allowed, not-allowed); }
 .reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
