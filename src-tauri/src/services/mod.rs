@@ -133,6 +133,8 @@ pub mod sheet_reader;
 pub mod skills;
 // SyncTeX read natively: reverse and forward search, page anchors, map freshness.
 pub mod synctex;
+// The tracked external-app windows and their launch origins (managed state).
+pub mod window_registry;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
 pub mod state_gc;

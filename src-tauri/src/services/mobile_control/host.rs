@@ -7811,7 +7811,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     // Nothing outlives a clean stop: the PTYs browser clients spawned here
     // (tmux attach clients, mostly — the sessions live on) go with the
     // process, as the window's do at its exit.
-    if let Some(registry) = core_ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
+    if let Some(registry) = core_ctx.state.try_get::<crate::terminal::RegistryState>() {
         registry.lock_ok().kill_all();
     }
     if let Some(error) = serve_failure.lock_ok().take() {

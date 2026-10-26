@@ -3,8 +3,8 @@ use app_core::sync::LockExt;
 use serde::{Deserialize, Serialize};
 use app_core::CoreCtx;
 
-use crate::commands::apps::WindowRegistryState;
-use crate::commands::workspace::WorkspaceStateArc;
+use crate::services::window_registry::WindowRegistryState;
+use crate::platform::WorkspaceStateArc;
 use crate::schema::project::TabEntry;
 use crate::schema::session::{FileTabSession, LayoutSession, ProjectState};
 use crate::services::terminal_service::app_sessions_dir;
@@ -148,7 +148,7 @@ pub fn switch_session(
     //     opened before the warm-up completes, and sandbox's lifecycle lock
     //     serializes rapid switches. Best-effort by design.
     {
-        let registry = ctx.get::<crate::commands::terminal::RegistryState>().clone();
+        let registry = ctx.get::<crate::terminal::RegistryState>().clone();
         let prev = previous_project_id.map(String::from);
         let next = project_id.map(String::from);
         std::thread::spawn(move || {

@@ -1,6 +1,6 @@
 use std::path::Path;
 use app_core::sync::LockExt;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 #[cfg(feature = "desktop")]
 use tauri::State;
@@ -8,11 +8,8 @@ use tauri::State;
 use crate::commands::apps::{TrackedWindow, WindowRegistryState};
 use crate::platform::{detect_backend, WorkspaceBackend, WorkspaceInfo};
 
-pub struct WorkspaceState {
-    pub backend: Box<dyn WorkspaceBackend>,
-}
-
-pub type WorkspaceStateArc = Arc<Mutex<WorkspaceState>>;
+// The window-manager backend's managed state lives in `crate::platform` (S5).
+pub use crate::platform::{WorkspaceState, WorkspaceStateArc};
 
 impl Default for WorkspaceState {
     fn default() -> Self {

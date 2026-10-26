@@ -178,6 +178,13 @@ pub trait WorkspaceBackend: Send + Sync {
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
+/// The window-manager backend as the app holds it in managed state.
+pub struct WorkspaceState {
+    pub backend: Box<dyn WorkspaceBackend>,
+}
+
+pub type WorkspaceStateArc = std::sync::Arc<std::sync::Mutex<WorkspaceState>>;
+
 /// The desktop an `x11` backend runs on: which workspace settings it takes
 /// over ([`X11Desktop::settings`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

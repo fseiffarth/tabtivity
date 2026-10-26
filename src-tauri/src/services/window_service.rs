@@ -1,7 +1,7 @@
 use crate::brand::SLUG;
 use std::collections::HashMap;
 
-use crate::commands::apps::{TrackedWindow, ORIGIN_DETACHED_SUBWINDOW};
+use crate::services::window_registry::{TrackedWindow, ORIGIN_DETACHED_SUBWINDOW};
 use crate::platform::WorkspaceBackend;
 use crate::schema::session::WindowSession;
 use crate::services::terminal_service::app_sessions_dir;
@@ -218,7 +218,7 @@ pub fn resolve_missing_window_ids(
 /// project switch, plus detached subwindows — which park but are never listed
 /// (they are Tabtivity's own windows, not launched apps).
 fn is_project_owned(origin: &str) -> bool {
-    crate::commands::apps::is_project_opened_origin(origin) || origin == ORIGIN_DETACHED_SUBWINDOW
+    crate::services::window_registry::is_project_opened_origin(origin) || origin == ORIGIN_DETACHED_SUBWINDOW
 }
 
 fn project_owned_windows<'a, 'b>(
@@ -234,7 +234,7 @@ fn project_owned_windows<'a, 'b>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::apps::{
+    use crate::services::window_registry::{
         ORIGIN_DETACHED_SUBWINDOW, ORIGIN_GLOBAL_APP, ORIGIN_SIDE_FILE_TREE,
     };
 
@@ -294,7 +294,7 @@ mod tests {
     fn apps_view_origins_all_park_on_project_switch() {
         // The parking set is the Apps-view set plus detached subwindows, so
         // everything the view lists is hidden/shown with its project.
-        use crate::commands::apps::{
+        use crate::services::window_registry::{
             ORIGIN_BLOB_FILE_VIEWER, ORIGIN_DOWNLOADS, ORIGIN_MANUAL_LAUNCH,
             ORIGIN_MIDDLE_FILE_BROWSER, ORIGIN_RESTORED,
         };

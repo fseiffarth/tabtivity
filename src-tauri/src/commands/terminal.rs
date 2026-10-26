@@ -1,16 +1,12 @@
-use std::{
-    fs,
-    io::Read,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{fs, io::Read, path::Path};
 use app_core::sync::LockExt;
 
 use crate::services::mobile_control::inbox;
-use crate::terminal::{PtyOptions, PtyRegistry};
+use crate::terminal::PtyOptions;
 use crate::tauri_host::Ctx;
 
-pub type RegistryState = Arc<Mutex<PtyRegistry>>;
+// The registry's managed-state type lives beside `PtyRegistry` (S5).
+pub use crate::terminal::RegistryState;
 
 /// The PTY the caller means by `id`: a server client's own attach PTY onto
 /// that tab when it has one (TODO #2347, `PtyRegistry::resolve`), else `id`.
