@@ -1,11 +1,11 @@
 /**
- * Performance plan §3.5: in the glass themes the tab bars and the docked file
- * sidebar carry no `backdrop-filter`. There is one of each per subwindow, all
- * beside live panes, and WebKitGTK's software path re-blurs a backdrop-filter's
- * region on every repaint beneath it. The header (one, static) keeps its frost.
- * To make up for the lost frost, the fill those surfaces read (`--glass-panel`,
- * which `--glass-subheader` mixes over) is near-opaque, so nothing behind them
- * reads through.
+ * Performance plan §3.5: nothing in the app carries a `backdrop-filter`.
+ * WebKitGTK's software path re-blurs a backdrop-filter's region on every repaint
+ * beneath it — the tab bars and file sidebar lost theirs first, and the header,
+ * menus, dialogs and modal backdrop followed when it made every header hover
+ * menu slow to appear and to vanish. To make up for the lost frost, the fills
+ * the glass themes read (`--glass-panel`, which `--glass-subheader` mixes over,
+ * and `--glass-elevated`) are (near-)opaque, so nothing behind them reads through.
  */
 import { describe, it, expect } from "vitest";
 import { readAppStylesheet } from "../helpers/cssCorpus";
@@ -27,14 +27,8 @@ function blurredSelectors(css: string): string[] {
 describe("glass chrome blur", () => {
   const blurred = blurredSelectors(CSS);
 
-  it("never blurs behind a tab bar or the docked file sidebar", () => {
-    const offenders = blurred.filter((s) => /\.tab-bar\b|\.subwindow-files\b/.test(s));
-    expect(offenders).toEqual([]);
-  });
-
-  it("keeps the header's frost in both glass themes", () => {
-    expect(blurred).toContain('[data-theme="fancy_dark"] .app-header');
-    expect(blurred).toContain('[data-theme="light_lavender"] .app-header');
+  it("never blurs behind anything", () => {
+    expect(blurred).toEqual([]);
   });
 });
 
@@ -47,6 +41,12 @@ describe("glass chrome fill without the blur", () => {
   it("both glass themes give the unblurred surfaces a near-opaque fill", () => {
     expect(alphas).toHaveLength(2);
     for (const a of alphas) expect(a).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("both glass themes give menus and dialogs an opaque fill", () => {
+    const elevated = [...CSS.matchAll(/--glass-elevated\s*:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(elevated).toHaveLength(2);
+    for (const fill of elevated) expect(fill).toMatch(/^rgb\(/);
   });
 
   it("the tab bars and the docked file column read that fill", () => {

@@ -282,15 +282,13 @@
      rules read those; making those translucent app-wide would stack
      translucency-on-translucency and wreck contrast everywhere). These instead
      recolor just the outer chrome surfaces (header, side panel, tab bars,
-     dialogs, menus, pills) for a frosted-glass look. */
-  --glass-blur: 18px;
-  --glass-blur-strong: 34px;
-  --glass-saturate: 150%;
+     dialogs, menus, pills) for a tinted-glass look. */
   /* Near-opaque: the tab bars and docked file column it fills carry no blur
      (performance plan §3.5), so the fill alone must keep what is behind them
      unreadable. */
   --glass-panel: rgba(20, 30, 52, 0.9);
-  --glass-elevated: rgba(22, 32, 56, 0.94);
+  /* Opaque: menus and dialogs float over readable content with no blur. */
+  --glass-elevated: rgb(22, 32, 56);
   --glass-header: linear-gradient(90deg, rgba(16, 22, 36, 0.55) 0%, rgba(22, 33, 58, 0.55) 48%, rgba(36, 23, 53, 0.55) 100%);
 }
 
@@ -601,11 +599,8 @@
   --activity-4: #6344ab;
   /* Glass chrome tokens — see the matching comment in fancy_dark above; same
      idea, tuned for a light, lavender-tinted frosted glass. */
-  --glass-blur: 16px;
-  --glass-blur-strong: 30px;
-  --glass-saturate: 130%;
   --glass-panel: rgba(242, 239, 250, 0.9);
-  --glass-elevated: rgba(248, 246, 253, 0.95);
+  --glass-elevated: rgb(248, 246, 253);
   --glass-header: rgba(242, 239, 250, 0.5);
 }
 
@@ -721,62 +716,20 @@
 }
 
 /* ── Glass chrome (fancy_dark / light_lavender) ───────────────────────────
-   Frosted-glass treatment for the app's outer chrome ONLY — header, right
-   file panel, project pills, dialogs, and popover menus. Reads the --glass-*
+   Tinted treatment for the app's outer chrome ONLY — header, right file
+   panel, project pills, dialogs, and popover menus. Reads the --glass-*
    tokens defined on each theme above, not the shared --bg-panel/--bg-elevated
    (see the comment on those tokens for why). Both themes share one rule set
    since they read the same variable names with theme-appropriate values.
 
-   The tab bars and the docked file sidebar keep their glass fills
-   (--glass-subheader, --glass-panel below) but no backdrop-filter: there is
-   one of each per subwindow, all beside live panes, and on WebKitGTK's
-   software path a backdrop-filter re-blurs its region on every repaint
-   beneath it (performance plan §3.5). To make up for the lost frost those
-   fills are near-opaque (--glass-panel at 0.9 alpha in both themes), so
-   nothing behind them reads through. */
-[data-theme="fancy_dark"] .app-header,
-[data-theme="light_lavender"] .app-header,
-[data-theme="fancy_dark"] .side-panel,
-[data-theme="light_lavender"] .side-panel {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-}
-
-/* Dialogs and popover menus float directly over readable content (terminal
-   text, code, file trees) — they need to fully obscure it, not just tint it,
-   so these get a much stronger blur plus a near-opaque fill (--glass-elevated)
-   rather than the lighter chrome-panel treatment above. */
-[data-theme="fancy_dark"] .project-dialog,
-[data-theme="light_lavender"] .project-dialog,
-[data-theme="fancy_dark"] .settings-dialog,
-[data-theme="light_lavender"] .settings-dialog,
-[data-theme="fancy_dark"] .stats-dialog,
-[data-theme="light_lavender"] .stats-dialog,
-[data-theme="fancy_dark"] .file-delete-dialog,
-[data-theme="light_lavender"] .file-delete-dialog,
-[data-theme="fancy_dark"] .context-menu,
-[data-theme="light_lavender"] .context-menu,
-[data-theme="fancy_dark"] .tab-new-menu,
-[data-theme="light_lavender"] .tab-new-menu,
-[data-theme="fancy_dark"] .project-switcher-add-menu,
-[data-theme="light_lavender"] .project-switcher-add-menu,
-[data-theme="fancy_dark"] .box-chip-menu,
-[data-theme="light_lavender"] .box-chip-menu,
-[data-theme="fancy_dark"] .project-search-popover,
-[data-theme="light_lavender"] .project-search-popover,
-[data-theme="fancy_dark"] .file-run-args,
-[data-theme="light_lavender"] .file-run-args,
-[data-theme="fancy_dark"] .file-viewer-run-args,
-[data-theme="light_lavender"] .file-viewer-run-args,
-[data-theme="fancy_dark"] .git-change-tree,
-[data-theme="light_lavender"] .git-change-tree,
-[data-theme="fancy_dark"] .presentation-settings,
-[data-theme="light_lavender"] .presentation-settings,
-[data-theme="fancy_dark"] .cal-alarm-popup,
-[data-theme="light_lavender"] .cal-alarm-popup {
-  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate));
-}
+   No surface carries a backdrop-filter. On WebKitGTK's software path a
+   backdrop-filter re-blurs its region on every repaint beneath it
+   (performance plan §3.5): the tab bars and file sidebar lost theirs first,
+   and the header, menus, dialogs and modal backdrop followed when the blur
+   made every header hover menu slow to appear and to vanish. The fills carry
+   the look instead: --glass-panel and --glass-elevated are (near-)opaque so
+   nothing behind them reads through, and the header's translucent fill only
+   ever sits over the app's flat background. */
 
 /* The glass pair's top-frame fill. Set on the THEME rather than on
    `.app-header` itself: the header reads --top-frame-bg (shell.css), and a
@@ -798,13 +751,10 @@
 }
 
 /* The right-side file panel is fully opaque even in the glass themes: it floats
-   over live terminal/code content, and a translucent tree is hard to read. It
-   opts out of the shared frosted-glass rule above (opaque fill ⇒ blur is moot). */
+   over live terminal/code content, and a translucent tree is hard to read. */
 [data-theme="fancy_dark"] .side-panel,
 [data-theme="light_lavender"] .side-panel {
   background-color: var(--bg-side-panel);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 /* The glass pair's secondary-chrome fill: --bg-subheader's opaque derivation
@@ -873,14 +823,6 @@
   background: var(--glass-elevated);
   border-top-color: var(--accent);
   box-shadow: var(--shadow-3);
-}
-
-/* Blur the whole app behind an open dialog too, so a modal reads as one
-   continuous glass surface rather than just a frosted frame. */
-[data-theme="fancy_dark"] .modal-backdrop,
-[data-theme="light_lavender"] .modal-backdrop {
-  backdrop-filter: blur(8px) saturate(120%);
-  -webkit-backdrop-filter: blur(8px) saturate(120%);
 }
 
 /* No ambient color wash behind the chrome (there were two faint radial
