@@ -10,7 +10,8 @@ import { projectIsOnHpc } from "../../lib/remote/hpc/hpcHost";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 
-/** What the tree knows about its project's remote side: the listing source, the sync overlay and its actions, the pool state and the host's child names. */
+/** What the tree knows about its project's remote side: the listing source, the
+ * sync overlay and its actions, the pool state and the host's child names. */
 export function useFileTreeRemote({
   projectId, syncSource,
 }: {
@@ -93,7 +94,8 @@ export function useFileTreeRemote({
   return { isRemote, project, mirrorRoot, treatLocal, remoteListing, syncStatus, dirSyncAgg, syncProgress, refreshSyncStatus, syncPull, syncPush, syncMarkSelected, syncSetAuto, syncAutoPreview, syncSetExcluded, remoteSshState, remoteBlocked, primaryIsHpc, hostChildNames, setHostChildNames };
 }
 
-/** Keeps the sync overlay fresh (on re-list, focus and a light tick) and probes the host for the mirror view's local-only folders. */
+/** Keeps the sync overlay fresh (on re-list, focus and a light tick) and probes
+ * the host for the mirror view's local-only folders. */
 export function useFileTreeSyncStatus({
   isRemote, projectId, remoteBlocked, relPath, active, refreshSyncStatus, remoteSshState,
   primaryIsHpc, fastMode, treatLocal, remoteProbeDir, setHostChildNames,

@@ -6,12 +6,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
-import { fileTreeSnapshotKey, readFileTreeSnapshot, writeFileTreeSnapshot } from "../../lib/projects/fileViewSnapshots";
+import {
+  fileTreeSnapshotKey, readFileTreeSnapshot, writeFileTreeSnapshot,
+} from "../../lib/projects/fileViewSnapshots";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { normalizeScanPath } from "./ProjectFilesSettings";
 import type { GitStatusMap } from "./fileTreeTypes";
 
-/** The listing's own state: the mount seed, the rows, folder sizes, the scan exclusions, the folder on screen, the selection and the load status. */
+/** The listing's own state: the mount seed, the rows, folder sizes, the scan
+ * exclusions, the folder on screen, the selection and the load status. */
 export function useFileTreeListingState({
   projectId, projectDir, initialRelPath, scanExcluded,
 }: {

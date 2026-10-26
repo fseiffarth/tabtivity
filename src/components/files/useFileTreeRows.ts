@@ -1,7 +1,11 @@
 // The file tree's rows: the listing split into sections and clipped to the row
 // cap, and the stable objects every memoised row receives.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { type FileEntry, type SortKey, sortEntries, isHiddenByEnding, STANDARD_PROJECT_FILES } from "../../lib/viewers/fileUtils";
+import {
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction,
+} from "react";
+import {
+  type FileEntry, type SortKey, sortEntries, isHiddenByEnding, STANDARD_PROJECT_FILES,
+} from "../../lib/viewers/fileUtils";
 import { argsToLines } from "../../lib/terminal/runArgsFormat";
 import type { GitStatusMap, MoveTargetAttrs, RowActions } from "./fileTreeTypes";
 import type { useFileTreeRunState } from "./useFileTreeRun";
@@ -17,7 +21,8 @@ type FileTreeRunState = ReturnType<typeof useFileTreeRunState>;
 // and not.
 export const ROW_CAP_STEP = 100;
 
-/** The listing split into its on-screen sections, clipped to the row cap, and the selection pruned to what still lists. */
+/** The listing split into its on-screen sections, clipped to the row cap, and
+ * the selection pruned to what still lists. */
 export function useFileTreeRows({
   gitStatuses, entries, hiddenEndings, relPath, shownPaths, separateScaffold, separateGitignored,
   dirIgnoredBytes, dirSizes, sortKey, descending, projectId, scaffoldExpanded, gitignoredExpanded,

@@ -1,6 +1,5 @@
-import { NAMES } from "../../../src/lib/brand";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { useI18nStore, useT, type TranslationKey, translateNow } from "../../../src/lib/i18n";
+import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
@@ -11,52 +10,34 @@ import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
-import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupSend, type MarkupTarget } from "../components/OutboxViewer";
+import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupTarget } from "../components/OutboxViewer";
 import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
-import { OutboxPost } from "../components/OutboxPost";
-import { SentFilesIndex, sentFiles, type SentFile } from "../components/SentFilesIndex";
+import { SentFilesIndex } from "../components/SentFilesIndex";
 import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
-import { ComposerThumb, InboxAlbum, leafName } from "../components/InboxPreview";
+import { ComposerThumb, InboxAlbum } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
+import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { phoneTerminalTheme } from "../theme";
-import { TERMINAL_MIN_CONTRAST } from "../../../src/lib/terminal/terminalPalette";
 import {
   ANY_FILE_ACCEPT,
   ApiError,
   api,
   attachDesktopImage,
-  clearOutbox,
   closeTab,
-  deleteOutboxFile,
-  getAgentStatus,
-  getSchedules,
-  getTranscript,
   inboxFileUrl,
   listDesktopImages,
-  listOutbox,
   MAX_INBOX_FILE,
   openSignInTab,
   openTeleportTab,
   pickPhoneFiles,
-  recoverSession,
   refreshProjectFile,
-  editHeldPrompt,
-  holdPrompt,
-  reportSentPrompt,
   sentName,
-  undoClear,
   getTabWorktrees,
   moveTabWorktree,
   getAssistantModels,
   switchAssistantModel,
-  getModelRows,
-  rememberModelRows,
   uploadToInbox,
   type DesktopImage,
   type OutboxFile,
@@ -68,27 +49,14 @@ import {
   type TabRow,
   type TabWorktrees,
   type AssistantModels,
-  type TranscriptEntry,
 } from "../api";
 import { describeFailure } from "../connection";
-import { DRAFT_SAVE_DELAY, readDraft, writeDraft } from "../drafts";
-import { OUTBOX_POLL, sameOutbox } from "../outbox";
+import { readDraft } from "../drafts";
 import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
-import { TERMINAL_PROTOCOL, TERMINAL_SIZE } from "../terminal/protocol";
-import { readableRange, readableScreen, readableText, type ReadableLine } from "../terminal/readableScreen";
-import {
-  absorbHistory,
-  emptyHistory,
-  lastHistoryText,
-  scrollbackTrimEvent,
-  shiftHistory,
-  type HistoryChunk,
-} from "../terminal/readableHistory";
-import { type TerminalControl, type TerminalEvent } from "../terminal/protocol";
-import { createVisibilityReporter } from "../terminal/visibility";
-import { installTerminalTouchScroll } from "../terminal/touchScroll";
-import { installWideOutputHint, type WideOutputHint } from "../terminal/wideOutput";
+import { readableText, type ReadableLine } from "../terminal/readableScreen";
+import { type HistoryChunk } from "../terminal/readableHistory";
+import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
@@ -97,242 +65,78 @@ import { sessionLimits } from "../terminal/sessionUsage";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { BackNest } from "../backStack";
 import {
-  answerRowKeys,
   freeTextRow,
-  freeTextWrites,
-  mergeSelectRows,
-  questionTabKeys,
   readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
   readStrayDialog,
   pressHintShown,
   dialogFooterShown,
-  revealSelectRow,
-  sameSelectStep,
   selectKeys,
-  selectMoveKeys,
-  selectSignature,
   type QuestionTab,
   type SelectOption,
   type SelectPrompt,
   type SelectStep,
 } from "../terminal/selectPrompt";
-import { NO_QUESTION_PARTS, questionParts, type QuestionParts } from "../terminal/questionParts";
-import { liveModelPick, modelRowsOf, modelRowsStep, sameModelRows } from "../terminal/modelRows";
-import {
-  isOpenCodeTab,
-  openCodeDialogCloseKeys,
-  openCodePickKeys,
-  OpenCodePickerWalk,
-  readOpenCodePickerPage,
-  OPENCODE_MODEL_KEYS,
-} from "../terminal/openCodeMini";
+import { isOpenCodeTab, openCodeDialogCloseKeys } from "../terminal/openCodeMini";
 import { groupOpenCodeModels, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
-import {
-  antigravityEffortKeys,
-  isAntigravityTab,
-  readAntigravityEffort,
-  readAntigravityPicker,
-  type AntigravityEffort,
-} from "../terminal/antigravity";
-import { isCursorTab, readCursorPicker } from "../terminal/cursorAgent";
+import { isAntigravityTab } from "../terminal/antigravity";
+import { isCursorTab } from "../terminal/cursorAgent";
 import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/agentModes";
-import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../terminal/composer";
-import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../terminal/commitPrompts";
-import { useChatUncommitted } from "../terminal/chatUncommitted";
+import { agentFamily } from "../terminal/composer";
 import { CommitFiles } from "./CommitFiles";
 import { agentWork } from "../terminal/agentBusy";
-import { chatTurns, isLiveEcho, opensAgentMessage } from "../terminal/chatTurns";
+import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
-import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
-import { pullQueuedPrompts, queuedHintShown } from "../terminal/queuePull";
-import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
-import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
-import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
-import { inboxInPlace, inboxLeaves, inboxSegments, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
-import { afterClear, clearMark, type ClearMark } from "../terminal/clearedSession";
-import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../terminal/heldPrompts";
+import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
+import { type PendingPrompt } from "../terminal/pendingPrompts";
+import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
+import { inboxInPlace, inboxLeaves, inboxSegments, withoutInboxReferences } from "../terminal/inboxRefs";
+import { type ClearMark } from "../terminal/clearedSession";
+import { readHeld } from "../terminal/heldPrompts";
 import { ageLabel } from "../terminal/fileLabels";
-import { startVisiblePoll, type VisiblePoll } from "../visiblePoll";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
-import { copiedSignIn, hasSignInTab, osc52Text, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, signInPageKeys, type SignIn, type SignInPage } from "../terminal/signIn";
-import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
+import { hasSignInTab, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, type SignIn, type SignInPage } from "../terminal/signIn";
+import { type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
 import { ChatChanges } from "../components/ChatChanges";
-import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
+import { readSlashCommands, slashCli } from "../slashCommands";
 import {
   onDeviceSpeechAsked,
-  prepareOnDeviceSpeech,
   speechRecognitionConstructor,
   speechRecognitionSupported,
-  advanceDictation,
   DICTATION_START,
-  dictationPreview,
-  readDictation,
-  settleDictation,
   type DictationProgress,
 } from "../voiceInput";
-import { startDictation, type DictationSession } from "../voiceSession";
+import { type DictationSession } from "../voiceSession";
 import { usePenWriting } from "../penWriting";
-import { speak, speechOutputSupported, stopSpeaking, unlockSpeech } from "../speechOutput";
-import { paintMicLevel, spokenSend, spokenText } from "../../../shared/voice";
+import { speechOutputSupported, stopSpeaking, unlockSpeech } from "../speechOutput";
+import { useComposerUploads, useComposerSend, useComposerTools } from "./terminal/useComposer";
+import { useTerminalViewport, useTerminalSocket } from "./terminal/useTerminalSocket";
+import { useReadableFollow, useEarlierOutput } from "./terminal/useReadableView";
+import {
+  useSessionTranscript, useSessionEntries, useSubagentReader, useReadAloud, useLimitsPoll,
+} from "./terminal/useSessionChat";
+import { useOutboxPoll, useOutboxViewers } from "./terminal/useOutbox";
+import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker";
+import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
+import { useLiveQuestion } from "./terminal/useLiveQuestion";
+import { useVoiceInput } from "./terminal/useVoiceInput";
+import {
+  type VoiceNote, TRANSCRIPT_STEP, UNDO_RELOADS, LINK_WAIT_MS, type InboxUpload, leafOfReference,
+  liftedDraft, uploadInFlight, withAttachments, type ChatInbox,
+} from "./terminal/terminalShared";
 
-/** A line the dictation strip shows: a key, not a sentence, so switching the
- * language retranslates what is already on screen. */
-type VoiceNote = { key: TranslationKey; language?: string };
-const PING_INTERVAL = 20_000;
-/** Floor between two rebuilds of the reading view. */
-const READABLE_INTERVAL = 120;
-/** Two missed pongs. A half-open TCP connection — routine on cellular — leaves
- * `readyState` at OPEN indefinitely, so the socket looked connected and every
- * keystroke was silently buffered into a dead link. */
-const PONG_GRACE = PING_INTERVAL * 2 + 5_000;
-/** How long a pong may take after the page comes back into view. A locked
- * phone keeps its socket in the OPEN state whether or not the link behind it
- * survived, so a reader who unlocked and typed was writing into a dead link
- * for up to PONG_GRACE — the composer looked connected and nothing arrived —
- * and only leaving the tab and reopening it reconnected. On resume the link
- * is asked to prove itself within this much, and closed (which reconnects)
- * if it does not. */
-const RESUME_GRACE = 4_000;
-/** How long an input frame may wait for the desktop's `ack` before the words
- * in it count as lost. Longer than a round trip on a poor cellular link,
- * well short of PONG_GRACE: the ack is what tells a prompt "sent" from a
- * prompt buffered into a half-open socket, and a reader should learn which
- * within seconds, not after the next missed pong. */
-const ACK_DEADLINE = 5_000;
-/** How long the pong asked for at an overdue ack may take before the frames
- * it would vouch for count as lost (see `armAck`). */
-const ACK_PROBE_GRACE = 4_000;
-/** Bytes the browser may hold unsent before the link counts as stalled. The
- * phone's frames are keystrokes and prompts; this much sitting in the socket's
- * buffer is a link that has stopped taking anything. */
-const STALLED_BYTES = 64 * 1024;
-/** How often Focus re-reads the stored session while it is in view. The read
- * carries the last fingerprint, so an unchanged transcript costs one small
- * request and no turns cross the link. */
-const TRANSCRIPT_POLL = 5_000;
-/** How long after the screen last changed the stored session is re-read: the
- * agent writes an answer to its transcript as it prints it, so a change on
- * screen is the earliest sign that the file has moved. */
-const TRANSCRIPT_SETTLE = 1_200;
-/** Turns fetched at first, and added per "Show earlier turns" tap. */
-const TRANSCRIPT_STEP = 120;
-
-/** An agent TUI parses one stdin chunk as one key event: a chunk that opens with
- * a control byte is read as that keypress and the remainder is dropped, so
- * `Ctrl-A Ctrl-K <text> CR` in a single frame arrived as a bare submit with no
- * text at all. `agentInputWrites` splits a message into the pieces; these gaps
- * keep the TUI's reads from coalescing them back into one chunk — the same
- * shape the desktop uses when it types a command into an agent tab.
- *
- * They are best-effort, and that is why the submit does not depend on them: a
- * phone's link can hold the text frame back and deliver it together with the
- * carriage return, and a Codex TUI reads that one chunk as a paste and never
- * submits. Bracketed paste is what closes the message unambiguously; the gaps
- * only still carry sessions whose pane has the mode off. */
-const AGENT_KEY_GAP = 80;
-const AGENT_SUBMIT_GAP = 200;
-/** How long a key walking Claude's agent list is given to show on the phone's
- * screen, which redraws only once the desktop's frames have crossed the link. */
-const SUBAGENT_WALK = { waitMs: 3000, pollMs: 80 };
-/** Why a message to a subagent did not go, said under the composer. */
-const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
-  not_listed: "mobile.subagent.notListed",
-  ambiguous: "mobile.subagent.ambiguous",
-  not_opened: "mobile.subagent.noWay",
-  send_failed: "mobile.subagent.noWay",
-};
-/** The key every supported agent CLI reads as "stop this turn" (its spinner
- * row says `esc to interrupt`), and how long the message held back behind it
- * waits: a lone Esc followed at once by text is read as Alt+key, and the turn
- * needs a moment to wind down before the CLI takes a new prompt. */
-const AGENT_INTERRUPT = "\u001b";
 /** CLIs whose queue the desktop reads for Send now. Mirrors `queue_hint` in
  * `src-tauri/src/services/mobile_control/pty_bridge.rs`. */
 const SEND_NOW_FAMILIES: ReadonlySet<string> = new Set(["claude"]);
-const AGENT_INTERRUPT_GAP = 400;
-/** How long Send is held before it interrupts the agent instead of queueing. */
-const SEND_HOLD_MS = 450;
 
-/** What the new-conversation button types. Every supported scrollback agent
- * reads `/clear` as "start a new chat" — Codex too, since it grew the command.
- * Codex's own `/new` is no longer a one-keystroke act: from 0.156 it opens a
- * "Where should the new conversation run?" picker, which the button's single
- * Enter leaves waiting on the desktop (2026-09-23). */
-const NEW_CONVERSATION_COMMAND = "/clear";
-/** The Commit chip's sheet rows, by the prompt each sends. */
-const COMMIT_LABELS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.own", state: "mobile.commit.state", split: "mobile.commit.split" };
-const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.ownHint", state: "mobile.commit.stateHint", split: "mobile.commit.splitHint" };
-const CLEAR_COMMAND = /^\s*\/clear\b/u;
-const SLASH_COMMAND = /^\s*\//u;
-/** A slash command owns a turn of the agent's own: `/clear` redraws and has
- * Claude run its session hooks, `/model` swaps the model or opens a picker —
- * and while it does, stdin may go unread. A message typed then reached it in
- * one read, text and CR together: a paste, whose CR is a new line, not a
- * submit — after a `/clear` the prompt sat unsent in the agent's composer. So
- * the next message after any command (and after an Undo the desktop typed)
- * waits until the screen has been quiet for COMMAND_SETTLE_QUIET, at least
- * COMMAND_SETTLE_MIN after the command and at most COMMAND_SETTLE_MAX — the
- * desktop's scheduled prefaces settle the same way (`AgentScheduleHost`). */
-const COMMAND_SETTLE_MIN = 1_200;
-const COMMAND_SETTLE_QUIET = 700;
-const COMMAND_SETTLE_MAX = 6_000;
-const COMMAND_SETTLE_POLL = 150;
-/** How long an Undo that found no clear recorded yet waits before its one
- * retry: the desktop's hook writes the record as Claude starts the new chat. */
-const UNDO_CLEAR_RETRY = 1_200;
-/** When the Reader reads the session again after an Undo: a relaunched agent
- * takes a few seconds to come back onto the conversation it resumes. */
-const UNDO_RELOADS = [2_000, 5_000, 10_000];
-/** The longest the Undo chip shows its progress after the desktop took it. */
-const UNDO_SETTLE_MAX = 12_000;
-const CODEX_AGENT = /codex/iu;
-
-/** Session lines the phone keeps. Matches the desktop sidecar's replay depth
- * (`pty_bridge::MOBILE_SCROLLBACK_LINES`) and the tmux `history-limit` Tabtivity
- * sets on its sessions — the three are one number by design, so what tmux
- * retains is what the replay carries and what this buffer can hold. */
-const PHONE_SCROLLBACK = 10_000;
-/** Rows past the live screen the per-frame tail rebuild re-reads. The screen
- * itself can still be repainted by the program; the margin is slack so the
- * history absorbs nothing a repaint could reach. */
-const TAIL_MARGIN = 8;
-/** Frozen history chunks each "Show earlier output" tap reveals (×400 lines). */
-const REVEAL_CHUNKS = 2;
-/** How far from its own bottom a scroller still counts as showing the newest
- * output. Terminal view needs only the rounding slack of one fractional cell
- * height; the reading view re-wraps, so it keeps the wider window a reader's
- * own scroll already uses there. */
-const NEWEST_SLACK = 4;
-
-/** How long the model sheet waits for the session to draw the picker `/model`
- * opens. Past it the sheet steps aside: the dialog — or the reason there is
- * none — is in the session output, and the arrow keys still answer it. */
-const MODEL_PICKER_WAIT = 6_000;
-/** How long a model list stays unchanged before it is kept for the next
- * opening (`rememberModelRows`): a frame split across reads is not the list. */
-const MODEL_KEEP_SETTLE = 500;
-/** How long the dialog an answer brought up takes no tap: a CLI asks its next
- * question at once and in the same place (Codex's "Hooks need review" under
- * its folder question), and a second tap meant for the answered row took the
- * new dialog's row unseen. */
-const NEXT_DIALOG_HOLD = 600;
-/** How long after asking a CLI for its sign-in link (`askForLink`) its
- * clipboard copy is taken as the answer. */
-const LINK_WAIT_MS = 5_000;
 /** `hiddenSignIn`'s value once the reader hid the hidden-link notice. */
 const HIDDEN_LINK = "\u0000hidden-link";
-/** How long the sheet waits, after a tap, for the step *after* the one it
- * answered: Codex follows the model list with a reasoning-level list, and that
- * one is drawn only once the session has read the Enter. Past it the dialog is
- * done and the sheet steps aside. */
-const SELECT_NEXT_WAIT = 700;
 /** Time given to a Shift+Tab before the redrawn status line is read back. One
  * reading-view rebuild (READABLE_INTERVAL) plus the TUI's own repaint. */
 const MODE_SETTLE = 340;
@@ -366,68 +170,6 @@ const DESKTOP_LIST_FAILURES: Record<string, TranslationKey> = {
   offline: "mobile.desktopImages.failed.offline",
 };
 
-/** A file on its way into the project inbox — from the phone, or copied on
- * the desktop's side — one that landed, or one that did not make it. A
- * landed one waits beside the composer with its `@` reference until the
- * message goes: writing the reference into the draft while the reader types
- * would pull the text out from under their keyboard. */
-interface InboxUpload {
-  id: number;
-  name: string;
-  /** Where the bytes come from; a desktop copy never leaves the desktop. */
-  source: "phone" | "desktop";
-  /** The desktop's project-relative reference, once the file has landed. */
-  reference?: string;
-  /** Why it did not land, said after its name. */
-  failure?: TranslationKey;
-  /** The phone's own copy of a picture (an object URL), shown while it
-   * travels and after; the inbox's copy stands in for the others. */
-  preview?: string;
-}
-
-/** The inbox leaf a landed file's reference names. */
-const leafOfReference = (reference: string) => reference.slice(reference.lastIndexOf("/") + 1);
-
-/** A stored draft as the composer shows it: the inbox references it carried
- * (`withAttachments` folded them in when the screen went away) lifted back
- * out as landed files beside the draft, not as `@` text in it. */
-function liftedDraft(stored: string): { text: string; uploads: InboxUpload[] } {
-  const leaves = inboxLeaves(stored);
-  if (leaves.length === 0) return { text: stored, uploads: [] };
-  const lifted = withoutInboxReferences(stored);
-  return {
-    text: lifted && /\s$/u.test(stored) ? `${lifted} ` : lifted,
-    // Negative ids: never one `uploadSeq` hands out.
-    uploads: leaves.map((leaf, index) => ({ id: -1 - index, name: leafName(leaf), source: "phone", reference: `${NAMES.inboxDir}/${leaf}` })),
-  };
-}
-
-/** Whether a file is still on its way — Send waits for it. */
-const uploadInFlight = (upload: InboxUpload) => !upload.failure && upload.reference === undefined;
-
-/** The draft with the landed files' `@` references after it — what Send
- * sends, and what the draft store keeps when the screen goes away. */
-function withAttachments(text: string, uploads: readonly InboxUpload[]): string {
-  const references = uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [`@${upload.reference}`]);
-  if (references.length === 0) return text;
-  return `${text}${text && !/\s$/u.test(text) ? " " : ""}${references.join(" ")} `;
-}
-
-/** How often an agent tab re-reads its CLI's usage panel for the facts row's
- * 5h/week figures. The desktop answers from a 60 s cache and otherwise runs
- * the CLI once (`services::agent_usage`), so this stays well above that. */
-const LIMITS_POLL = 120_000;
-
-/** Whether two reads of the stored session carry the same turns, so an
- * unchanged answer does not repaint the view. */
-function sameTranscript(a: SessionTranscript, b: SessionTranscript): boolean {
-  return a.available === b.available && a.truncated === b.truncated && a.agentsEarlier === b.agentsEarlier && a.version === b.version
-    && a.entries.length === b.entries.length
-    && a.entries.every((entry, index) => entry.kind === b.entries[index].kind && entry.text === b.entries[index].text && entry.cut === b.entries[index].cut
-      // A subagent's handle can arrive after its entry did.
-      && entry.subagent === b.entries[index].subagent && entry.role === b.entries[index].role);
-}
-
 /** "Screenshots · 3 min ago · 1.2 MB", or "Clipboard · 1920×1080". */
 function desktopImageDescription(image: DesktopImage) {
   return [
@@ -455,10 +197,6 @@ const ReadableRow = memo(function ReadableRow({ line, plain }: { line: ReadableL
       : <span key={index}>{span.text}</span>
   ))}</div>;
 });
-
-/** More new answers than this at once is a session that was swapped in or
- * caught up on, not one that is talking: read-aloud leaves those to the eye. */
-const MAX_SPOKEN_AT_ONCE = 3;
 
 /** A block of screen lines: a shell's Focus output, or the screen a dialog an
  * agent waits on was drawn onto. On an agent tab they lay out as a chat: the
@@ -527,14 +265,6 @@ const PromptText = memo(function PromptText({ text, links }: { text: string; lin
   const html = useMemo(() => promptHtml(text), [text]);
   return <div className="transcript-md" {...links} dangerouslySetInnerHTML={{ __html: html }} />;
 });
-
-/** Where a prompt bubble's inbox files come from and go to. */
-interface ChatInbox {
-  tabId: string;
-  files: ReadonlyMap<string, OutboxFile | null>;
-  onOpen: (file: OutboxFile) => void;
-  onSettle?: () => void;
-}
 
 /** Per tab, the markup view tucked away behind its chat (`markupAway`): the
  * chat's way back to the file outlives the tab being left, and the tab opens
@@ -1222,20 +952,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [desktopSheet, setDesktopSheet] = useState(false);
   const [desktopImages, setDesktopImages] = useState<DesktopImage[] | null>(null);
   const [desktopFailure, setDesktopFailure] = useState<TranslationKey | "">("");
-  const [uploads, setUploads] = useState<InboxUpload[]>(() => liftedDraft(readDraft(tab.id)).uploads);
-  uploadsRef.current = uploads;
-  // A picture's own copy is let go once its file leaves the composer.
-  const previewUrls = useRef(new Set<string>());
-  useEffect(() => {
-    const live = new Set(uploads.flatMap((upload) => upload.preview ? [upload.preview] : []));
-    for (const url of previewUrls.current) if (!live.has(url)) URL.revokeObjectURL?.(url);
-    previewUrls.current = live;
-  }, [uploads]);
-  useEffect(() => () => {
-    for (const url of previewUrls.current) URL.revokeObjectURL?.(url);
-  }, []);
-  const uploading = uploads.some(uploadInFlight);
-  const attached = uploads.some((upload) => upload.reference !== undefined && !upload.failure);
+  const { setUploads, uploads, uploading, attached } = useComposerUploads({ tab, uploadsRef });
   /** The pictures the agent left in the project's `.tabtivity/outbox/` for this
    * phone (the desktop's `outbox.rs`), newest first — the gallery beside the
    * tab name, and the one way an image reaches the phone from a session: a
@@ -1493,980 +1210,41 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     };
   }, [tab.id]);
 
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    const syncHeight = () => setViewportHeight(viewport.height);
-    syncHeight();
-    viewport.addEventListener("resize", syncHeight);
-    return () => viewport.removeEventListener("resize", syncHeight);
-  }, []);
-
-  // The one full-bleed screen has to be the one screen the *document* cannot
-  // scroll. `body` keeps a 100dvh floor for the scrolling sections while this
-  // screen is sized to the visual viewport, so the document is taller than what
-  // is on glass — and everything a phone does about that is a scroll that takes
-  // the header with it. Three ways in practice: arriving from the bottom of a
-  // long project screen, or from far down the agents list, keeps that scroll
-  // offset; focusing the composer makes the browser
-  // scroll the header away to seat the keyboard; and an agent tab has its own
-  // way in, because `addContext` and the two attach paths focus the composer
-  // *for* the reader, so the scroll arrives unasked after a tap on the ＋ sheet.
-  // The header carries the back chevron, and the body below it eats
-  // vertical drags (`touch-action:none` plus the drag handler in
-  // terminal/touchScroll.ts), so once it is off screen there is no way back to
-  // the project at all. Take the overflow away for as long as the terminal is
-  // mounted — and pull the page back up first, since hiding the overflow under a
-  // scrolled document leaves it scrolled, which is the same trap with no scroll
-  // bar left to escape it.
-  useLayoutEffect(() => {
-    if (window.scrollY !== 0) window.scrollTo(0, 0);
-    document.body.classList.add("terminal-open");
-    return () => document.body.classList.remove("terminal-open");
-  }, []);
+  useTerminalViewport({ setViewportHeight });
 
 
-  useEffect(() => {
-    if (!host.current) return;
-    const term = new XTerm({
-      // The rendered terminal is an output and scroll surface. Text always
-      // comes from the native composer below, which is more reliable on phone
-      // keyboards and keeps accidental taps from editing a live agent prompt.
-      disableStdin: true,
-      cursorBlink: false,
-      cursorStyle: "bar",
-      cursorInactiveStyle: "bar",
-      cursorWidth: 2,
-      fontSize: 14,
-      scrollback: PHONE_SCROLLBACK,
-      theme: phoneTerminalTheme(),
-      minimumContrastRatio: TERMINAL_MIN_CONTRAST,
-    });
-    const fit = new FitAddon(); term.loadAddon(fit); term.open(host.current); fit.fit();
-    // A theme picked while the terminal is open repaints it too.
-    const themeWatch = new MutationObserver(() => { term.options.theme = phoneTerminalTheme(); });
-    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    setCopiedLink(null);
-    setLinkAsking(false);
-    setLinkMissing(false);
-    linkAsked.current = 0;
-    // A clipboard copy the session makes is read only as the sign-in link the
-    // phone just asked for (`askForLink`); any other copy stays on the desktop.
-    // Guarded like the trim emitter below: a stand-in terminal has no parser.
-    term.parser?.registerOscHandler(52, (data) => {
-      if (Date.now() - linkAsked.current > LINK_WAIT_MS) return true;
-      const link = copiedSignIn(osc52Text(data) ?? "");
-      if (link) {
-        linkAsked.current = 0;
-        setLinkAsking(false);
-        setCopiedLink(link);
-        setSignInSheet(true);
-      }
-      return true;
-    });
-    bracketedPaste.current = () => term.modes.bracketedPasteMode === true;
-    screenRows.current = () => bufferRows(term.buffer.active);
-    viewportRows.current = () => bufferRows(term.buffer.active, term.rows);
-    // The history log needs to know when xterm trims scrollback (row indices
-    // shift), and xterm has no public event for it — so this rides the internal
-    // buffer list's own trim emitter (`scrollbackTrimEvent`), guarded: when a
-    // future xterm renames it, the view falls back to the bounded whole-screen
-    // rebuild instead of showing wrong lines.
-    const history = emptyHistory();
-    let trimWatch: { dispose(): void } | undefined;
-    // `term.reset()` — the replay boundary below — builds a *new* normal
-    // buffer, and a listener on the old one's trim emitter then never fires
-    // again. Left as it was, the first reconnect silently detached the log from
-    // trims: once the 10k scrollback filled, `history.end` stopped following the
-    // buffer and the absorbed rows drifted onto the wrong lines. Re-armed after
-    // every reset instead.
-    const watchTrim = () => {
-      trimWatch?.dispose();
-      trimWatch = scrollbackTrimEvent(term)?.((amount) => shiftHistory(history, amount));
-    };
-    watchTrim();
-    const resetHistory = () => {
-      history.chunks = [];
-      history.open = [];
-      history.end = 0;
-      history.droppedLines = 0;
-      history.lost = false;
-      setEarlier({ chunks: [], open: [], dropped: false });
-    };
-    let readableFrame = 0;
-    let readableScrollFrame = 0;
-    let readableTimer = 0;
-    let lastReadable = 0;
-    const renderReadable = () => {
-      const buffer = term.buffer?.active;
-      if (!buffer) return;
-      paneColumns.current = term.cols;
-      const stream = readableHost.current;
-      // The reading view is unmounted in Terminal view. A shell tab has no
-      // other reader of these lines, so re-reading the screen there is pure
-      // waste on a phone battery — but an agent tab's model and mode facts still do:
-      // the mode walk confirms every Shift+Tab against the redrawn status line
-      // and the model sheet lists the picker, both from `lines`. Left stale in
-      // Terminal view, a walk pressed its full lap and reported a failure on a
-      // session that had switched on the second press. The lazy history keeps
-      // this to the live tail, so the rebuild is cheap; only the scroll follow
-      // needs the stream.
-      if (!stream && tab.kind !== "agent") return;
-      lastReadable = Date.now();
-      const followOutput = stream != null && stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120;
-      // The alternate screen has no scrollback, so the reading view would show
-      // only the visible frame, rebuild it on every redraw, and lose the lot
-      // when the program exits. Say so instead of showing a collapsing view —
-      // and never absorb its frames into the history: they are a full-screen
-      // program's repaints, not session output.
-      const alternate = buffer.type === "alternate";
-      setAltScreen(alternate);
-      if (alternate) {
-        // An agent CLI can draw its whole session here — Claude Code does under
-        // `"tui": "fullscreen"`, OpenCode's full TUI always — and then a
-        // question it is waiting on sits on this frame and nowhere else: the
-        // stored session only grows at message boundaries, and there is no
-        // scrollback the reading view could grow from. So the frame is read for
-        // the live readers, and still absorbed nowhere.
-        if (tab.kind === "agent") setAltFrame(readableScreen(buffer).lines);
-        return;
-      }
-      setAltFrame((held) => (held.length > 0 ? [] : held));
-      if (trimWatch) {
-        // Rows that left the tail window are converted once and kept; only the
-        // tail — the live screen plus a margin — is re-read per frame.
-        const grew = absorbHistory(buffer, history, term.rows + TAIL_MARGIN);
-        const tail = readableRange(buffer, history.end, buffer.length, lastHistoryText(history));
-        while (tail.length > 0 && tail[tail.length - 1].text === "") tail.pop();
-        setLines(tail);
-        if (grew) {
-          setEarlier({
-            chunks: [...history.chunks],
-            open: history.open,
-            dropped: history.droppedLines > 0 || history.lost,
-          });
-        }
-        setClipped(false);
-      } else {
-        const screen = readableScreen(buffer);
-        setLines(screen.lines);
-        setClipped(screen.clipped);
-      }
-      if (stream && followOutput) {
-        cancelAnimationFrame(readableScrollFrame);
-        readableScrollFrame = requestAnimationFrame(() => {
-          stream.scrollTo({ top: stream.scrollHeight });
-          followReadable(true);
-        });
-      }
-    };
-    // A busy agent repaints many times a second. Rebuilding the reading view on
-    // every one of those frames burned battery and made the text jitter under a
-    // reader's eyes without adding anything they could follow.
-    const updateReadable = () => {
-      if (readableTimer) return;
-      const wait = Math.max(0, READABLE_INTERVAL - (Date.now() - lastReadable));
-      readableTimer = window.setTimeout(() => {
-        readableTimer = 0;
-        cancelAnimationFrame(readableFrame);
-        readableFrame = requestAnimationFrame(() => {
-          renderReadable();
-          // The tick's one reader is the session settle read, which only an
-          // agent tab has (`sessionFocus`). On a shell tab in Terminal view
-          // `renderReadable` changes no state, so bumping it anyway re-rendered
-          // this whole screen ~8×/s for as long as a command streamed.
-          if (tab.kind === "agent") setScreenTick((tick) => tick + 1);
-        });
-      }, wait);
-    };
-    refreshReadable.current = updateReadable;
-    const scheme = location.protocol === "https:" ? "wss" : "ws";
-    let ws: WebSocket | null = null;
-    let stopped = false;
-    let reconnectTimer: number | undefined;
-    let reconnectAttempt = 0;
-    let lastPong = 0;
-    /** Pongs received on the current socket — what the resume check compares,
-     * since two timestamps in one millisecond would read as no pong. */
-    let pongs = 0;
-    /** Binary input frames sent on the current socket. The desktop counts the
-     * ones it wrote to the PTY the same way and acks each by that ordinal, so
-     * nothing has to ride on a raw keystroke frame. */
-    let inputFrames = 0;
-    /** Frames the desktop has not acked yet, by ordinal: when they went, and
-     * the pending bubble they carry a piece of. One past its deadline stays
-     * here, `late`, until its socket goes: an ack that comes after all still
-     * takes the marker back down. */
-    const unacked = new Map<number, { at: number; prompt?: number; late?: boolean }>();
-    let ackTimer = 0;
-    /** `inputFrames` at each ping still waiting for its pong. The desktop
-     * reads the socket in order, so a pong vouches for every frame sent
-     * before its ping — which is also all a sidecar that predates the ack
-     * says about them. */
-    const pingMarks: number[] = [];
-    /** Whether an interruption notice is already on screen for this outage:
-     * one line per outage, not one per reconnect attempt. */
-    let interrupted = false;
-    const markPrompt = (id: number, state: { failed: boolean; retrying: boolean }) => {
-      setPending((current) => current.map((prompt) => prompt.id === id ? { ...prompt, ...state } : prompt));
-    };
-    /** Give up on every unacked frame older than `olderThan`: its bubble is
-     * marked not delivered, or, for a keystroke with no bubble, the
-     * composer's notice goes up. `lost` (a close, a replay) also forgets
-     * them — no ack can come for them any more. */
-    const failUnacked = (olderThan: number, lost = false) => {
-      const failed = new Set<number>();
-      let bare = false;
-      for (const [seq, entry] of unacked) {
-        if (entry.at > olderThan) continue;
-        if (lost) unacked.delete(seq);
-        if (entry.late) continue;
-        entry.late = true;
-        if (entry.prompt === undefined) bare = true;
-        else failed.add(entry.prompt);
-      }
-      for (const id of failed) markPrompt(id, { failed: true, retrying: false });
-      if (bare) setSendFailed(true);
-    };
-    /** Everything up to the `seq`-th frame reached the PTY (frames are
-     * ordered). A bubble whose last frame is in clears its marker, and so
-     * does the composer's notice once no late keystroke is left. */
-    // The desktop's AI switch dropped the frame the next ack covers (its
-    // `ai_off` event comes just before that ack): the prompt was not delivered.
-    let aiRefused = false;
-    const acked = (seq: number) => {
-      const refused = aiRefused;
-      aiRefused = false;
-      const delivered = new Set<number>();
-      let bare = false;
-      for (const [frame, entry] of unacked) {
-        if (frame > seq) continue;
-        unacked.delete(frame);
-        if (entry.prompt !== undefined) delivered.add(entry.prompt);
-        else if (entry.late) bare = true;
-      }
-      const waiting = [...unacked.values()];
-      for (const id of delivered) {
-        if (refused) markPrompt(id, { failed: true, retrying: false });
-        else if (!waiting.some((entry) => entry.prompt === id)) markPrompt(id, { failed: false, retrying: false });
-      }
-      if (bare && !waiting.some((entry) => entry.late && entry.prompt === undefined)) setSendFailed(false);
-    };
-    const sendPing = (socket: WebSocket) => {
-      pingMarks.push(inputFrames);
-      socket.send(JSON.stringify({ type: "ping" }));
-    };
-    /** An overdue ack is not yet a lost frame: a late ack (behind a burst of
-     * output) or a desktop that predates acks left the marker flickering up on
-     * every prompt and the composer's notice up after every keystroke. Past
-     * the deadline the link is asked for a pong — which vouches for every
-     * frame sent before its ping — and only what that has not cleared within
-     * ACK_PROBE_GRACE counts as lost. */
-    const armAck = () => {
-      if (ackTimer || ![...unacked.values()].some((entry) => !entry.late)) return;
-      ackTimer = window.setTimeout(() => {
-        const overdue = Date.now() - ACK_DEADLINE;
-        const socket = ws;
-        if (socket?.readyState === WebSocket.OPEN && [...unacked.values()].some((entry) => !entry.late && entry.at <= overdue)) {
-          sendPing(socket);
-          ackTimer = window.setTimeout(() => {
-            ackTimer = 0;
-            failUnacked(overdue);
-            armAck();
-          }, ACK_PROBE_GRACE);
-          return;
-        }
-        ackTimer = 0;
-        failUnacked(overdue);
-        armAck();
-      }, ACK_DEADLINE);
-    };
-    // Returns whether the bytes were handed to an open socket that is still
-    // taking them. Callers that confirm something to the user must not claim
-    // success on a `false`; the ack is what confirms delivery.
-    sendControl.current = (frame) => {
-      if (ws?.readyState !== WebSocket.OPEN) return false;
-      ws.send(JSON.stringify(frame));
-      return true;
-    };
-    write.current = (value, prompt) => {
-      if (ws?.readyState !== WebSocket.OPEN) return false;
-      // Buffered bytes the socket is not draining are the earliest sign of a
-      // stalled link — earlier than the missed pongs that would close it.
-      if (ws.bufferedAmount > STALLED_BYTES) return false;
-      ws.send(new TextEncoder().encode(value));
-      inputFrames += 1;
-      unacked.set(inputFrames, { at: Date.now(), prompt });
-      armAck();
-      return true;
-    };
-    // tmux sizes a window to its widest client and pans every narrower one
-    // across it. Adopting the window geometry the server reports is what keeps
-    // the phone from receiving a silently cropped, cursor-following slice; the
-    // offscreen emulator's column count never had to match the physical screen.
-    let windowSize: { cols: number; rows: number } | undefined;
-    let wide: WideOutputHint | undefined;
-    let anchorFrame = 0;
-    // The screen is as tall as the desktop window, so on a phone its last rows
-    // — the live prompt and the newest output — sit below the fold. Show that
-    // end of it; the rows above are one drag away (terminal/touchScroll.ts).
-    // Deferred a frame because xterm sizes the screen element on its own
-    // render, after this returns.
-    const anchorNewest = () => {
-      cancelAnimationFrame(anchorFrame);
-      anchorFrame = requestAnimationFrame(() => {
-        const box = host.current;
-        if (box) box.scrollTop = box.scrollHeight;
-        atNewest.current = true;
-        wide?.sync();
-      });
-    };
-    const applySize = () => {
-      const rows = term.rows;
-      if (windowSize) {
-        if (term.cols !== windowSize.cols || term.rows !== windowSize.rows) {
-          term.resize(windowSize.cols, windowSize.rows);
-        }
-      } else {
-        fit.fit();
-        // Without a window frame the fitted size is what goes to the desktop,
-        // and a size outside the protocol's bounds is answered with a close
-        // that never retries. A landscape phone with its keyboard up fits fewer
-        // rows than the floor; clamp to what the desktop accepts.
-        const cols = Math.min(TERMINAL_SIZE.maxCols, Math.max(TERMINAL_SIZE.minCols, term.cols));
-        const rows = Math.min(TERMINAL_SIZE.maxRows, Math.max(TERMINAL_SIZE.minRows, term.rows));
-        if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
-      }
-      // A changed row count moves the view, and so does a box that was showing
-      // the newest rows before this resize — the keyboard opening and the
-      // composer growing both shrink it, and without this the live prompt and
-      // the newest output slide under the composer and stay there. A reader
-      // panned up into the screen keeps their place through either.
-      if (term.rows !== rows || atNewest.current) anchorNewest();
-      wide?.sync();
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-      }
-    };
-    /** The desktop said the session lapsed (`session_expired`): the next
-     * connect renews it first — the device key signs a fresh challenge, no
-     * PIN — since the upgrade would only meet a 401 otherwise. */
-    let relogin = false;
-    const visibility = createVisibilityReporter(() => document.visibilityState === "visible");
-    /** The link is down: the composer stops looking live, whatever the
-     * socket still owed an ack for is marked not delivered, and dictation —
-     * which types into this link — ends. Shared by a close, a closing frame
-     * that ends the session, and a link this code judged dead itself. */
-    const dropLink = () => {
-      connectedRef.current = false;
-      voiceRequest.current += 1;
-      // Whatever this socket still owed an ack for is gone with it.
-      failUnacked(Number.POSITIVE_INFINITY, true);
-      setConnected(false);
-      setPreparingVoice(false);
-      const activeRecognition = recognition.current;
-      if (activeRecognition) {
-        recognition.current = undefined;
-        activeRecognition.abort();
-        paintMicLevel(dictateButton.current, null);
-        setListening(false);
-        setVoiceStatus(null);
-        setVoiceFailure({ key: "mobile.voice.disconnected" });
-      }
-    };
-    /** The next attempt, on the backoff. The server attaches to the persisted
-     * tmux session again on reconnect, so its screen/history is replayed. Do
-     * not clear the local screen: it keeps the last rendered state useful
-     * while a phone wakes or switches between Wi-Fi and cellular. */
-    const reconnectLater = () => {
-      // Once per outage: a long one used to print this on every attempt,
-      // which walked the screen away from what the reader was reading.
-      if (!interrupted) {
-        interrupted = true;
-        term.write(`\r\n\x1b[33m[${translateNow("mobile.terminal.interrupted")}]\x1b[0m\r\n`);
-      }
-      const delay = Math.min(1_000 * 2 ** reconnectAttempt, 15_000);
-      reconnectAttempt += 1;
-      // A session that ended on the desktop refuses the upgrade at the HTTP
-      // layer, so no `closing` frame can ever say why — the phone would show
-      // "reconnecting…" forever. After two straight failures, ask the tab
-      // endpoint; a transient network failure keeps the reconnect loop. A tab
-      // on the remote host that is out of reach lost the desktop's connection
-      // to the host (its upgrade's `409 host_offline`, `host_down` on the row),
-      // not its session.
-      if (reconnectAttempt >= 2) {
-        void api<{ tab: TabRow }>(`/api/v1/tabs/${tab.id}`)
-          .then((body) => { if (!body.tab.available) throw new ApiError(410, body.tab.on_host && body.tab.host_down ? "host_offline" : "session_gone"); })
-          .catch((reason) => {
-            if (stopped || !(reason instanceof ApiError)) return;
-            if (reason.status !== 404 && reason.status !== 410) return;
-            stopped = true;
-            clearTimeout(reconnectTimer);
-            setStoppedReason(describeFailure(reason.code === "host_offline" ? "host_offline" : "session_gone"));
-          });
-      }
-      clearTimeout(reconnectTimer);
-      reconnectTimer = window.setTimeout(connect, delay);
-    };
-    /** A link this code judged dead — no pong, a send buffer not draining —
-     * is let go of at once. `close()` alone left it to `onclose`, which on a
-     * silent link the browser fires only once the closing handshake times
-     * out; until then `readyState` read CLOSING, the screen still said
-     * connected, and neither the ping tick nor `resume` would act on it.
-     * Detached here, its late `onclose` and anything it still delivers are
-     * ignored (`ws !== next`); the desktop evicts the old viewer when the new
-     * socket attaches. */
-    const abandon = (socket: WebSocket) => {
-      if (stopped || ws !== socket) return;
-      ws = null;
-      socket.close();
-      dropLink();
-      reconnectLater();
-    };
-    const connect = () => {
-      if (stopped) return;
-      if (relogin) {
-        relogin = false;
-        void recoverSession().finally(() => { if (!stopped) connect(); });
-        return;
-      }
-      const next = new WebSocket(`${scheme}://${location.host}/api/v1/tabs/${tab.id}/terminal`, TERMINAL_PROTOCOL);
-      ws = next;
-      next.binaryType = "arraybuffer";
-      next.onopen = () => {
-        if (stopped || ws !== next) return;
-        reconnectAttempt = 0;
-        connectedRef.current = true;
-        lastPong = Date.now();
-        pongs = 0;
-        inputFrames = 0;
-        pingMarks.length = 0;
-        interrupted = false;
-        // A new bridge says again what it takes; an ask the old socket held
-        // is never answered.
-        setSendNowReady(false);
-        sendNowAsking.current = false;
-        setConnected(true);
-        setSendFailed(false);
-        // A retryable close (`idle_timeout`) explained itself and then
-        // reconnected; the explanation must not outlive the outage, or it sat
-        // over the composer for the rest of the session.
-        setStoppedReason("");
-        next.send(JSON.stringify({ type: "ready" }));
-        applySize();
-      };
-      // An error is always followed by `close`, which does the reconnecting;
-      // this exists so the failure is not an unhandled event.
-      next.onerror = () => {
-        if (ws === next) connectedRef.current = false;
-      };
-      // A closing frame that ends the session tore the link down already
-      // (below), and an unmount must not set state: both leave `stopped`.
-      next.onclose = () => {
-        if (stopped || ws !== next) return;
-        dropLink();
-        reconnectLater();
-      };
-      next.onmessage = (event) => {
-        if (ws !== next) return;
-        if (event.data instanceof ArrayBuffer) {
-          lastOutputAt.current = Date.now();
-          term.write(new Uint8Array(event.data), updateReadable);
-          return;
-        }
-        if (typeof event.data !== "string") return;
-        let control: TerminalEvent;
-        try {
-          control = JSON.parse(event.data) as TerminalEvent;
-        } catch {
-          return;
-        }
-        if (typeof control !== "object" || control === null) return;
-        if (control.type === "pong") {
-          lastPong = Date.now();
-          pongs += 1;
-          const mark = pingMarks.shift();
-          if (mark !== undefined) acked(mark);
-          return;
-        }
-        if (control.type === "ack") {
-          acked(control.seq);
-          return;
-        }
-        if (control.type === "replay") {
-          // The desktop sends this once, before it reads any input: frames the
-          // phone sent ahead of it are still to be written and acked, not lost.
-          // The server is about to resend the session. Without an explicit
-          // boundary the replay was appended to whatever was already on screen,
-          // so each reconnect left another copy of the same agent turn — and a
-          // reader could not tell one destructive command from three.
-          // The history log goes with it: the replay re-delivers the session,
-          // so keeping the absorbed copy would double every line.
-          term.reset();
-          watchTrim();
-          resetHistory();
-          setLines([]);
-          return;
-        }
-        if (control.type === "ai_switch") {
-          setAiOff(control.off);
-          if (!control.off) setAiOffAt(0);
-          return;
-        }
-        if (control.type === "ai_off") {
-          aiRefused = true;
-          setAiOff(true);
-          setAiOffAt(Date.now());
-          return;
-        }
-        if (control.type === "features") {
-          // This desktop takes visibility reports: say so if the page is
-          // already hidden, and from here on at every change.
-          if (control.visibility) visibility.supported(next);
-          setSendNowReady(control.send_now === true);
-          return;
-        }
-        if (control.type === "send_now") {
-          sendNowAnswer.current(control.sent);
-          return;
-        }
-        if (control.type === "window") {
-          windowSize = { cols: control.cols, rows: control.rows };
-          applySize();
-          return;
-        }
-        if (control.type === "closing") {
-          // An end the desktop chose (`replaced`, `access_revoked`, …) is
-          // torn down here, on its frame: `stopped` makes the `onclose` that
-          // follows a no-op, so leaving it to that left the composer live and
-          // the unacked prompts pending under the sentence below. That
-          // sentence is the whole explanation; nothing goes on the screen.
-          if (!control.retry && !stopped) {
-            stopped = true;
-            clearTimeout(reconnectTimer);
-            dropLink();
-          }
-          // The session lapsed, not the tab: renew it and come back.
-          if (control.reason === "session_expired") relogin = true;
-          setStoppedReason(describeFailure(control.reason));
-        }
-      };
-    };
-    connect();
-    // xterm retains an internal textarea for accessibility even with stdin
-    // disabled. Explicitly disable and remove it from tab order so a tap can
-    // neither summon a second keyboard nor become a second input route.
-    if (term.textarea) {
-      term.textarea.disabled = true;
-      term.textarea.tabIndex = -1;
-      term.textarea.setAttribute("aria-hidden", "true");
-    }
-    const terminalHost = host.current;
-    const removeTouchScroll = installTerminalTouchScroll(terminalHost, term);
-    // Both the drag handler and `anchorNewest` scroll the box, and both arrive
-    // here. `NEWEST_SLACK` absorbs the sub-pixel cell height that leaves a
-    // fitted screen a fraction short of its own scroll extent.
-    const followNewest = () => {
-      atNewest.current =
-        terminalHost.scrollHeight - terminalHost.scrollTop - terminalHost.clientHeight <= NEWEST_SLACK;
-    };
-    terminalHost.addEventListener("scroll", followNewest, { passive: true });
-    // A fresh session starts at column one, whatever the previous tab was
-    // panned to.
-    terminalHost.scrollLeft = 0;
-    if (wideHint.current) wide = installWideOutputHint(terminalHost, wideHint.current);
-    anchorNewest();
-    let resizeTimer = 0;
-    let resizeFrame = 0;
-    // A pending reading-view frame is left alone: the keyboard opening fires a
-    // burst of viewport resizes, and cancelling the frame here dropped the
-    // rebuild of whatever output had just arrived — the next byte, if any,
-    // was the only thing that brought it back.
-    const resize = () => {
-      cancelAnimationFrame(resizeFrame);
-      resizeFrame = requestAnimationFrame(() => {
-        clearTimeout(resizeTimer);
-        resizeTimer = window.setTimeout(applySize, 100);
-      });
-    };
-    // A backgrounded PWA can be frozen before React unmounts, so the release
-    // has to go out on `pagehide` too — otherwise the server holds the tab.
-    const release = () => {
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "detached" }));
-    };
-    window.addEventListener("pagehide", release);
-    // Hidden is not gone: the socket stays (no replay on the way back), and
-    // the desktop is told nobody is looking, so an agent's notice is not held
-    // back for a phone in a pocket (`terminal/visibility.ts`).
-    document.addEventListener("visibilitychange", visibility.changed);
-    window.addEventListener("resize", resize);
-    window.visualViewport?.addEventListener("resize", resize);
-    // A phone can change the terminal's usable width without firing a window
-    // resize (for example when browser chrome or a split-screen divider moves).
-    // Keep xterm and the PTY in lockstep so long output is reflowed at the
-    // visible right edge instead of leaving a stale, wider canvas behind.
-    const resizeObserver = typeof ResizeObserver === "undefined"
-      ? undefined
-      : new ResizeObserver(resize);
-    resizeObserver?.observe(terminalHost);
-    const ping = window.setInterval(() => {
-      if (ws?.readyState !== WebSocket.OPEN) return;
-      // The server answers every ping. Silence past the grace window means the
-      // link is gone even though the browser still reports OPEN, so let go of
-      // it and reconnect. So does a send buffer the socket is not draining —
-      // the earlier tell of the same dead link.
-      if ((lastPong && Date.now() - lastPong > PONG_GRACE) || ws.bufferedAmount > STALLED_BYTES) {
-        abandon(ws);
-        return;
-      }
-      sendPing(ws);
-    }, PING_INTERVAL);
-    // The page came back into view — a phone unlocked, the app switched back
-    // to. A socket that closed while it was away has its reconnect waiting on
-    // a backoff timer that was frozen with the page: run it now. One the
-    // browser still reports OPEN is asked for a pong within RESUME_GRACE and
-    // abandoned otherwise, which starts the ordinary reconnect without waiting
-    // for the browser's close; before this the composer stayed enabled on a
-    // dead link until PONG_GRACE ran out, and typing went nowhere.
-    let resumeTimer = 0;
-    const resume = () => {
-      if (stopped || document.visibilityState !== "visible") return;
-      const current = ws;
-      if (!current || current.readyState === WebSocket.CLOSED) {
-        clearTimeout(reconnectTimer);
-        reconnectAttempt = 0;
-        connect();
-        return;
-      }
-      if (current.readyState !== WebSocket.OPEN) return;
-      const seen = pongs;
-      sendPing(current);
-      clearTimeout(resumeTimer);
-      resumeTimer = window.setTimeout(() => {
-        if (stopped || ws !== current || current.readyState !== WebSocket.OPEN) return;
-        if (pongs === seen) {
-          reconnectAttempt = 0;
-          abandon(current);
-        }
-      }, RESUME_GRACE);
-      updateReadable();
-    };
-    document.addEventListener("visibilitychange", resume);
-    window.addEventListener("pageshow", resume);
-    return () => {
-      stopped = true;
-      connectedRef.current = false;
-      voiceRequest.current += 1;
-      refreshReadable.current = () => {};
-      write.current = () => false;
-      sendControl.current = () => false;
-      bracketedPaste.current = () => false;
-      screenRows.current = () => [];
-      viewportRows.current = () => [];
-      clearTimeout(reconnectTimer);
-      clearTimeout(ackTimer);
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "detached" }));
-      ws?.close();
-      trimWatch?.dispose();
-      themeWatch.disconnect();
-      term.dispose();
-      window.clearTimeout(linkTimer.current);
-      clearInterval(ping);
-      clearTimeout(resumeTimer);
-      document.removeEventListener("visibilitychange", resume);
-      window.removeEventListener("pageshow", resume);
-      clearTimeout(resizeTimer);
-      clearTimeout(readableTimer);
-      cancelAnimationFrame(resizeFrame);
-      cancelAnimationFrame(readableFrame);
-      cancelAnimationFrame(readableScrollFrame);
-      cancelAnimationFrame(anchorFrame);
-      window.removeEventListener("pagehide", release);
-      document.removeEventListener("visibilitychange", visibility.changed);
-      window.removeEventListener("resize", resize);
-      window.visualViewport?.removeEventListener("resize", resize);
-      resizeObserver?.disconnect();
-      terminalHost.removeEventListener("scroll", followNewest);
-      removeTouchScroll();
-      wide?.dispose();
-    };
-  }, [tab.id]);
-  useEffect(() => { if (view === "focus") refreshReadable.current(); }, [view]);
-  // The reading view has the problem Terminal view's box has: the keyboard
-  // opening, or the composer growing under a long draft, shrinks it without
-  // moving its scroll offset, so the newest turn slides under the composer.
-  // There it also stops following output, because the follow test is the
-  // distance to the bottom the shrink just opened up — nothing came back until
-  // the reader found "Jump to latest". Put it back on the newest whenever it
-  // was there before the resize.
-  useEffect(() => {
-    const stream = readableHost.current;
-    if (!stream || typeof ResizeObserver === "undefined") return;
-    let frame = 0;
-    const observer = new ResizeObserver(() => {
-      if (!atBottomRef.current) return;
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => stream.scrollTo({ top: stream.scrollHeight }));
-    });
-    observer.observe(stream);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-    // The stored session mounts the reading view over a full-screen program
-    // too, so its availability re-runs this as well.
-  }, [view, altScreen, transcript?.available]);
-  // Focus on an agent tab is its stored session and nothing else, so an agent
-  // whose transcript is never read (`unsupported`) opens Terminal instead,
-  // without writing that as the reader's choice. Every other reason is a
-  // session on its way — a tab the phone just created has no session id until
-  // its hook records one, a read can fail once, Codex binds its rollout late —
-  // so Focus stays on a loading row and paints the session the moment it
-  // reads. It used to leave for Terminal on any of these, and since that was
-  // not the reader's choice either, nothing ever brought it back.
-  /** Whether the composer has the keyboard. While it does, nothing swaps the
-   * view under the reader's thumbs: not the hand-over to Terminal below, and
-   * not a read that answers a shown chat `available: false` — on a desktop
-   * under full load the window misses the call's deadline, the host answers
-   * from the tab record instead, and the chat used to drop to the screen and
-   * come back with the next read, mid-sentence. Such an answer is only noted
-   * (`transcriptHeld`); letting go of the composer reads the session afresh. */
-  const [composerTyping, setComposerTyping] = useState(false);
-  const transcriptHeld = useRef(false);
-  const typingStopped = () => {
-    setComposerTyping(false);
-    if (!transcriptHeld.current) return;
-    transcriptHeld.current = false;
-    setTranscriptReload((count) => count + 1);
-  };
-  // Asks the page rather than `composerTyping`: a composer disabled while it
-  // had focus (the link dropped) loses it without a blur event.
-  const showTranscript = (next: SessionTranscript) => setTranscript((current) => {
-    const typing = !!composerInput.current && document.activeElement === composerInput.current;
-    if (typing && current?.available && !next.available) {
-      transcriptHeld.current = true;
-      return current;
-    }
-    transcriptHeld.current = false;
-    return current && sameTranscript(current, next) ? current : next;
+  useTerminalSocket({
+    tab, host, wideHint, readableHost, refreshReadable, write, sendControl, setSendNowReady,
+    sendNowAsking, sendNowAnswer, recognition, dictateButton, connectedRef, voiceRequest,
+    lastOutputAt, bracketedPaste, screenRows, viewportRows, setConnected, setStoppedReason,
+    setAiOffAt, setAiOff, setAltScreen, setAltFrame, setSendFailed, setLines, setClipped,
+    setSignInSheet, setCopiedLink, linkAsked, linkTimer, setLinkAsking, setLinkMissing, setEarlier,
+    followReadable, atNewest, setListening, setPreparingVoice, setVoiceStatus, setVoiceFailure,
+    setPending, setScreenTick, paneColumns,
   });
-  /** An agent with no stored session to read: its Chat entry is dimmed and
-   * its Focus hands over to Terminal. A just-sent prompt is still a useful
-   * Reader conversation when Codex has not produced a readable rollout yet —
-   * its local bubble stays on screen rather than vanishing mid-turn. */
-  const chatUnavailable = tab.kind === "agent" && transcript?.available === false && transcript.reason === "unsupported"
-    && (!CODEX_AGENT.test(tab.agent_label ?? tab.label) || pending.length === 0);
-  useEffect(() => {
-    if (!composerTyping && view === "focus" && chatUnavailable) setView("terminal");
-  }, [view, chatUnavailable, composerTyping]);
-  /** Whether Focus is reading an agent's stored session: every agent tab's
-   * Focus — a shell's reads its screen. */
-  const sessionFocus = tab.kind === "agent" && view === "focus";
-  /** Whether `transcript` is the session as it stands: a read answered since
-   * Focus last opened. Terminal view reads none, so what it holds is the
-   * session of when the reader left Focus — or nothing at all. */
-  const [transcriptCurrent, setTranscriptCurrent] = useState(false);
-  useEffect(() => { if (view !== "focus") setTranscriptCurrent(false); }, [view]);
-  const transcriptVersion = useRef<string | undefined>();
-  /** The session poll below, so the settle read can ask it to read now. */
-  const transcriptPoll = useRef<VisiblePoll>();
-  useEffect(() => { transcriptVersion.current = transcript?.version; }, [transcript]);
-  /** What this chat changed and has not committed: the Commit chip's count
-   * and its sheet's list, read again each time the sheet opens. */
-  const [commitRefresh, setCommitRefresh] = useState(0);
-  const uncommitted = useChatUncommitted(tab.id, tab.kind === "agent" && !bare, transcript?.version, commitRefresh);
-  const uncommittedCount = uncommitted?.available ? uncommitted.total : 0;
-  /** Reads the stored session: on open, every TRANSCRIPT_POLL while the page
-   * is visible, and TRANSCRIPT_SETTLE after the screen last changed. A read
-   * that answers `unchanged` keeps what is shown; one that fails keeps it too
-   * and the next read retries. An unavailable session (a shell, an agent
-   * whose transcript is not read, no desktop) hands Focus to the screen. */
-  useEffect(() => {
-    if (tab.kind !== "agent" || view !== "focus") return;
-    const poll = startVisiblePoll((signal) => getTranscript(tab.id, transcriptVersion.current, transcriptLimit, signal).then(
-      (next) => {
-        if (signal.aborted) return;
-        // A malformed answer is a failed read: keep what is shown.
-        if (!next || typeof next !== "object") return;
-        setTranscriptCurrent(true);
-        if (next.unchanged) return;
-        // A forced full read (after an Undo) answers the same session: keep
-        // what is shown, but ask by its version again from here on.
-        transcriptVersion.current = next.version;
-        showTranscript(next);
-      },
-      () => {},
-    ), TRANSCRIPT_POLL);
-    transcriptPoll.current = poll;
-    return () => {
-      poll.stop();
-      if (transcriptPoll.current === poll) transcriptPoll.current = undefined;
-    };
-  }, [tab.id, tab.kind, view, transcriptLimit, transcriptReload]);
-  useEffect(() => {
-    if (!sessionFocus || screenTick === 0) return;
-    const timer = window.setTimeout(() => transcriptPoll.current?.now(), TRANSCRIPT_SETTLE);
-    return () => window.clearTimeout(timer);
-  }, [screenTick, sessionFocus, tab.id, transcriptLimit]);
-  /** Where the live screen's input box begins — `liveScreen.length` while the
-   * CLI has not drawn one yet (still starting, or a dialog in its place). */
-  const liveFrameStart = useMemo(
-    () => (tab.kind === "agent" ? inputFrameStart(liveScreen, tab.agent_label ?? tab.label) : liveScreen.length),
-    [tab.kind, tab.agent_label, tab.label, liveScreen],
-  );
-  const cliReady = liveFrameStart < liveScreen.length;
-  /** A session with nothing to read yet: the first read has not answered, or
-   * the CLI has recorded no session (or no transcript) so far — a fresh tab
-   * starting, Codex binding its rollout late, a prompt from here not yet
-   * recorded. The chat shows a loading row while the CLI starts, then the
-   * empty chat; the screen is one tap away in Terminal. A cloud tab never
-   * records one (`cloudTab`). */
-  const sessionWaiting = sessionFocus && !cloudTab
-    && (transcript === null || (!transcript.available && (transcript.reason === "no_session" || transcript.reason === "no_transcript")));
-  /** The session chat's entries: the stored ones, with each prompt sent
-   * from here held in its place (`withPending`). */
-  /** The new chat's records while the one cleared from here is still what the
-   * desktop answers with; `null` once another session is read. */
-  const sinceClear = useMemo(() => afterClear(transcript?.entries ?? [], clearedAt), [transcript, clearedAt]);
-  // The Undo is done once the session read holds the cleared conversation's
-  // last record again (at once, when that conversation was empty).
-  useEffect(() => {
-    if (typeof undoing !== "object") return;
-    if (undoing.mark && afterClear(transcript?.entries ?? [], undoing.mark) === null) return;
-    setUndoing(false);
-  }, [undoing, transcript]);
-  const storedEntries = useMemo(() => sinceClear ?? transcript?.entries ?? [], [sinceClear, transcript]);
-  const sessionEntries = useMemo(() => withPending(storedEntries, pending), [storedEntries, pending]);
-  const sessionAgents = useMemo(() => sessionEntries.filter((entry) => entry.kind === "agent"), [sessionEntries]);
-  /** The session's subagents only earlier turns not read in hold, counted
-   * with the listed ones; none for a long session that never spawned one. */
-  const earlierAgents = transcript?.truncated && !sinceClear ? transcript.agentsEarlier ?? 0 : 0;
-  const agentsEarlier = earlierAgents > 0;
-  /** A prompt the desktop still holds sits below the agent at work. */
-  const queuedShown = sessionEntries.some((entry) => entry.queued);
-  /** The files the agent sent while this conversation ran, as its messages. */
-  // The gallery holds every file of the project; the chat only what this tab sent.
-  const chatPosts = useMemo(() => outboxPosts(sessionEntries, outbox.filter((file) => file.from_tab)), [sessionEntries, outbox]);
-  /** What the phone sent into the inbox, as the chat's prompts and the
-   * composer name it — described once by the desktop for their previews. */
-  const promptLeaves = useMemo(() => [...new Set(sessionEntries.flatMap((entry) => entry.kind === "prompt" ? inboxLeaves(entry.text) : []))], [sessionEntries]);
-  const inboxNamed = useMemo(() => [...new Set([
-    ...promptLeaves,
-    ...uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [leafOfReference(upload.reference)]),
-  ])], [promptLeaves, uploads]);
-  const inboxFiles = useInboxFiles(tab.id, inboxNamed);
-  /** Both directions' files, for the list beside the subagent index. */
-  const chatFiles = useMemo(() => sentFiles(outbox, promptLeaves, inboxFiles), [outbox, promptLeaves, inboxFiles]);
-  /** The open subagent's conversation, once read. */
-  const subToken = openStep?.token;
-  const subTranscript = subRead && subRead.token === subToken ? subRead.transcript : null;
-  // Another tab is another session, with subagents of its own. Not on the
-  // first run: a subagent picked off the card is open from the start.
-  const pathTab = useRef(tab.id);
-  useEffect(() => {
-    if (pathTab.current === tab.id) return;
-    pathTab.current = tab.id;
-    setSubagentPath([]);
-  }, [tab.id]);
-  useEffect(() => { setSubagentListOpen(false); setSentListOpen(false); }, [tab.id]);
-  useEffect(() => { setSubagentNote(""); }, [tab.id, subToken]);
-  useEffect(() => { setSubLimit(TRANSCRIPT_STEP); }, [subToken]);
-  /** Reads the open subagent's conversation as the session itself is read: at
-   * once, then every TRANSCRIPT_POLL while the page is visible — a subagent
-   * still at work keeps writing. */
-  useEffect(() => {
-    if (!subToken || tab.kind !== "agent" || view !== "focus") return;
-    let version: string | undefined;
-    return startVisiblePoll((signal) => getTranscript(tab.id, version, subLimit, signal, subToken).then(
-      (next) => {
-        if (signal.aborted || !next || typeof next !== "object" || next.unchanged) return;
-        version = next.version;
-        setSubRead((current) => current && current.token === subToken && sameTranscript(current.transcript, next)
-          ? current
-          : { token: subToken, transcript: next });
-      },
-      () => {},
-    ), TRANSCRIPT_POLL).stop;
-  }, [subToken, subLimit, tab.id, tab.kind, view]);
-  /** The conversation on screen — the session's, or the open subagent's —
-   * which is where a card tapped in it was opened from. */
-  const levelEntries = openStep ? (subTranscript?.entries ?? []) : sessionEntries;
-  const levelEntriesRef = useRef(levelEntries);
-  levelEntriesRef.current = levelEntries;
-  const openSubagentTurn = useCallback((turn: Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">, fromList = false) => {
-    const token = turn.subagent;
-    if (!token) return;
-    const top = readableHost.current?.scrollTop ?? 0;
-    setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role, ...(turn.workflow ? { workflow: true } : {}) }, levelEntriesRef.current, top));
-    if (!fromList) setSubagentListOpen(false);
-    // A conversation opens on its newest turn, as the session does.
-    atBottomRef.current = true;
-    setAtBottom(true);
-  }, []);
-  const openListedSubagent = (entry: TranscriptEntry) => {
-    if (!entry.subagent) return;
-    openSubagentTurn(entry, true);
-  };
-  /** Back up one level, to where that conversation was scrolled. */
-  const subagentUp = () => {
-    if (!openStep) return;
-    // Opened from outside the chat (the card's list): up lands on its newest turn.
-    const fromOutside = openStep.scrollTop < 0;
-    restoreScroll.current = fromOutside ? null : openStep.scrollTop;
-    atBottomRef.current = fromOutside;
-    setAtBottom(fromOutside);
-    setSubagentPath((path) => path.slice(0, -1));
-  };
-  const subagentSibling = (delta: number) => {
-    atBottomRef.current = true;
-    setAtBottom(true);
-    setSubagentPath((path) => stepSibling(path, delta));
-  };
-  // A prompt that went to the session (a Claude subagent's own words never
-  // join `pending`): the Reader goes back to the chat it lands in.
-  const pendingCount = useRef(pending.length);
-  useEffect(() => {
-    if (pending.length > pendingCount.current) {
-      atBottomRef.current = true;
-      setAtBottom(true);
-      setSubagentPath([]);
-    }
-    pendingCount.current = pending.length;
-  }, [pending.length]);
-  useLayoutEffect(() => {
-    const top = restoreScroll.current;
-    const stream = readableHost.current;
-    // Wait until the conversation gone back to is drawn.
-    if (top === null || !stream || (openStep && !subTranscript)) return;
-    restoreScroll.current = null;
-    stream.scrollTop = top;
-  }, [openStep, subTranscript]);
-  /** Read-aloud: each answer that arrives at the end of the stored session is
-   * spoken once. What the first read brought is history, as is anything
-   * "earlier" reveals above it or a whole other session swapped in — only a
-   * short new tail is news. Nothing is said over dictation: the microphone
-   * would hear it. */
-  const spokenKeys = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    spokenKeys.current = null;
-    return stopSpeaking;
-  }, [tab.id]);
-  useEffect(() => {
-    if (!sessionFocus || !transcript) return;
-    const turns = transcriptTurns(transcript.entries);
-    const seen = spokenKeys.current;
-    spokenKeys.current = new Set(turns.map((turn) => turn.key));
-    if (!seen || !readAloud || listening) return;
-    let known = -1;
-    turns.forEach((turn, index) => { if (seen.has(turn.key)) known = index; });
-    const fresh = turns.slice(known + 1).filter((turn) => turn.kind === "answer");
-    if (fresh.length === 0 || fresh.length > MAX_SPOKEN_AT_ONCE) return;
-    const code = t("mobile.speech.code");
-    for (const turn of fresh) speak(turn.key, spokenText(turn.text, code), speechTag());
-  }, [sessionFocus, transcript, readAloud, listening, t]);
-  useEffect(() => {
-    if (listening || !sessionFocus) stopSpeaking();
-  }, [listening, sessionFocus]);
+  useReadableFollow({ readableHost, refreshReadable, altScreen, view, atBottomRef, transcript });
+  const {
+    setComposerTyping, typingStopped, chatUnavailable, sessionFocus, transcriptCurrent,
+    transcriptVersion, setCommitRefresh, uncommitted, uncommittedCount,
+  } = useSessionTranscript({
+    tab, bare, composerInput, view, setView, setTranscript, transcript, pending,
+    setTranscriptReload, transcriptReload, transcriptLimit, screenTick,
+  });
+  const {
+    cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents,
+    earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles,
+  } = useSessionEntries({
+    tab, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
+    sessionFocus,
+  });
+  const {
+    subToken, subTranscript, openSubagentTurn, openListedSubagent, subagentUp, subagentSibling,
+  } = useSubagentReader({
+    tab, readableHost, view, setAtBottom, atBottomRef, pending, setSubagentNote, setSubagentPath,
+    setSubagentListOpen, setSentListOpen, openStep, subRead, setSubRead, setSubLimit, subLimit,
+    restoreScroll, sessionEntries,
+  });
+  useReadAloud({ tab, t, listening, transcript, readAloud, sessionFocus });
   // A new turn in the stored session, or a file the agent sent into the
   // Focus chat, scrolls the view to it, as new screen output does, unless
   // the reader has scrolled up to read.
@@ -2475,805 +1253,42 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     const stream = readableHost.current;
     if (stream && typeof stream.scrollTo === "function") stream.scrollTo({ top: stream.scrollHeight });
   }, [sessionFocus, transcript, pending, chatPosts, atBottom, subToken, subTranscript]);
-  /** Reads the outbox now and every `OUTBOX_POLL` while the page is visible;
-   * coming back to the page reads it at once. A listing that could not be
-   * fetched keeps what was shown — the next poll retries. */
-  useEffect(() => {
-    setOutbox([]);
-    setGallery(false);
-    setOutboxOpen(null);
-    setInboxOpen(null);
-    if (bare) return;
-    return startVisiblePoll((signal) => listOutbox({ tab: tab.id }, signal).then(
-      (images) => {
-        if (signal.aborted || !Array.isArray(images)) return;
-        setOutbox((current) => sameOutbox(current, images) ? current : images);
-      },
-      () => {},
-    ), OUTBOX_POLL).stop;
-  }, [tab.id, bare]);
-  /** Reads the usage panel now and every `LIMITS_POLL` while the page is
-   * visible. A CLI with no usage readout stops the polling; a failed read keeps
-   * what was shown — the next poll retries. */
-  useEffect(() => {
-    if (tab.kind !== "agent") return;
-    let last = 0;
-    let unsupported = false;
-    let disposed = false;
-    const poll = startVisiblePoll(() => {
-      if (unsupported || Date.now() - last < LIMITS_POLL / 2) return undefined;
-      last = Date.now();
-      return getAgentStatus(tab.id).then(
-        (report) => {
-          // A malformed answer is a failed read: keep what is shown.
-          if (disposed || !report?.usage) return;
-          if (report.usage.supported === false) {
-            unsupported = true;
-            return;
-          }
-          if (report.usage.raw) rememberLimits(limitMeters(parseUsageReport(report.usage.raw)));
-        },
-        () => {},
-      );
-    }, LIMITS_POLL);
-    return () => {
-      disposed = true;
-      poll.stop();
-    };
-  }, [tab.id, tab.kind, rememberLimits]);
-  useEffect(() => {
-    if (tab.kind !== "agent") return;
-    const timer = window.setInterval(() => setLimitsNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, [tab.kind]);
-  useEffect(() => {
-    const viewerUp = outboxOpen !== null && markupAway === null;
-    if (!viewerUp && !gallery && !inboxOpen) return;
-    // The viewer opens from the gallery, so Escape closes the top one first;
-    // a tucked-away markup view is not on top.
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (viewerUp) setOutboxOpen(null);
-      else if (inboxOpen) setInboxOpen(null);
-      else setGallery(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [outboxOpen, gallery, inboxOpen, markupAway]);
-  // Another file opened, or the viewer closed: nothing stays tucked away —
-  // past the mount, where a `markupBack` view starts out tucked away.
-  const awayMounted = useRef(false);
-  useEffect(() => {
-    if (!awayMounted.current) {
-      awayMounted.current = true;
-      return;
-    }
-    setMarkupAway(null);
-  }, [outboxOpen, askedFile, filesOpen]);
-  /** A picture, a text or a PDF opens full-screen here; in an agent tab the
-   * viewer also carries **Mark up**. */
-  const openOutbox = useCallback((file: OutboxFile) => setOutboxOpen(file), []);
-  /** A lone picture takes its own shape once loaded; a chat following its
-   * bottom follows the taller bubble (the resize observer watches the view's
-   * box, not what grows inside it). */
-  const settlePost = useCallback(() => {
-    const stream = readableHost.current;
-    if (atBottomRef.current && stream && typeof stream.scrollTo === "function") stream.scrollTo({ top: stream.scrollHeight });
-  }, []);
-  const renderPost = useCallback((post: ChatPost) => <OutboxPost scope={outboxScope} post={post} onOpen={openOutbox} onSettle={settlePost} />, [outboxScope, openOutbox, settlePost]);
-  const chatInbox = useMemo<ChatInbox>(() => ({ tabId: tab.id, files: inboxFiles, onOpen: setInboxOpen, onSettle: settlePost }), [tab.id, inboxFiles, settlePost]);
-  const inboxScope = useMemo(() => ({ inbox: tab.id }), [tab.id]);
-  /** A row of the chat's file list, opened in the viewer of its side. */
-  const openSentFile = useCallback(({ file, from }: SentFile) => (from === "agent" ? setOutboxOpen : setInboxOpen)(file), []);
-  /** Removes one of the files the agent sent, from the tile's own confirm — the
-   * same removal the project screen's shelf does, through this tab's scope. The
-   * row goes now rather than at the next poll, and the sheet closes with the
-   * last file rather than standing empty over the session. */
-  const removeOutbox = useCallback(async (file: OutboxFile) => {
-    await deleteOutboxFile({ tab: tab.id }, file.name);
-    setOutbox((current) => {
-      const left = current.filter((row) => row.name !== file.name);
-      if (left.length === 0) setGallery(false);
-      return left;
-    });
-    setOutboxOpen((open) => open?.name === file.name ? null : open);
-  }, [tab.id]);
-  /** The gallery's Delete all, through this tab's scope: the project's whole
-   * outbox goes (every tab's sends, as the gallery lists them all), to free
-   * the space, and the sheet closes over the empty list. */
-  const removeAllOutbox = useCallback(async () => {
-    await clearOutbox({ tab: tab.id });
-    setOutbox([]);
-    setGallery(false);
-    setOutboxOpen(null);
-  }, [tab.id]);
-  /** Chunks above the revealed window stay in memory but out of the DOM — the
-   * lazy half of the earlier-output log. */
-  const hiddenChunks = Math.max(0, earlier.chunks.length - revealed);
-  const visibleChunks = useMemo(
-    () => earlier.chunks.slice(hiddenChunks),
-    [earlier.chunks, hiddenChunks],
-  );
-  const hiddenLines = useMemo(
-    () => earlier.chunks.slice(0, hiddenChunks).reduce((sum, chunk) => sum + chunk.lines.length, 0),
-    [earlier.chunks, hiddenChunks],
-  );
-  const showEarlier = () => {
-    const stream = readableHost.current;
-    if (stream) revealAnchor.current = { height: stream.scrollHeight, top: stream.scrollTop };
-    setRevealed((count) => count + REVEAL_CHUNKS);
-  };
-  // Revealing prepends content, which would shove the line the reader tapped
-  // beside out of view; restore the reading position by the height delta.
-  useLayoutEffect(() => {
-    const anchor = revealAnchor.current;
-    const stream = readableHost.current;
-    if (!anchor || !stream) return;
-    revealAnchor.current = undefined;
-    stream.scrollTop = anchor.top + (stream.scrollHeight - anchor.height);
-  }, [revealed]);
-  const type = (value: string, prompt?: number) => {
-    const delivered = write.current(value, prompt);
-    // A prompt's frames report through their bubble; the composer's notice
-    // is for keystrokes with no bubble to carry it.
-    if (prompt === undefined) setSendFailed(!delivered);
-    return delivered;
-  };
-  /** A single keypress, unmodified — what an agent's select prompts, `less` and
-   * `vim` actually read. The composer's line-editor prefix would be meaningless
-   * or destructive there. */
-  const press = (value: string) => {
-    const payload = ctrl && value.length === 1
-      ? String.fromCharCode(value.toUpperCase().charCodeAt(0) & 0x1f)
-      : value;
-    const delivered = type(payload);
-    if (ctrl) setCtrl(false);
-    return delivered;
-  };
-  /** Run `send` after `delay`, cancelled when the screen switches tabs. */
-  const later = (delay: number, send: () => void) => {
-    sendTimers.current.push(window.setTimeout(send, delay));
-  };
-  /** Drops writes still queued behind their gaps. */
-  const clearPending = () => {
-    sendTimers.current.forEach(window.clearTimeout);
-    sendTimers.current = [];
-  };
-  /** Delivers a run of writes one at a time, never as one chunk (see
-   * AGENT_KEY_GAP). Only the first can be confirmed synchronously; a later one
-   * that fails raises the dropped-connection notice through `type`. Shared by
-   * the composer's Send and by the sheet that answers a TUI dialog with the
-   * same arrow/Enter keys the on-screen key row sends. */
-  const deliver = (writes: string[], prompt?: number) => {
-    if (writes.length === 0) return true;
-    if (!type(writes[0], prompt)) return false;
-    const step = (index: number) => {
-      if (index >= writes.length) return;
-      // The submit gets the longer pause: it is the one write whose arrival in
-      // the same read as the text would be swallowed as part of a paste.
-      const gap = index === writes.length - 1 ? AGENT_SUBMIT_GAP : AGENT_KEY_GAP;
-      later(gap, () => {
-        if (type(writes[index], prompt)) step(index + 1);
-        // A later piece refused by a socket that has since closed: the bubble
-        // says so, since its first piece went and left it looking sent.
-        else if (prompt !== undefined) setPending((current) => current.map((entry) => entry.id === prompt ? { ...entry, failed: true, retrying: false } : entry));
-      });
-    };
-    step(1);
-    return true;
-  };
-  /** One message into the agent's line editor: reset its line, deliver the
-   * text, submit — inside bracketed paste markers where the pane has the mode
-   * on and the family wants them (`bracketsAgentMessage`). Shared by the
-   * composer's Send and the composer chips' slash commands. */
-  const sendAgentText = (text: string, prompt?: number) => {
-    const bracketed = bracketsAgentMessage(tab.agent_label ?? tab.label, bracketedPaste.current());
-    const typed = agentInputWrites(text, bracketed);
-    // A dialog OpenCode has up over its composer would take the message
-    // instead of the agent: closed first (`openCodeDialogCloseKeys`).
-    const writes = typed.length > 0 && isOpenCodeTab(tab.agent_label ?? tab.label)
-      ? [...openCodeDialogCloseKeys(viewportRows.current()), ...typed]
-      : typed;
-    const message = { writes, prompt, settles: SLASH_COMMAND.test(text) };
-    // Behind a command still settling, and behind anything already waiting on
-    // one, a message queues; the writes it reports as sent go once it drains.
-    if (message.writes.length > 0 && (settleQueue.current.length > 0 || !commandSettled())) {
-      if (!connectedRef.current) return false;
-      settleQueue.current.push(message);
-      if (settleQueue.current.length === 1) later(COMMAND_SETTLE_POLL, drainSettled);
-      return true;
-    }
-    clearPending();
-    return deliverMessage(message);
-  };
-  /** How long `deliver` takes to put `writes` out, CR included. */
-  const writesSpan = (writes: string[]) => writes.length < 2 ? 0 : (writes.length - 2) * AGENT_KEY_GAP + AGENT_SUBMIT_GAP;
-  const commandSettled = () => {
-    const now = Date.now();
-    const since = now - commandSentAt.current;
-    if (since >= COMMAND_SETTLE_MAX) return true;
-    return since >= COMMAND_SETTLE_MIN && now - Math.max(lastOutputAt.current, commandSentAt.current) >= COMMAND_SETTLE_QUIET;
-  };
-  const deliverMessage = (message: { writes: string[]; prompt?: number; settles?: boolean }) => {
-    const delivered = deliver(message.writes, message.prompt);
-    // Timed from its CR, the write the agent acts on.
-    if (delivered && message.settles) commandSentAt.current = Date.now() + writesSpan(message.writes);
-    return delivered;
-  };
-  /** Types the queued messages once the command before them has settled, one
-   * at a time, each after the last one's writes are out — a queued command
-   * holds the ones behind it in turn. */
-  const drainSettled = () => {
-    if (!commandSettled()) {
-      later(COMMAND_SETTLE_POLL, drainSettled);
-      return;
-    }
-    const next = settleQueue.current.shift();
-    if (!next) return;
-    if (!deliverMessage(next) && next.prompt !== undefined) {
-      setPending((current) => current.map((entry) => entry.id === next.prompt ? { ...entry, failed: true, retrying: false } : entry));
-    }
-    if (settleQueue.current.length > 0) later(writesSpan(next.writes) + AGENT_SUBMIT_GAP, drainSettled);
-  };
-  /** Once dictated words have left the composer by its ✕, "Heard:" stops
-   * quoting them. They stay counted as inserted: the recognizer, still
-   * listening, reads them back, and they must not return to the draft. */
-  const forgetDictation = () => {
-    voiceProgress.current = settleDictation(voiceProgress.current);
-    setVoicePreview("");
-  };
-  /** Send ends the dictation, and a start still being prepared with it. It is
-   * aborted, not stopped: a stop lets the recognizer finalize what it still
-   * holds, and those words would land in the draft just emptied. */
-  const endDictation = () => {
-    voiceRequest.current += 1;
-    setPreparingVoice(false);
-    const active = recognition.current;
-    recognition.current = undefined;
-    if (active) {
-      active.abort();
-      paintMicLevel(dictateButton.current, null);
-    }
-    voiceProgress.current = DICTATION_START;
-    setListening(false);
-    setVoicePreview("");
-    setVoiceStatus(null);
-  };
-  /** The open subagent the composer writes to: Claude's only, the one CLI
-   * whose own TUI takes words for a subagent. */
-  const subagentTarget = openStep && agentFamily(tab.agent_label ?? tab.label) === "claude" && !inWorkflow(subagentPath) ? openStep : undefined;
-  /** Words for the open subagent, delivered through Claude's agent list
-   * (`subagentInput`); the Reader stays on the subagent, whose conversation
-   * shows them once it has taken them. Words that did not get there go back
-   * into an empty composer, with the reason under it. */
-  /** Types `words` as the composer would, once its last write is out. */
-  const typeOut = async (words: string) => {
-    const writes = agentInputWrites(words, bracketsAgentMessage(tab.agent_label ?? tab.label, bracketedPaste.current()));
-    if (!deliver(writes)) return false;
-    await new Promise((resolve) => window.setTimeout(resolve, writesSpan(writes) + AGENT_SUBMIT_GAP));
-    return true;
-  };
-  const sendToOpenSubagent = (text: string, target: SubagentStep, fromComposer: boolean) => {
-    setSubagentNote("");
-    setSubagentSending(true);
-    if (fromComposer) {
-      setDraft("");
-      endDictation();
-    }
-    void sendToSubagent({
-      rows: () => screenRows.current(),
-      key: async (key) => type(key),
-      command: (command) => typeOut(command),
-      type: () => typeOut(text),
-    }, target, SUBAGENT_WALK).then((result) => {
-      if (result.ok) {
-        setLastSent(text);
-        return;
-      }
-      setSubagentNote(SUBAGENT_SEND_FAILED[result.reason]);
-      if (fromComposer) setDraft((current) => current || text);
-    }).finally(() => setSubagentSending(false));
-  };
-  /** `fromComposer` false: words that are not the draft (the Commit chip's
-   * prompts) — sent as a prompt like any other, the draft and an edit left
-   * alone. */
-  /** Whether the words left the phone, or are held for the agent's next idle
-   * point — the markup view's Submit keeps its layer otherwise. */
-  /** `interrupt`: the Send button's hold — a working agent is stopped and the
-   * words go in at once instead of waiting for its next idle point. */
-  const submitText = (text: string, fromComposer: boolean, interrupt: boolean): boolean => {
-    if (editing && fromComposer) {
-      submitEdit(editing, text);
-      return true;
-    }
-    if (!connected || !text.trim()) return false;
-    // The desktop's AI switch is off: the draft stays, nothing is sent.
-    if (tab.kind === "agent" && aiOffRef.current) {
-      setAiOffAt(Date.now());
-      return false;
-    }
-    // Only confirm what actually left the device. `readyState === OPEN` on a
-    // half-open cellular link silently buffers, and "Sent" was shown regardless.
-    if (tab.kind !== "agent") {
-      // A shell has no soft newline: each line is its own command line.
-      if (!type(`${text.replace(/\r?\n/g, "\r")}\r`)) return false;
-      setLastSent(text);
-      setDraft("");
-      return true;
-    }
-    // A slash command is the CLI's, not a turn: the session never records it,
-    // so a bubble for it would wait forever. `/clear` also ends the chat the
-    // earlier bubbles were waiting in.
-    const slash = /^\s*\//u.test(text);
-    // Words go to the open subagent; a command stays the session's.
-    if (subagentTarget && !slash) {
-      if (subagentSending) return false;
-      sendToOpenSubagent(text, subagentTarget, fromComposer);
-      return true;
-    }
-    const id = slash ? undefined : ++pendingId.current;
-    // A chat of the assistant scope has no held-prompt binding: its words go straight to the CLI.
-    if (id !== undefined && agentAtWork && !interrupt && !bare) {
-      holdDraft(id, text, fromComposer);
-      return true;
-    }
-    if (!(interrupt && agentAtWork ? interruptWith(text, id) : sendAgentText(text, id))) return false;
-    setLastSent(text);
-    setEditNote("");
-    if (id === undefined) {
-      // A prefix the CLI's popup completes (`/clea`) runs that command.
-      const command = completedSlashCommand(text, slashCliKey, usedSlash) ?? text;
-      if (CLEAR_COMMAND.test(command)) startedOver();
-      rememberSlashCommand(slashCliKey, command);
-      setUsedSlash(readSlashCommands(slashCliKey));
-    } else {
-      // The new chat has a prompt now: resuming the old one would leave it.
-      setUndoable(false);
-      setClearQueued(false);
-      setUndoNote("");
-      // A bubble takes its place from the session the phone holds. Sent from
-      // Terminal view that one is stale or empty, and the bubble stood above
-      // turns that came before it — at the top of the chat for a session never
-      // read here — while its record, where it belongs, was hidden for it. The
-      // record alone shows it once Focus reads the session.
-      if (transcriptCurrent) {
-        const sent = pendingPrompt(id, text, storedEntries);
-        setPending((current) => [...current, sent].slice(-MAX_PENDING));
-      }
-      // The phone knows the words before they leave; the desktop records them
-      // as this tab's prompt — the only record of it for an agent whose
-      // transcript is not read (OpenCode's cards list these).
-      void reportSentPrompt(tab.id, text).catch(() => {});
-    }
-    if (!fromComposer) return true;
-    setDraft("");
-    endDictation();
-    return true;
-  };
-  /** The composer's words go with the files that landed for them; while one
-   * is still on its way nothing goes, so no reference is left behind. */
-  const submitDraft = (text = draft, fromComposer = true, interrupt = false): boolean => {
-    if (!fromComposer) return submitText(text, false, interrupt);
-    if (uploadsRef.current.some(uploadInFlight)) return false;
-    if (!submitText(withAttachments(text, uploadsRef.current), true, interrupt)) return false;
-    setUploads((current) => current.filter((upload) => upload.reference === undefined));
-    return true;
-  };
-  /** For dictation's spoken send: the session's handlers outlive the render
-   * that started them. */
-  const submitDraftRef = useRef(submitDraft);
-  submitDraftRef.current = submitDraft;
-  /** Esc stops the agent's turn; once the CLI has wound down the message is
-   * typed like any other — not held for an idle point the interrupt has just
-   * made. A failure after the gap marks the bubble, as a dropped piece does. */
-  const interruptWith = (text: string, id?: number) => {
-    clearPending();
-    if (!type(AGENT_INTERRUPT)) return false;
-    later(AGENT_INTERRUPT_GAP, () => {
-      if (sendAgentText(text, id) || id === undefined) return;
-      setPending((current) => current.map((entry) => entry.id === id ? { ...entry, failed: true, retrying: false } : entry));
-    });
-    return true;
-  };
-  /** Send held down: interrupt and send. `fired` swallows the click the
-   * release still delivers, so the words do not go out twice. */
-  const sendHold = useRef({ timer: 0, fired: false });
-  const fireSendHold = () => {
-    window.clearTimeout(sendHold.current.timer);
-    if (sendHold.current.fired) return;
-    sendHold.current.fired = true;
-    submitDraftRef.current(undefined, true, true);
-  };
-  const sendHoldHandlers = {
-    onPointerDown: (event: ReactPointerEvent) => {
-      if (event.button !== 0) return;
-      sendHold.current.fired = false;
-      window.clearTimeout(sendHold.current.timer);
-      sendHold.current.timer = window.setTimeout(fireSendHold, SEND_HOLD_MS);
-    },
-    onPointerUp: () => window.clearTimeout(sendHold.current.timer),
-    onPointerLeave: () => window.clearTimeout(sendHold.current.timer),
-    onPointerCancel: () => window.clearTimeout(sendHold.current.timer),
-    // The browser's own long press (a tooltip, a callout) is this hold.
-    onContextMenu: (event: ReactMouseEvent) => {
-      event.preventDefault();
-      if (tab.kind === "agent" && !editing) fireSendHold();
-    },
-  };
-  /** Whether a prompt sent now is held — what `submitDraft` decides on, read
-   * by the markup view's Submit, which outlives the render it began in. */
-  const agentAtWorkRef = useRef(agentAtWork);
-  agentAtWorkRef.current = agentAtWork;
-  /** The markup view's Submit: the desktop's prompt goes out like a typed
-   * one — into the agent's queue while it works (a markup prompt is never a
-   * slash command, so `submitDraft` holds it exactly then). The viewer stays
-   * open for the next round (`docs/done/pdf_markup_rounds_plan.md` §2.5). */
-  const sendMarkup = useCallback((text: string): MarkupSend => {
-    const queued = agentAtWorkRef.current;
-    if (!submitDraftRef.current(text, false)) return false;
-    return queued ? "queued" : "sent";
-  }, []);
-  /** Mark up's Reload on a file the agent sent: the newest copy this tab
-   * sent under the same name — at least as new as the one shown, by the
-   * desktop's clock — else the shown one's fresh row. */
-  const refreshOutboxFile = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
-    const files = await listOutbox({ tab: tab.id });
-    if (!Array.isArray(files)) return null;
-    const name = sentName(file);
-    const newer = files
-      .filter((candidate) => candidate.from_tab && sentName(candidate) === name && candidate.modified >= file.modified)
-      .sort((a, b) => b.modified - a.modified)[0];
-    return newer ?? files.find((candidate) => candidate.name === file.name) ?? null;
-  }, [tab.id]);
-  /** Send while the agent works: the desktop holds the prompt for the tab's
-   * next idle point (`holdPrompt`) instead of it going into the CLI's own
-   * queue, where nothing can reach it again — so until the agent takes it in,
-   * its bubble's hold menu offers Edit. The bubble shows at once, as any
-   * prompt's does. With no window the Mobile host holds it itself. A host
-   * that cannot hold it (an older build, a tab with no binding) costs nothing: the words are typed as they always were. The delivery
-   * records the prompt in the desktop's history, so it is not reported here. */
-  const holdDraft = (id: number, text: string, fromComposer = true) => {
-    setLastSent(text);
-    setUndoable(false);
-    setUndoNote("");
-    setEditNote("mobile.composer.heldNote");
-    // `held: ""` — asked for, id not known yet: waiting, not yet editable.
-    setPending((current) => [...current, { ...pendingPrompt(id, text, storedEntries), held: "" }].slice(-MAX_PENDING));
-    if (fromComposer) {
-      setDraft("");
-      endDictation();
-    }
-    // The answer may come after the reader left the tab, or came back to it:
-    // `patchHeld` hands it to the chat showing the tab then (`onHeldPatched`).
-    holdPrompt(tab.id, text).then(
-      (held) => patchHeld(tab.id, id, { held }),
-      () => {
-        setEditNote("");
-        if (!sendAgentText(text, id)) {
-          patchHeld(tab.id, id, { held: undefined, failed: true, retrying: false });
-          return;
-        }
-        patchHeld(tab.id, id, { held: undefined });
-        void reportSentPrompt(tab.id, text).catch(() => {});
-      },
-    );
-  };
-  /** The queued bubbles' Send now: Esc stops the agent's turn, and the CLI
-   * then sends what waits in its queue at once (the desktop chat's Send now).
-   * But Claude takes a queued message into the running turn at its next tool
-   * call, and an Esc after that stops the turn that was to answer it. The
-   * phone's copy of the screen is too late to judge that by, so the desktop
-   * does, beside the pane (`send_now`): it presses only while the queue hint
-   * shows. Until then — the desktop has not typed the prompt in yet, or the
-   * hint the phone saw was gone by the time it asked — Send now waits, and it
-   * gives up once the turn ends or takes the prompt up. */
-  const sendQueuedNow = () => {
-    setQueueNote("");
-    setSendNowWaiting(true);
-  };
-  useEffect(() => {
-    if (!sendNowWaiting) return;
-    // The turn ended, or took the prompts up: they go without an Esc.
-    if (!liveBusy || !queuedShown) {
-      setSendNowWaiting(false);
-      return;
-    }
-    // The phone's own read only says when to ask; the desktop reads again.
-    if (sendNowAsking.current || !queuedHintShown(screenRows.current())) return;
-    sendNowAsking.current = sendControl.current({ type: "send_now", family: agentKey });
-  }, [sendNowWaiting, liveBusy, queuedShown, liveScreen, agentKey]);
-  sendNowAnswer.current = (sent) => {
-    sendNowAsking.current = false;
-    if (sent) setSendNowWaiting(false);
-  };
-  useEffect(() => setSendNowWaiting(false), [tab.id]);
-  /** The queued bubbles' Cancel and edit — the desktop chat's ↑ in its empty
-   * box: every prompt in Claude's queue comes back out of it into the
-   * composer, after the draft, read off the phone's copy of the screen
-   * (`queuePull`); the bubbles of those it held go. */
-  const pullQueued = () => {
-    if (queuePulling) return;
-    const arrived = arrivedPending(storedEntries, pending);
-    const queued = pending.filter((entry) => entry.held !== undefined && !arrived.has(entry.id));
-    if (queued.length === 0) return;
-    setQueueNote("");
-    setQueuePulling(true);
-    void pullQueuedPrompts({ rows: () => screenRows.current(), key: async (key) => type(key) }, queued.map((entry) => entry.text), SUBAGENT_WALK).then((result) => {
-      if (!result.ok) {
-        setQueueNote("terminal.reader.pullFailed");
-        return;
-      }
-      const taken = new Set(queued.slice(queued.length - result.pulled).map((entry) => entry.id));
-      if (taken.size > 0) setPending((current) => current.filter((entry) => !taken.has(entry.id)));
-      setDraft((current) => (current ? `${current}\n${result.text}` : result.text));
-      if (!result.cleared) setQueueNote("terminal.reader.pullLeftover");
-      composerInput.current?.focus();
-    }).finally(() => setQueuePulling(false));
-  };
-  /** The bubble's Edit: its words go into the composer, the draft steps
-   * aside until the edit is sent or cancelled. */
-  const startEdit = (id: number) => {
-    const prompt = pending.find((entry) => entry.id === id);
-    if (!prompt?.held || arrivedPending(storedEntries, pending).has(id)) {
-      setEditNote("mobile.composer.heldGone");
-      return;
-    }
-    setEditNote("");
-    setEditing({ id, before: editing?.before ?? draft });
-    setDraft(prompt.text);
-    composerInput.current?.focus();
-  };
-  const cancelEdit = () => {
-    if (!editing) return;
-    setDraft(editing.before);
-    setEditing(null);
-    setEditNote("");
-  };
-  /** Send in edit mode: the desktop rewrites the held prompt, and only once
-   * it says so does the bubble take the new words — it keeps its place. An
-   * agent that took the prompt first keeps the old words: the new ones stay
-   * in the composer, now an ordinary draft, to be sent or dropped. */
-  const submitEdit = (target: { id: number; before: string }, words = draft) => {
-    const prompt = pending.find((entry) => entry.id === target.id);
-    const text = words.trim();
-    if (!connected || !text || editSending || !prompt?.held) return;
-    if (text === prompt.text) {
-      cancelEdit();
-      return;
-    }
-    setEditSending(true);
-    editHeldPrompt(tab.id, prompt.held, text)
-      .then(() => {
-        setPending((current) => current.map((entry) => entry.id === target.id ? reworded(entry, text, storedEntries) : entry));
-        if (editingRef.current?.id === target.id) {
-          setDraft(target.before);
-          setEditing(null);
-        }
-        setEditNote("mobile.composer.heldEdited");
-      })
-      .catch((error) => {
-        const code = error instanceof ApiError ? error.code : "";
-        if (code === "held_gone" || code === "held_busy") {
-          setEditing(null);
-          setEditNote("mobile.composer.heldGone");
-        } else setEditNote("mobile.composer.heldEditFailed");
-      })
-      .finally(() => setEditSending(false));
-  };
-  useEffect(() => onHeldPatched((tabId, id, patch) => {
-    if (tabId === tab.id) setPending((current) => current.map((entry) => entry.id === id ? { ...entry, ...patch } : entry));
-  }), [tab.id]);
-  // What the desktop holds outlives this view; what the session recorded is
-  // the record's.
-  useEffect(() => {
-    const arrived = arrivedPending(storedEntries, pending);
-    writeHeld(tab.id, pending.filter((entry) => !arrived.has(entry.id)));
-  }, [tab.id, storedEntries, pending]);
-  // Back on the tab: a prompt held when the reader left may have been
-  // delivered, or dropped on the desktop, meanwhile.
-  useEffect(() => {
-    // Only what was held before this view: a prompt held since may be newer
-    // than the list read.
-    const restored = new Set(readHeld(tab.id).map((entry) => entry.id));
-    if (!restored.size) return;
-    let live = true;
-    getSchedules(tab.id).then(({ schedules }) => {
-      if (!live || !Array.isArray(schedules)) return;
-      setPending((current) => {
-        const kept = stillHeld(current.filter((entry) => restored.has(entry.id) && entry.held !== undefined), schedules);
-        return current.flatMap((entry) => {
-          if (!restored.has(entry.id) || entry.held === undefined) return [entry];
-          const now = kept.find((prompt) => prompt.id === entry.id);
-          return now ? [now] : [];
-        });
-      });
-    }, () => {});
-    return () => { live = false; };
-  }, [tab.id]);
-  /** Some prompt sent from here still waits on the desktop. */
-  const heldWaiting = useMemo(() => {
-    const arrived = arrivedPending(storedEntries, pending);
-    return pending.some((entry) => entry.held !== undefined && !arrived.has(entry.id));
-  }, [storedEntries, pending]);
-  // What the notes about waiting prompts say is over once none waits.
-  useEffect(() => {
-    if (!heldWaiting && (editNote === "mobile.composer.heldNote" || editNote === "mobile.composer.heldEdited")) setEditNote("");
-  }, [heldWaiting, editNote]);
-  // The agent took the prompt being edited: its words are final. What the
-  // reader typed stays in the composer as an ordinary draft.
-  useEffect(() => {
-    if (editing && !editSending && arrivedPending(storedEntries, pending).has(editing.id)) {
-      setEditing(null);
-      setEditNote("mobile.composer.heldGone");
-    }
-  }, [editing, editSending, storedEntries, pending]);
-  /** A prompt the link lost goes again, as the same bubble: the same words
-   * into the agent's line editor (which is reset first, so a half-delivered
-   * first try is not doubled), tagged with the same id so the ack clears
-   * the marker. The desktop hears the words again too; it folds a repeat of
-   * the same prompt close in time into one history row. */
-  const resendPrompt = (id: number) => {
-    const prompt = pending.find((entry) => entry.id === id);
-    if (!prompt || !connected) return;
-    setPending((current) => current.map((entry) => entry.id === id ? { ...entry, failed: false, retrying: true } : entry));
-    if (!sendAgentText(prompt.text, id)) {
-      setPending((current) => current.map((entry) => entry.id === id ? { ...entry, failed: true, retrying: false } : entry));
-      return;
-    }
-    void reportSentPrompt(tab.id, prompt.text).catch(() => {});
-  };
-  /** Codex at work: it answers `/clear` with "disabled while a task is in
-   * progress" and keeps the conversation. */
-  const codexBusy = () => CODEX_AGENT.test(tab.agent_label ?? tab.label) && liveBusy;
-  /** A `/clear` just left for the agent: the chat shown starts over. What the
-   * session held stays hidden until the new one is read, unless Codex was busy
-   * and refused it — then the conversation goes on, and so does the chat. */
-  const startedOver = () => {
-    setUndoNote("");
-    if (codexBusy()) return;
-    if (agentAtWork) {
-      setClearQueued(true);
-      return;
-    }
-    setPending([]);
-    clearShown();
-  };
-  /** The chat shown starts over, the Clear chip reading Undo. */
-  const clearShown = () => {
-    setClearedAt(clearMark(transcript?.entries ?? []));
-    // Every agent Tabtivity resumes can take the clear back — the desktop decides
-    // how, and says so when a tab is not one of them. Aider resumes nothing.
-    setUndoable(slashCliKey !== "aider");
-  };
-  // The turn is over: the queued `/clear` runs now. Bubbles held meanwhile
-  // stay — they went in ahead of it.
-  useEffect(() => {
-    if (!clearQueued || agentAtWork) return;
-    setClearQueued(false);
-    clearShown();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on the turn's end, with the transcript as it stands then
-  }, [clearQueued, agentAtWork]);
-  /** The Undo chip: the desktop brings back the conversation just cleared —
-   * in-session for Claude, by relaunching the tab onto it for the others, as a
-   * restart of Tabtivity would. Claude's hook records the clear a moment after the
-   * command lands, so a tap that beats it is tried once more. */
-  const undoClearConversation = () => {
-    const mark = clearedAt;
-    const run = ++undoRun.current;
-    setUndoable(false);
-    setUndoNote("");
-    setUndoing("asking");
-    const attempt = (retry: boolean): void => {
-      undoClear(tab.id)
-        .then(() => {
-          setUndoing({ mark });
-          window.setTimeout(() => {
-            if (undoRun.current === run) setUndoing(false);
-          }, UNDO_SETTLE_MAX);
-          // The cleared conversation is the session read again, all of it:
-          // read it afresh now, and again while a relaunched agent comes up.
-          setClearedAt(null);
-          // The desktop just typed the resume, or relaunched the agent.
-          commandSentAt.current = Date.now();
-          transcriptVersion.current = undefined;
-          setTranscriptReload((count) => count + 1);
-          for (const delay of UNDO_RELOADS) {
-            window.setTimeout(() => {
-              transcriptVersion.current = undefined;
-              setTranscriptReload((count) => count + 1);
-            }, delay);
-          }
-        })
-        .catch((error) => {
-          const code = error instanceof ApiError ? error.code : "";
-          if (code === "nothing_to_undo" && retry) {
-            window.setTimeout(() => attempt(false), UNDO_CLEAR_RETRY);
-            return;
-          }
-          setUndoing(false);
-          setUndoNote(code === "nothing_to_undo" ? "mobile.composer.undoGone"
-            : code === "remote_tab" ? "mobile.composer.undoRemote"
-            : "mobile.composer.undoFailed");
-        });
-    };
-    attempt(true);
-  };
-  /** The bar's Clear chip sends the selected CLI's new-conversation command at
-   * once — no confirm dialog. The draft is left alone. A Codex that is working
-   * would refuse it, so the button says so here instead. */
-  const clearConversation = () => {
-    if (codexBusy()) {
-      setClearRefused(true);
-      return;
-    }
-    setClearRefused(false);
-    if (sendAgentText(NEW_CONVERSATION_COMMAND)) startedOver();
-  };
-  /** The Commit chip's pick: its prompt goes as the reader's own would —
-   * a bubble at once, held while the agent works — and the draft stays. */
-  const commitOptions: SheetOption[] = COMMIT_CHOICES.map((choice) => ({
-    key: choice,
-    label: t(COMMIT_LABELS[choice]),
-    description: t(COMMIT_HINTS[choice]),
-    current: false,
-  }));
-  const pickCommit = (key: string) => {
-    setCommitSheet(false);
-    submitDraft(COMMIT_PROMPTS[key as CommitChoice], false);
-  };
-  /** The composer's `/` menu: the commands that continue the draft, the
-   * reader's own first. Picking one only fills the field — the reader still
-   * sends it, so a stray tap never runs `/clear` on a session. Its rows,
-   * like the mode sheet's, are worded in the language live when read. */
-  const lang = useI18nStore((state) => state.lang);
-  const slashMenu = useMemo(
-    () => (tab.kind === "agent" && connected ? slashSuggestions(draft, slashCliKey, usedSlash) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `lang` re-words the rows
-    [tab.kind, connected, draft, slashCliKey, usedSlash, lang],
-  );
-  const pickSlash = (suggestion: SlashSuggestion) => {
-    setDraft(suggestion.args ? `${suggestion.line} ` : suggestion.line);
-    composerInput.current?.focus();
-  };
-  /** The bar's Plan / Goal chips: tapping one leads the draft with its
-   * command (or takes it off again). Like the `/` menu it only fills the
-   * field — the reader still writes the words and sends. */
-  const prefixCommands = draftPrefixes(slashCliKey);
-  const activePrefix = draftPrefix(draft, prefixCommands);
-  const togglePrefix = (command: string) => {
-    setDraft((current) => toggleDraftPrefix(current, command, prefixCommands));
-    composerInput.current?.focus();
-  };
-  const forgetSlash = (line: string) => {
-    forgetSlashCommand(slashCliKey, line);
-    setUsedSlash(readSlashCommands(slashCliKey));
-    composerInput.current?.focus();
-  };
-  /** The composer's ✕: an empty draft, and the dictation transcript with it. */
-  const clearDraft = () => {
-    setDraft("");
-    forgetDictation();
-    composerInput.current?.focus();
-  };
-  /** Keep the draft a moment after the typing stops. Per keystroke would put a
-   * synchronous store write between the reader and their next letter, and the
-   * only thing the delay can cost is text that is still on the screen. */
-  useEffect(() => {
-    const timer = window.setTimeout(() => writeDraft(tab.id, savedDraft()), DRAFT_SAVE_DELAY);
-    return () => window.clearTimeout(timer);
-  }, [tab.id, draft, uploads]);
-  /** …and once more when this screen goes away, which the delay above would
-   * otherwise eat: leaving for the tab list unmounts it, and a phone putting the
-   * PWA away kills it without unmounting anything (`pagehide` is the last word
-   * either way — `beforeunload` never fires on iOS). */
-  useEffect(() => {
-    const flush = () => writeDraft(tab.id, savedDraft());
-    window.addEventListener("pagehide", flush);
-    return () => {
-      window.removeEventListener("pagehide", flush);
-      flush();
-    };
-  }, [tab.id]);
+  useOutboxPoll({ tab, bare, setOutbox, setGallery, setOutboxOpen, setInboxOpen });
+  useLimitsPoll({ tab, setLimitsNow, rememberLimits });
+  const {
+    openOutbox, renderPost, chatInbox, inboxScope, openSentFile, removeOutbox, removeAllOutbox,
+  } = useOutboxViewers({
+    tab, readableHost, atBottomRef, setOutbox, outboxScope, gallery, setGallery, outboxOpen,
+    setOutboxOpen, inboxOpen, setInboxOpen, askedFile, markupAway, setMarkupAway, filesOpen,
+    inboxFiles,
+  });
+  const { visibleChunks, hiddenLines, showEarlier } = useEarlierOutput({
+    readableHost, earlier, revealed, setRevealed, revealAnchor,
+  });
+  const {
+    type, press, clearPending, deliver, sendAgentText, forgetDictation, subagentTarget, submitDraft,
+    submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow,
+    pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
+  } = useComposerSend({
+    tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
+    dictateButton, connectedRef, voiceRequest, voiceProgress, sendTimers, commandSentAt,
+    lastOutputAt, settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt,
+    aiOffRef, ctrl, setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing,
+    editingRef, editSending, setEditSending, liveScreen, setLastSent, slashCliKey, agentKey,
+    usedSlash, setUsedSlash, setListening, setPreparingVoice, setVoicePreview, setVoiceStatus,
+    setUploads, transcript, setPending, pending, pendingId, setClearedAt, clearedAt, setUndoable,
+    setClearQueued, clearQueued, setEditNote, editNote, setSubagentSending, subagentSending,
+    setSubagentNote, setQueueNote, queuePulling, setQueuePulling, setUndoNote, setUndoing, undoRun,
+    setTranscriptReload, setClearRefused, liveBusy, setSendNowWaiting, sendNowWaiting, agentAtWork,
+    subagentPath, openStep, transcriptCurrent, transcriptVersion, storedEntries, queuedShown,
+  });
+  const {
+    commitOptions, pickCommit, lang, slashMenu, pickSlash, prefixCommands, activePrefix,
+    togglePrefix, forgetSlash, clearDraft,
+  } = useComposerTools({
+    tab, t, composerInput, connected, draft, setDraft, savedDraft, slashCliKey, usedSlash,
+    setUsedSlash, setCommitSheet, uploads, forgetDictation, submitDraft,
+  });
   /** The tab's own name for its agent, which is what every family rule is
    * scoped by: the mode tables, the prompt echo Kimi Code draws, and the whole
    * of OpenCode's mini interface, whose frame has no marker to be found by. */
@@ -3335,315 +1350,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {reset && <> · {t("mobile.facts.resetIn", { time: reset })}</>}
     </button>;
   };
-  /** The picker the model chip opened, read off the screen while the sheet is
-   * up — a list of the session's own rows, not a list of models Tabtivity
-   * believes in. None of OpenCode's, Antigravity's or Cursor's is the numbered
-   * dialog the others draw, so each is read by its own shape (`openCodeMini`,
-   * `antigravity`, `cursorAgent`). */
-  const openCodePage = useMemo(
-    () => (modelSheet && openCode ? readOpenCodePickerPage(liveScreen) : null),
-    [modelSheet, openCode, liveScreen],
-  );
-  /** OpenCode's list is a scroll box that draws a slice of itself: the walk
-   * scrolls it with ↓ and lists the slices put together. Fed every frame;
-   * `walked` re-reads it when it ends without one. */
-  const deliverNow = useRef(deliver);
-  deliverNow.current = deliver;
-  const [walked, setWalked] = useState(0);
-  const openCodeWalk = useRef<OpenCodePickerWalk | null>(null);
-  if (!openCodeWalk.current) {
-    openCodeWalk.current = new OpenCodePickerWalk(
-      (keys) => { deliverNow.current(keys); },
-      () => setWalked((count) => count + 1),
-    );
-  }
-  useEffect(() => () => openCodeWalk.current?.reset(), []);
-  const [walkedPicker, setWalkedPicker] = useState<SelectPrompt | null>(null);
-  useEffect(() => {
-    const walk = openCodeWalk.current;
-    if (!walk) return;
-    if (!modelSheet || !openCode) {
-      walk.reset();
-      setWalkedPicker(null);
-      return;
-    }
-    walk.read(openCodePage);
-    setWalkedPicker(walk.prompt());
-  }, [modelSheet, openCode, openCodePage, walked]);
-  const picker = useMemo(
-    () => {
-      if (!modelSheet) return null;
-      if (openCode) return walkedPicker;
-      if (antigravity) return readAntigravityPicker(liveScreen);
-      if (cursorAgent) return readCursorPicker(liveScreen);
-      return readSelectPrompt(liveScreen, agentLabel);
-    },
-    [modelSheet, openCode, walkedPicker, antigravity, cursorAgent, liveScreen, agentLabel],
-  );
-  /** The step the sheet is showing: the picker on screen, unless it is the one
-   * a tap just answered and the session has not redrawn yet. */
-  const pickerStep = picker && answered && sameSelectStep(answered, picker) ? null : picker;
-  /** The step as far as it is known: the rows on screen plus those an earlier
-   * slice of the same picker drew. OpenCode's slices are put together by its
-   * own walk (`openCodeWalk`), which already is the whole list. */
-  const listedStep = useMemo<SelectStep | null>(
-    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep)),
-    [pickerStep, openCode, knownStep],
-  );
-  useEffect(() => { if (listedStep && !openCode) setKnownStep(listedStep); }, [listedStep, openCode]);
-  /** The remembered rows, listed until the session draws its picker — for
-   * OpenCode until its walk has listed the whole of it. */
-  const modelPreview = modelSheet && !answered && !effortFor && !effortStep && (!listedStep || (openCode && !!picker?.hidden))
-    ? rememberedStep
-    : null;
-  /** The printed number of the row the dialog highlights right now. */
-  const pickerAt = pickerStep?.options[pickerStep.current]?.number;
-  /** The effort stops Antigravity's dialog is offering right now — the ones
-   * belonging to the model its highlight is on, which is why they are read
-   * again after every walk rather than kept with the row. */
-  const effortSlider = useMemo<AntigravityEffort | null>(
-    () => (modelSheet && antigravity ? readAntigravityEffort(liveScreen) : null),
-    [modelSheet, antigravity, liveScreen],
-  );
-  useEffect(() => {
-    if (!modelSheet) return;
-    if (pickerStep) {
-      sawPicker.current = true;
-      // A step is up, so nothing is left to hold for: a dialog that comes back
-      // to a list already answered (Codex's "More reasoning…" has an esc back)
-      // is a step again, not the stale paint of the answer.
-      if (answered) setAnswered(null);
-      return;
-    }
-    // The answered list, still on screen: the session has not read the Enter
-    // yet. Hold — the next step, if there is one, replaces it in place. If the
-    // session never moves off it, the answer did not land: give the list back
-    // rather than hold a sheet the tap can no longer leave.
-    if (answered && picker) {
-      const stuck = window.setTimeout(() => setAnswered(null), MODEL_PICKER_WAIT);
-      return () => window.clearTimeout(stuck);
-    }
-    if (sawPicker.current) {
-      // Gone after it was listed: answered here, on the desktop, or dismissed.
-      // After a tap the gap is given to the step that may still follow.
-      if (!answered) {
-        // A reveal walk's keys still queued would land in the composer the
-        // picker gave back, where ↑ recalls old prompts from history.
-        clearPending();
-        setReveal(null);
-        setModelSheet(false);
-        return;
-      }
-      const next = window.setTimeout(() => {
-        setModelSheet(false);
-        setAnswered(null);
-      }, SELECT_NEXT_WAIT);
-      return () => window.clearTimeout(next);
-    }
-    // Never drawn: the session may have no `/model` picker at all. Step out of
-    // the way rather than hold an empty sheet over its output. OpenCode's was
-    // opened by the chip's own keys, and one this could not read is still up
-    // in the session, where the next message would land in it: closed there.
-    const timer = window.setTimeout(() => {
-      if (openCode) openCodeDialogCloseKeys(viewportRows.current()).forEach((key) => write.current(key));
-      setModelSheet(false);
-    }, MODEL_PICKER_WAIT);
-    return () => window.clearTimeout(timer);
-    // `clearPending` is a fresh closure every render; it only reads refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSheet, picker, pickerStep, answered, openCode]);
-  /** A windowed picker says how many rows it is not drawing: the highlight is
-   * walked to each one it hides, which scrolls it into view, and back. Only
-   * arrow keys — nothing is accepted — and only while nothing was tapped. */
-  useEffect(() => {
-    if (!modelSheet || openCode || answered || !pickerStep || !listedStep || pickerAt === undefined || revealStuck.current) return;
-    if (reveal && pickerAt !== reveal.target) {
-      // The keys have not landed yet. If they never do, stop walking.
-      const stuck = window.setTimeout(() => {
-        revealStuck.current = true;
-        setReveal(null);
-      }, MODEL_PICKER_WAIT);
-      return () => window.clearTimeout(stuck);
-    }
-    const target = revealSelectRow(listedStep, pickerStep) ?? reveal?.origin;
-    if (target === undefined || target === pickerAt) {
-      if (reveal) setReveal(null);
-      return;
-    }
-    if (!deliver(selectMoveKeys(pickerAt, target))) {
-      setReveal(null);
-      return;
-    }
-    setReveal({ origin: reveal?.origin ?? pickerAt, target });
-    // `deliver` is a fresh closure every render; the walk runs on the frames.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, reveal]);
-  /** Walks a paged sign-in page with Shift+↓/↑ until every line of it has
-   * been on screen. Only scroll keys; keys sent from one window position are
-   * not sent again from it, so a walk that never shows stops there. */
-  const pageWalkFrom = useRef("");
-  useEffect(() => {
-    if (!signInPage) {
-      pageWalkFrom.current = "";
-      return;
-    }
-    const at = `${signInPage.first}-${signInPage.last}`;
-    const keys = signInPageKeys(signInPage);
-    if (pageWalkFrom.current === at || keys.length === 0) return;
-    if (deliver(keys)) pageWalkFrom.current = at;
-    // `deliver` is a fresh closure every render; the walk runs on the frames.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signInPage]);
-  /** The highlight has reached the model an Antigravity tap chose, so the
-   * dialog has redrawn its slider for *that* model: a model with stops asks
-   * for one here, and a model with none — every Claude model it offers — is
-   * accepted now, because there is nothing left to ask. Until the walk lands
-   * the screen still shows the row it left, so nothing is pressed on a frame
-   * that has not caught up; a walk whose keys never show gives the list back. */
-  useEffect(() => {
-    if (!effortFor) return;
-    if (!pickerStep || pickerAt !== effortFor.number) {
-      const stuck = window.setTimeout(() => setEffortFor(null), MODEL_PICKER_WAIT);
-      return () => window.clearTimeout(stuck);
-    }
-    if (effortSlider && effortSlider.stops.length > 1) {
-      setEffortStep(effortFor.label);
-      setEffortFor(null);
-      return;
-    }
-    if (deliver(["\r"]) && listedStep) setAnswered(listedStep);
-    setEffortFor(null);
-    // `deliver` is a fresh closure every render; the step runs on the frames.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effortFor, pickerStep, pickerAt, effortSlider, listedStep]);
-  /** `/model` opens the agent's own picker in the session; the sheet lists the
-   * rows it drew, and a tap answers it with the same keys the arrow row sends —
-   * so nothing here decides what the models are.
-   *
-   * Neither OpenCode interface has a `/model`. In mini the words would be
-   * submitted to the model as a prompt, a turn the reader never asked for; in
-   * the full TUI the command is `/models`, so `/model` only opened the slash
-   * completion and left it sitting in the composer. Both open the same picker
-   * from the command palette, so the chip presses the keys that get there
-   * (`OPENCODE_MODEL_KEYS`) instead of typing a command. */
-  const selectModel = () => {
-    if (modelSheet) return;
-    sawPicker.current = false;
-    revealStuck.current = false;
-    sheetAnswered.current = false;
-    keptStep.current = null;
-    setAnswered(null);
-    setKnownStep(null);
-    setRememberedStep(null);
-    setHeldPick(null);
-    setReveal(null);
-    setEffortFor(null);
-    setEffortStep(null);
-    if (openCode) {
-      clearPending();
-      if (!deliver(OPENCODE_MODEL_KEYS)) return;
-    } else if (!sendAgentText("/model")) return;
-    setModelSheet(true);
-    // Refused for a tab whose CLI runs elsewhere: the sheet waits as before.
-    getModelRows(tab.id).then((rows) => setRememberedStep((now) => now ?? modelRowsStep(rows)), () => {});
-  };
-  /** The card's model tap, answered once the socket is up and the session has
-   * drawn its first frame: sent any earlier, `/model` lands before the agent's
-   * prompt exists, and the sheet's own wait for the picker would run out on
-   * the attach rather than on the agent. */
-  const pickModelPending = useRef(pickModel && tab.kind === "agent" && !tab.local_model && !bare);
-  useEffect(() => {
-    if (!pickModelPending.current || !connected || liveScreen.length === 0) return;
-    pickModelPending.current = false;
-    selectModel();
+  const {
+    openCodeWalk, picker, pickerStep, listedStep, modelPreview, pickerAt, effortSlider,
+  } = useModelPicker({
+    write, viewportRows, liveScreen, modelSheet, setModelSheet, answered, setAnswered, knownStep,
+    setKnownStep, rememberedStep, setReveal, reveal, revealStuck, effortFor, effortStep, sawPicker,
+    clearPending, deliver, agentLabel, openCode, antigravity, cursorAgent,
   });
-  /** Answers the step on screen. The sheet does not close on the tap: `/model`
-   * is one step in Claude Code and two in Codex, which asks for a reasoning
-   * level next, and which it is, is the session's answer to give — the sheet
-   * lists whatever it draws next, and closes when it draws nothing.
-   *
-   * OpenCode's picker is answered by typing into its search field rather than
-   * by walking a highlight this cannot see (`openCodePickKeys`); tapping one of
-   * its group headings narrows the list, which the sheet reads as the next
-   * step. */
-  const answerModel = (key: string) => {
-    // Mid-walk the highlight is not where the frame says; the sheet is busy.
-    if (!pickerStep || !listedStep || reveal || effortFor) return;
-    clearPending();
-    const picked = listedStep.options.find((option) => option.number === Number(key));
-    if (!picked) return;
-    // Antigravity's dialog applies the model and its effort together, on one
-    // Enter: the tap only walks the highlight there, and what happens next is
-    // the effort the dialog then draws for it.
-    if (antigravity) {
-      if (pickerAt === undefined || !deliver(selectMoveKeys(pickerAt, picked.number))) return;
-      sheetAnswered.current = true;
-      setEffortFor({ number: picked.number, label: picked.label });
-      return;
-    }
-    // No walk key may follow the answer's into the session.
-    if (openCode) openCodeWalk.current?.hold();
-    // Walked by printed number: a windowed picker's rows on screen are a slice.
-    const writes = openCode
-      ? picked.keys ?? openCodePickKeys(picked.label)
-      : pickerAt === undefined ? [] : selectKeys(pickerAt, picked.number);
-    if (writes.length === 0 || !deliver(writes)) return;
-    sheetAnswered.current = true;
-    setAnswered(listedStep);
-  };
-  /** A tap on the sheet: a remembered row is held for the live picker. */
-  const chooseModel = (key: string) => {
-    if (!modelPreview) {
-      answerModel(key);
-      return;
-    }
-    const row = modelPreview.options.find((option) => option.number === Number(key));
-    if (row) setHeldPick(row.label);
-  };
-  const answerModelNow = useRef(answerModel);
-  answerModelNow.current = answerModel;
-  /** Whether the live list is all there: OpenCode's walk has listed it, or a
-   * windowed picker's reveal walk has nothing left to show. */
-  const listSettled = !!pickerStep && !!listedStep && !reveal && (openCode
-    ? !picker?.hidden
-    : revealStuck.current || revealSelectRow(listedStep, pickerStep) === undefined);
-  // The opening's model list, kept for the next one once it is all there and
-  // has stopped changing (a frame split across reads is not the list), and
-  // only before anything was answered in it.
-  useEffect(() => {
-    if (!modelSheet || !listSettled || !listedStep || sheetAnswered.current || answered || effortFor || effortStep) return;
-    const keep = window.setTimeout(() => {
-      const kept = keptStep.current ?? rememberedStep;
-      if (kept && sameModelRows(kept, listedStep)) return;
-      keptStep.current = listedStep;
-      rememberModelRows(tab.id, modelRowsOf(listedStep)).catch(() => {});
-    }, MODEL_KEEP_SETTLE);
-    return () => window.clearTimeout(keep);
-  }, [modelSheet, listSettled, listedStep, answered, effortFor, effortStep, rememberedStep, tab.id]);
-  // The held remembered row, answered in the live list by its label once the
-  // walks are done (their keys must not follow the answer's), or dropped when
-  // the whole list is in without it. OpenCode's search answer needs no walk.
-  useEffect(() => {
-    if (!heldPick || !pickerStep || !listedStep || reveal || effortFor) return;
-    const index = liveModelPick(listedStep, { label: heldPick });
-    if (!listSettled && !(openCode && index !== null)) return;
-    setHeldPick(null);
-    const row = listedStep.options.find((option) => option.index === index);
-    if (row) answerModelNow.current(String(row.number));
-  }, [heldPick, pickerStep, listedStep, reveal, effortFor, listSettled, openCode]);
-  /** Answers Antigravity's effort step: the slider is moved with the same
-   * ←/→ its own keyboard row names, and the Enter that follows is the one
-   * that applies the model and the effort at once. */
-  const chooseEffort = (key: string) => {
-    if (!effortSlider || !listedStep) return;
-    clearPending();
-    const target = Number(key);
-    if (!effortSlider.stops[target]) return;
-    if (!deliver([...antigravityEffortKeys(effortSlider.current, target), "\r"])) return;
-    sheetAnswered.current = true;
-    setAnswered(listedStep);
-    setEffortStep(null);
-  };
+  useSignInPageWalk({ signInPage, deliver });
+  const { selectModel, chooseModel, chooseEffort } = useModelPickerAnswers({
+    tab, pickModel, bare, connected, liveScreen, modelSheet, setModelSheet, setAnswered, answered,
+    setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
+    setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
+    clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, picker, pickerStep,
+    listedStep, modelPreview, pickerAt, effortSlider,
+  });
   /** The hidden-link notice's button: the key the CLI hands its link over
    * on, answered by a clipboard copy the terminal above catches. */
   const askForLink = () => {
@@ -4143,90 +1864,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     () => (tab.kind !== "agent" && project && openTab ? { projectId: project, show: (row: TabRow, back?: MarkupBack) => openTab(row, { markupBack: back }) } : undefined),
     [tab.kind, project, openTab],
   );
-  /** The dialog's own question — the block right above its rows, which the
-   * list below shows as its heading — and the screen it was drawn onto, which
-   * stays as the session drew it. Blank rows at either seam are the dialog's
-   * own gutter, not a paragraph of anybody's.
-   *
-   * Between the two Claude Code draws a tab row over a question an agent asks
-   * (`readQuestionTabs`); it is the question's label, so it is lifted off and
-   * the list shows it as chips. Such a question and the agent's prose above it
-   * are rejoined into paragraphs (`joinProseWraps`) — any other dialog's
-   * screen, a diff or a command, stays as drawn. */
-  const { ask: questionAsk, context: questionContext, tabs: questionTabs, tabFocus: questionTabFocus, tabSubmit: questionTabSubmit, tabKeys: questionStepKeys } = useMemo(
-    (): QuestionParts => (liveQuestion ? questionParts(liveTail, liveQuestion) : NO_QUESTION_PARTS),
-    [liveQuestion, liveTail],
-  );
-  /** An agent's own question (a tab row over it) shows the agent's message
-   * above it only when that message is read from its first row. Anything else
-   * there — a thinking preview's last rows, a half-erased row of the answer
-   * before, a message whose top `CONTEXT_LINES` cut off — reached the chat as
-   * fragments cut mid-sentence; the conversation behind the card has the turn. */
-  const questionContextShown = questionContext.length > 0
-    && (questionTabs.length === 0 || opensAgentMessage(questionContext[0], agentLabel));
-  /** What the list on screen *is*, as a string: a stable dep for the effects
-   * below, which must not restart on every repaint of the same question. Two
-   * questions of one dialog can offer the same rows (two yes/no questions):
-   * the step they are on tells them apart. */
-  const questionSignature = !liveQuestion ? ""
-    : questionTabs.length === 0 ? selectSignature(liveQuestion)
-    : [selectSignature(liveQuestion), ...questionTabs.map((tab) => `${tab.answered ? "✓" : "☐"}${tab.label}`), `@${questionTabFocus ?? ""}`, ...questionAsk.map((line) => line.text)].join("\n");
-  /** The question a tap just answered, while the session has not redrawn yet:
-   * its rows stay listed, but nothing can be tapped twice. */
-  const [questionSent, setQuestionSent] = useState<{ signature: string; number: number } | null>(null);
-  const sentSignature = questionSent?.signature ?? "";
-  /** The dialog drawn in place of an answered one, while it is held
-   * (`NEXT_DIALOG_HOLD`). */
-  const [heldQuestion, setHeldQuestion] = useState("");
-  useEffect(() => {
-    if (!heldQuestion) return;
-    const timer = window.setTimeout(() => setHeldQuestion(""), NEXT_DIALOG_HOLD);
-    return () => window.clearTimeout(timer);
-  }, [heldQuestion]);
-  const questionHeld = !!questionSent || (!!heldQuestion && heldQuestion === questionSignature);
-  useEffect(() => {
-    if (!sentSignature) return;
-    // Redrawn as something else — answered, or moved on: the list is live again.
-    if (questionSignature !== sentSignature) {
-      setQuestionSent(null);
-      if (questionSignature) setHeldQuestion(questionSignature);
-      return;
-    }
-    // Still the same question after the keys had time to land: the answer did
-    // not arrive. Give the list back rather than leave a dead block on screen.
-    const stuck = window.setTimeout(() => setQuestionSent(null), MODEL_PICKER_WAIT);
-    return () => window.clearTimeout(stuck);
-  }, [sentSignature, questionSignature]);
-  /** Answers the question on screen with the row tapped — the same arrow keys
-   * and Enter the on-screen key row sends, so a tapped row lands exactly as a
-   * walked one. Nothing here decides what the options are. */
-  const answerQuestion = (option: SelectOption) => {
-    if (!liveQuestion || questionHeld) return;
-    clearPending();
-    if (!deliver(answerRowKeys(liveQuestion, option))) return;
-    setQuestionSent({ signature: questionSignature, number: option.number });
-  };
-  /** Walks a several-question dialog — Claude Code's ←/→, Codex's
-   * PageUp/PageDown — so an answer already given can be changed before it is
-   * sent. No row is pending, but none can be tapped until the session redraws. */
-  const stepQuestion = (from: number, to: number) => {
-    const keys = questionTabKeys(from, to, questionStepKeys);
-    if (!liveQuestion || questionHeld || keys.length === 0) return;
-    clearPending();
-    if (!deliver(keys)) return;
-    setQuestionSent({ signature: questionSignature, number: -1 });
-  };
-  /** Answers the question's free-text row (`freeTextRow`) with what was typed
-   * under it: the highlight walked there, the words, and Enter where Enter
-   * sends them (`freeTextWrites`). */
-  const answerQuestionText = (option: SelectOption, text: string) => {
-    if (!liveQuestion || questionHeld) return;
-    const writes = freeTextWrites(liveQuestion.current, option, text);
-    if (writes.length === 0) return;
-    clearPending();
-    if (!deliver(writes)) return;
-    setQuestionSent({ signature: questionSignature, number: option.number });
-  };
+  const {
+    questionAsk, questionContext, questionTabs, questionTabFocus, questionTabSubmit,
+    questionContextShown, questionSignature, questionSent, sentSignature, answerQuestion,
+    stepQuestion, answerQuestionText,
+  } = useLiveQuestion({
+    clearPending, deliver, agentLabel, liveTail, liveQuestion,
+  });
   /** The stored session only grows at message boundaries, so a turn busy in
    * tool calls looked finished. The live screen's interrupt hint says it is
    * not; a choice on screen is waiting on the reader instead. */
@@ -4321,95 +1965,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
     followReadable(true);
   };
-  const stopVoice = () => recognition.current?.stop();
-  /** A tap while the on-device check runs takes the check back, so a browser
-   * whose check hangs (or a long language download) never locks the button. */
-  const cancelVoicePrep = () => {
-    voiceRequest.current += 1;
-    setPreparingVoice(false);
-    setVoiceStatus(null);
-  };
-  const startVoice = async () => {
-    if (!connectedRef.current || recognition.current || preparingVoice) return;
-    const Recognition = speechRecognitionConstructor();
-    if (!Recognition) {
-      setVoiceFailure({ key: "mobile.voice.unavailable" });
-      return;
-    }
-    const request = voiceRequest.current + 1;
-    voiceRequest.current = request;
-    const language = speechTag();
-    setPreparingVoice(true);
-    setVoiceStatus({ key: "mobile.voice.checking" });
-    setVoiceFailure(null);
-    // Read at the tap, like the language: the menu's choice applies to the
-    // next dictation without this closure having to follow it.
-    const mode = readFlag("voiceRemote") ? "remote" : await prepareOnDeviceSpeech(Recognition, language);
-    if (voiceRequest.current !== request) return;
-    setPreparingVoice(false);
-    if (!connectedRef.current) {
-      setVoiceStatus(null);
-      setVoiceFailure({ key: "mobile.voice.disconnected" });
-      return;
-    }
-    if (mode === "installed") {
-      setVoiceStatus({ key: "mobile.voice.installed", language });
-      return;
-    }
-    voiceProgress.current = DICTATION_START;
-    setVoicePreview("");
-    setVoiceFailure(null);
-    // The session restarts the browser's recognizer through pauses, so
-    // "listening" holds from the tap until the stop (`voiceSession.ts`).
-    const session: DictationSession = startDictation(Recognition, { lang: language, local: mode === "local" }, {
-      onStart: () => {
-        setListening(true);
-        setVoiceStatus({ key: mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" });
-      },
-      onResult: (event) => {
-        const reading = readDictation(event);
-        const step = advanceDictation(voiceProgress.current, reading.heard);
-        voiceProgress.current = step.progress;
-        // Speech is inserted into the current prompt, not submitted: the user
-        // reviews it and presses Send — or says "go on" / "los" last, which
-        // leaves the draft and sends the rest (`spokenSend`). The ref, not
-        // the state, is read and moved: two results can land in one render.
-        if (step.insert) {
-          const current = draftRef.current;
-          const next = `${current}${current && !current.endsWith(" ") ? " " : ""}${step.insert}`;
-          const spoken = spokenSend(next);
-          draftRef.current = spoken ?? next;
-          setDraft(spoken ?? next);
-          if (spoken !== null) {
-            forgetDictation();
-            submitDraftRef.current(spoken);
-            return;
-          }
-        }
-        setVoicePreview(dictationPreview(step.progress, reading.interim));
-      },
-      // A new recognizer's result list starts empty: everything the last one
-      // heard is in the draft already, and none of it is read back.
-      onRestart: () => { voiceProgress.current = DICTATION_START; },
-      onError: (message) => setVoiceFailure({ key: message }),
-      onLevel: (level) => paintMicLevel(dictateButton.current, level),
-      onEnd: () => {
-        if (recognition.current === session) recognition.current = undefined;
-        setListening(false);
-        setVoiceStatus(null);
-      },
-    });
-    recognition.current = session;
-  };
-  useEffect(() => () => {
-    voiceRequest.current += 1;
-    const active = recognition.current;
-    recognition.current = undefined;
-    if (active) {
-      active.abort();
-      paintMicLevel(dictateButton.current, null);
-    }
-  }, [tab.id]);
+  const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
+    tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
+    setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
+    setVoiceFailure, forgetDictation, submitDraftRef,
+  });
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
   /** A browser without Web Speech says so from the start: no action clears

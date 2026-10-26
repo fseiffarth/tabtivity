@@ -9,7 +9,8 @@ import { type TexCapability, getTexCapability } from "../../lib/viewers/tex/tex"
 import { PLATFORM } from "../../lib/window/dragPlatform";
 import { warmDragIcon } from "./fileTreeDrag";
 
-/** The row tooltip and its vertical clamp; the dwell timer that opens it stays with the row handlers. */
+/** The row tooltip and its vertical clamp; the dwell timer that opens it stays
+ * with the row handlers. */
 export function useFileTreeTooltip({ cancelTooltipTimer }: { cancelTooltipTimer: () => void }) {
   const [tooltip, setTooltip] = useState<{ rect: DOMRect; entry: FileEntry } | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);

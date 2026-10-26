@@ -15,7 +15,8 @@ import { useClampToViewport } from "../../hooks/useClampToViewport";
 // built on) reads as "changed" and re-renders forever.
 const EMPTY_PY_ARGS: Record<string, string> = {};
 
-/** TeX toolchain presence, the .tex files compiling, and the Run button's remembered arguments with their popover. */
+/** TeX toolchain presence, the .tex files compiling, and the Run button's
+ * remembered arguments with their popover. */
 export function useFileTreeRunState() {
   // TeX toolchain presence (null until probed); absolute paths of .tex files
   // currently compiling, for the inline build spinner.
