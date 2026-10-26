@@ -1280,14 +1280,14 @@ fn probe(mark: &Mark) -> (f64, f64) {
 /// a wrong line sends the agent to the wrong place) or one whose name could
 /// speak in the prompt is left out.
 /// Marks are in the page's displayed points from its top left, as reverse
-/// search clicks are (`commands::synctex`).
+/// search clicks are (`services::synctex`).
 fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> BTreeMap<(u32, usize), String> {
     let mut found = BTreeMap::new();
     let ResolvedSource::Files(rel) = source else {
         return found;
     };
     let pdf = root.join(rel);
-    let status = crate::commands::synctex::status(&pdf);
+    let status = crate::services::synctex::status(&pdf);
     if !status.has_map || status.pdf_newer_than_map {
         return found;
     }
@@ -1307,14 +1307,14 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
             asked.entry(page.n).or_default().push(index);
         }
     }
-    for (page, answers) in crate::commands::synctex::resolve_pages(&pdf, &points) {
+    for (page, answers) in crate::services::synctex::resolve_pages(&pdf, &points) {
         for (index, answer) in asked.get(&page).into_iter().flatten().zip(answers) {
             let Some((input, line)) = answer else { continue };
             if edited.contains(input.as_str()) {
                 continue;
             }
             // SyncTeX spells a source under the PDF's folder as given
-            // (`commands::synctex`), and `pdf` is `root.join(rel)`, so a
+            // (`services::synctex`), and `pdf` is `root.join(rel)`, so a
             // source in the project strips against `root` as given — minus
             // Windows' `\\?\` prefix, which SyncTeX never hands back.
             let input = Path::new(&input);
@@ -1753,7 +1753,7 @@ mod tests {
         for tex in ["docs/main.tex", "docs/chapters/intro.tex"] {
             fs::write(root.join(tex), "x").unwrap();
         }
-        // Two lines as `commands::synctex`'s fixture has them — main.tex:3 at
+        // Two lines as `services::synctex`'s fixture has them — main.tex:3 at
         // y ≈ 134.8 bp, intro.tex:4 at y ≈ 201 bp — and a third from a class
         // file outside the project, at y ≈ 300 bp.
         let map = format!(
@@ -1822,7 +1822,7 @@ mod tests {
         let mut page = page(1, &layer(root, "a-p1-marked.png"));
         page.marks = vec![Mark::Text { color: Color::Blue, at: [150.0, 133.0], size: 12.0, text: "here".into() }];
         // SyncTeX does answer the mark; only the name is refused.
-        let (input, _) = crate::commands::synctex::resolve(&root.join("docs/draft.pdf"), 1, 150.0, 133.0).unwrap();
+        let (input, _) = crate::services::synctex::resolve(&root.join("docs/draft.pdf"), 1, 150.0, 133.0).unwrap();
         assert!(input.ends_with("x.tex"), "{input}");
         let lines = source_lines(root, &ResolvedSource::Files("docs/draft.pdf".into()), &[page]);
         assert!(lines.is_empty(), "{lines:?}");

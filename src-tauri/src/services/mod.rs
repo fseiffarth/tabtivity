@@ -131,6 +131,8 @@ pub mod sandbox;
 // Spreadsheet parsing in a limited child process of the main binary.
 pub mod sheet_reader;
 pub mod skills;
+// SyncTeX read natively: reverse and forward search, page anchors, map freshness.
+pub mod synctex;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
 pub mod state_gc;

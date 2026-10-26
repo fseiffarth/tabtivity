@@ -718,7 +718,7 @@ fn status_reads_the_files_beside_the_pdf() {
     // without Windows' `\\?\` prefix (which `root` carries there).
     set(&slide, t0 + Duration::from_secs(120));
     let st = status(&pdf);
-    assert_eq!(st.newer_sources, vec![crate::commands::fs::display_path(&slide)]);
+    assert_eq!(st.newer_sources, vec![crate::paths::display_path(&slide)]);
     assert!(!st.pdf_newer_than_map);
 
     // The PDF rebuilt without a map: the map is the older build's.
