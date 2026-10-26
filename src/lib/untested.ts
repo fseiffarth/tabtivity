@@ -281,6 +281,7 @@ export const UNTESTED = {
   "nav.updates.title": { area: "layout", what: "UpdatesPanel · Updates" },
   "updates.legacyNames": { area: "layout", what: "UpdatesPanel · Names from before the rename (fallback log and unfinished migration steps; only shown once the app's name has changed)" },
   "ollama.autostartTitle": { area: "layout", what: "SettingsSubPanels · Load on Tabtivity start" },
+  "ollama.browseRegistry": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry: community models (user/name) listed with a community chip and pullable; Type (all of), Runs (local/cloud) and Download size filters and the Popular/Newest/Name sort applied by ollama.com; scrolling loads page after page until End of results" },
   "ollama.modelLocationTitle": { area: "layout", what: "SettingsSubPanels · Model download location" },
   "projectSwitcher.addProjectsToBox": { area: "layout", what: "ProjectSwitcher · Add projects to Box" },
   "projectSwitcher.hpcPipeline": { area: "layout", what: "ProjectSwitcher · HPC pipeline…" },
