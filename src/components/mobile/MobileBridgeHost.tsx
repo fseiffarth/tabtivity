@@ -8,14 +8,13 @@ import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
-  hostTabId,
   isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
-  workerRunnable,
   type TabEntry,
   type TabLocation,
 } from "../../stores/tabs";
+import { hostTabId, workerRunnable } from "../../stores/tabs/tabLocation";
 import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { ASSISTANT_SCOPE, type AssistantLaunch, type AssistantModelRow, assistantCurrentModel, assistantErrorCode, assistantModelRows, assistantNewChat, assistantOptions } from "../../lib/assistant";

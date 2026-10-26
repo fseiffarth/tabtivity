@@ -14,12 +14,12 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import {
   useTabsStore,
-  duplicateSpec,
   flushViewerState,
   pendingViewerState,
   type GroupNode,
   type TabEntry,
 } from "../../stores/tabs";
+import { duplicateSpec } from "../../stores/tabs/tabEntries";
 import { BRAND, envName } from "../../lib/brand";
 
 function seed() {

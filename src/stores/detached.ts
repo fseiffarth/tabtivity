@@ -19,23 +19,24 @@ import {
   flushViewerState,
   orderedTabKeys,
   findGroupOfTab,
+  allGroups,
+  isPtyTabKind,
+  type DropEdge,
+  type LayoutNode,
+  type TabEntry,
+  type TabLocation,
+  type ViewerState,
+} from "./tabs";
+import {
   mapGroup,
   removeKeyFromTree,
   splitSubtree,
   applyResize,
   moveKeyInTree,
-  allGroups,
-  isPtyTabKind,
-  normalizeTodoId,
-  type DetachedGroup,
-  type DropEdge,
-  type LayoutNode,
-  type LocalityHost,
-  type TabEntry,
-  type TabLocation,
-  type ViewerState,
-  type WindowBounds,
-} from "./tabs";
+} from "./tabs/layoutTree";
+import { normalizeTodoId } from "./tabs/tabEntries";
+import type { DetachedGroup, WindowBounds } from "./tabs/types";
+import type { LocalityHost } from "./tabs/tabLocation";
 import { useProjectsStore } from "./projects";
 import { noteClosedPopoutTabs, reopenClosedAgentTab } from "./agents/closedAgentTabs";
 import {

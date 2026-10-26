@@ -1,14 +1,16 @@
 import {
   BLOB_TAB_CMD,
   BROWSER_TAB_CMD,
+  PROMPTCHART_TAB_CMD,
+  type TabEntry,
+} from "../../stores/tabs";
+import {
   PRINTING_TAB_CMD,
   DISKUSAGE_TAB_CMD,
   MONITOR_TAB_CMD,
   NETWORK_TAB_CMD,
   SKILLSLIBRARY_TAB_CMD,
-  PROMPTCHART_TAB_CMD,
-  type TabEntry,
-} from "../../stores/tabs";
+} from "../../stores/tabs/tabKinds";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { PROJECT_FILES_TAB_CMD, ROOT_SCOPE } from "../../stores/tabs";

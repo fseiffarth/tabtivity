@@ -28,18 +28,17 @@ import {
   isResumableAgentTab,
   isSavedWhileLive,
   remoteHostIdOf,
-  restorableSavedTabs,
   ROOT_SCOPE,
-  savedLayoutTreeOf,
   toSavedTabEntry,
   useTabsStore,
-  type LocalLaunch,
   type SavedLayoutTree,
   type TabKind,
   type TabLocation,
   type TabEntry,
   type ViewerState,
 } from "./tabs";
+import { restorableSavedTabs, savedLayoutTreeOf } from "./tabs/savedLayout";
+import type { LocalLaunch } from "./tabs/types";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { useTimerStore } from "./timer";
 import { useSettingsStore, whenSettingsLoaded } from "./settings";

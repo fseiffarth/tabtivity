@@ -18,13 +18,12 @@ import {
   useTabsStore,
   findGroup,
   allGroups,
-  serializeTree,
   pruneSavedTree,
-  withDetachedDocked,
   isDetachedPtyId,
   type GroupNode,
   type SplitNode,
 } from "../../stores/tabs";
+import { serializeTree, withDetachedDocked } from "../../stores/tabs/savedLayout";
 
 function tab(label: string) {
   return { label, cmd: "bash", cwd: "/p", kind: "shell" as const };

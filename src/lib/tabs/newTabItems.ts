@@ -1,8 +1,5 @@
-import {
-  FILES_TAB_CMD,
-  TabEntry,
-  TabKind,
-} from "../../stores/tabs";
+import { TabEntry, TabKind } from "../../stores/tabs";
+import { FILES_TAB_CMD } from "../../stores/tabs/tabKinds";
 import { AGENT_CLI_ROWS, RESUMABLE_AGENTS } from "../agents/agentClis";
 import type { CustomAgent } from "../../types";
 import type { TranslationKey } from "../i18n";

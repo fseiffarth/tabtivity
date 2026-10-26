@@ -29,7 +29,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { basename, dirname, relativePathWithin } from "../paths";
 import { IS_WINDOWS } from "../platform";
-import { useTabsStore, isRemoteLocation, type TabEntry, type TabLocation } from "../../stores/tabs";
+import { useTabsStore, type TabEntry, type TabLocation } from "../../stores/tabs";
+import { isRemoteLocation } from "../../stores/tabs/tabLocation";
 import { guardLoginNodeRun } from "../remote/hpc/hpcGuard";
 import { translateNow } from "../i18n";
 import { envName } from "../brand";

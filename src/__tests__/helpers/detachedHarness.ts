@@ -117,6 +117,9 @@ export function createWindowRegistry(): WindowRegistry {
 /** One heap's view of the modules a detached test drives. */
 export interface Heap {
   tabs: typeof import("../../stores/tabs");
+  /** The tab store's pure parts that hold per-heap state or are read per heap. */
+  tabLayoutTree: typeof import("../../stores/tabs/layoutTree");
+  tabViewerState: typeof import("../../stores/tabs/viewerState");
   detached: typeof import("../../stores/detached");
   settings: typeof import("../../stores/settings");
   activity: typeof import("../../stores/activity");
@@ -137,9 +140,11 @@ export interface Heap {
  */
 export async function loadHeap(): Promise<Heap> {
   vi.resetModules();
-  const [tabs, detached, settings, activity, context, projects, boxes, remoteStatus, usage, runHostPref] =
+  const [tabs, tabLayoutTree, tabViewerState, detached, settings, activity, context, projects, boxes, remoteStatus, usage, runHostPref] =
     await Promise.all([
       import("../../stores/tabs"),
+      import("../../stores/tabs/layoutTree"),
+      import("../../stores/tabs/viewerState"),
       import("../../stores/detached"),
       import("../../stores/settings"),
       import("../../stores/activity"),
@@ -152,6 +157,8 @@ export async function loadHeap(): Promise<Heap> {
     ]);
   return {
     tabs,
+    tabLayoutTree,
+    tabViewerState,
     detached,
     settings,
     activity,

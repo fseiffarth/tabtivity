@@ -28,13 +28,13 @@ import {
   DEFAULT_MIN_SUBWINDOW_PX,
   EMPTY_GROUP_ID,
   allGroups,
-  dividerFraction,
   findGroup,
   hydrateScopeFromDisk,
   useTabsStore,
   type DetachedDockTarget,
   type LayoutNode,
 } from "../../stores/tabs";
+import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";

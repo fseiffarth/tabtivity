@@ -87,7 +87,6 @@ import { useSettingsStore } from "../../stores/settings";
 import {
   DEFAULT_MIN_SUBWINDOW_PX,
   allGroups,
-  dividerFraction,
   findGroup,
   findGroupOfTab,
   isPtyTabKind,
@@ -100,6 +99,7 @@ import {
   type TabEntry,
   type TabLocation,
 } from "../../stores/tabs";
+import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import { detachedNewTabCwd, type DetachedRemoteInfo } from "../../stores/detached";

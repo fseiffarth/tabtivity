@@ -3,7 +3,8 @@ import type { TranslationKey } from "./i18n";
 import { terminalFor } from "./terminal/terminalRegistry";
 import { asleepPty } from "./terminal/sleepingPtys";
 import { isDetachedWindow } from "../stores/detachedContext";
-import { isDetachedPtyId, isPtyTabKind, splitSubPaneKey, type TabEntry } from "../stores/tabs";
+import { isDetachedPtyId, isPtyTabKind, type TabEntry } from "../stores/tabs";
+import { splitSubPaneKey } from "../stores/tabs/viewerState";
 
 /**
  * What an open tab holds in this window's renderer — an ESTIMATE, read on

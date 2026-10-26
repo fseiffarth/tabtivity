@@ -34,7 +34,8 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { hostTabCwd, hostTabId, type TabEntry } from "../../stores/tabs";
+import { type TabEntry } from "../../stores/tabs";
+import { hostTabCwd, hostTabId } from "../../stores/tabs/tabLocation";
 import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { ASSISTANT_SCOPE, withAssistantPromptTarget } from "../../lib/assistant";

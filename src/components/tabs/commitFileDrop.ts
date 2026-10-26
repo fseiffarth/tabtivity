@@ -8,8 +8,8 @@ import {
   type DetachedDockTarget,
   type DropEdge,
   type TabEntry,
-  type WindowBounds,
 } from "../../stores/tabs";
+import type { WindowBounds } from "../../stores/tabs/types";
 import { useWindowsStore } from "../../stores/windows";
 import { reseedDetached } from "./detachedDropTargets";
 import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";

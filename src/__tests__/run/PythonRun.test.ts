@@ -10,7 +10,7 @@ import {
   systemInterpreter,
 } from "../../lib/terminal/pythonRun";
 import { BRAND } from "../../lib/brand";
-import { withoutLegacyRunGlyph } from "../../stores/tabs";
+import { withoutLegacyRunGlyph } from "../../stores/tabs/tabEntries";
 
 describe("shellQuote", () => {
   it("single-quotes on unix and escapes an embedded quote", () => {

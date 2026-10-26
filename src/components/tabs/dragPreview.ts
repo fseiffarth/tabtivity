@@ -1,4 +1,5 @@
-import { allGroups, findGroup, removeNodeById, type LayoutNode } from "../../stores/tabs";
+import { allGroups, findGroup, type LayoutNode } from "../../stores/tabs";
+import { removeNodeById } from "../../stores/tabs/layoutTree";
 
 /**
  * The layout that should be RENDERED while a tab drag is in flight.

@@ -48,13 +48,13 @@ import {
 import { applyDetachedStatus } from "../../stores/activity";
 import {
   allGroups,
-  allNodeIds as nodeIdsOf,
   orderedTabKeys,
-  setDetachedViewerState,
   type LayoutNode,
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
+import { allNodeIds as nodeIdsOf } from "../../stores/tabs/layoutTree";
+import { setDetachedViewerState } from "../../stores/tabs/viewerState";
 import { withdrawnTabKinds } from "../../lib/experimental";
 import { PLATFORM } from "../../lib/platform";
 import { useTabLandStore } from "../../stores/drag/tabLand";

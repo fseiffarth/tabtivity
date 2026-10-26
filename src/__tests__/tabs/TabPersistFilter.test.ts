@@ -17,7 +17,6 @@ import {
   BROWSER_TAB_CMD,
   cmdToKind,
   isPtyTabKind,
-  isRestorableKind,
   isRelaunchableLocalTab,
   isResumableAgentTab,
   isRestorableTab,
@@ -27,6 +26,7 @@ import {
   useTabsStore,
   type SavedLayoutTree,
 } from "../../stores/tabs";
+import { isRestorableKind } from "../../stores/tabs/tabKinds";
 import { BRAND, envName, tabCommand } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);

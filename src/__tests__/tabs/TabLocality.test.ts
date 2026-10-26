@@ -12,15 +12,17 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
 import {
-  defaultLocationForKind,
   effectiveTabLocation,
-  hostTabCwd,
-  hostTabId,
-  isLocatableKind,
   localTabCwd,
   useTabsStore,
   type SavedLayoutTree,
 } from "../../stores/tabs";
+import {
+  defaultLocationForKind,
+  hostTabCwd,
+  hostTabId,
+  isLocatableKind,
+} from "../../stores/tabs/tabLocation";
 
 const invokeMock = vi.mocked(invoke);
 

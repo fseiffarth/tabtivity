@@ -3,15 +3,17 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   effectiveTabLocation,
-  isLocatableKind,
   isPtyTabKind,
   isResumableAgentTab,
-  localityHostLabel,
   remoteHostIdOf,
-  type LocalityHost,
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
+import {
+  isLocatableKind,
+  localityHostLabel,
+  type LocalityHost,
+} from "../../stores/tabs/tabLocation";
 import { lastPtyOutputAt, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { useFileSourcesStore } from "../../stores/viewers/fileSources";

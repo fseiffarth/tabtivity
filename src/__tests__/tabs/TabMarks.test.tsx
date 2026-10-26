@@ -25,12 +25,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   allGroups,
-  duplicateSpec,
   toSavedTabEntry,
   useTabsStore,
   type SavedTabEntry,
   type TabEntry,
 } from "../../stores/tabs";
+import { duplicateSpec } from "../../stores/tabs/tabEntries";
 import { applyMarkToTabs, applyTodoToTabs } from "../../stores/detached";
 import { isTabMark, markedTabs } from "../../lib/tabMarks";
 import { linkedTabOf, taskFromTab } from "../../lib/todoBoard";

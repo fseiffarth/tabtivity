@@ -4,21 +4,23 @@ import {
   BLOB_TAB_CMD,
   BROWSER_TAB_CMD,
   PROJECT_FILES_TAB_CMD,
-  PRINTING_TAB_CMD,
-  DISKUSAGE_TAB_CMD,
-  NETWORK_TAB_CMD,
-  MONITOR_TAB_CMD,
-  SKILLSLIBRARY_TAB_CMD,
   PROMPTCHART_TAB_CMD,
   EMPTY_GROUP_ID,
   isPtyTabKind,
   useTabsStore,
   useGroup,
   useGroupTabs,
-  type AddTabOpts,
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
+import {
+  PRINTING_TAB_CMD,
+  DISKUSAGE_TAB_CMD,
+  NETWORK_TAB_CMD,
+  MONITOR_TAB_CMD,
+  SKILLSLIBRARY_TAB_CMD,
+} from "../../stores/tabs/tabKinds";
+import type { AddTabOpts } from "../../stores/tabs/types";
 import { useDragStore } from "../../stores/drag/drag";
 import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";

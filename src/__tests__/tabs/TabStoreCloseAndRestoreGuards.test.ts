@@ -24,16 +24,18 @@ import { forgetPty } from "../../lib/agents/promptCount";
 import {
   activeLayoutPersistTarget,
   allGroups,
-  isSavedTabEntry,
   orderedTabKeys,
-  restorableSavedTabs,
-  savedLayoutTreeOf,
   useTabsStore,
-  type DetachedGroup,
   type SavedLayoutTree,
   type SavedTabEntry,
   type TabEntry,
 } from "../../stores/tabs";
+import {
+  isSavedTabEntry,
+  restorableSavedTabs,
+  savedLayoutTreeOf,
+} from "../../stores/tabs/savedLayout";
+import type { DetachedGroup } from "../../stores/tabs/types";
 
 const invokeMock = vi.mocked(invoke);
 const forgetPtyMock = vi.mocked(forgetPty);

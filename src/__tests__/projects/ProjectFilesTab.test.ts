@@ -15,11 +15,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) 
 import {
   PROJECT_FILES_TAB_CMD,
   cmdToKind,
-  isRestorableKind,
   isRestorableTab,
   useTabsStore,
   type GroupNode,
 } from "../../stores/tabs";
+import { isRestorableKind } from "../../stores/tabs/tabKinds";
 import { tabCommand } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);

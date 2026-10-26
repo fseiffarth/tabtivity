@@ -2,13 +2,15 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   effectiveTabLocation,
   remoteHostIdOf,
+  type TabEntry,
+  type TabLocation,
+} from "../../stores/tabs";
+import {
   isLocatableKind,
   localityHostLabel,
   workerRunnable,
   type LocalityHost,
-  type TabEntry,
-  type TabLocation,
-} from "../../stores/tabs";
+} from "../../stores/tabs/tabLocation";
 import { useFileSourcesStore } from "../../stores/viewers/fileSources";
 import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import { UntestedTag } from "../common/UntestedTag";
