@@ -15,7 +15,7 @@ use app_core::sync::LockExt;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use super::root_mcp::{Caller, Effects, Stores};
+use crate::services::root_mcp::{Caller, Effects, Stores};
 
 pub const TOOL: &str = "calendar_import_ics";
 /// Under the 128 KiB request body, with room for JSON's escaping of line ends.
@@ -126,7 +126,7 @@ pub fn call(stores: &Stores, tab: &str, args: &Value) -> Result<(Value, Effects)
     if staged.len() >= MAX_TOTAL || staged.iter().filter(|r| r.tab == tab).count() >= MAX_PER_TAB {
         return Err("Too many calendar imports are waiting; the user has to decide on those first".into());
     }
-    let id = super::root_mcp::mint_token().ok_or("No OS entropy")?;
+    let id = crate::services::root_mcp::mint_token().ok_or("No OS entropy")?;
     let row = StagedImport { id: id.clone(), tab: tab.to_string(), name, created: crate::clock::now_ms().to_string(), text: text.to_string() };
     let folder = dir(stores.state);
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;

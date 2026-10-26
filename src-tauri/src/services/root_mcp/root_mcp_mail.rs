@@ -30,7 +30,7 @@
 use crate::brand::UPPER;
 use serde_json::{json, Map, Value};
 
-use super::root_mcp::{Caller, Change, Effects, Stores};
+use crate::services::root_mcp::{Caller, Change, Effects, Stores};
 use crate::schema::mail::{
     MailAgentScope, MailBody, MailDraft, MailFolder, MailFolderKind, MailHeader, MailHeaderPage,
     NewStagedFile, StagedAttachment,
@@ -531,7 +531,7 @@ pub fn envelope(content: &Value, nonce: &str) -> Value {
 
 fn enveloped(mut content: Value) -> Result<Value, String> {
     strip_value(&mut content);
-    let nonce = super::root_mcp::mint_token().ok_or("No OS entropy")?;
+    let nonce = crate::services::root_mcp::mint_token().ok_or("No OS entropy")?;
     Ok(envelope(&content, &nonce[..16]))
 }
 
@@ -554,7 +554,7 @@ pub fn tool_schemas(caller: Caller, reads: bool) -> Vec<Value> {
     // adds with a click. Never a reader's or a local model's.
     if caller == Caller::Agent {
         draft_fields.insert("attach".into(), json!({
-            "type": "array", "maxItems": super::mail_attach::MAX_FILES,
+            "type": "array", "maxItems": crate::services::mail_attach::MAX_FILES,
             "description": concat!("Project files to attach, at most 5 (20 MiB each, 25 MiB per draft). ", crate::app_name!(), " copies each file when you call and shows it to the user with its source before sending. On an update the list replaces the files this draft has; omit it to keep them, pass [] to remove them. Only files a fenced tab of that project could read are attached: no links, nothing in .git, no key or credential files."),
             "items": { "type": "object",
                 "properties": {
@@ -979,7 +979,7 @@ struct Staging {
 /// `None` when the argument is absent. Refused whole — nothing staged — on the
 /// first file that fails a check or a cap.
 fn attach_files(mail: &ScopedMail, caller: Caller, args: &Value, before: Option<&MailDraft>) -> Result<Option<Staging>, String> {
-    use super::mail_attach as attach;
+    use crate::services::mail_attach as attach;
     if args.get("attach").is_some() && caller != Caller::Agent {
         return Err(attach::NOT_FOR_CALLER.into());
     }
@@ -993,11 +993,11 @@ fn attach_files(mail: &ScopedMail, caller: Caller, args: &Value, before: Option<
     // The tab's own fence, as recorded when it was spawned: with the projects
     // hidden from the tab, Tabtivity reading them for it is the widening the
     // `.ics` import rule forbids.
-    let grant = mail.stores.session.map_or(super::root_mcp::ProjectsGrant::Hidden, |s| s.projects_grant());
+    let grant = mail.stores.session.map_or(crate::services::root_mcp::ProjectsGrant::Hidden, |s| s.projects_grant());
     let granted: Option<Vec<std::path::PathBuf>> = match grant {
-        super::root_mcp::ProjectsGrant::Hidden => return Err(attach::NEEDS_PROJECTS_READABLE.into()),
-        super::root_mcp::ProjectsGrant::Paths(paths) => Some(paths),
-        super::root_mcp::ProjectsGrant::All => None,
+        crate::services::root_mcp::ProjectsGrant::Hidden => return Err(attach::NEEDS_PROJECTS_READABLE.into()),
+        crate::services::root_mcp::ProjectsGrant::Paths(paths) => Some(paths),
+        crate::services::root_mcp::ProjectsGrant::All => None,
     };
     let stores = mail.stores;
     let projects: crate::schema::projects::ProjectsList = crate::storage::read_json(stores.projects).unwrap_or_default();
@@ -1007,7 +1007,7 @@ fn attach_files(mail: &ScopedMail, caller: Caller, args: &Value, before: Option<
     let (mut add, mut reply, mut total) = (Vec::new(), Vec::new(), 0u64);
     for item in &items {
         stores.check()?;
-        let id = super::root_mcp::resolve_project(stores, &item.project)?;
+        let id = crate::services::root_mcp::resolve_project(stores, &item.project)?;
         let file = attach::resolve(&lists, &id, &item.path)?;
         total += file.bytes.len() as u64;
         if total > attach::MAX_DRAFT_BYTES {
@@ -1124,12 +1124,12 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
         .then(super::root_mcp_review::lock);
     stores.check()?;
     let caller = stores.caller;
-    if !TOOLS.contains(&name) || !super::root_mcp::served(caller, name) {
+    if !TOOLS.contains(&name) || !crate::services::root_mcp::served(caller, name) {
         return Err(format!("unknown tool '{name}'"));
     }
     if !stores.access.allows(caller, name) {
         // Of this class, taken away by the user: said so, not made to vanish.
-        return Err(super::root_mcp::ACCESS_NARROWED.to_string());
+        return Err(crate::services::root_mcp::ACCESS_NARROWED.to_string());
     }
     if is_read_tool(name) && !stores.policy.reads_mail(caller) {
         // Only a local-model tab reaches here (`served` already refused a
@@ -1146,10 +1146,10 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
             None => {
                 let settings: crate::schema::Settings = crate::storage::read_json(stores.settings)
                     .map_err(|_| LOCAL_READ_REMOTE.to_string())?;
-                super::mail_ai::resolve_endpoint(crate::commands::ollama::host_setting(&settings).0).map_err(|_| LOCAL_READ_REMOTE.to_string())?
+                crate::services::mail_ai::resolve_endpoint(crate::commands::ollama::host_setting(&settings).0).map_err(|_| LOCAL_READ_REMOTE.to_string())?
             }
         };
-        let addr = super::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;
+        let addr = crate::services::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;
         // A loopback Ollama still runs an Ollama cloud model on ollama.com
         // (gap 25): the model recorded at spawn must be one that endpoint
         // lists without a remote, and no other listed model may share its
@@ -1167,7 +1167,7 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
         // latch staying set for this spawn either way.
         if let Some(session) = stores.session {
             session.mark_read_mail();
-            super::root_mcp::record_read_mail(stores.state, &session.identity.tab, session.identity.model.as_deref())
+            crate::services::root_mcp::record_read_mail(stores.state, &session.identity.tab, session.identity.model.as_deref())
                 .map_err(|_| LOCAL_READ_UNRECORDED.to_string())?;
         }
     }

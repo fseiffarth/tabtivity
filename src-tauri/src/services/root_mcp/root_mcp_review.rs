@@ -1,6 +1,6 @@
 //! Root MCP's backend-owned copies and immutable, row-based write proposals.
 //! Lock order: REVIEW_LOCK, then the calendar RMW lock. No AppHandle or IPC.
-use super::root_mcp::{self, Change, Effects, Stores};
+use crate::services::root_mcp::{self, Change, Effects, Stores};
 use app_core::sync::LockExt;
 use super::root_mcp_security::{self as security, Access};
 use crate::{commands::calendar, storage};

@@ -4,7 +4,7 @@ use app_core::sync::LockExt;
 use serde_json::Value;
 use std::path::Path;
 
-use super::root_mcp::Caller;
+use crate::services::root_mcp::Caller;
 
 pub const MAX_BODY: usize = 128 * 1024;
 pub const MAX_RESPONSE: usize = 512 * 1024;
@@ -57,7 +57,7 @@ pub fn audit_admission(reason: &'static str) {
     });
 }
 pub fn audit(
-    session: &super::root_mcp::Session,
+    session: &crate::services::root_mcp::Session,
     name: &str,
     outcome: &'static str,
     elapsed: std::time::Duration,
@@ -65,7 +65,7 @@ pub fn audit(
     audit_reason(session, name, outcome, elapsed, None);
 }
 
-pub fn audit_reason(session: &super::root_mcp::Session, name: &str, outcome: &'static str, elapsed: std::time::Duration, reason: Option<&'static str>) {
+pub fn audit_reason(session: &crate::services::root_mcp::Session, name: &str, outcome: &'static str, elapsed: std::time::Duration, reason: Option<&'static str>) {
     let mut rows = AUDIT.lock_ok();
     if rows.len() >= AUDIT_ROWS {
         rows.pop_front();
@@ -76,7 +76,7 @@ pub fn audit_reason(session: &super::root_mcp::Session, name: &str, outcome: &'s
         session: session.id.clone(),
         caller: Some(session.identity.caller),
         // Do not echo arbitrary method names (which may contain private text).
-        tool: if tool(name).is_some() || super::schedule_mcp::tool_names().contains(&name) || super::git_push_mcp::tool_names().contains(&name) {
+        tool: if tool(name).is_some() || crate::services::schedule_mcp::tool_names().contains(&name) || crate::services::git_push_mcp::tool_names().contains(&name) {
             name
         } else {
             "protocol"
@@ -573,7 +573,7 @@ mod tests {
             assert!(!t.serves(Caller::Agent) && !t.serves(Caller::Scheduler) && !t.serves(Caller::Pusher), "{name}");
         }
         // No other tool gains a local-only row.
-        for name in super::super::root_mcp::tool_names() {
+        for name in crate::services::root_mcp::tool_names() {
             let t = tool(name).unwrap();
             if !["mail_folders", "mail_search", "mail_read", "mail_thread"].contains(&name) {
                 assert_eq!(t.serves(Caller::LocalModel), t.serves(Caller::Agent), "{name}");
@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn audit_masks_unknown_names_and_caps_its_rows() {
         audit_clear();
-        let (_, session) = super::super::root_mcp::test_session(Caller::Agent);
+        let (_, session) = crate::services::root_mcp::test_session(Caller::Agent);
         audit(&session, "calendar_list", "allowed", std::time::Duration::ZERO);
         audit(&session, "schedule_prompt", "refused", std::time::Duration::ZERO);
         audit(&session, "tools/call: my private note about Alice", "refused", std::time::Duration::ZERO);
@@ -645,14 +645,14 @@ mod tests {
         }
         assert_eq!(audit_rows().len(), AUDIT_ROWS);
         assert_eq!(audit_rows().iter().filter(|r| r.tool == ADMISSION).count(), 0, "the oldest rows go first, probes included");
-        super::super::root_mcp::revoke_tab(&session.identity.tab);
+        crate::services::root_mcp::revoke_tab(&session.identity.tab);
         audit_clear();
     }
 
     #[test]
     fn new_tools_and_reader_data_are_denied() {
         assert!(tool("calendar_new_tool").is_none());
-        for name in super::super::root_mcp::tool_names() {
+        for name in crate::services::root_mcp::tool_names() {
             assert!(tool(name).is_some(), "unclassified tool: {name}");
         }
         let reader = Access::initial(Caller::Reader);

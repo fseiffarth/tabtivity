@@ -207,8 +207,8 @@ fn drafts_belong_to_one_spawn_and_account_grants_hide_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("settings.json");
     std::fs::write(&settings, r#"{"root_mcp_mail":true}"#).unwrap();
-    let (_, first) = super::super::root_mcp::test_session(Caller::Agent);
-    let (_, second) = super::super::root_mcp::test_session(Caller::Agent);
+    let (_, first) = crate::services::root_mcp::test_session(Caller::Agent);
+    let (_, second) = crate::services::root_mcp::test_session(Caller::Agent);
     let mut a = stores(Some(&f), Caller::Agent); a.settings = &settings; a.session = Some(&first);
     let created = call(&a, "mail_draft_create", &json!({"account_id":"open", "subject":"Private draft"})).unwrap().0;
     let id = created["draft_id"].as_str().unwrap();
@@ -219,8 +219,8 @@ fn drafts_belong_to_one_spawn_and_account_grants_hide_metadata() {
     b.access.accounts = super::super::root_mcp_security::Scope::default();
     assert_eq!(call(&b, "mail_accounts_list", &json!({})).unwrap().0["accounts"], json!([]));
     assert!(call(&b, "mail_draft_create", &json!({"account_id":"open"})).is_err());
-    super::super::root_mcp::revoke_tab(&first.identity.tab);
-    super::super::root_mcp::revoke_tab(&second.identity.tab);
+    crate::services::root_mcp::revoke_tab(&first.identity.tab);
+    crate::services::root_mcp::revoke_tab(&second.identity.tab);
 }
 
 /// A draft the user approved into "Drafted by agents" goes back to ✓
@@ -231,7 +231,7 @@ fn an_agent_update_unfiles_an_approved_draft() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("settings.json");
     std::fs::write(&settings, r#"{"root_mcp_mail":true}"#).unwrap();
-    let (_, session) = super::super::root_mcp::test_session(Caller::Agent);
+    let (_, session) = crate::services::root_mcp::test_session(Caller::Agent);
     let mut a = stores(Some(&f), Caller::Agent); a.settings = &settings; a.session = Some(&session);
     let created = call(&a, "mail_draft_create", &json!({"account_id":"open", "subject":"Offer"})).unwrap().0;
     let id = created["draft_id"].as_str().unwrap().to_string();
@@ -240,7 +240,7 @@ fn an_agent_update_unfiles_an_approved_draft() {
     f.drafts.lock().unwrap().iter_mut().find(|d| d.id == id).unwrap().filed = true;
     call(&a, "mail_draft_update", &json!({"draft_id":id, "subject":"Offer v2"})).unwrap();
     assert!(!filed(&f), "a changed draft is approved again");
-    super::super::root_mcp::revoke_tab(&session.identity.tab);
+    crate::services::root_mcp::revoke_tab(&session.identity.tab);
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn only_a_root_tabs_attach_items_take_a_path_and_nothing_takes_a_file_a_bcc_or_a
 
 /// A local-model tab with `root_mcp_mail_local_read` on, its settings file
 /// matching the policy (a live session re-reads it per call).
-fn local_reader<'a>(f: &'a Fx, settings: &'a Path, session: &'a super::super::root_mcp::Session) -> Stores<'a> {
+fn local_reader<'a>(f: &'a Fx, settings: &'a Path, session: &'a crate::services::root_mcp::Session) -> Stores<'a> {
     // The endpoint lists the test session's model as installed (gap 25),
     // and the taint markers land beside the settings file (gap 33).
     crate::commands::ollama::test_tags::set(Some(LOCAL_TAGS));
@@ -347,7 +347,7 @@ fn a_local_model_reads_marked_mails_only() {
     f.marks = vec!["m1".into()];
     let dir = tempfile::tempdir().unwrap();
     let settings = local_settings(dir.path(), "127.0.0.1:11434");
-    let (_, session) = super::super::root_mcp::test_session(Caller::LocalModel);
+    let (_, session) = crate::services::root_mcp::test_session(Caller::LocalModel);
     let s = local_reader(&f, &settings, &session);
     let run = |name: &str, args: Value| call(&s, name, &args).map(|(v, _)| v);
 
@@ -378,7 +378,7 @@ fn a_local_model_reads_marked_mails_only() {
     assert!(run("mail_draft_create", json!({ "account_id": "open", "reply_to_message_id": "m1", "to": ["eve@else.example"] })).is_err());
     assert!(run("mail_draft_create", json!({ "account_id": "open", "reply_to_message_id": "m3" })).is_err());
     assert!(run("mail_draft_update", json!({ "draft_id": early, "subject": "after" })).is_ok(), "its own pre-read draft stays its own");
-    super::super::root_mcp::revoke_tab(&session.identity.tab);
+    crate::services::root_mcp::revoke_tab(&session.identity.tab);
 }
 
 /// Off by default; never for a cloud root agent; never through a remote
@@ -389,7 +389,7 @@ fn local_reads_need_the_switch_a_local_model_and_a_loopback_ollama() {
     f.marks = vec!["m1".into()];
     let dir = tempfile::tempdir().unwrap();
     let loopback = local_settings(dir.path(), "localhost:11434");
-    let (_, session) = super::super::root_mcp::test_session(Caller::LocalModel);
+    let (_, session) = crate::services::root_mcp::test_session(Caller::LocalModel);
 
     let mut off = local_reader(&f, &loopback, &session);
     off.policy.mail_local_read = false;
@@ -405,7 +405,7 @@ fn local_reads_need_the_switch_a_local_model_and_a_loopback_ollama() {
     assert!(call(&cloud, "mail_read", &json!({ "message_id": "m1" })).unwrap_err().starts_with("unknown tool"));
 
     // A tab opened against a remote Ollama (the endpoint recorded at spawn).
-    let (_, remote_session) = super::super::root_mcp::test_session_with(Caller::LocalModel, "root:remote-ollama", dir.path(), Some("gpu-box.example:11434".into()));
+    let (_, remote_session) = crate::services::root_mcp::test_session_with(Caller::LocalModel, "root:remote-ollama", dir.path(), Some("gpu-box.example:11434".into()));
     let s = local_reader(&f, &loopback, &remote_session);
     for (tool, args) in [("mail_search", json!({ "account_id": "open" })), ("mail_read", json!({ "message_id": "m1" }))] {
         assert_eq!(call(&s, tool, &args).unwrap_err(), LOCAL_READ_REMOTE, "{tool}");
@@ -418,8 +418,8 @@ fn local_reads_need_the_switch_a_local_model_and_a_loopback_ollama() {
     s.session = None;
     assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_REMOTE);
     assert!(!session.has_read_mail());
-    super::super::root_mcp::revoke_tab(&session.identity.tab);
-    super::super::root_mcp::revoke_tab("root:remote-ollama");
+    crate::services::root_mcp::revoke_tab(&session.identity.tab);
+    crate::services::root_mcp::revoke_tab("root:remote-ollama");
 }
 
 #[test]
@@ -759,13 +759,13 @@ fn a_resumed_tab_keeps_its_drafts() {
     let settings = dir.path().join("settings.json");
     std::fs::write(&settings, r#"{"root_mcp_mail":true}"#).unwrap();
     let tab = "root:resumed";
-    let (_, first) = super::super::root_mcp::test_session_for_tab(Caller::Agent, tab, dir.path());
+    let (_, first) = crate::services::root_mcp::test_session_for_tab(Caller::Agent, tab, dir.path());
     let mut a = stores(Some(&f), Caller::Agent); a.settings = &settings; a.session = Some(&first);
     let id = call(&a, "mail_draft_create", &json!({"account_id":"open", "subject":"Kept"})).unwrap().0["draft_id"].as_str().unwrap().to_string();
     assert_eq!(f.drafts.lock().unwrap()[0].owner_session.as_deref(), Some(first.tab_key().as_str()));
     f.drafts.lock().unwrap().push(MailDraft { id: "legacy".into(), account_id: "open".into(), subject: "old build".into(), origin: Some("agent".into()), owner_session: Some(first.id.clone()), ..Default::default() });
     assert_eq!(call(&a, "mail_drafts_list", &json!({})).unwrap().0["drafts"].as_array().unwrap().len(), 2, "spawn-keyed drafts still answer to their spawn");
-    let (_, second) = super::super::root_mcp::test_session_for_tab(Caller::Agent, tab, dir.path());
+    let (_, second) = crate::services::root_mcp::test_session_for_tab(Caller::Agent, tab, dir.path());
     let mut b = stores(Some(&f), Caller::Agent); b.settings = &settings; b.session = Some(&second);
     let listed = call(&b, "mail_drafts_list", &json!({})).unwrap().0["drafts"].clone();
     assert_eq!(listed.as_array().unwrap().iter().map(|d| d["subject"].as_str().unwrap()).collect::<Vec<_>>(), ["Kept"]);
@@ -773,11 +773,11 @@ fn a_resumed_tab_keeps_its_drafts() {
     assert!(call(&b, "mail_draft_update", &json!({"draft_id": "legacy", "subject":"x"})).is_err());
     call(&b, "mail_draft_delete", &json!({"draft_id": id})).unwrap();
     // Another tab never sees any of it.
-    let (_, other) = super::super::root_mcp::test_session_for_tab(Caller::Agent, "root:other", dir.path());
+    let (_, other) = crate::services::root_mcp::test_session_for_tab(Caller::Agent, "root:other", dir.path());
     let mut c = stores(Some(&f), Caller::Agent); c.settings = &settings; c.session = Some(&other);
     assert_eq!(call(&c, "mail_drafts_list", &json!({})).unwrap().0["drafts"], json!([]));
-    super::super::root_mcp::revoke_tab(tab);
-    super::super::root_mcp::revoke_tab("root:other");
+    crate::services::root_mcp::revoke_tab(tab);
+    crate::services::root_mcp::revoke_tab("root:other");
 }
 
 /// Gap 33, two tabs at once: a tab of the same model, already open when
@@ -785,7 +785,7 @@ fn a_resumed_tab_keeps_its_drafts() {
 /// two share the model's Vibe home); a tab of another model does not.
 #[test]
 fn an_open_twin_of_a_model_that_read_mail_writes_reader_drafts() {
-    use super::super::root_mcp::{revoke_tab, test_session_for_tab, test_session_model};
+    use crate::services::root_mcp::{revoke_tab, test_session_for_tab, test_session_model};
     let mut f = fx();
     f.marks = vec!["m1".into()];
     let dir = tempfile::tempdir().unwrap();
@@ -793,7 +793,7 @@ fn an_open_twin_of_a_model_that_read_mail_writes_reader_drafts() {
     let (_, reader) = test_session_for_tab(Caller::LocalModel, "root:twin-read", dir.path());
     let (_, twin) = test_session_for_tab(Caller::LocalModel, "root:twin-open", dir.path());
     let (_, other) = test_session_model(Caller::LocalModel, "root:twin-other", dir.path(), Some("127.0.0.1:11434".into()), Some("qwen3:8b".into()));
-    let origin_of_new = |session: &super::super::root_mcp::Session| {
+    let origin_of_new = |session: &crate::services::root_mcp::Session| {
         let s = local_reader(&f, &settings, session);
         let id = call(&s, "mail_draft_create", &json!({ "account_id": "open" })).unwrap().0["draft_id"].as_str().unwrap().to_string();
         f.drafts.lock().unwrap().iter().find(|d| d.id == id).unwrap().origin.clone()
@@ -814,7 +814,7 @@ fn a_draft_updated_after_the_first_read_carries_the_reader_mark() {
     f.marks = vec!["m1".into()];
     let dir = tempfile::tempdir().unwrap();
     let settings = local_settings(dir.path(), "127.0.0.1:11434");
-    let (_, session) = super::super::root_mcp::test_session_for_tab(Caller::LocalModel, "root:origin", dir.path());
+    let (_, session) = crate::services::root_mcp::test_session_for_tab(Caller::LocalModel, "root:origin", dir.path());
     let mut s = local_reader(&f, &settings, &session);
     s.state = dir.path();
     let run = |name: &str, args: Value| call(&s, name, &args).map(|(v, _)| v);
@@ -824,20 +824,20 @@ fn a_draft_updated_after_the_first_read_carries_the_reader_mark() {
     run("mail_draft_update", json!({ "draft_id": early, "subject": "still before" })).unwrap();
     assert_eq!(origin(&early).as_deref(), Some("agent"), "no read yet, no mark");
     run("mail_read", json!({ "message_id": "m1" })).unwrap();
-    assert!(session.has_read_mail() && super::super::root_mcp::tab_read_mail(dir.path(), "root:origin"), "latched in memory and on disk");
+    assert!(session.has_read_mail() && crate::services::root_mcp::tab_read_mail(dir.path(), "root:origin"), "latched in memory and on disk");
     run("mail_draft_update", json!({ "draft_id": early, "body_text": "after" })).unwrap();
     assert_eq!(origin(&early).as_deref(), Some("reader"), "upgraded on the first write after the read");
     run("mail_draft_update", json!({ "draft_id": early, "body_text": "again" })).unwrap();
     assert_eq!(origin(&early).as_deref(), Some("reader"), "never downgraded");
-    super::super::root_mcp::revoke_tab("root:origin");
+    crate::services::root_mcp::revoke_tab("root:origin");
     // A cloud tab: `agent` before and after, whatever it does.
-    let (_, cloud) = super::super::root_mcp::test_session(Caller::Agent);
+    let (_, cloud) = crate::services::root_mcp::test_session(Caller::Agent);
     let mut c = stores(Some(&f), Caller::Agent); c.settings = &settings; c.session = Some(&cloud);
     c.policy.mail_local_read = true;
     let id = call(&c, "mail_draft_create", &json!({"account_id":"open"})).unwrap().0["draft_id"].as_str().unwrap().to_string();
     call(&c, "mail_draft_update", &json!({"draft_id": id, "subject": "x"})).unwrap();
     assert_eq!(origin(&id).as_deref(), Some("agent"));
-    super::super::root_mcp::revoke_tab(&cloud.identity.tab);
+    crate::services::root_mcp::revoke_tab(&cloud.identity.tab);
 }
 
 /// The loopback check is against the endpoint the tab was opened with,
@@ -852,17 +852,17 @@ fn local_reads_follow_the_endpoint_recorded_at_spawn() {
     let loopback = local_settings(dir.path(), "127.0.0.1:11434");
     let remote_dir = tempfile::tempdir().unwrap();
     let remote = local_settings(remote_dir.path(), "http://gpu-box.example:11434");
-    let (_, spawned_remote) = super::super::root_mcp::test_session_with(Caller::LocalModel, "root:was-remote", dir.path(), Some("gpu-box.example:11434".into()));
+    let (_, spawned_remote) = crate::services::root_mcp::test_session_with(Caller::LocalModel, "root:was-remote", dir.path(), Some("gpu-box.example:11434".into()));
     let s = local_reader(&f, &loopback, &spawned_remote);
     assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_REMOTE);
     assert!(!spawned_remote.has_read_mail());
-    let (_, spawned_local) = super::super::root_mcp::test_session_with(Caller::LocalModel, "root:was-local", dir.path(), Some("127.0.0.1:11434".into()));
+    let (_, spawned_local) = crate::services::root_mcp::test_session_with(Caller::LocalModel, "root:was-local", dir.path(), Some("127.0.0.1:11434".into()));
     let s = local_reader(&f, &remote, &spawned_local);
     assert!(call(&s, "mail_read", &json!({ "message_id": "m1" })).is_ok());
-    let (_, unknown) = super::super::root_mcp::test_session_with(Caller::LocalModel, "root:no-endpoint", dir.path(), None);
+    let (_, unknown) = crate::services::root_mcp::test_session_with(Caller::LocalModel, "root:no-endpoint", dir.path(), None);
     let s = local_reader(&f, &loopback, &unknown);
     assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_REMOTE, "no recorded endpoint is not loopback");
-    for tab in ["root:was-remote", "root:was-local", "root:no-endpoint"] { super::super::root_mcp::revoke_tab(tab); }
+    for tab in ["root:was-remote", "root:was-local", "root:no-endpoint"] { crate::services::root_mcp::revoke_tab(tab); }
 }
 
 /// Gap 25: a loopback endpoint is not enough — the model recorded at spawn
@@ -872,7 +872,7 @@ fn local_reads_follow_the_endpoint_recorded_at_spawn() {
 /// read latches nothing, and drafts still work.
 #[test]
 fn local_reads_refuse_a_cloud_or_unconfirmed_model() {
-    use super::super::root_mcp::{model_read_mail, revoke_tab, tab_read_mail, test_session_model, test_session_with, TEST_LOCAL_MODEL};
+    use crate::services::root_mcp::{model_read_mail, revoke_tab, tab_read_mail, test_session_model, test_session_with, TEST_LOCAL_MODEL};
     let mut f = fx();
     f.marks = vec!["m1".into()];
     let dir = tempfile::tempdir().unwrap();
@@ -920,7 +920,7 @@ fn a_read_whose_taint_marker_cannot_be_written_is_refused() {
     f.marks = vec!["m1".into()];
     let dir = tempfile::tempdir().unwrap();
     let settings = local_settings(dir.path(), "127.0.0.1:11434");
-    let (_, session) = super::super::root_mcp::test_session_with(Caller::LocalModel, "root:unrecorded", dir.path(), Some("127.0.0.1:11434".into()));
+    let (_, session) = crate::services::root_mcp::test_session_with(Caller::LocalModel, "root:unrecorded", dir.path(), Some("127.0.0.1:11434".into()));
     let mut s = local_reader(&f, &settings, &session);
     // A file where the marker folder has to go.
     let blocked = dir.path().join("blocked");
@@ -930,7 +930,7 @@ fn a_read_whose_taint_marker_cannot_be_written_is_refused() {
         assert_eq!(call(&s, tool, &args).unwrap_err(), LOCAL_READ_UNRECORDED, "{tool}");
     }
     assert!(session.has_read_mail(), "latched in memory before the read");
-    super::super::root_mcp::revoke_tab("root:unrecorded");
+    crate::services::root_mcp::revoke_tab("root:unrecorded");
 }
 
 /// More drafts than a page: the list says it was cut, the way the offset
@@ -1129,7 +1129,7 @@ fn tree() -> Tree {
     Tree { dir, projects, state, settings }
 }
 
-fn tree_stores<'a>(f: &'a Fx, t: &'a Tree, caller: Caller, session: &'a super::super::root_mcp::Session) -> Stores<'a> {
+fn tree_stores<'a>(f: &'a Fx, t: &'a Tree, caller: Caller, session: &'a crate::services::root_mcp::Session) -> Stores<'a> {
     let mut s = stores(Some(f), caller);
     s.projects = &t.projects;
     s.state = &t.state;
@@ -1151,7 +1151,7 @@ fn attach_follows_the_same_roots_rule() {
     let t = tree();
     let f = fx();
     let tab = "root:attach-table";
-    let (_, session) = super::super::root_mcp::test_session_reading_projects(Caller::Agent, tab, &t.state);
+    let (_, session) = crate::services::root_mcp::test_session_reading_projects(Caller::Agent, tab, &t.state);
     let st = tree_stores(&f, &t, Caller::Agent, &session);
     let go = |args: Value| call(&st, "mail_draft_create", &args).map(|(v, _)| v);
 
@@ -1210,7 +1210,7 @@ fn attach_follows_the_same_roots_rule() {
     });
     std::fs::File::create(t.dir.path().join("work/alpha/two.bin")).unwrap().set_len(2 * 1024 * 1024).unwrap();
     refused(attach("Alpha", "two.bin"), "100 MiB");
-    super::super::root_mcp::revoke_tab(tab);
+    crate::services::root_mcp::revoke_tab(tab);
 }
 
 /// Replace semantics on update: the list given is the set; omitted keeps
@@ -1220,7 +1220,7 @@ fn attach_on_update_replaces_keeps_or_clears() {
     let t = tree();
     let f = fx();
     let tab = "root:attach-update";
-    let (_, session) = super::super::root_mcp::test_session_reading_projects(Caller::Agent, tab, &t.state);
+    let (_, session) = crate::services::root_mcp::test_session_reading_projects(Caller::Agent, tab, &t.state);
     let st = tree_stores(&f, &t, Caller::Agent, &session);
     let id = call(&st, "mail_draft_create", &attach("Alpha", "f1.txt")).unwrap().0["draft_id"].as_str().unwrap().to_string();
     let names = || f.drafts.lock().unwrap().iter().find(|d| d.id == id).unwrap().staged.iter().map(|a| a.filename.clone()).collect::<Vec<_>>();
@@ -1230,7 +1230,7 @@ fn attach_on_update_replaces_keeps_or_clears() {
     assert_eq!(names(), ["f2.txt", "f3.txt"], "the list replaces");
     call(&st, "mail_draft_update", &json!({ "draft_id": id, "attach": [] })).unwrap();
     assert!(names().is_empty(), "[] clears");
-    super::super::root_mcp::revoke_tab(tab);
+    crate::services::root_mcp::revoke_tab(tab);
 }
 
 /// The spawn record, not the setting: a session whose fence hid the
@@ -1240,7 +1240,7 @@ fn attach_needs_a_tab_that_reads_the_projects() {
     let t = tree();
     let f = fx();
     let tab = "root:attach-hidden";
-    let (_, session) = super::super::root_mcp::test_session_with(Caller::Agent, tab, &t.state, None);
+    let (_, session) = crate::services::root_mcp::test_session_with(Caller::Agent, tab, &t.state, None);
     let st = tree_stores(&f, &t, Caller::Agent, &session);
     let err = call(&st, "mail_draft_create", &attach("Alpha", "out/paper.pdf")).unwrap_err();
     assert!(err.contains("Root agent reads projects"), "{err}");
@@ -1248,7 +1248,7 @@ fn attach_needs_a_tab_that_reads_the_projects() {
     let mut none = tree_stores(&f, &t, Caller::Agent, &session);
     none.session = None;
     assert!(call(&none, "mail_draft_create", &attach("Alpha", "out/paper.pdf")).is_err());
-    super::super::root_mcp::revoke_tab(tab);
+    crate::services::root_mcp::revoke_tab(tab);
 }
 
 /// Reader and local-model tabs: neither argument is in their schema, and
@@ -1263,12 +1263,12 @@ fn attach_and_suggestions_are_a_root_tabs_only() {
             assert!(props.get("attach").is_none() && props.get("suggested_to").is_none(), "{caller:?} {}", tool["name"]);
         }
         let tab = format!("root:attach-{caller:?}");
-        let (_, session) = super::super::root_mcp::test_session_reading_projects(caller, &tab, &t.state);
+        let (_, session) = crate::services::root_mcp::test_session_reading_projects(caller, &tab, &t.state);
         let st = tree_stores(&f, &t, caller, &session);
-        assert_eq!(call(&st, "mail_draft_create", &attach("Alpha", "out/paper.pdf")).unwrap_err(), super::super::mail_attach::NOT_FOR_CALLER);
+        assert_eq!(call(&st, "mail_draft_create", &attach("Alpha", "out/paper.pdf")).unwrap_err(), crate::services::mail_attach::NOT_FOR_CALLER);
         let err = call(&st, "mail_draft_create", &json!({ "account_id": "open", "suggested_to": ["bob@example.com"] })).unwrap_err();
         assert!(err.contains("not available"), "{err}");
-        super::super::root_mcp::revoke_tab(&tab);
+        crate::services::root_mcp::revoke_tab(&tab);
     }
     assert!(f.drafts.lock().unwrap().is_empty() && f.files.lock().unwrap().is_empty());
 }

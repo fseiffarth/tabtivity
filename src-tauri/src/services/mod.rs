@@ -188,10 +188,7 @@ pub mod remote_transcript;
 pub mod remote_usage;
 pub mod restore_service;
 pub mod root_mcp;
-pub mod root_mcp_security;
-pub mod root_mcp_import;
-pub mod root_mcp_mail;
-pub mod root_mcp_review;
+pub use root_mcp::{root_mcp_import, root_mcp_mail, root_mcp_review, root_mcp_security};
 // The project container bind-mounts host paths straight into a Linux container
 // and maps the host uid/gid, so it is Unix-only today *at runtime*: Windows
 // refuses at the `pty_spawn` call site (and `up_for_project` no-ops) rather

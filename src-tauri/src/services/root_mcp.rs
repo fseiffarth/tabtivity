@@ -39,6 +39,11 @@
 //! neither, and `discovery` refuses the id outright. Root Claude tabs also spawn
 //! without `--remote-control` (see `commands::terminal`).
 
+pub mod root_mcp_import;
+pub mod root_mcp_mail;
+pub mod root_mcp_review;
+pub mod root_mcp_security;
+
 use std::collections::HashMap;
 use app_core::sync::LockExt;
 use std::path::Path;
