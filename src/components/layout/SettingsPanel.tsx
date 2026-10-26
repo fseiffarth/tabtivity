@@ -108,6 +108,7 @@ import {
 } from "./settingsUi";
 import { ErrorNote } from "../common/ErrorNote";
 import { usePoll, type PollRun } from "../../lib/usePoll";
+import { useCanPark } from "../../lib/workspaceCaps";
 
 // The workspace-layout help text. The key is the one that works here, from
 // `livePanelToggleLabel` (unless rebound): a lone Super on a Linux desktop that leaves it to the
@@ -121,22 +122,6 @@ function workspaceLayoutIntro(t: ReturnType<typeof useT>): string {
     : t("help.workspaceLayout.introOther", { key: livePanelToggleLabel() });
 }
 
-/** What `workspace_capabilities` answers (backend `commands::workspace`). */
-interface WorkspaceCapabilities {
-  backend: string;
-  can_park: boolean;
-}
-
-/**
- * One sentence in Layout, Linux only: this desktop cannot hide other apps'
- * windows on a project switch. Project switching promises to swap the apps
- * with the project, and on GNOME, XFCE or KDE Wayland (the `null` and
- * `kde-wayland` backends) it silently leaves every window where it was — the
- * user should read that here rather than conclude the feature is broken.
- * Renders nothing until the backend answers, when it can park, and when the
- * command is missing (a backend older than this frontend). Not on Windows or
- * macOS, whose backends always park.
- */
 /** One Mark up prompt of the desktop PDF viewer (Settings → PDF markup): a
  *  free-text field that starts from the default, kept as typed; Use the
  *  default clears it (`undefined` = the default). */
@@ -205,22 +190,22 @@ function PdfMarkupAskCard({ value, onChange }: { value: number; onChange: (stop:
   );
 }
 
+/**
+ * One sentence in Layout, Linux only: this desktop cannot hide other apps'
+ * windows on a project switch. Project switching promises to swap the apps
+ * with the project, and on XFCE, KDE Wayland or a desktop whose X connection
+ * failed (the `null` and `kde-wayland` backends) it silently leaves every
+ * window where it was — the user should read that here rather than conclude
+ * the feature is broken. Renders nothing until the backend answers, when it
+ * can park, and when the command is missing (a backend older than this
+ * frontend). Not on Windows or macOS, whose backends always park. Single
+ * windows a parking desktop still can't hide (native Wayland ones) are
+ * explained in the side panel's Apps view, not here.
+ */
 export function WorkspaceParkingNote() {
   const t = useT();
-  const [caps, setCaps] = useState<WorkspaceCapabilities | null>(null);
-  useEffect(() => {
-    if (PLATFORM !== "linux") return;
-    let live = true;
-    invoke<WorkspaceCapabilities>("workspace_capabilities")
-      .then((c) => {
-        if (live && c && typeof c.can_park === "boolean") setCaps(c);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-  if (!caps || caps.can_park) return null;
+  const canPark = useCanPark();
+  if (PLATFORM !== "linux" || canPark !== false) return null;
   return (
     <SettingsCard>
       <p className="settings-help">

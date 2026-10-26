@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -24,6 +24,8 @@ import { useSyncStore, amberPaths, localNewPaths, splitByNewerSide, type SyncSki
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
+import { rowStaysVisible, useWorkspaceCaps } from "../../lib/workspaceCaps";
+import { IS_LINUX } from "../../lib/platform";
 import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
 import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
 import { usePoll, type PollRun } from "../../lib/usePoll";
@@ -410,6 +412,8 @@ export function ProjectFilesView({
         .sort((a, b) => a.opened_at - b.opened_at),
     [windows, projectId],
   );
+  // Whether a project switch hides these apps (one fetch per session).
+  const workspaceCaps = useWorkspaceCaps();
   const remarksEnabled = useExperimental("project_remarks");
   // The checkout's todo groups; only a dev build has a checkout to read.
   const devTodo = useDevTodoAvailable();
@@ -2855,24 +2859,41 @@ export function ProjectFilesView({
           <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
             <UntestedTag id="projectFilesView.7" />
           </div>
+          {/* A desktop that parks nothing is said once for the list; a
+              parking desktop under Wayland explains each row it still can't
+              hide (no window id = not an XWayland window). Linux only: the
+              Windows/macOS backends always park, and an older backend or the
+              browser client gives no usable answer (null → silence). */}
+          {scopedWindows.length > 0 && workspaceCaps?.canPark === false && IS_LINUX && (
+            <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
+              {t("projectFilesView.noParkingNote")} <UntestedTag id="projectFilesView.noParkingNote" />
+            </div>
+          )}
           {scopedWindows.length === 0 ? (
             <div className="file-tree-empty">{t("projectFilesView.noOpenedWindows")}</div>
           ) : (
             scopedWindows.map((w) => (
-              <div key={w.id} className="file-entry">
-                <span className="file-icon"><WindowIcon /></span>
-                <span className="file-name" title={w.exec}>
-                  {basename(w.exec) || w.exec}
-                  {w.file && <span style={{ color: "var(--text-muted)" }}> {basename(w.file)}</span>}
-                </span>
-                <button
-                  className="tab-close"
-                  onClick={() => closeApp(w.id)}
-                  title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
-                >
-                  ×
-                </button>
-              </div>
+              <Fragment key={w.id}>
+                <div className="file-entry">
+                  <span className="file-icon"><WindowIcon /></span>
+                  <span className="file-name" title={w.exec}>
+                    {basename(w.exec) || w.exec}
+                    {w.file && <span style={{ color: "var(--text-muted)" }}> {basename(w.file)}</span>}
+                  </span>
+                  <button
+                    className="tab-close"
+                    onClick={() => closeApp(w.id)}
+                    title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
+                  >
+                    ×
+                  </button>
+                </div>
+                {rowStaysVisible(workspaceCaps, w.window_id) === "wayland" && (
+                  <div className="file-tree-empty" style={{ paddingTop: 0 }}>
+                    {t("projectFilesView.waylandStaysVisible")} <UntestedTag id="projectFilesView.waylandStaysVisible" />
+                  </div>
+                )}
+              </Fragment>
             ))
           )}
         </div>

@@ -220,6 +220,8 @@ export const UNTESTED = {
   "projectFilesView.5": { area: "files", what: "ProjectFilesView · {s.name}" },
   "projectFilesView.6": { area: "files", what: "ProjectFilesView · Side panel, Jobs view" },
   "projectFilesView.7": { area: "files", what: "ProjectFilesView · Side panel, Windows view" },
+  "projectFilesView.noParkingNote": { area: "files", what: "Side panel Apps view · on a desktop that parks nothing (XFCE, KDE Wayland) one muted line says the apps stay on screen on a project switch" },
+  "projectFilesView.waylandStaysVisible": { area: "files", what: "Side panel Apps view · under Wayland on a parking desktop (GNOME), a row with no XWayland window (a native Wayland app) says it stays on screen on a project switch; XWayland rows (e.g. PyCharm) show no line" },
   "projectFilesView.8": { area: "files", what: "ProjectFilesView · Sessions view, Kill all / Kill closed per machine" },
   "projectFilesView.openInIde": { area: "files", what: "ProjectFilesView · Side panel header, Open in IDE button" },
   "devTodo.title": { area: "files", what: "ProjectFilesView · Todo view (dev build): todo/*.md groups, task boxes write back to the file" },

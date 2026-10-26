@@ -39,23 +39,33 @@ pub fn workspace_info(state: State<'_, WorkspaceStateArc>) -> WorkspaceInfo {
 /// project's app windows (`WorkspaceBackend::can_park`). A separate command
 /// rather than new `WorkspaceInfo` fields, so no backend constructor (macOS's
 /// among them, uncompilable here) has to change.
+///
+/// `wayland_session` lets the Apps view explain a row it cannot hide: under
+/// Wayland only XWayland windows get a window id, so a parking backend still
+/// leaves a windowless (native Wayland) app on screen. The frontend derives
+/// the per-row answer from this plus the row's `window_id`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WorkspaceCapabilities {
     pub backend: String,
     pub can_park: bool,
+    pub wayland_session: bool,
 }
 
-pub(crate) fn capabilities_of(backend: &dyn WorkspaceBackend) -> WorkspaceCapabilities {
+pub(crate) fn capabilities_of(
+    backend: &dyn WorkspaceBackend,
+    wayland_session: bool,
+) -> WorkspaceCapabilities {
     WorkspaceCapabilities {
         backend: backend.name().to_string(),
         can_park: backend.can_park(),
+        wayland_session,
     }
 }
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_capabilities(state: State<'_, WorkspaceStateArc>) -> WorkspaceCapabilities {
-    capabilities_of(&*state.lock_ok().backend)
+    capabilities_of(&*state.lock_ok().backend, crate::platform::session_is_wayland())
 }
 
 /// Does the desktop shell own the lone Super/Meta key?
@@ -837,9 +847,17 @@ mod tests {
 
     #[test]
     fn null_backend_reports_it_cannot_park() {
-        let caps = capabilities_of(&crate::platform::null::NullBackend);
+        let caps = capabilities_of(&crate::platform::null::NullBackend, false);
         assert_eq!(caps.backend, "null");
         assert!(!caps.can_park);
+        assert!(!caps.wayland_session);
+        // The session flag is passed through as given, and serialized under
+        // the snake_case key the frontend's `workspaceCaps.ts` reads.
+        let caps = capabilities_of(&crate::platform::null::NullBackend, true);
+        assert!(caps.wayland_session);
+        let json = serde_json::to_value(&caps).unwrap();
+        assert_eq!(json["wayland_session"], serde_json::json!(true));
+        assert_eq!(json["can_park"], serde_json::json!(false));
     }
 
     #[test]

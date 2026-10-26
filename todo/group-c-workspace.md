@@ -120,3 +120,64 @@
       - [ ] ❌ Doesn't work on Linux (Wayland)
       - [ ] ✅ Works on Windows
       - [ ] ❌ Doesn't work on Windows
+
+22. **GNOME (X11 and Wayland) parks launched apps on the workspace to the right
+    (2026-10-26, ✅ Built · 🧪 Untested).** Plan:
+    `docs/wayland_app_parking_plan.md`, handoff
+    `docs/wayland_app_parking_handoff.md`. Launches carry a marker
+    (`TABTIVITY_LAUNCH_ID`) so a row outlives its launcher and finds its
+    XWayland window late; GNOME runs on the `x11` backend (desktop 0 = active
+    project, desktop 1 = parked) and sets/restores its workspace gsettings;
+    the Apps view says which rows a project switch can't hide.
+    - [ ] 🖐️ PyCharm via **Open in PyCharm** (cold start): listed in the side
+      panel Apps view; switching to another project moves its window to the
+      hidden workspace (Ctrl+Alt+→ shows it there), switching back brings it
+      back — on the primary and on a secondary monitor.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Same with PyCharm already running (the launcher hands the folder
+      to the running instance and exits at once): the row stays listed and
+      parks/returns with the project; a raise of an already-open project window
+      adds a row too.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] 🖐️ GNOME workspace settings come back after a clean quit
+      (`gsettings get org.gnome.mutter dynamic-workspaces`,
+      `workspaces-only-on-primary`, `org.gnome.desktop.wm.preferences
+      num-workspaces` / `workspace-names` read the same as before the start),
+      and after `kill -9` of Tabtivity followed by a restart and a clean quit.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] 🖐️ Cinnamon: its workspace settings are restored after a clean quit
+      (never happened before — the restore only ran from `Drop`), and parking
+      behaves as before (regression check).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] 🖐️ A native Wayland app opened from the project (e.g. GNOME Text
+      Editor) is listed in the Apps view with the muted "Stays on screen …
+      only XWayland windows can move" line, and stays on screen on a switch;
+      the PyCharm (XWayland) row shows no such line. On KDE Wayland/XFCE the
+      list shows the one "This desktop can't hide app windows" line instead.
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] 🖐️ Settings → Layout: the "can't hide other apps' windows" note shows
+      only on a desktop that parks nothing (XFCE, KDE Wayland) and names GNOME
+      among the supported desktops; nothing on GNOME/Cinnamon/KDE X11.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] 🖐️ Drop a file onto a screen to open it in an external app on
+      GNOME/Wayland: the app's window is not moved to a wrong place.
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
