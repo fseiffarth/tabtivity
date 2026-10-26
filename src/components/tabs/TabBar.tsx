@@ -44,7 +44,7 @@ import {
 import { useAgentWorktreePicker } from "./agentWorktrees";
 import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../../lib/terminal/ptyId";
-import { CustomAgentDialog } from "./CustomAgentDialog";
+import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
 import { TabHoverCard, shellLaunch } from "./TabHoverCard";
 import { TabStackChip, type StackMember } from "./TabStackChip";
@@ -150,6 +150,12 @@ function canDuplicateTab(tab: TabEntry): boolean {
 }
 
 // Empty activity maps a bar without a tab group subscribes to (see `TabItem`).
+/** The "+" menu's "Add agent…": the Models & agents overlay's Agents & CLIs
+ *  section, where every CLI is installed and custom agents are managed. */
+function openAgentsAndClis(): void {
+  useModelsOverlayStore.getState().openOverlay("agents");
+}
+
 const NO_BUSY: Record<string, boolean> = {};
 const NO_BUSY_KIND: Record<string, BusyKind> = {};
 const NO_ATTENTION: Record<string, AttentionKind> = {};
@@ -647,8 +653,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
   const { promptText, dialogs } = useDialogs();
-  // The manage-custom-agents dialog the "+" menu's "Add custom…" opens.
-  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   // The tabs live in their own horizontally-scrolling strip; chevrons flank it
@@ -1825,7 +1829,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   agentOrder,
                   onAddCustom: () => {
                     setMenuPos(null);
-                    setAgentDialogOpen(true);
+                    openAgentsAndClis();
                   },
                   t,
                 }),
@@ -1840,7 +1844,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     agentOrder,
                     onAddCustom: () => {
                       setMenuPos(null);
-                      setAgentDialogOpen(true);
+                      openAgentsAndClis();
                     },
                     t,
                   }),
@@ -2053,9 +2057,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             ]}
           />
         </ContextMenuPortal>
-      )}
-      {agentDialogOpen && (
-        <CustomAgentDialog onClose={() => setAgentDialogOpen(false)} />
       )}
       {worktreePicker.dialogs}
       {scheduleDialogKey && (() => {
