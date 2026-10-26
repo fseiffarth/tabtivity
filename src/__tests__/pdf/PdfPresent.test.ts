@@ -1,6 +1,6 @@
 /**
  * Tests for the fullscreen PDF present window's link
- * (`components/embed/pdf/present`).
+ * (`lib/viewers/pdfPresent`).
  *
  * The cases worth reading are the ones that encode a decision. That the window
  * label is derived from the PDF's *path*, so pressing Present twice for one file
@@ -27,7 +27,7 @@ import {
   resetClock,
   startClock,
   toggleClock,
-} from "../../components/embed/pdf/present";
+} from "../../lib/viewers/pdfPresent";
 import { parsePresentParam, presenterLabel } from "../../lib/viewers/deck/present";
 
 describe("pdf present labels", () => {

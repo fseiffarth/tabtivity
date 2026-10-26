@@ -1,5 +1,5 @@
 /**
- * Closing every **PDF present window** (`components/embed/pdf/present.ts`) —
+ * Closing every **PDF present window** (`lib/viewers/pdfPresent.ts`) —
  * what a scope change does, so a PDF shown fullscreen from one project's tab
  * never stays over the next project.
  *
@@ -13,7 +13,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
-import { isPdfPresentLabel } from "../../components/embed/pdf/present";
+import { isPdfPresentLabel } from "../viewers/pdfPresent";
 
 export async function closePdfPresentWindows(): Promise<void> {
   let labels: string[];

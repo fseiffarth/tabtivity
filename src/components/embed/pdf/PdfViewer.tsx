@@ -140,7 +140,7 @@ import {
   pdfPresentLabel,
   pdfPresentSeedEvent,
   readPresentScreen,
-} from "./present";
+} from "../../../lib/viewers/pdfPresent";
 import { openRoutedUri } from "../../../lib/linkTarget";
 import { printPdfNative } from "../../../lib/window/printing";
 import { layoutPrintPdf } from "../../../lib/viewers/pdfPrintLayout";

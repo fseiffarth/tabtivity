@@ -163,6 +163,35 @@ export default tseslint.config(
     },
   },
   {
+    // Layering (code screen section G, after S3): `lib/` and `stores/` are the
+    // layers the components build on, so they never import a component. A
+    // module both need goes in `lib/`; a component-only piece stays out of it.
+    files: ['src/lib/**/*.{ts,tsx}', 'src/stores/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '(^|/)components/',
+              message: 'src/lib and src/stores may not import src/components: move the module into src/lib (or src/hooks), not the other way round.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // The one leftover: the print preview is an imperative DOM modal that mounts
+    // the shared <PageStrip> (a React component) into its own box via
+    // `mountPageStrip`. Moving or rewriting it was judged not worth the risk
+    // (see mountPageStrip's header); do not add to this list.
+    files: ['src/lib/viewers/print.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
+    },
+  },
+  {
     // The quit path runs with no React tree left to host a PromptDialogs
     // dialog: the VPN-still-active notice is deliberately a native message.
     files: ['src/components/layout/AppShell.tsx'],

@@ -45,7 +45,7 @@ import {
   startClock,
   toggleClock,
   writePresentScreen,
-} from "./present";
+} from "../../../lib/viewers/pdfPresent";
 import { type PresentBlank, PdfPresentBar } from "./PdfPresentBar";
 import { PdfPresentLaser } from "./PdfPresentLaser";
 

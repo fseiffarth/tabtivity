@@ -25,7 +25,7 @@ import {
   WindowIcon,
 } from "../../common/icons/Icon";
 import { UntestedTag } from "../../common/UntestedTag";
-import { type TalkClock, clockElapsed, clockTone, formatClock } from "./present";
+import { type TalkClock, clockElapsed, clockTone, formatClock } from "../../../lib/viewers/pdfPresent";
 
 export type PresentBlank = "black" | "white" | null;
 

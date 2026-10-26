@@ -33,7 +33,7 @@
  * below, which is one localStorage key both windows read.
  */
 
-import { storageKey } from "../../../lib/brand";
+import { storageKey } from "../brand";
 
 /**
  * FNV-1a (32-bit), base36 — the same shape `deck/present.ts` and
