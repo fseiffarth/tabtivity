@@ -954,7 +954,16 @@ pub async fn agent_tab_model(
     agent: String,
     project_id: Option<String>,
     session_id: String,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> Option<String> {
+    if let Some(copy) = host_tab_copy(&ctx, &agent, project_id.as_deref(), remote_host.as_deref(), &session_id).await {
+        return read_host_copy(copy, |path| {
+            crate::services::agent_session::last_model_in_transcript(path, crate::services::agent_session::TranscriptKind::Claude)
+        })
+        .await
+        .flatten();
+    }
     app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_model(
             &agent,
@@ -995,7 +1004,16 @@ pub async fn agent_tab_last_prompt(
     agent: String,
     project_id: Option<String>,
     session_id: String,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> Option<String> {
+    if let Some(copy) = host_tab_copy(&ctx, &agent, project_id.as_deref(), remote_host.as_deref(), &session_id).await {
+        return read_host_copy(copy, |path| {
+            crate::services::agent_session::last_prompt_in_transcript(path, crate::services::agent_session::TranscriptKind::Claude)
+        })
+        .await
+        .flatten();
+    }
     app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_last_prompt(
             &agent,
@@ -1013,12 +1031,25 @@ pub async fn agent_tab_last_prompt(
 /// sent while the agent was working included
 /// (`services::agent_session::agent_session_recent_prompts`). What the prompt
 /// chart adopts typed prompts from; empty when there is no transcript to read.
+/// `remote_host`, on this and the two reads above, is the host a remote
+/// project's tab runs on (as for [`agent_tab_transcript`]): the tail is read
+/// off the local copy of that host's transcript.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_recent_prompts(
     agent: String,
     project_id: Option<String>,
     session_id: String,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> Vec<crate::services::agent_session::TranscriptPrompt> {
+    if let Some(copy) = host_tab_copy(&ctx, &agent, project_id.as_deref(), remote_host.as_deref(), &session_id).await {
+        return read_host_copy(copy, |path| {
+            crate::services::agent_session::recent_prompts_in_transcript(path, crate::services::agent_session::TranscriptKind::Claude)
+        })
+        .await
+        .flatten()
+        .unwrap_or_default();
+    }
     app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_recent_prompts(
             &agent,
@@ -1028,6 +1059,34 @@ pub async fn agent_tab_recent_prompts(
     })
     .await
     .unwrap_or_default()
+}
+
+/// The local copy of the conversation of a tab on a remote project's host
+/// (`services::remote_transcript`), grown first: `Some(None)` when there is
+/// nothing to read yet (or it cannot be read), `None` for a tab that runs here.
+async fn host_tab_copy(
+    ctx: &Ctx,
+    agent: &str,
+    project_id: Option<&str>,
+    remote_host: Option<&str>,
+    session_id: &str,
+) -> Option<Option<std::path::PathBuf>> {
+    let (project, host) = (project_id?, remote_host?);
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+    use crate::services::remote_transcript::HostCopy;
+    match crate::services::remote_transcript::host_tab_copy(pool, agent, project, host, session_id).await? {
+        HostCopy::At(path) => Some(Some(path)),
+        HostCopy::NotYet | HostCopy::Unavailable(_) => Some(None),
+    }
+}
+
+/// `read` of a host tab's local copy, off the async runtime.
+async fn read_host_copy<T: Send + 'static>(
+    copy: Option<std::path::PathBuf>,
+    read: impl FnOnce(&std::path::Path) -> T + Send + 'static,
+) -> Option<T> {
+    let path = copy?;
+    app_core::rt::spawn_blocking(move || read(&path)).await.ok()
 }
 
 /// The stored conversation of the tab launched as `agent` with launch id
