@@ -387,8 +387,9 @@ export function synctexEdit(
   page: number,
   x: number,
   y: number,
+  projectId?: string | null,
 ): Promise<SyncSource | null> {
-  return invoke<SyncSource | null>("synctex_edit", { pdf, page, x, y }).catch(() => null);
+  return invoke<SyncSource | null>("synctex_edit", { pdf, page, x, y, projectId }).catch(() => null);
 }
 
 /** What SyncTeX can promise for a PDF right now; mirrors the backend
@@ -406,8 +407,8 @@ export type SyncTexStatus = {
 /** Probe the SyncTeX map beside `pdf`. Resolves to null when the backend cannot
  *  answer (a backend not yet rebuilt for it), which the caller reads as "unknown"
  *  and words nothing from. */
-export function synctexStatus(pdf: string): Promise<SyncTexStatus | null> {
-  return invoke<SyncTexStatus>("synctex_status", { pdf }).catch(() => null);
+export function synctexStatus(pdf: string, projectId?: string | null): Promise<SyncTexStatus | null> {
+  return invoke<SyncTexStatus>("synctex_status", { pdf, projectId }).catch(() => null);
 }
 
 /** The notice a SyncTeX jump deserves — either direction — from the map's status
@@ -471,8 +472,8 @@ export function editedAboveLine(saved: string, draft: string, line: number): boo
  *  line). The backend answers from the map natively, by any spelling of `input`.
  *  `[]` is an honest miss; a rejected call (a backend without the command) reads
  *  as one too. */
-export function synctexView(pdf: string, input: string, line: number): Promise<SyncRect[]> {
-  return invoke<SyncRect[]>("synctex_view", { pdf, input, line }).then(
+export function synctexView(pdf: string, input: string, line: number, projectId?: string | null): Promise<SyncRect[]> {
+  return invoke<SyncRect[]>("synctex_view", { pdf, input, line, projectId }).then(
     (r) => (Array.isArray(r) ? r : []),
     () => [],
   );

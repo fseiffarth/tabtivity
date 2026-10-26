@@ -844,8 +844,13 @@ pub fn status(pdf: &Path) -> MapStatus {
 /// Read and parse the map at `path`, bounded both ways at `cap` bytes: the map
 /// sits in a project folder, so a small `.gz` could inflate to gigabytes. None
 /// for a map that cannot be read or is past the cap — no SyncTeX for it.
+/// Only a regular file is opened: a FIFO planted under the map's name would
+/// hold the reading thread forever.
 fn read_map(path: &Path, cap: u64) -> Option<Map> {
     use std::io::Read;
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
     let mut text = String::new();
     let read = if path.extension().is_some_and(|e| e == "gz") {
         let file = std::fs::File::open(path).ok()?;

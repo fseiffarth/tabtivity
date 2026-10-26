@@ -230,7 +230,7 @@ describe("SyncTeX on the PDF side", () => {
       fireEvent.click(wrap, { ctrlKey: true, clientX: 686, clientY: 172 });
     });
     await waitFor(() =>
-      expect(io.invoke).toHaveBeenCalledWith("synctex_edit", { pdf: PATH, page: 1, x: 172, y: 106 }),
+      expect(io.invoke).toHaveBeenCalledWith("synctex_edit", { pdf: PATH, page: 1, x: 172, y: 106, projectId: "p1" }),
     );
   });
 

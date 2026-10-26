@@ -1320,3 +1320,15 @@ g1,10:31409438,11617566
     assert!((par[0].y - (bp(11617566.0) - bp(455111.0))).abs() < 0.01, "{par:?}");
     assert_eq!(at(9), par);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_under_the_maps_name_is_not_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("main.synctex");
+    let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: a valid NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo {}", fifo.display());
+    // Opening it would block until a writer came; it is skipped instead.
+    assert!(read_map(&fifo, MAX_MAP_BYTES).is_none());
+}

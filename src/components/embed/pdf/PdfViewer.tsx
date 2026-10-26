@@ -3946,9 +3946,9 @@ function PdfCanvas({
         });
         return;
       }
-      const src = syncable ? await synctexEdit(path, page, x, y) : null;
+      const src = syncable ? await synctexEdit(path, page, x, y, scope) : null;
       if (src) await jump(src);
-      const status = syncable ? await synctexStatus(path) : null;
+      const status = syncable ? await synctexStatus(path, scope) : null;
       const kind = syncable
         ? syncNoticeKind(status, src != null)
         : ("noMap" satisfies SyncNoticeKind);
