@@ -23,6 +23,20 @@
 //! opts into "Save password", it is kept in the OS keychain (never our JSON) and
 //! reused here for silent reconnect (see `services::remote_credentials`).
 
+pub mod remote_credentials;
+pub mod remote_sync;
+// A host tab's conversation, copied from the host over the pooled SFTP session.
+pub mod remote_transcript;
+pub mod remote_usage;
+pub mod sftp;
+pub mod ssh_common;
+pub mod ssh_exec;
+pub mod sync_auto;
+pub mod sync_op;
+pub mod worker_sync;
+// Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
+pub mod tar_stream;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -26,8 +26,6 @@ pub mod markup_rounds;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub use app_core::services::fence_scope;
-// Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
-pub mod tar_stream;
 // The AI switch: the side panel's power button, read by every AI gate.
 pub mod ai_switch;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
@@ -104,12 +102,8 @@ pub mod process_lease;
 pub mod project_runtime;
 pub mod prompt_blame;
 pub mod remote;
+pub use remote::{remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
 pub use app_core::services::remote_agents;
-pub mod remote_credentials;
-pub mod remote_sync;
-// A host tab's conversation, copied from the host over the pooled SFTP session.
-pub mod remote_transcript;
-pub mod remote_usage;
 pub mod restore_service;
 pub mod root_mcp;
 pub use root_mcp::{root_mcp_import, root_mcp_mail, root_mcp_review, root_mcp_security};
@@ -120,17 +114,12 @@ pub use root_mcp::{root_mcp_import, root_mcp_mail, root_mcp_review, root_mcp_sec
 // kill/lifecycle seams (PtyRegistry, project switch, app exit) call into it
 // unconditionally.
 pub mod sandbox;
-pub mod sftp;
 // Spreadsheet parsing in a limited child process of the main binary.
 pub mod sheet_reader;
 pub mod skills;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
-pub mod ssh_common;
-pub mod ssh_exec;
 pub mod state_gc;
-pub mod sync_auto;
-pub mod sync_op;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
@@ -179,7 +168,6 @@ pub mod webkit_gpu;
 pub mod win_links;
 pub mod window_service;
 pub mod window_state;
-pub mod worker_sync;
 
 pub use app_core::services::text_completion;
 // One FIFO worker thread: the state-file commands' way off the GTK thread.
