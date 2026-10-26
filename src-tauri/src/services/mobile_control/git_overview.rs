@@ -143,7 +143,7 @@ pub fn worktree_matcher<'a>(paths: impl IntoIterator<Item = &'a str>) -> impl Fn
     // ancestor, so it still meets its checkout under a symlinked or
     // non-canonical spelling (macOS's `/var`, a Windows temp path).
     fn canonical(path: &str) -> PathBuf {
-        crate::commands::fs::canonical_or_new(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path))
+        crate::paths::canonical_or_new(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path))
     }
     fn best(roots: &[PathBuf], cwd: &Path) -> Option<usize> {
         roots

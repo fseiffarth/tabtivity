@@ -15,6 +15,8 @@ use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::services::remote_sync::SyncManifestState;
 use crate::storage;
 use crate::tauri_host::Ctx;
+pub(crate) use crate::paths::sanitize_name;
+pub(crate) use crate::storage::uuid_v4;
 
 /// Local per-project state directory for a **remote** project:
 /// `<state_dir>/remote-projects/<id>`. Mount-free remote projects keep their
@@ -5283,24 +5285,6 @@ pub(crate) fn projects_root() -> PathBuf {
     paths::projects_root()
 }
 
-pub(crate) fn sanitize_name(name: &str) -> String {
-    name.trim()
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 /// Copy a tree, leaving git's administrative state behind.
 ///
 /// `.git` is skipped whatever **kind** of entry it is (#23 D3). Testing `is_dir()`
@@ -5311,26 +5295,6 @@ pub(crate) fn sanitize_name(name: &str) -> String {
 /// into: a nested repo or worktree is not this tree's content to duplicate.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
     copy_tree_core(src, dst, false)
-}
-
-/// Mint a random RFC 4122 v4 UUID (36 chars, `8-4-4-4-12`). It must be a real
-/// UUID: it is passed as `claude --session-id` and checked by
-/// `agent_session::is_uuid_shaped`. Ids minted by older builds repeat a
-/// nanosecond timestamp in every group (85 chars); they stay valid as ids.
-/// Should the system RNG fail, the bytes fall back to the clock, so callers
-/// that mint several ids back-to-back keep their collision guards (see
-/// `commands::boxes::create_box`).
-pub(crate) fn uuid_v4() -> String {
-    let mut b = [0u8; 16];
-    if getrandom::fill(&mut b).is_err() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        b = ts.to_le_bytes();
-    }
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h: String = crate::digest::hex(&b);
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
 fn chrono_now() -> String {

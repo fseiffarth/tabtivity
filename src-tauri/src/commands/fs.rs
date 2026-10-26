@@ -18,6 +18,7 @@ use crate::services::tree_copy::{copy_tree, CopyReport};
 use crate::storage;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
+pub(crate) use crate::paths::{canonical_or_new, display_path, enforce_confinement};
 
 // ── File tree ─────────────────────────────────────────────────────────────
 
@@ -2544,29 +2545,6 @@ fn canonical(path: &str) -> Result<PathBuf, String> {
     fs::canonicalize(path).map_err(|e| format!("canonicalize {path}: {e}"))
 }
 
-/// Render a (typically canonicalized) path as the string handed to the frontend.
-///
-/// `fs::canonicalize` returns *verbatim* paths on Windows — `\\?\C:\proj\file`
-/// for a drive path, `\\?\UNC\server\share\...` for a network path. The frontend
-/// (`src/lib/paths.ts`) expects NATIVE paths (`C:\proj\file`, `\\server\share`)
-/// and prefix-matches `entry.path` against the project directory (stored without
-/// the verbatim prefix); the `\\?\` prefix would break that match and `file://`
-/// URI building. This strips it. No-op on Unix and for paths lacking the prefix.
-pub(crate) fn display_path(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
-            // `\\?\UNC\server\share` → `\\server\share`
-            return format!(r"\\{rest}");
-        }
-        if let Some(rest) = s.strip_prefix(r"\\?\") {
-            return rest.to_string();
-        }
-    }
-    s.into_owned()
-}
-
 fn collect_project_endings(
     root: &Path,
     dir: &Path,
@@ -2702,45 +2680,6 @@ fn should_skip_ending_scan_dir(name: &str) -> bool {
     )
 }
 
-/// Resolve a path that may not exist yet, for confinement: existing paths
-/// canonicalize; a dangling link resolves to where it points; a missing path
-/// canonicalizes its deepest existing ancestor and applies the rest lexically.
-/// The result never keeps a `..` or a link, so neither `missing/../..` nor a
-/// planted link to a not-yet-existing file outside can pass a `starts_with`
-/// check. Callers write to the returned path, not the one they joined.
-pub(crate) fn canonical_or_new(path: &Path) -> Result<PathBuf, String> {
-    resolve_new(path, 0).ok_or_else(|| format!("cannot resolve '{}'", path.display()))
-}
-
-fn resolve_new(path: &Path, links: u32) -> Option<PathBuf> {
-    // The kernel's own ELOOP bound for a chain of links.
-    if links > 40 {
-        return None;
-    }
-    if let Ok(c) = path.canonicalize() {
-        return Some(c);
-    }
-    if let Ok(meta) = fs::symlink_metadata(path) {
-        if !meta.file_type().is_symlink() {
-            // It exists yet will not canonicalize (an unreadable ancestor).
-            return None;
-        }
-        let link = fs::read_link(path).ok()?;
-        let target = match path.parent() {
-            Some(parent) => parent.join(link),
-            None => link,
-        };
-        return resolve_new(&target, links + 1);
-    }
-    let parent = resolve_new(path.parent()?, links)?;
-    match path.components().next_back()? {
-        std::path::Component::Normal(name) => Some(parent.join(name)),
-        std::path::Component::CurDir => Some(parent),
-        std::path::Component::ParentDir => parent.parent().map(Path::to_path_buf),
-        _ => None,
-    }
-}
-
 /// Write `content` to `target_c`, a path `canonical_or_new` resolved and
 /// `enforce_confinement` passed, creating its missing folders. The file itself
 /// is opened `O_NOFOLLOW`: a link swapped in after the check is refused rather
@@ -2761,18 +2700,6 @@ fn write_confined(target_c: &Path, content: &[u8]) -> Result<(), String> {
         .open(target_c)
         .and_then(|mut f| f.write_all(content))
         .map_err(|e| e.to_string())
-}
-
-/// Enforce that `target` is inside `root` (relative-path project confinement).
-pub(crate) fn enforce_confinement(root: &Path, target: &Path) -> Result<(), String> {
-    if !target.starts_with(root) {
-        return Err(format!(
-            "path '{}' escapes project root '{}'",
-            target.display(),
-            root.display()
-        ));
-    }
-    Ok(())
 }
 
 /// One subdirectory in a [`DirListing`]: its display name and absolute path.

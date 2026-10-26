@@ -1317,7 +1317,7 @@ mod tests {
     /// no `\\?\` prefix (which `canonicalize` puts on `root`, and under
     /// which `/` is no separator).
     fn agent_path(root: &Path, rel: &str) -> String {
-        format!("{}/{rel}", crate::commands::fs::display_path(root).replace('\\', "/"))
+        format!("{}/{rel}", crate::paths::display_path(root).replace('\\', "/"))
     }
 
     /// A project folder with `docs/draft.pdf` and an outbox copy of it.

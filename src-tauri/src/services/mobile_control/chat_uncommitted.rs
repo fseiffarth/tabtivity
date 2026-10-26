@@ -165,7 +165,7 @@ pub(super) fn checkouts_of(roots: &[PathBuf]) -> Vec<(String, Option<TabWorktree
 /// `None` outside it.
 pub(super) fn relative_to(checkout: &Path, path: &Path) -> Option<String> {
     fn resolved(path: &Path) -> PathBuf {
-        crate::commands::fs::canonical_or_new(path).unwrap_or_else(|_| path.to_path_buf())
+        crate::paths::canonical_or_new(path).unwrap_or_else(|_| path.to_path_buf())
     }
     let relative = resolved(path)
         .strip_prefix(resolved(checkout))

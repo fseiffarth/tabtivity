@@ -399,8 +399,8 @@ fn installed_skill_dir(target: &SkillTarget, name: &str) -> Result<PathBuf, Stri
     let name = plain_name(name, "skill name")?;
     let skills = target_skills_dir(target)?;
     if let SkillTarget::Project { dir } = target {
-        let project = crate::commands::fs::canonical_or_new(Path::new(dir))?;
-        let real = crate::commands::fs::canonical_or_new(&skills)?;
+        let project = crate::paths::canonical_or_new(Path::new(dir))?;
+        let real = crate::paths::canonical_or_new(&skills)?;
         if !real.starts_with(&project) {
             return Err(format!("'{}' leads out of the project", skills.display()));
         }

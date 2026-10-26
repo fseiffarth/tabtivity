@@ -127,7 +127,7 @@ fn kind_of(tab: &TabEntry) -> &str {
 /// can tell one project's sessions from another's.
 pub fn mint_tmux_session(scope: &str, kind: &str) -> String {
     let token = if kind == "shell" { "shell" } else { "agent" };
-    format!("{}{}--{token}-{}", crate::brand::TMUX_PREFIX, storage::project_key(scope), crate::commands::projects::uuid_v4())
+    format!("{}{}--{token}-{}", crate::brand::TMUX_PREFIX, storage::project_key(scope), crate::storage::uuid_v4())
 }
 
 /// Give a freshly created tab what the owner mints for it: a tmux session
@@ -142,7 +142,7 @@ fn mint_for_created(scope: &str, tab: &mut TabEntry) {
     }
     // The chat assistant's scope takes no schedules (plan decision, "Call sites").
     if kind != "shell" && !storage::is_assistant_scope(scope) && extra_str(tab, SCHEDULE_TARGET_KEY).is_none() {
-        tab.extra.insert(SCHEDULE_TARGET_KEY.to_string(), Value::String(crate::commands::projects::uuid_v4()));
+        tab.extra.insert(SCHEDULE_TARGET_KEY.to_string(), Value::String(crate::storage::uuid_v4()));
     }
     if tmux_of(tab).is_none() {
         tab.extra.insert(TMUX_SESSION_KEY.to_string(), Value::String(mint_tmux_session(scope, &kind)));
@@ -205,9 +205,9 @@ pub fn adopt(session: &mut TerminalSession) -> bool {
 }
 
 fn fresh_id(taken: &HashSet<String>) -> String {
-    let mut id = crate::commands::projects::uuid_v4();
+    let mut id = crate::storage::uuid_v4();
     while taken.contains(&id) {
-        id = crate::commands::projects::uuid_v4();
+        id = crate::storage::uuid_v4();
     }
     id
 }
@@ -791,7 +791,7 @@ pub fn reopen_tab_in(path: &Path, scope: &str, closed_id: Option<&str>) -> Resul
         for key in [TAB_ID_KEY, TAB_CREATED_KEY, TAB_UPDATED_KEY, TMUX_SESSION_KEY, "mobileRequestHash", "launchedAt"] {
             tab.extra.remove(key);
         }
-        tab.key = format!("headless-{}", crate::commands::projects::uuid_v4());
+        tab.key = format!("headless-{}", crate::storage::uuid_v4());
         session.tab_layout.push(tab);
         Ok(())
     });

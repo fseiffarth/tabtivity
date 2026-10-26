@@ -814,7 +814,7 @@ pub fn resolve_local_source(root: &Path, path: &Path) -> Result<ResolvedSource, 
     let canonical = root.canonicalize().map_err(|_| MarkupError::Files(files::FilesError::Unavailable))?;
     // Windows canonicalises to `\\?\C:\…`, which never prefixes the `C:/…` an
     // agent writes: the same root without the verbatim prefix does.
-    let plain = std::path::PathBuf::from(crate::commands::fs::display_path(&canonical));
+    let plain = std::path::PathBuf::from(crate::paths::display_path(&canonical));
     let rest = path
         .strip_prefix(root)
         .or_else(|_| path.strip_prefix(&canonical))
@@ -1318,7 +1318,7 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
             // source in the project strips against `root` as given — minus
             // Windows' `\\?\` prefix, which SyncTeX never hands back.
             let input = Path::new(&input);
-            let Ok(inside) = input.strip_prefix(root).or_else(|_| input.strip_prefix(crate::commands::fs::display_path(root))) else { continue };
+            let Ok(inside) = input.strip_prefix(root).or_else(|_| input.strip_prefix(crate::paths::display_path(root))) else { continue };
             // A map naming a file that is gone comes back un-canonicalised, so
             // a `..` in it could still climb out of the project.
             if inside.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
@@ -1764,7 +1764,7 @@ mod tests {
              (6,9:8799518,19735000:22609920,455111,0\nx6,9:8799518,19735000\n)\n}}1\nPostamble:\n",
             // As TeX writes it: no `\\?\` prefix, under which Windows would
             // read `/` as part of a name and never find the file.
-            r = crate::commands::fs::display_path(root)
+            r = crate::paths::display_path(root)
         );
         fs::write(root.join("docs/draft.synctex"), map).unwrap();
         let strike = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[140.0, 131.0, 0.5], [190.0, 132.0, 0.5]], style: PenStyle::Pen, comment: None };
@@ -1816,7 +1816,7 @@ mod tests {
         let map = format!(
             "SyncTeX Version:1\nInput:1:{r}/docs/../../x.tex\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n\
              [1,7:4736286,46220574:26673152,41484288,0\n(1,3:8799518,8865054:22609920,455111,0\nx1,3:11218261,8865054\n)\n]\n}}1\n",
-            r = crate::commands::fs::display_path(root)
+            r = crate::paths::display_path(root)
         );
         fs::write(root.join("docs/draft.synctex"), map).unwrap();
         let mut page = page(1, &layer(root, "a-p1-marked.png"));

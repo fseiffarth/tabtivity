@@ -430,7 +430,7 @@ pub fn push_in(state_dir: &Path, socket: &Path, link: &Link, user: &str) -> Resu
     }
     let missing = git_in(dir, None, &["rev-list", "-n", "1", &tip, "--not", &not_remotes])?;
     let tmp = tmp_dir(state_dir)?;
-    let bundle = tmp.join(format!("{}.bundle", crate::commands::projects::uuid_v4()));
+    let bundle = tmp.join(format!("{}.bundle", crate::storage::uuid_v4()));
     let _cleanup = Remove(bundle.clone());
     let bytes = if missing.is_empty() {
         0
@@ -527,7 +527,7 @@ pub fn create_in(state_dir: &Path, socket: &Path, project_id: &str, dir: &Path, 
 /// objects (another uid's files) and runs no hook.
 pub fn clone_into(parent: &Path, info: &ShareInfo) -> Result<PathBuf, String> {
     let hub = PathBuf::from(&info.path);
-    let base = crate::commands::projects::sanitize_name(&info.name);
+    let base = crate::paths::sanitize_name(&info.name);
     let base = if base.is_empty() { "shared-project".to_string() } else { base };
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut dest = parent.join(&base);

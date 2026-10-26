@@ -444,7 +444,7 @@ fn output_of(cmd: Command, limit: usize) -> Result<Vec<u8>, RunError> {
 
 /// A path as git reads it from the environment (no Windows `\\?\`).
 fn env_path(path: &Path) -> String {
-    crate::commands::fs::display_path(path)
+    crate::paths::display_path(path)
 }
 
 /// `GIT_ALTERNATE_OBJECT_DIRECTORIES` holding one directory: quoted (git's
@@ -1854,7 +1854,7 @@ mod tests {
         let git_dir = base.join("planted.git");
         // As a user's repo names them: without the `\\?\` prefix Windows'
         // `canonicalize` puts on them.
-        let plain = |p: &Path| crate::commands::fs::display_path(p);
+        let plain = |p: &Path| crate::paths::display_path(p);
         git(&base, &["init", "-q", "--separate-git-dir", &plain(&git_dir), "planted"]);
         git(&base, &["--git-dir", &plain(&git_dir), "config", "core.worktree", &plain(&elsewhere)]);
         assert_eq!(begin(&state, &root, phone(), None), Err(NoUndo::NotGit));

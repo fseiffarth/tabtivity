@@ -1256,7 +1256,7 @@ fn resolve_spec_dockerfile(project_dir: &Path, df: &str) -> Result<PathBuf, Stri
             joined.display()
         )
     })?;
-    crate::commands::fs::enforce_confinement(&root, &resolved)
+    crate::paths::enforce_confinement(&root, &resolved)
         .map_err(|e| format!("Project container: {e}"))?;
     Ok(resolved)
 }

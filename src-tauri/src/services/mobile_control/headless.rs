@@ -736,7 +736,7 @@ async fn create_chat(
     }
     let chosen = super::assistant::resolve(choices, handle).ok_or(CreateRefusal::UnknownAgent)?;
     let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
-    let uid = crate::commands::projects::uuid_v4();
+    let uid = crate::storage::uuid_v4();
     let record = crate::services::assistant::new_chat_record(state_dir, &chosen, &uid, Some(&request_hash))
         .map_err(|refusal| CreateRefusal::Assistant(refusal.code()))?;
     let path = session_file(state_dir, &project.raw_id);
@@ -762,7 +762,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
     let (label, cmd, session_id) = match (kind, agent) {
         (CreateTabKind::Agent, Some(agent)) => {
-            let uuid = crate::commands::projects::uuid_v4();
+            let uuid = crate::storage::uuid_v4();
             let args = if matches!(agent.bin, "claude" | "gemini") {
                 vec!["--session-id".to_string(), uuid.clone()]
             } else {
@@ -785,7 +785,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
     };
     extra.insert("mobileRequestHash".into(), json!(request_hash));
     TabEntry {
-        key: format!("headless-{}", crate::commands::projects::uuid_v4()),
+        key: format!("headless-{}", crate::storage::uuid_v4()),
         label,
         cmd,
         cwd: cwd.to_string_lossy().into_owned(),
@@ -1203,7 +1203,7 @@ pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, mess
         state_dir,
         project_id,
         RecordedAgentPromptInput {
-            id: crate::commands::projects::uuid_v4(),
+            id: crate::storage::uuid_v4(),
             message: text.to_string(),
             created_at: None,
             sent: SentAgentPromptInput {
@@ -1341,7 +1341,7 @@ pub fn schedule_mutate(
         }
         ScheduleMutation::Create { schedule } => {
             let prompt = ScheduledAgentPrompt {
-                id: crate::commands::projects::uuid_v4(),
+                id: crate::storage::uuid_v4(),
                 enabled: schedule.enabled,
                 message: schedule.message,
                 rule: schedule.rule,
@@ -1408,7 +1408,7 @@ pub fn prompt_mutate(
             state_dir,
             project_id,
             ProjectAgentPromptInput {
-                id: crate::commands::projects::uuid_v4(),
+                id: crate::storage::uuid_v4(),
                 message: prompt.message,
                 tags: None,
                 target: None,
