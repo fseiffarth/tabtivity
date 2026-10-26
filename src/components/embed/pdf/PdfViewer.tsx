@@ -34,10 +34,13 @@ import { emptyDeck } from "../../../lib/viewers/deck/model";
 import { deckPathForPdf, serializeDeck } from "../../../lib/viewers/deck/sidecar";
 import { jumpToSource, SaveButton, useViewerState } from "../FileViewerPane";
 import { canRecompileTexSource, recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
+import { isServerClient } from "../../../lib/transport/linkState";
 import {
   renderPdfPagesToImages,
   printHtmlBody,
+  PDF_PREVIEW_SCALE,
   PDF_PRINT_CSS,
+  PDF_PRINT_SCALE,
   type NativePrint,
 } from "../../../lib/viewers/print";
 import {
@@ -3083,7 +3086,10 @@ function PdfCanvas({
       // screen, without having to save it first. Preview sheet n is `sheets[n-1]`.
       const sheets = pages;
       const title = basename(path);
-      const images = await renderPdfPagesToImages(sheets, (id) => sources.get(id)?.doc);
+      // The window's native print sends the vector PDF, so its preview images
+      // need only screen sharpness; the browser client keeps paper's.
+      const scale = isServerClient() ? PDF_PRINT_SCALE : PDF_PREVIEW_SCALE;
+      const images = await renderPdfPagesToImages(sheets, (id) => sources.get(id)?.doc, scale);
       const body = images
         .map((src) => `<div class="print-page"><img src="${src}" alt=""></div>`)
         .join("");

@@ -1292,6 +1292,14 @@ export const PDF_PRINT_DPI = 300;
 /** {@link PDF_PRINT_DPI} as a pdf.js viewport scale (one unit = 1/72 in). */
 export const PDF_PRINT_SCALE = PDF_PRINT_DPI / 72;
 /**
+ * Resolution for a PDF sheet that is only ever SHOWN: where the printer gets the
+ * real PDF (`NativePrint`), the preview's images never reach paper. 150 dpi keeps
+ * an A4 sheet sharp in the preview on a HiDPI screen at a quarter of the 300 dpi
+ * pixels — rasterising and PNG-encoding every sheet at print resolution held the
+ * preview back for seconds on a long document (Ctrl+P on a PDF).
+ */
+export const PDF_PREVIEW_SCALE = 150 / 72;
+/**
  * The ceiling on one rasterised sheet, in pixels. A canvas past the engine's
  * limit does not fail loudly — it comes back blank, and a blank sheet prints as
  * a blank sheet. An A4 page at print scale is 8.7 Mpx and inside it; an A0/A1
