@@ -327,6 +327,33 @@ describe("the agent pane's Reader", () => {
     await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
   });
 
+  it("lets two prompts queued behind a turn go once Claude records both", async () => {
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    try {
+      useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      act(() => noteSentPrompt("st-1", "first queued prompt alpha"));
+      act(() => noteSentPrompt("st-1", "second queued prompt beta"));
+      expect(host.querySelectorAll(".terminal-reader-turn.pending")).toHaveLength(2);
+      // 2.1.310 records them as two `user` messages once the turn ends.
+      const at = new Date(Date.now() + 1000).toISOString();
+      const recorded = {
+        ...transcript,
+        version: "v2",
+        entries: [...transcript.entries, { kind: "prompt", text: "first queued prompt alpha", at }, { kind: "prompt", text: "second queued prompt beta", at }],
+      };
+      invoke.mockImplementation((command: string) =>
+        Promise.resolve(command === "agent_tab_transcript" ? recorded : []));
+      act(() => { rows.splice(2, 1, "✻ Crunched for 18s · done 12:11"); });
+      await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
   it("keeps the text and says why when the prompt did not go in", async () => {
     sendSteeringPrompt.mockRejectedValue(new Error("agent terminal is not ready"));
     reader(host);

@@ -86,7 +86,7 @@ export interface SelectStep {
   options: SelectOption[];
 }
 
-interface SelectLineLike { text: string; afterRule?: boolean; edge?: number; spans?: readonly ReadableSpanLike[] }
+interface SelectLineLike { text: string; afterRule?: boolean; frameText?: string; edge?: number; spans?: readonly ReadableSpanLike[] }
 
 /** How far up from the bottom a dialog may sit. Below it the TUI still draws
  * its footer ("Esc to cancel") and, in Codex, the input box — and at phone
@@ -809,10 +809,14 @@ export function readStrayDialog(lines: readonly SelectLineLike[], columns?: numb
 /** Whether `lines[index]` is the highlighted row of a list `readStrayDialog`
  * reads. Its `❯` is the input line's too, but Claude Code draws that line
  * under a rule, with the box's lower rule under its draft; a list's
- * highlighted row sits under a row of its own, or its run ends in a blank. */
+ * highlighted row sits under a row of its own, or its run ends in a blank.
+ * The rule may carry the session's name (`──── MyProject ─`, 2.1.310),
+ * which `readableScreen` keeps as a row of its own (`frameText`): a draft
+ * under it whose last line is empty read as a closed list, and the chat lost
+ * the input box. */
 export function isStrayListRow(lines: readonly SelectLineLike[], index: number): boolean {
   const text = lines[index].text;
-  if (lines[index].afterRule || !/^\s*❯\s/u.test(text)) return false;
+  if (lines[index].afterRule || (index > 0 && lines[index - 1].frameText) || !/^\s*❯\s/u.test(text)) return false;
   const column = unnumberedLabelAt(text);
   let end = index;
   while (end + 1 < lines.length && lines[end + 1].text.trim() && !lines[end + 1].afterRule && unnumberedLabelAt(lines[end + 1].text) === column) end += 1;
