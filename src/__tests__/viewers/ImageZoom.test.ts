@@ -3,7 +3,7 @@
  * helper keeps the anchor point (the cursor) fixed on screen across a zoom.
  */
 import { describe, it, expect } from "vitest";
-import { zoomOffset } from "../../components/embed/FileViewerPane";
+import { zoomOffset } from "../../components/embed/fileViewer/ImageView";
 
 /** Map an image point to a screen point under (scale, offset). */
 const project = (scale: number, off: { x: number; y: number }, p: { x: number; y: number }) => ({
