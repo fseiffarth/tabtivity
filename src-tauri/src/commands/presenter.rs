@@ -1,6 +1,6 @@
 //! The presentation windows: the deck presenter's **audience window** (TODO
 //! M#90, `docs/deck_presenter_plan.md`) and the PDF viewer's **fullscreen present
-//! window** (`src/components/embed/pdf/present.ts`).
+//! window** (`src/lib/viewers/pdfPresent.ts`).
 //!
 //! A talk wants two surfaces: the slide the room sees, and the notes/timer the
 //! speaker sees. The second one is an OS window rendering the same React bundle
