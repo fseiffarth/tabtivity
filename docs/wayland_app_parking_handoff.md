@@ -532,3 +532,78 @@ All green (own `CARGO_TARGET_DIR` = `<worktree>/target`,
   the phone, but on Cinnamon it had been taking the settings over.
 - The removed integration test and the Linux-gated `detect_backend` tests
   mean no test exercises a live X server any more; that is deliberate.
+
+## Final review (range `bfc89615..4cdd0370`)
+
+### Fixed
+
+- `9c96ef03` **A failed settings restore lost the user's original.**
+  `workspace_settings::give_back` deleted the restore file even when a
+  `gsettings` restore failed (no session bus at logout, dconf unwritable),
+  and `take_over` did the same with a crash's leftovers; the next start then
+  read the app's own values (`dynamic-workspaces=false`, count 2) as the
+  user's and recorded nothing. Now a key whose restore fails stays in the
+  file and is carried into the next record (its original wins over the
+  fresh plan, and is kept even when a lenient re-write fails) until a
+  restore succeeds. Tests:
+  `a_failed_restore_keeps_that_key_in_the_file_for_the_next_start`,
+  `a_crash_key_that_cannot_be_restored_is_carried_not_lost`.
+- `bd746385` **Apps-view read on the main thread under the registry lock**
+  (A1b's flag, AGENTS.md's sync-command rule). `get_opened_windows` is
+  `async` (`Ctx`, `app_core::rt::blocking`) and returns
+  `Result<Vec<TrackedWindow>, String>` (rejects only if the task panics).
+  `prune_dead_windows(&WindowRegistryState, scope) -> rows` locks only to
+  pick candidates (`resolve_asks`, `prune_candidates`) and to apply
+  (`resolve_missing_launch_windows_with`, `apply_prune`); marked-process
+  lookups and the one window scan run unlocked. `apply_prune` skips a row
+  whose pid/window id changed since it was picked (an exit watcher got there
+  first). `prune_dead_windows_with` is now the tests' seam (`cfg(test)`).
+  Tests: `the_apps_view_read_scans_and_probes_with_the_registry_unlocked`
+  (asserts `try_lock` succeeds inside both probes), `…_makes_no_scan_without_a_question`,
+  `a_row_that_changed_during_the_unlocked_scan_is_left_for_the_next_read`.
+
+### Checked, no change
+
+Wayland scan short-circuits vs A2: only `find_window_for_title` keeps one;
+popout retire keys on `session_is_wayland`, not the backend, so GNOME on
+`x11` leaves it alone. A3's `rowStaysVisible` matches A1a/A1b row states
+(a resolved XWayland row loses the line on the next read). Exit `cleanup`
+runs after the persist drain and the Mobile stop, before the long
+teardowns; parked windows move back before the settings are given back.
+i18n keys in all five dictionaries; both `UntestedTag` ids have
+`untested.ts` rows; no leftover TODOs.
+
+### Gates (HEAD after the two fixes)
+
+- `cargo test -q -p tabtivity --lib`: 4766 passed, 7 ignored.
+- `cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+  4634 passed, 7 ignored (2 suites).
+- `cargo clippy --workspace --all-targets`, `-p tabtivity
+  --no-default-features --lib`, `-p app-serverd --all-targets`
+  (`-D warnings`): clean.
+- `scripts/brand-check.sh`, `git diff --check`, `scripts/privacy-check.sh`
+  (staged, per commit): pass.
+- Not run: npm gates (no frontend file touched), `scripts/ci-local.sh`
+  (Windows/macOS legs — the new apps code is cfg-free and pure; run at
+  merge), `npm run backend:stale` (main agent, after merge).
+
+### Final review — Flagged for user
+
+- **Two instances with separate state dirs** (dev sandbox + packaged): the
+  second sees the first's brand-named `workspace-names` with no file of its
+  own, records it as "reset to default", and if it quits *after* the first
+  it resets the names the first just restored. Multi-instance coordination
+  is a design call (e.g. a shared restore file outside the state dir, or a
+  lock), not fixed.
+- The **switch-time** resolve (`project_runtime::switch` step 5) still holds
+  the registry lock across its one X scan — on the switch thread, not the
+  main thread; left as is.
+- `route` sends `budgie:GNOME` and `GNOME-Flashback:GNOME` to the GNOME
+  table; Budgie's WM and Metacity may ignore the `org.gnome.mutter` keys.
+  Harmless writes at worst, but parking there is unverified.
+- GNOME **X11** now embeds (`supports_embedding` true; it was `null`
+  before) — Mutter reparenting never live-tested.
+- A leftover restore file is only consulted when the X connect succeeds
+  (A2's gotcha): a GNOME session with XWayland disabled never restores it.
+- `X11Backend::try_new` may wait up to 1 s on the startup thread for the
+  count to land (only when settings were changed).
