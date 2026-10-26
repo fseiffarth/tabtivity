@@ -210,7 +210,7 @@ pub fn refresh_source(id: &str) -> Result<(), String> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        crate::commands::git::git_clone_blocking(
+        crate::services::git_hardened::git_clone_blocking(
             source.url.clone(),
             dest.to_string_lossy().to_string(),
         )

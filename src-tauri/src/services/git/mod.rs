@@ -10,6 +10,8 @@ pub mod git_credentials;
 pub mod git_guard;
 // How Tabtivity runs git: the hardened builder, `run_git`, push/clone transport.
 pub mod git_hardened;
+// Which hosting credentials apply to a project, and where a token may go.
+pub mod git_hosting;
 // The default branch (`main`) for repositories Tabtivity creates, and the
 // unpublished-`master` rename that runs just before a publish.
 pub mod git_init;

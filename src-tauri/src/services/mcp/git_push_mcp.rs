@@ -108,7 +108,7 @@ pub fn set_policy(project: &str, level: Option<Level>, protected: Option<Vec<Str
     if let Some(list) = &protected {
         for name in list { validate_branch(name)?; }
     }
-    crate::commands::projects::patch_project_entry(project, |entry| {
+    crate::services::project_registry::patch_project_entry(project, |entry| {
         let mut policy: ProjectPolicy = match entry.extra.get("git_push_mcp") {
             None => ProjectPolicy::default(),
             Some(value) => serde_json::from_value(value.clone()).map_err(|_| "invalid push policy")?,
@@ -164,7 +164,7 @@ fn add_ci_repo(entry: &mut crate::schema::projects::ProjectEntry, repo: &str) ->
     Ok(())
 }
 fn allow_ci_repo(project: &str, repo: &str) -> Result<(), String> {
-    crate::commands::projects::patch_project_entry(project, |entry| add_ci_repo(entry, repo))
+    crate::services::project_registry::patch_project_entry(project, |entry| add_ci_repo(entry, repo))
 }
 
 /// Strip what the user confirmed on this machine from a `projects.json`
@@ -1003,10 +1003,10 @@ fn window_required(dir: &Path) -> Value {
 
 pub(crate) fn creds(project: &str) -> (Option<String>, Vec<String>) {
     if keyring_free() {
-        return (None, crate::commands::git_hosting::token_origins(Some(project), None));
+        return (None, crate::services::git_hosting::token_origins(Some(project), None));
     }
-    let token = crate::commands::git_hosting::effective_git_creds(project).1;
-    let origins = crate::commands::git_hosting::token_origins(Some(project), None);
+    let token = crate::services::git_hosting::effective_git_creds(project).1;
+    let origins = crate::services::git_hosting::token_origins(Some(project), None);
     (token, origins)
 }
 

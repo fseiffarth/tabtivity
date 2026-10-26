@@ -36,6 +36,7 @@ fn an_omitted_device_list_is_every_phone() {
 }
 
 use super::*;
+use crate::services::project_registry::{drop_legacy_trash_project, drop_reserved_projects, patch_projects_list_at};
 
 /// A minted id is a real v4 UUID: `claude --session-id` rejects anything else.
 #[test]

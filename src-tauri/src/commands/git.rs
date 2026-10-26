@@ -10,7 +10,7 @@ pub use crate::services::git_hardened::git_available_blocking;
 pub(crate) use crate::services::git_hardened::{
     check_rev, hardened_git_command_in, hooked_git_command_in, hookless_git_command_in,
     local_non_repo, pin_common_dir, run_git, run_git_hooked,
-    scoped_token_config, stdout, valid_positional_path, validate_clone_url,
+    git_clone_blocking, scoped_token_config, stdout, valid_positional_path, validate_clone_url,
 };
 
 // Off-thread note: why every git command runs its body through
@@ -1229,32 +1229,6 @@ fn rev_parse(dir: &std::path::Path, rev: &str) -> Option<String> {
 
 // ── Clone (import from GitHub/GitLab) ───────────────────────────────────────
 
-/// Turn git's own auth failure into the one sentence that tells the user what to
-/// do about it. A private https repo with no token stored reads as "could not
-/// read Username" / "Authentication failed", which explains nothing on its own.
-fn clone_error(stderr: &str, had_token: bool, https: bool) -> String {
-    let lower = stderr.to_ascii_lowercase();
-    let auth_failed = lower.contains("could not read username")
-        || lower.contains("authentication failed")
-        || lower.contains("terminal prompts disabled")
-        || lower.contains("repository not found");
-    if auth_failed && https {
-        let hint = if had_token {
-            "The stored access token was rejected (or has no access to this repository) — check it in Settings → Git Hosting."
-        } else {
-            "For a private repository, add an access token in Settings → Git Hosting, or use an SSH URL."
-        };
-        return format!("{}\n\n{hint}", stderr.trim());
-    }
-    if auth_failed {
-        return format!(
-            "{}\n\nSSH authentication failed — make sure your key is loaded (ssh-agent) and the host is known.",
-            stderr.trim()
-        );
-    }
-    stderr.trim().to_string()
-}
-
 /// Clone `url` into `dest` and return `dest`. Used by the import dialog's
 /// "Clone from GitHub/GitLab" source: the clone lands first, then the regular
 /// `import_project` registers the resulting directory in place ("keep" mode).
@@ -1267,65 +1241,6 @@ fn clone_error(stderr: &str, had_token: bool, https: bool) -> String {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_clone(url: String, dest: String) -> Result<String, String> {
     app_core::rt::try_blocking("git", move || git_clone_blocking(url, dest)).await
-}
-
-pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, String> {
-    let url = url.trim().to_string();
-    validate_clone_url(&url)?;
-
-    let dest_path = PathBuf::from(&dest);
-    if dest_path.exists() {
-        let empty = std::fs::read_dir(&dest_path)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false);
-        if !empty {
-            return Err(format!(
-                "Destination '{dest}' already exists and is not empty"
-            ));
-        }
-    }
-    if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
-    let token = crate::commands::git_hosting::global_git_token();
-    let https = {
-        let lower = url.to_ascii_lowercase();
-        lower.starts_with("https://") || lower.starts_with("http://")
-    };
-
-    // Bare on purpose: a network clone into a new, empty `dest`; no local repo
-    // whose config or hooks could run (the URL is validated above).
-    let mut cmd = crate::paths::command_no_window("git");
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-    if https {
-        if let Some(tok) = token.as_deref() {
-            let origins = crate::commands::git_hosting::token_origins(None, None);
-            cmd.args(scoped_token_config(&origins, "x-access-token"));
-            cmd.env(crate::app_env!("GIT_TOKEN"), tok);
-        }
-    }
-    // `--` so a URL can never be read as an option.
-    cmd.args(["clone", "--", &url, &dest]);
-
-    let out = cmd.output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        let raw = if stderr.trim().is_empty() {
-            stdout
-        } else {
-            stderr
-        };
-        // A failed clone can still leave a partial directory behind; drop it so a
-        // retry isn't blocked by its own debris.
-        if dest_path.exists() {
-            let _ = std::fs::remove_dir_all(&dest_path);
-        }
-        return Err(clone_error(&raw, token.is_some(), https));
-    }
-    Ok(dest)
 }
 
 /// The https form of a clone URL, for an *anonymous* readability probe. An

@@ -15,7 +15,7 @@ pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod calendar;
 pub use calendar::{caldav, calendar_alarms, calendar_recurrence, todo_board};
 pub mod git;
-pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_init, git_peer, git_release};
+pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release};
 pub mod mail;
 pub use mail::{
     mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine,
@@ -102,6 +102,8 @@ pub mod net_usage;
 pub mod openvpn;
 pub mod process_lease;
 pub mod project_runtime;
+// The projects.json write side: serialized read-modify-write + entry patches.
+pub mod project_registry;
 pub mod prompt_blame;
 pub mod remote;
 pub use remote::{remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
