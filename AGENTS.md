@@ -168,7 +168,7 @@ Security / data loss:
 - Destructive background git/sync moves record through `services::local_loss`.
 - Local git verbs that can run repo-configured programs (status, diff, add,
   commit, checkout, merge, push, …) never run bare: use
-  `commands::git::hardened_git_command_in` (the `hookless_` variant for
+  `services::git_hardened::hardened_git_command_in` (the `hookless_` variant for
   background work). Project code Tabtivity runs on the
   host (git hooks, `latexmkrc`, a project's prettier) is gated by
   `services::exec_trust`; what runs or where comes from `projects.json`, never
