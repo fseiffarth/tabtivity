@@ -15,10 +15,10 @@
 //! its walk then becomes everyone else's reading too.
 //!
 //! What a process carries beyond its `stat` line is read lazily and only for the
-//! processes a caller asks about: [`tab_uid`] reads `/proc/<pid>/environ` once
-//! per process lifetime (keyed by pid, start time and `comm`, so a reused pid or
-//! an `exec` reads again) and remembers the answer until the process leaves the
-//! table.
+//! processes a caller asks about: [`tab_uid`] and [`launch_id`] read
+//! `/proc/<pid>/environ` once per process lifetime (keyed by pid, start time
+//! and `comm`, so a reused pid or an `exec` reads again) and remember the answer
+//! until the process leaves the table.
 //!
 //! `AppHandle`-free. Linux reads `/proc`; elsewhere the table is
 //! `sysstat::parent_map`'s pid → ppid with empty names, which is all the
@@ -224,15 +224,28 @@ fn read_table() -> Vec<Proc> {
 /// For a caller about to act on a snapshot up to [`MAX_AGE`] old.
 #[cfg(target_os = "linux")]
 pub fn alive(proc_: &Proc) -> bool {
-    std::fs::read_to_string(format!("/proc/{}/stat", proc_.pid))
-        .ok()
-        .and_then(|stat| parse_stat(proc_.pid, &stat))
-        .is_some_and(|now| now.start == proc_.start)
+    start_time(proc_.pid) == Some(proc_.start)
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn alive(_proc: &Proc) -> bool {
     true
+}
+
+/// When `pid` started (clock ticks since boot, [`Proc::start`]), read from its
+/// `stat` now — a zombie still answers. With the pid it names one process
+/// across pid reuse. `None` for no such process, and always off Linux.
+#[cfg(target_os = "linux")]
+pub fn start_time(pid: u32) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| parse_stat(pid, &stat))
+        .map(|now| now.start)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn start_time(_pid: u32) -> Option<u64> {
+    None
 }
 
 /// What a liveness probe of one pid found.
@@ -320,16 +333,20 @@ fn key_of(proc_: &Proc) -> ProcKey {
     (proc_.pid, proc_.start, proc_.comm.clone())
 }
 
-/// What was read about each process image, until it leaves the table.
-struct UidCache(Mutex<HashMap<ProcKey, Option<String>>>);
+/// One environment variable as read for each process image, until the image
+/// leaves the table. `parse` picks the variable out of an environ block.
+struct EnvCache {
+    parse: fn(&[u8]) -> Option<String>,
+    known: Mutex<HashMap<ProcKey, Option<String>>>,
+}
 
-impl UidCache {
-    fn new() -> Self {
-        UidCache(Mutex::new(HashMap::new()))
+impl EnvCache {
+    fn new(parse: fn(&[u8]) -> Option<String>) -> Self {
+        EnvCache { parse, known: Mutex::new(HashMap::new()) }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ProcKey, Option<String>>> {
-        self.0.lock_ok()
+        self.known.lock_ok()
     }
 
     /// Forget processes no longer in the table.
@@ -338,47 +355,118 @@ impl UidCache {
         self.lock().retain(|(pid, start, _), _| live.contains(&(*pid, *start)));
     }
 
-    fn tab_uid(&self, proc_: &Proc, read: impl FnOnce(u32) -> Option<Vec<u8>>) -> Option<String> {
+    fn value(&self, proc_: &Proc, read: impl FnOnce(u32) -> Option<Vec<u8>>) -> Option<String> {
         let key = key_of(proc_);
         if let Some(known) = self.lock().get(&key) {
             return known.clone();
         }
         let environ = read(proc_.pid);
-        let uid = environ.as_deref().and_then(environ_tab_uid);
+        let value = environ.as_deref().and_then(self.parse);
         // An empty block is a process caught inside `exec`: the kernel names
         // the new image before it sets up its environment. Read it again.
         if environ.as_ref().is_some_and(Vec::is_empty) {
-            return uid;
+            return value;
         }
-        self.lock().insert(key, uid.clone());
-        uid
+        self.lock().insert(key, value.clone());
+        value
     }
 }
 
-fn tab_uids() -> &'static UidCache {
-    static UIDS: OnceLock<UidCache> = OnceLock::new();
-    UIDS.get_or_init(UidCache::new)
+fn tab_uids() -> &'static EnvCache {
+    static UIDS: OnceLock<EnvCache> = OnceLock::new();
+    UIDS.get_or_init(|| EnvCache::new(environ_tab_uid))
+}
+
+#[cfg(target_os = "linux")]
+fn launch_ids() -> &'static EnvCache {
+    static IDS: OnceLock<EnvCache> = OnceLock::new();
+    IDS.get_or_init(|| EnvCache::new(environ_launch_id))
 }
 
 /// Forget what was read about processes no longer in the table.
 fn prune_lazy(procs: &[Proc]) {
     tab_uids().prune(procs);
+    #[cfg(target_os = "linux")]
+    launch_ids().prune(procs);
+}
+
+/// The value a NUL-separated environment block gives the variable `prefix`
+/// names (`NAME=`, with its `=`): everything after that first `=`, so a value
+/// may hold `=` itself.
+fn environ_value(environ: &[u8], prefix: &str) -> Option<String> {
+    environ
+        .split(|b| *b == 0)
+        .find_map(|kv| kv.strip_prefix(prefix.as_bytes()))
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .map(str::to_string)
 }
 
 /// The tab uid (`TABTIVITY_TAB_UID`) a NUL-separated environment block sets.
 pub fn environ_tab_uid(environ: &[u8]) -> Option<String> {
-    environ
-        .split(|b| *b == 0)
-        .find_map(|kv| kv.strip_prefix(concat!(crate::app_env!("TAB_UID"), "=").as_bytes()))
-        .and_then(|v| std::str::from_utf8(v).ok())
-        .map(str::to_string)
+    environ_value(environ, concat!(crate::app_env!("TAB_UID"), "="))
 }
 
 /// The tab uid `proc_` inherited, read from its environment once per process
 /// image and remembered while it stays in the table. `None` for a process
 /// that sets none or whose environment cannot be read (another user's).
 pub fn tab_uid(proc_: &Proc) -> Option<String> {
-    tab_uids().tab_uid(proc_, |pid| std::fs::read(format!("/proc/{pid}/environ")).ok())
+    tab_uids().value(proc_, |pid| std::fs::read(format!("/proc/{pid}/environ")).ok())
+}
+
+/// The launch marker (`TABTIVITY_LAUNCH_ID`, set by `commands::apps` on an app
+/// it launches) a NUL-separated environment block sets; an empty value is no
+/// marker. Nothing older ever set it, so there is no legacy name to look up.
+pub fn environ_launch_id(environ: &[u8]) -> Option<String> {
+    environ_value(environ, concat!(crate::app_env!("LAUNCH_ID"), "=")).filter(|v| !v.is_empty())
+}
+
+/// The launch marker `proc_` inherited, read once per process image like
+/// [`tab_uid`], and only from this user's own processes (another user's
+/// environment is never opened). Linux only: elsewhere no process answers,
+/// so a launched app is judged as it was before the marker existed.
+pub fn launch_id(proc_: &Proc) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        launch_ids().value(proc_, read_own_environ)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = proc_;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_own_environ(pid: u32) -> Option<Vec<u8>> {
+    use std::os::unix::fs::MetadataExt;
+    let dir = std::path::Path::new("/proc").join(pid.to_string());
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    if std::fs::metadata(&dir).ok()?.uid() != me {
+        return None;
+    }
+    std::fs::read(dir.join("environ")).ok()
+}
+
+/// The processes of `snap` that carry the launch marker `id` and started no
+/// earlier than `since` (clock ticks since boot, [`Proc::start`]; 0 = no
+/// floor). A marked process descends from the launch, so it cannot predate
+/// the launcher: the floor spares reading the environment of everything older.
+pub fn marked_procs(snap: &Snapshot, id: &str, since: u64) -> Vec<Proc> {
+    marked_procs_with(snap.procs(), id, since, launch_id)
+}
+
+fn marked_procs_with<'a>(
+    procs: impl Iterator<Item = &'a Proc>,
+    id: &str,
+    since: u64,
+    launch_id_of: impl Fn(&Proc) -> Option<String>,
+) -> Vec<Proc> {
+    procs
+        .filter(|p| p.start >= since)
+        .filter(|p| launch_id_of(p).as_deref() == Some(id))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -509,19 +597,19 @@ mod tests {
             reads.set(reads.get() + 1);
             Some(env.clone())
         };
-        let cache = UidCache::new();
-        assert_eq!(cache.tab_uid(&p, read).as_deref(), Some("aaaa-1"));
-        assert_eq!(cache.tab_uid(&p, read).as_deref(), Some("aaaa-1"));
+        let cache = EnvCache::new(environ_tab_uid);
+        assert_eq!(cache.value(&p, read).as_deref(), Some("aaaa-1"));
+        assert_eq!(cache.value(&p, read).as_deref(), Some("aaaa-1"));
         assert_eq!(reads.get(), 1);
         // An exec (new comm) or a reused pid (new start) reads again.
         let execd = Proc { comm: "node".into(), ..p.clone() };
-        assert_eq!(cache.tab_uid(&execd, |_| Some(b"HOME=/h\0".to_vec())), None);
+        assert_eq!(cache.value(&execd, |_| Some(b"HOME=/h\0".to_vec())), None);
         let reused = Proc { start: 78, ..p.clone() };
-        cache.tab_uid(&reused, read);
+        cache.value(&reused, read);
         assert_eq!(reads.get(), 2);
         // A process gone from the table is forgotten.
         cache.prune(&[Proc { pid: 1, ppid: 0, comm: "init".into(), start: 1 }]);
-        cache.tab_uid(&p, read);
+        cache.value(&p, read);
         assert_eq!(reads.get(), 3);
     }
 
@@ -531,14 +619,14 @@ mod tests {
     #[test]
     fn an_empty_environment_read_mid_exec_is_read_again() {
         let p = Proc { pid: 4_000_002, ppid: 1, comm: "bash".into(), start: 91 };
-        let cache = UidCache::new();
-        assert_eq!(cache.tab_uid(&p, |_| Some(Vec::new())), None);
+        let cache = EnvCache::new(environ_tab_uid);
+        assert_eq!(cache.value(&p, |_| Some(Vec::new())), None);
         let env = concat!(crate::app_env!("TAB_UID"), "=bbbb-2\0").as_bytes().to_vec();
-        assert_eq!(cache.tab_uid(&p, |_| Some(env.clone())).as_deref(), Some("bbbb-2"));
+        assert_eq!(cache.value(&p, |_| Some(env.clone())).as_deref(), Some("bbbb-2"));
         // Unreadable (another user's) stays known: not read again.
         let q = Proc { pid: 4_000_003, ..p.clone() };
-        assert_eq!(cache.tab_uid(&q, |_| None), None);
-        assert_eq!(cache.tab_uid(&q, |_| Some(env.clone())), None);
+        assert_eq!(cache.value(&q, |_| None), None);
+        assert_eq!(cache.value(&q, |_| Some(env.clone())), None);
     }
 
     #[test]
@@ -547,5 +635,76 @@ mod tests {
         assert_eq!(environ_tab_uid(env.as_bytes()).as_deref(), Some("aaaa-1"));
         assert_eq!(environ_tab_uid(concat!("X_", crate::app_env!("TAB_UID"), "=aaaa-1\0").as_bytes()), None);
         assert_eq!(environ_tab_uid(b"HOME=/h\0"), None);
+    }
+
+    #[test]
+    fn environ_launch_id_reads_the_marker_and_nothing_else() {
+        let var = crate::app_env!("LAUNCH_ID");
+        // Absent.
+        assert_eq!(environ_launch_id(b"HOME=/h\0PATH=/bin\0"), None);
+        assert_eq!(environ_launch_id(b""), None);
+        // Present, between other variables and last without a trailing NUL.
+        let env = format!("HOME=/h\0{var}=0f3a\0PATH=/bin\0");
+        assert_eq!(environ_launch_id(env.as_bytes()).as_deref(), Some("0f3a"));
+        assert_eq!(environ_launch_id(format!("{var}=0f3a").as_bytes()).as_deref(), Some("0f3a"));
+        // Empty is no marker.
+        assert_eq!(environ_launch_id(format!("{var}=\0").as_bytes()), None);
+        // `=` inside the value belongs to the value.
+        assert_eq!(environ_launch_id(format!("{var}=a=b\0").as_bytes()).as_deref(), Some("a=b"));
+        // Only the exact name: a longer one, or the old brand's spelling, is not it.
+        assert_eq!(environ_launch_id(format!("X_{var}=0f3a\0").as_bytes()), None);
+        let legacy = format!("{}_LAUNCH_ID=0f3a\0", crate::brand::LEGACY_UPPER);
+        assert_eq!(environ_launch_id(legacy.as_bytes()), None);
+        // The tab uid is a different variable.
+        let tab = concat!(crate::app_env!("TAB_UID"), "=0f3a\0");
+        assert_eq!(environ_launch_id(tab.as_bytes()), None);
+    }
+
+    #[test]
+    fn marked_procs_are_the_ones_carrying_the_id_since_the_floor() {
+        let procs = [
+            Proc { pid: 1, ppid: 0, comm: "init".into(), start: 5 },
+            Proc { pid: 10, ppid: 1, comm: "old".into(), start: 50 },
+            Proc { pid: 11, ppid: 1, comm: "java".into(), start: 120 },
+            Proc { pid: 12, ppid: 11, comm: "gradle".into(), start: 130 },
+            Proc { pid: 13, ppid: 1, comm: "other".into(), start: 140 },
+        ];
+        let read = std::cell::RefCell::new(Vec::new());
+        let id_of = |p: &Proc| {
+            read.borrow_mut().push(p.pid);
+            match p.pid {
+                10..=12 => Some("L1".to_string()),
+                13 => Some("L2".to_string()),
+                _ => None,
+            }
+        };
+        let mut got: Vec<u32> = marked_procs_with(procs.iter(), "L1", 100, id_of)
+            .into_iter()
+            .map(|p| p.pid)
+            .collect();
+        got.sort_unstable();
+        // pid 10 carries the id but predates the launch: not read, not marked.
+        assert_eq!(got, vec![11, 12]);
+        assert!(!read.borrow().contains(&10) && !read.borrow().contains(&1));
+        // No floor: everything is asked.
+        let all = marked_procs_with(procs.iter(), "L1", 0, |p: &Proc| (p.pid == 10).then(|| "L1".to_string()));
+        assert_eq!(all.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn start_time_names_this_process_and_nothing_for_a_free_pid() {
+        let me = std::process::id();
+        let snap = snapshot_within(Duration::ZERO);
+        assert_eq!(start_time(me), snap.get(me).map(|p| p.start));
+        assert_eq!(start_time(u32::MAX), None);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn no_launch_marker_is_read_off_linux() {
+        let p = Proc { pid: std::process::id(), ppid: 0, comm: String::new(), start: 0 };
+        assert_eq!(launch_id(&p), None);
+        assert_eq!(start_time(p.pid), None);
     }
 }

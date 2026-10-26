@@ -241,6 +241,7 @@ mod tests {
             opened_at: 0.0,
             window_id: wid,
             origin: origin.to_string(),
+            launch_id: None,
         }
     }
 
