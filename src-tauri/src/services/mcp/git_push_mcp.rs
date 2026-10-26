@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::root_mcp::{Caller, Session};
+use crate::services::root_mcp::{Caller, Session};
 use crate::commands::git::{hardened_git_command_in, push_transport_command, resolve_pre_push_hook, scoped_token_config};
 
 pub const SERVER_NAME: &str = crate::brand::MCP_GIT_SERVER;
@@ -132,7 +132,7 @@ const CI_REPOS_KEY: &str = "git_ci_repos";
 
 /// Lowercase `owner/repo` of a github.com URL: what CI confirmations compare.
 pub(crate) fn ci_repo_key(url: &str) -> Option<String> {
-    super::git_ci::github_repo(url).map(|(owner, repo)| format!("{owner}/{repo}").to_ascii_lowercase())
+    crate::services::git_ci::github_repo(url).map(|(owner, repo)| format!("{owner}/{repo}").to_ascii_lowercase())
 }
 
 /// The repos allowed on a card. Missing or malformed reads as none.
@@ -258,7 +258,7 @@ pub struct RepoState {
 
 /// The last 8 KB, invisible controls stripped, credentials replaced.
 pub fn clean_output(raw: &str, secret: Option<&str>) -> String {
-    let stripped = super::root_mcp_mail::strip_invisible(raw);
+    let stripped = crate::services::root_mcp_mail::strip_invisible(raw);
     let redacted = redact(&stripped, secret);
     tail(&redacted, OUTPUT_CAP)
 }
@@ -595,7 +595,7 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
 #[derive(Clone, Copy, Debug)]
 enum HookBoundary<'a> {
     /// The fence scope recorded on the tab's Pusher binding at spawn
-    /// ([`PushBinding::fence_scope`](super::root_mcp::PushBinding)).
+    /// ([`PushBinding::fence_scope`](crate::services::root_mcp::PushBinding)).
     Fence(&'a str),
     /// No scope was recorded: the hook is not run and the push is refused.
     /// The hook is agent-writable, so a missing record never means "run it
@@ -621,7 +621,7 @@ impl<'a> HookBoundary<'a> {
 fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote: &str, url: &str) -> Result<std::process::Command, Failure> {
     let args = vec![remote.to_string(), url.to_string()];
     let mut cmd = match boundary {
-        HookBoundary::Fence(scope) => super::agent_fence::one_shot_command(scope, &hook.to_string_lossy(), &args, dir)
+        HookBoundary::Fence(scope) => crate::services::agent_fence::one_shot_command(scope, &hook.to_string_lossy(), &args, dir)
             .map_err(|e| Failure::new(Category::FenceUnavailable, format!("The tab is fenced but the fence cannot run the pre-push hook: {e}")))?,
         HookBoundary::Unrecorded => {
             return Err(Failure::new(Category::FenceUnavailable, if cfg!(windows) {
@@ -637,7 +637,7 @@ fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote
             cmd
         }
     };
-    for var in [crate::app_env!("GIT_TOKEN"), super::root_mcp::TOKEN_ENV, super::root_mcp::SCHEDULE_TOKEN_ENV, super::root_mcp::GIT_TOKEN_ENV, super::root_mcp::HELP_TOKEN_ENV, super::root_mcp::MARKUP_TOKEN_ENV, "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"] {
+    for var in [crate::app_env!("GIT_TOKEN"), crate::services::root_mcp::TOKEN_ENV, crate::services::root_mcp::SCHEDULE_TOKEN_ENV, crate::services::root_mcp::GIT_TOKEN_ENV, crate::services::root_mcp::HELP_TOKEN_ENV, crate::services::root_mcp::MARKUP_TOKEN_ENV, "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"] {
         cmd.env_remove(var);
     }
     cmd.env(crate::app_env!("PUSH_PREFLIGHT"), "1");
@@ -825,12 +825,12 @@ fn prune(list: &mut Vec<Proposal>) -> bool {
         }
     }
     let before = list.len();
-    list.retain(|p| p.status == Status::Running || (p.created.elapsed() < RETENTION && (super::root_mcp::session_alive(&p.session) || cfg!(test) && p.session.starts_with("test-"))));
+    list.retain(|p| p.status == Status::Running || (p.created.elapsed() < RETENTION && (crate::services::root_mcp::session_alive(&p.session) || cfg!(test) && p.session.starts_with("test-"))));
     changed | (list.len() != before)
 }
 
 fn proposal_id(prefix: &str) -> String {
-    format!("{prefix}-{}", super::root_mcp::mint_token().map(|t| t[..16].to_string()).unwrap_or_else(|| format!("{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default())))
+    format!("{prefix}-{}", crate::services::root_mcp::mint_token().map(|t| t[..16].to_string()).unwrap_or_else(|| format!("{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default())))
 }
 
 fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> Proposal {
@@ -938,8 +938,8 @@ fn ci_unconfirmed(card: Option<&str>, repo: &str) -> Value {
 /// The repo a CI read goes to — only once it is confirmed (gap 19). An
 /// unconfirmed one stages the card and answers `ci_repo_unconfirmed`;
 /// `no_upstream` / `not_github` come first. `Err` is the tool result.
-fn ci_target(session: &Session, project: &str, dir: &Path, policy: &ProjectPolicy, listed: &[String]) -> Result<super::git_ci::CiRepo, Value> {
-    let target = super::git_ci::resolve(dir).map_err(|f| ci_result(Err(f)))?;
+fn ci_target(session: &Session, project: &str, dir: &Path, policy: &ProjectPolicy, listed: &[String]) -> Result<crate::services::git_ci::CiRepo, Value> {
+    let target = crate::services::git_ci::resolve(dir).map_err(|f| ci_result(Err(f)))?;
     if ci_repo_allowed(policy, listed, &target.url) { return Ok(target); }
     let repo = ci_repo_key(&target.url).unwrap_or_default();
     if keyring_free() { return Err(ci_unconfirmed(None, &repo)); }
@@ -956,7 +956,7 @@ fn release_ci_gate(project: &str) -> impl Fn(&str) -> bool {
 /// A release refused for an unconfirmed CI repo stages the card too.
 fn release_failure(p: &Proposal, failure: Failure) -> Failure {
     if failure.category != Category::CiRepoUnconfirmed { return failure; }
-    let Ok(target) = super::git_ci::resolve(&p.dir) else { return failure };
+    let Ok(target) = crate::services::git_ci::resolve(&p.dir) else { return failure };
     let url = target.url;
     let Some(repo) = ci_repo_key(&url) else { return failure };
     let card = (!keyring_free()).then(|| stage_ci_card(p, &url, &repo));
@@ -1149,11 +1149,11 @@ fn run_release(id: String, requested: Option<String>) {
     let tag = match requested {
         Some(tag) => tag,
         None => match git(&p.dir, &["rev-parse", "--verify", "HEAD^{commit}"]) {
-            Ok(head) => super::git_release::suggest_tag(&p.dir, &head).0,
+            Ok(head) => crate::services::git_release::suggest_tag(&p.dir, &head).0,
             Err(e) => { fail(&id, Failure::new(Category::NotCheckedOut, e)); return; }
         },
     };
-    let plan = match super::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
+    let plan = match crate::services::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
         Ok(plan) => plan,
         Err(failure) => { update(&id, |p| p.tag = Some(tag.clone())); fail(&id, release_failure(&p, failure)); return; }
     };
@@ -1179,7 +1179,7 @@ fn run_release(id: String, requested: Option<String>) {
 fn decide_release(p: Proposal) -> Result<Proposal, String> {
     let (Some(tag), Some(head)) = (p.tag.clone(), p.head.clone()) else { return Err("incomplete proposal".into()) };
     let (token, origins) = creds(&p.project);
-    let plan = match super::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
+    let plan = match crate::services::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
         Ok(plan) => plan,
         Err(failure) => return fail(&p.id, release_failure(&p, failure)).ok_or("proposal not found".into()),
     };
@@ -1188,7 +1188,7 @@ fn decide_release(p: Proposal) -> Result<Proposal, String> {
     }
     update(&p.id, |p| p.status = Status::Running);
     changed();
-    match super::git_release::release(&p.dir, &plan, &plan.tag, token.as_deref(), &origins) {
+    match crate::services::git_release::release(&p.dir, &plan, &plan.tag, token.as_deref(), &origins) {
         Ok(output) => {
             update(&p.id, |p| {
                 p.status = Status::Pushed;
@@ -1276,7 +1276,7 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
 
 fn sanitize_note(note: Option<String>) -> Result<String, String> {
     let Some(note) = note else { return Ok(String::new()) };
-    let clean: String = super::root_mcp_mail::strip_invisible(&note).split_whitespace().collect::<Vec<_>>().join(" ");
+    let clean: String = crate::services::root_mcp_mail::strip_invisible(&note).split_whitespace().collect::<Vec<_>>().join(" ");
     if clean.chars().count() > NOTE_MAX { return Err(format!("invalid_arguments: the note is longer than {NOTE_MAX} characters")); }
     Ok(clean)
 }
@@ -1302,7 +1302,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
         }
         "git_release" => {
             let args: ReleaseArgs = serde_json::from_value(args).map_err(|e| format!("invalid_arguments: {e}"))?;
-            if let Some(tag) = &args.tag { super::git_release::validate_tag(tag).map_err(|e| format!("invalid_arguments: {e}"))?; }
+            if let Some(tag) = &args.tag { crate::services::git_release::validate_tag(tag).map_err(|e| format!("invalid_arguments: {e}"))?; }
             sanitize_note(args.note)?;
             if keyring_free() { return Ok(()); }
             let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && !(p.kind == Kind::Release && p.status == Status::Pending) && matches!(p.status, Status::Pending | Status::Running)).count();
@@ -1317,7 +1317,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
                 _ => serde_json::from_value::<CiAlertsArgs>(args).map(|_| ()),
             };
             parsed.map_err(|e| format!("invalid_arguments: {e}"))?;
-            if !super::git_ci::admit_rate(&session.identity.tab) { return Err("rate_limited: sixty CI reads per tab per hour".into()); }
+            if !crate::services::git_ci::admit_rate(&session.identity.tab) { return Err("rate_limited: sixty CI reads per tab per hour".into()); }
             Ok(())
         }
         "git_push_cancel" => serde_json::from_value::<Cancel>(args).map(|_| ()).map_err(|e| format!("invalid_arguments: {e}")),
@@ -1445,20 +1445,20 @@ fn call_status(session: &Session, dir: &Path, policy: &ProjectPolicy) -> Value {
 }
 
 /// One CI read against a repo [`ci_target`] let through.
-fn call_ci(name: &str, target: &super::git_ci::CiRepo, project: &str, args: Value) -> Result<Value, String> {
+fn call_ci(name: &str, target: &crate::services::git_ci::CiRepo, project: &str, args: Value) -> Result<Value, String> {
     match name {
         "ci_runs" => serde_json::from_value::<CiRunsArgs>(args).map_err(|e| e.to_string())
-            .map(|a| ci_result(super::git_ci::runs(target, project, a.reference.as_deref(), a.limit, a.failed_only.unwrap_or(false)))),
+            .map(|a| ci_result(crate::services::git_ci::runs(target, project, a.reference.as_deref(), a.limit, a.failed_only.unwrap_or(false)))),
         "ci_run" => serde_json::from_value::<CiRunArgs>(args).map_err(|e| e.to_string())
-            .map(|a| ci_result(super::git_ci::run(target, project, a.id))),
+            .map(|a| ci_result(crate::services::git_ci::run(target, project, a.id))),
         _ => serde_json::from_value::<CiAlertsArgs>(args).map_err(|e| e.to_string())
-            .map(|a| ci_result(super::git_ci::security_alerts(target, project, a.reference.as_deref(), a.limit))),
+            .map(|a| ci_result(crate::services::git_ci::security_alerts(target, project, a.reference.as_deref(), a.limit))),
     }
 }
 
 /// The `.git` entry git discovery finds from `dir` — the nearest
 /// `<ancestor>/.git` git would stop at — as `(dev, ino)`. Read at spawn into
-/// [`PushBinding::git_at_spawn`](super::root_mcp::PushBinding) and again
+/// [`PushBinding::git_at_spawn`](crate::services::root_mcp::PushBinding) and again
 /// before every push, release and CI read (gap 19): `git_guard` pins only a
 /// `.git` that exists at spawn, so an agent can `git init` a repo where there
 /// was none, or nearer than the one there was. Bare-repo discovery needs no
@@ -1481,7 +1481,7 @@ pub(crate) fn git_entry_identity(dir: &Path) -> Option<(u64, u128)> {
     #[cfg(windows)]
     {
         let _ = meta;
-        super::mobile_control::files::file_identity(&dot_git).ok()
+        crate::services::mobile_control::files::file_identity(&dot_git).ok()
     }
 }
 
@@ -1501,7 +1501,7 @@ fn git_entry_at(dot_git: &Path) -> Option<std::fs::Metadata> {
 
 /// The `repo_changed` refusal when the tab's git dir is not the one it
 /// started with, or it started with none.
-fn repo_changed(binding: &super::root_mcp::PushBinding) -> Option<Value> {
+fn repo_changed(binding: &crate::services::root_mcp::PushBinding) -> Option<Value> {
     let message = match (binding.git_at_spawn, git_entry_identity(&binding.dir)) {
         (Some(at_spawn), Some(now)) if at_spawn == now => return None,
         (None, _) => "This tab started in a folder with no git repository, and a repository made since is never pushed or read CI for. Ask the user to restart this tab.",
@@ -1528,7 +1528,7 @@ pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(),
     if session.identity.caller != Caller::Pusher || session.check().is_err() { return (error(id, -32000, "access refused"), false); }
     let Some(project) = session.identity.project.as_deref() else { return (error(id, -32000, "missing project"), false) };
     let Some(binding) = session.identity.push.as_ref() else { return (error(id, -32000, "missing project directory"), false) };
-    if super::remote::remote_target_for(project).is_some() {
+    if crate::services::remote::remote_target_for(project).is_some() {
         return (ok(json!({"content":[{"type":"text","text":"not_local"}],"structuredContent":{"status":"refused","category":Category::NotLocal,"message":"Only local projects can be pushed through this lane.","output":"","state":Value::Null},"isError":false})), false);
     }
     match message["method"].as_str().unwrap_or_default() {
@@ -1580,7 +1580,7 @@ pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::root_mcp::PushBinding;
+    use crate::services::root_mcp::PushBinding;
     use std::process::Command;
 
     fn have_git() -> bool { Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success()) }
@@ -1620,9 +1620,9 @@ mod tests {
         sh(work, &["rev-parse", "HEAD"])
     }
     fn session(tab: &str, dir: &Path) -> Session {
-        let (_, mut s) = super::super::root_mcp::test_session_for_tab(Caller::Pusher, tab, Path::new("/nonexistent"));
+        let (_, mut s) = crate::services::root_mcp::test_session_for_tab(Caller::Pusher, tab, Path::new("/nonexistent"));
         s.identity.project = Some("p".into());
-        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None, git_at_spawn: git_entry_identity(dir) });
+        s.identity.push = Some(crate::services::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None, git_at_spawn: git_entry_identity(dir) });
         s
     }
     fn test_proposal(session: &Session, dir: &Path) -> String {
@@ -1852,19 +1852,19 @@ mod tests {
             assert_eq!(reply.unwrap()["error"]["message"], "access refused");
         };
         let s = session("tab:revoked", dir.path());
-        super::super::root_mcp::revoke_session(&s.id).unwrap();
+        crate::services::root_mcp::revoke_session(&s.id).unwrap();
         refused(&s);
         let s = session("tab:closed", dir.path());
-        assert!(super::super::root_mcp::revoke_tab(&s.identity.tab));
+        assert!(crate::services::root_mcp::revoke_tab(&s.identity.tab));
         refused(&s);
-        let (_, root) = super::super::root_mcp::test_session(Caller::Agent);
+        let (_, root) = crate::services::root_mcp::test_session(Caller::Agent);
         refused(&root);
-        let (_, scheduler) = super::super::root_mcp::test_session(Caller::Scheduler);
+        let (_, scheduler) = crate::services::root_mcp::test_session(Caller::Scheduler);
         refused(&scheduler);
-        for name in super::super::root_mcp::tool_names() {
-            assert!(!super::super::root_mcp_security::tool(name).unwrap().serves(Caller::Pusher), "{name}");
+        for name in crate::services::root_mcp::tool_names() {
+            assert!(!crate::services::root_mcp_security::tool(name).unwrap().serves(Caller::Pusher), "{name}");
         }
-        for name in tool_names() { assert!(super::super::root_mcp_security::tool(name).is_none()); }
+        for name in tool_names() { assert!(crate::services::root_mcp_security::tool(name).is_none()); }
     }
 
     #[test]
@@ -2061,7 +2061,7 @@ mod tests {
     fn the_proposal_carries_the_fence_scope_its_binding_recorded() {
         let dir = Path::new("/nonexistent/gp-scope");
         let mut s = session("tab:recorded", dir);
-        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()), git_at_spawn: git_entry_identity(dir) });
+        s.identity.push = Some(crate::services::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()), git_at_spawn: git_entry_identity(dir) });
         let p = new_proposal(&s, "p", dir, String::new());
         assert_eq!(p.fence_scope.as_deref(), Some("p"));
         assert!(matches!(HookBoundary::of(p.fence_scope.as_deref()), HookBoundary::Fence("p")));
@@ -2072,7 +2072,7 @@ mod tests {
     #[test]
     fn a_fenced_preflight_cannot_write_outside_the_project() {
         if !have_git() { eprintln!("git not on PATH — skipping"); return; }
-        if !super::super::agent_fence::bwrap_available() { eprintln!("bubblewrap unavailable — skipping the fenced preflight test"); return; }
+        if !crate::services::agent_fence::bwrap_available() { eprintln!("bubblewrap unavailable — skipping the fenced preflight test"); return; }
         let home = crate::paths::home_dir();
         let marker = home.join(format!(concat!(".", crate::app_slug!(), "-preflight-marker-{}"), std::process::id()));
         let _ = std::fs::remove_file(&marker);
@@ -2083,7 +2083,7 @@ mod tests {
         // The scope is the root work dir: a known scope without a project entry.
         let root = crate::storage::root_work_dir();
         let _ = std::fs::create_dir_all(&root);
-        let mut cmd = match super::super::agent_fence::one_shot_command("root", &hook.path().to_string_lossy(), &[], &root) {
+        let mut cmd = match crate::services::agent_fence::one_shot_command("root", &hook.path().to_string_lossy(), &[], &root) {
             Ok(cmd) => cmd,
             Err(e) => { eprintln!("fence refused ({e}) — skipping"); return; }
         };

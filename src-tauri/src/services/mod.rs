@@ -1,3 +1,5 @@
+pub mod mcp;
+pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
 pub mod api;
 pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod agent;
@@ -9,16 +11,8 @@ pub use mail::{mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, ma
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
-pub mod schedule_mcp;
-// Agent-requested pushes: the `/mcp/git` lane, its policy, the fenced
-// tokenless preflight and the hooks-off host transport.
-pub mod git_push_mcp;
-pub mod help_mcp;
-// The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
-pub mod web_lane;
 pub use app_core::services::schedule_usage;
 pub use app_core::services::agent_usage;
-pub mod markup_mcp;
 // The Undo of a PDF markup round that applied the marks directly: git-tree
 // snapshots of the work tree in the round's own object store under the state
 // dir, reverse-applied only when nothing changed since.

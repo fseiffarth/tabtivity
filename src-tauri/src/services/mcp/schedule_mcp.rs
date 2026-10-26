@@ -3,7 +3,7 @@ use chrono::{DateTime, Datelike, Duration, Local, NaiveDateTime, TimeZone, Timel
 use serde::Deserialize;
 use serde_json::{json, Value};
 use crate::schema::agent_tasks::{AgentPromptTarget, AgentScheduleResult, AgentScheduleRule, AgentTasksFile, ScheduleAuthor, ScheduleOrigin, ScheduledAgentPrompt};
-use super::{agent_tasks, root_mcp::{Caller, Session}};
+use crate::services::{agent_tasks, root_mcp::{Caller, Session}};
 
 pub const SERVER_NAME: &str = crate::brand::MCP_SCHEDULE_SERVER;
 pub const CONTRACT: &str = concat!("Schedules fire from an open ", crate::app_name!(), " window, or, with ", crate::app_name!(), " Mobile switched on, from its background service while no window is open (which restarts this tab's session if it has stopped), when the tab is next idle at/after the time. Occurrences over one hour late are missed. By default the user must approve proposals first. Recurring prompts always require approval. Times are desktop-local YYYY-MM-DDTHH:MM / HH:MM. Weekdays are numbered 1 = Monday … 7 = Sunday (the calendar tools' 0 = Sunday convention does not apply here). A one-time schedule needs five minutes' lead; a daily or weekday rule whose next occurrence is closer than that starts at the occurrence after it. Arguments are validated before anything else runs — a malformed call costs no budget. Prompts only: no commands or prefix commands.");
@@ -30,7 +30,7 @@ pub(crate) fn level_at(state: &std::path::Path, project: &str) -> Result<Level, 
 
 /// Collapse lines before submission and refuse the union of CLI control prefixes.
 pub fn sanitize_prompt(message: &str) -> Result<String, String> {
-    let clean = super::root_mcp_mail::strip_invisible(message);
+    let clean = crate::services::root_mcp_mail::strip_invisible(message);
     let clean = agent_tasks::sanitize_message(&clean).split_whitespace().collect::<Vec<_>>().join(" ");
     if clean.is_empty() { return Err("empty_message".into()); }
     if clean.len() > agent_tasks::MAX_MESSAGE_BYTES { return Err("message_too_long".into()); }
@@ -138,7 +138,7 @@ fn apply_create(file: &mut AgentTasksFile, session: &Session, args: Create, leve
         return Err("recurring_limit: at most one agent recurring schedule".into());
     }
     let from_delivery = target.agent_deliveries.iter().rev().find(|d| d.result == Some(AgentScheduleResult::Delivered)).map(|d| d.id.clone());
-    let id = format!("agent-{}", super::root_mcp::mint_token().ok_or("entropy unavailable")?);
+    let id = format!("agent-{}", crate::services::root_mcp::mint_token().ok_or("entropy unavailable")?);
     let enabled = level == Level::Apply && !recurring;
     let row = ScheduledAgentPrompt { id: id.clone(), enabled, message, rule, preface: vec![], last: None,
         origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery, extra: Default::default() }), phone_device: None, extra: Default::default() };
@@ -288,9 +288,9 @@ mod tests {
     use crate::schema::agent_tasks::AgentScheduleDelivery;
     fn now() -> DateTime<Local> { wall("2026-09-20T12:00").unwrap() }
     fn session() -> Session {
-        let (_, mut s) = super::super::root_mcp::test_session(Caller::Scheduler);
+        let (_, mut s) = crate::services::root_mcp::test_session(Caller::Scheduler);
         s.identity.project = Some("p".into());
-        s.identity.schedule_target = Some(super::super::root_mcp::ScheduleBinding { target: "t".into(), agent: "claude".into() });
+        s.identity.schedule_target = Some(crate::services::root_mcp::ScheduleBinding { target: "t".into(), agent: "claude".into() });
         s
     }
     fn create(when: Value) -> Create { serde_json::from_value(json!({"message":"continue the work","when":when})).unwrap() }
@@ -446,21 +446,21 @@ mod tests {
             assert_eq!(reply.unwrap()["error"]["message"], "access refused");
         };
         let s = session();
-        super::super::root_mcp::revoke_session(&s.id).unwrap();
+        crate::services::root_mcp::revoke_session(&s.id).unwrap();
         refused(&s);
         let s = session();
-        assert!(super::super::root_mcp::revoke_tab(&s.identity.tab));
+        assert!(crate::services::root_mcp::revoke_tab(&s.identity.tab));
         refused(&s);
         // A root-class token never reaches the schedule tools either.
-        let (_, root) = super::super::root_mcp::test_session(Caller::Agent);
+        let (_, root) = crate::services::root_mcp::test_session(Caller::Agent);
         refused(&root);
     }
     #[test]
     fn root_registry_never_serves_scheduler() {
-        for name in super::super::root_mcp::tool_names() {
-            assert!(!super::super::root_mcp_security::tool(name).unwrap().serves(Caller::Scheduler), "{name}");
+        for name in crate::services::root_mcp::tool_names() {
+            assert!(!crate::services::root_mcp_security::tool(name).unwrap().serves(Caller::Scheduler), "{name}");
         }
-        for name in tool_names() { assert!(super::super::root_mcp_security::tool(name).is_none()); }
+        for name in tool_names() { assert!(crate::services::root_mcp_security::tool(name).is_none()); }
     }
 
     #[test]

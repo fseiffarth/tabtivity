@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::root_mcp::{Caller, Session};
-use super::root_mcp_security as security;
+use crate::services::root_mcp::{Caller, Session};
+use crate::services::root_mcp_security as security;
 use crate::schema::Settings;
 
 /// The MCP server name the CLIs list the lane under (`mcp__web__web_fetch`,
@@ -143,7 +143,7 @@ impl Category {
 /// Which category a `browser_engine` fetch error token falls in. Anything not
 /// recognised is a plain failure: the token's text never goes further.
 pub fn category_of_fetch_error(token: &str) -> Category {
-    use super::browser_engine::AGENT_USERINFO;
+    use crate::services::browser_engine::AGENT_USERINFO;
     match token {
         "loopback" | "private-network" | "link-local" | "internal-name" | "app-origin" | "no-host" => Category::NotPublic,
         t if t.starts_with("redirect-to-") => Category::NotPublic,
@@ -277,7 +277,7 @@ pub fn html_to_text(html: &str) -> String {
 /// `U+E0100`..`U+E01EF`), the Hangul, Khmer and braille fillers, the combining
 /// grapheme joiner, Mongolian free variation selectors, interlinear
 /// annotation marks, and the musical and shorthand format controls. The
-/// shared [`super::web_safety::FORMAT_CHARS`] (bidi, zero-width, soft hyphen)
+/// shared [`crate::services::web_safety::FORMAT_CHARS`] (bidi, zero-width, soft hyphen)
 /// is a mirrored list used for file and tab names; it keeps these because
 /// emoji flags and presentation selectors are built from them. A page's text
 /// going to a model has no such use, so the lane strips them on top.
@@ -293,7 +293,7 @@ fn is_invisible_filler(c: char) -> bool {
 /// (`web_safety::strip_format_controls` plus [`is_invisible_filler`]). The
 /// private-use structure marks ([`BREAK`], [`KEPT_SPACE`]) pass.
 fn printable(s: &str) -> String {
-    super::web_safety::strip_format_controls(s).chars().filter(|c| !c.is_control() && !is_invisible_filler(*c)).collect()
+    crate::services::web_safety::strip_format_controls(s).chars().filter(|c| !c.is_control() && !is_invisible_filler(*c)).collect()
 }
 
 /// A page's title as shown to the model: printable, one line, at most
@@ -404,9 +404,9 @@ pub enum KeyState {
 }
 
 fn read_ollama_key() -> KeyState {
-    match super::remote_credentials::get(&super::remote_credentials::web_search_account(OLLAMA_PROVIDER)) {
+    match crate::services::remote_credentials::get(&crate::services::remote_credentials::web_search_account(OLLAMA_PROVIDER)) {
         Some(key) => KeyState::Key(key),
-        None if super::remote_credentials::store_readable() => KeyState::Missing,
+        None if crate::services::remote_credentials::store_readable() => KeyState::Missing,
         None => KeyState::Unreadable,
     }
 }
@@ -463,7 +463,7 @@ pub fn render_results(hits: &[Hit]) -> String {
 }
 
 fn search_client() -> Result<reqwest::Client, Category> {
-    super::mail_engine::install_crypto_provider();
+    crate::services::mail_engine::install_crypto_provider();
     reqwest::Client::builder()
         .user_agent(SEARCH_USER_AGENT)
         // A backend's redirect is never followed: the configured address is
@@ -559,7 +559,7 @@ pub fn tools() -> Value {
         "name": name,
         "description": describe(name),
         "inputSchema": schema(name),
-        "annotations": super::root_mcp::tool_annotations(name),
+        "annotations": crate::services::root_mcp::tool_annotations(name),
     })).collect())
 }
 
@@ -580,7 +580,7 @@ async fn fetch(url: &str) -> Result<Value, Category> {
     if url.is_empty() || url.contains(['\n', '\r', '\0']) {
         return Err(Category::Invalid);
     }
-    let page = match tokio::time::timeout(CALL_DEADLINE, super::browser_engine::fetch_for_agent(url)).await {
+    let page = match tokio::time::timeout(CALL_DEADLINE, crate::services::browser_engine::fetch_for_agent(url)).await {
         Ok(Ok(page)) => page,
         Ok(Err(token)) => return Err(category_of_fetch_error(&token)),
         Err(_) => return Err(Category::FetchFailed),
@@ -990,7 +990,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_lane_lists_two_tools_and_serves_only_a_web_token() {
-        let (_, web) = super::super::root_mcp::test_session(Caller::Web);
+        let (_, web) = crate::services::root_mcp::test_session(Caller::Web);
         let ctx = ctx(SearchConfig::Unset, || KeyState::Missing);
         let init = handle_with(&web, &ctx, &rpc("initialize", json!({}))).await.unwrap();
         assert_eq!(init["result"]["serverInfo"]["name"], SERVER_NAME);
@@ -1002,18 +1002,18 @@ mod tests {
         assert_eq!(handle_with(&web, &ctx, &json!({"jsonrpc": "1.0", "id": 1, "method": "ping"})).await.unwrap()["error"]["code"], -32600);
         // Another lane's token is refused here, whatever route led to it.
         for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Helper, Caller::Marker] {
-            let (_, other) = super::super::root_mcp::test_session(caller);
+            let (_, other) = crate::services::root_mcp::test_session(caller);
             let reply = handle_with(&other, &ctx, &tool_call(TOOL_FETCH, json!({"url": "https://example.com/"}))).await.unwrap();
             assert_eq!(reply["error"]["message"], "access refused", "{caller:?}");
         }
         // A revoked session too.
-        super::super::root_mcp::revoke_tab(&web.identity.tab);
+        crate::services::root_mcp::revoke_tab(&web.identity.tab);
         assert_eq!(handle_with(&web, &ctx, &rpc("ping", json!({}))).await.unwrap()["error"]["message"], "access refused");
     }
 
     #[tokio::test]
     async fn the_lane_refuses_with_fixed_categories_and_never_echoes_the_request() {
-        let (_, web) = super::super::root_mcp::test_session(Caller::Web);
+        let (_, web) = crate::services::root_mcp::test_session(Caller::Web);
         let on = ctx(SearchConfig::Unset, || KeyState::Missing);
         let refusal = |reply: &Value| reply["result"]["structuredContent"]["category"].as_str().unwrap().to_string();
         let fetch_of = |url: &str| tool_call(TOOL_FETCH, json!({"url": url}));
@@ -1048,8 +1048,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_hourly_budget_is_per_tab_and_counts_every_valid_call() {
-        let (_, web) = super::super::root_mcp::test_session(Caller::Web);
-        let (_, other) = super::super::root_mcp::test_session(Caller::Web);
+        let (_, web) = crate::services::root_mcp::test_session(Caller::Web);
+        let (_, other) = crate::services::root_mcp::test_session(Caller::Web);
         let on = ctx(SearchConfig::Unset, || KeyState::Missing);
         let call = tool_call(TOOL_SEARCH, json!({"query": "q"}));
         for _ in 0..CALLS_PER_HOUR {
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_respawn_keeps_the_tabs_hourly_budget() {
-        use super::super::root_mcp::{test_session_for_tab, web_budget_tabs, WEB_BUDGET_TABS_MAX};
+        use crate::services::root_mcp::{test_session_for_tab, web_budget_tabs, WEB_BUDGET_TABS_MAX};
         let on = ctx(SearchConfig::Unset, || KeyState::Missing);
         let call = tool_call(TOOL_SEARCH, json!({"query": "q"}));
         let tab = "p:web-respawn-budget";

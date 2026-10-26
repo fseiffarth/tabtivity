@@ -42,8 +42,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::mobile_control::{files, markup, outbox};
-use super::root_mcp::{Caller, Session};
+use crate::services::mobile_control::{files, markup, outbox};
+use crate::services::root_mcp::{Caller, Session};
 
 pub const SERVER_NAME: &str = concat!(crate::app_slug!(), "-markup");
 /// Rung (no payload) whenever an ask opens, closes or expires, and whenever
@@ -168,7 +168,7 @@ fn changed() { if let Some(hook) = CHANGE_HOOK.get() { hook(); } }
 /// token; cap the store. Whether an **open** ask went (the views change).
 fn prune(list: &mut Vec<Ask>) -> bool {
     let open_before = list.iter().filter(|a| a.state == State::Open).count();
-    list.retain(|a| a.created.elapsed() < RETENTION && super::root_mcp::session_alive(&a.session));
+    list.retain(|a| a.created.elapsed() < RETENTION && crate::services::root_mcp::session_alive(&a.session));
     while list.len() > MAX_RECORDS {
         let at = list.iter().position(|a| a.state != State::Open).unwrap_or(0);
         list.remove(at);
@@ -283,7 +283,7 @@ fn tick_store() -> &'static Mutex<Vec<Tick>> {
 /// out. Whether any went (the views change).
 fn prune_ticks(list: &mut Vec<Tick>) -> bool {
     let before = list.len();
-    list.retain(|t| t.created.elapsed() < RETENTION && super::root_mcp::session_alive(&t.session));
+    list.retain(|t| t.created.elapsed() < RETENTION && crate::services::root_mcp::session_alive(&t.session));
     if list.len() > MAX_TICKS {
         let mut held: BTreeMap<(String, String), usize> = BTreeMap::new();
         for t in list.iter() { *held.entry((t.project.clone(), t.target.clone())).or_default() += 1; }
@@ -404,7 +404,7 @@ pub struct Answered {
 }
 
 fn mint_receipt() -> String {
-    super::root_mcp::mint_token().map(|t| t[..16].to_string())
+    crate::services::root_mcp::mint_token().map(|t| t[..16].to_string())
         .unwrap_or_else(|| format!("{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()))
 }
 
@@ -527,7 +527,7 @@ pub fn answer_prompt(file: Option<&str>, lines: &[(String, String)]) -> String {
 
 /// `strip_invisible`, then whitespace collapsed: one line, no hidden text.
 pub fn clean(text: &str) -> String {
-    super::root_mcp_mail::strip_invisible(text).split_whitespace().collect::<Vec<_>>().join(" ")
+    crate::services::root_mcp_mail::strip_invisible(text).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[derive(Deserialize)]
@@ -804,7 +804,7 @@ fn call_ask(session: &Session, project: &str, target: &str, ctx: &Context, args:
             }
         }
     };
-    let id = format!("ask-{}", super::root_mcp::mint_token().map(|t| t[..16].to_string())
+    let id = format!("ask-{}", crate::services::root_mcp::mint_token().map(|t| t[..16].to_string())
         .unwrap_or_else(|| format!("{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default())));
     let mut asks = store().lock_ok();
     prune(&mut asks);
@@ -894,8 +894,8 @@ pub fn handle_message(session: &Session, message: &Value) -> Option<Value> {
 /// The local folder `projects.json` records for `project`; `None` for a
 /// remote project or one without a folder.
 pub fn project_root(project: &str) -> Option<PathBuf> {
-    if super::remote::remote_target_for(project).is_some() { return None; }
-    super::remote::project_directory(project).filter(|d| !d.is_empty()).map(PathBuf::from)
+    if crate::services::remote::remote_target_for(project).is_some() { return None; }
+    crate::services::remote::project_directory(project).filter(|d| !d.is_empty()).map(PathBuf::from)
 }
 
 /// Whether the switch is on (`Settings::markup_mcp`, absent = on). An
@@ -929,7 +929,7 @@ pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<
         "tools/call" => {
             let name = message["params"]["name"].as_str().unwrap_or_default();
             let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            if !super::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Marker)) {
+            if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Marker)) {
                 return ok(json!({"content":[{"type":"text","text":"unknown tool"}],"isError":true}));
             }
             let value = match name {
@@ -947,7 +947,7 @@ pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<
 /// no file; its id. For another module's tests (`mobile_control::host`).
 #[cfg(all(test, unix))]
 pub(crate) fn test_open_ask(tab: &str, project: &str, target: &str, questions: Value) -> String {
-    let (_, session) = super::root_mcp::test_session_bound(Caller::Marker, tab, project, target);
+    let (_, session) = crate::services::root_mcp::test_session_bound(Caller::Marker, tab, project, target);
     let msg = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":questions}}});
     let reply = handle_with(&session, &msg, &Context { enabled: true, root: &|| None }).expect("a reply");
     reply["result"]["structuredContent"]["id"].as_str().expect("an ask id").to_string()
@@ -956,7 +956,7 @@ pub(crate) fn test_open_ask(tab: &str, project: &str, target: &str, questions: V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::root_mcp::{self, test_session_bound};
+    use crate::services::root_mcp::{self, test_session_bound};
 
     fn ctx_on() -> Context<'static> { Context { enabled: true, root: &|| None } }
 
@@ -1494,14 +1494,14 @@ mod tests {
     #[test]
     fn registry_keeps_markup_to_its_own_class() {
         for name in TOOLS {
-            let policy = super::super::root_mcp_security::tool(name).unwrap();
+            let policy = crate::services::root_mcp_security::tool(name).unwrap();
             assert!(policy.serves(Caller::Marker), "{name}");
             for other in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Helper] {
                 assert!(!policy.serves(other), "{name} {other:?}");
             }
         }
         for name in root_mcp::tool_names().iter().copied().chain(super::super::help_mcp::TOOLS.iter().copied()) {
-            assert!(!super::super::root_mcp_security::tool(name).unwrap().serves(Caller::Marker), "{name}");
+            assert!(!crate::services::root_mcp_security::tool(name).unwrap().serves(Caller::Marker), "{name}");
         }
     }
 }

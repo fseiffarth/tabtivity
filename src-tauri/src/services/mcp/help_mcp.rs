@@ -26,8 +26,8 @@ use std::sync::OnceLock;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::root_mcp::{Caller, Session};
-use super::root_mcp_security as security;
+use crate::services::root_mcp::{Caller, Session};
+use crate::services::root_mcp_security as security;
 
 mod corpus {
     include!(concat!(env!("OUT_DIR"), "/help_corpus.rs"));
@@ -603,7 +603,7 @@ pub fn tools() -> Value {
         "name": name,
         "description": describe(name),
         "inputSchema": schema(name),
-        "annotations": super::root_mcp::tool_annotations(name),
+        "annotations": crate::services::root_mcp::tool_annotations(name),
     })).collect())
 }
 
@@ -852,11 +852,11 @@ mod tests {
         let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
         let call_msg = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":concat!(crate::app_slug!(), "_help_search"),"arguments":{"query":"ollama"}}});
         for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Marker] {
-            let (_, s) = super::super::root_mcp::test_session(caller);
+            let (_, s) = crate::services::root_mcp::test_session(caller);
             assert_eq!(handle_with(&s, &index, &call_msg).unwrap()["error"]["message"], "access refused", "{caller:?}");
-            super::super::root_mcp::revoke_tab(&s.identity.tab);
+            crate::services::root_mcp::revoke_tab(&s.identity.tab);
         }
-        let (_, s) = super::super::root_mcp::test_session(Caller::Helper);
+        let (_, s) = crate::services::root_mcp::test_session(Caller::Helper);
         let tools = handle_with(&s, &index, &list).unwrap();
         let names: Vec<_> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(names, TOOLS);
@@ -869,7 +869,7 @@ mod tests {
         assert_eq!(handle_with(&s, &index, &root).unwrap()["result"]["isError"], true);
         assert!(handle_with(&s, &index, &json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
         // Revocation (the tab closed) refuses the next call.
-        assert!(super::super::root_mcp::revoke_tab(&s.identity.tab));
+        assert!(crate::services::root_mcp::revoke_tab(&s.identity.tab));
         assert_eq!(handle_with(&s, &index, &call_msg).unwrap()["error"]["message"], "access refused");
     }
 
@@ -882,7 +882,7 @@ mod tests {
                 assert!(!policy.serves(other), "{name} {other:?}");
             }
         }
-        for name in super::super::root_mcp::tool_names() {
+        for name in crate::services::root_mcp::tool_names() {
             assert!(!security::tool(name).unwrap().serves(Caller::Helper), "{name}");
         }
         for name in super::super::schedule_mcp::tool_names() {
