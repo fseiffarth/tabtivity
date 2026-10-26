@@ -325,6 +325,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/pdf/PdfTextLayer.tsx` | Selectable text layer (pdf.js `TextLayer`) over rendered pages. Not a mode — always on. |
 | `embed/pdf/PdfSelectionBar.tsx` | Selection bar over selected text: 4 highlighter colours (swatch = action), highlight + remark, copy. |
 | `embed/pdf/selection.ts` | Selection as geometry: DOM Range rects → big points per page, clipped per page, merged along lines. |
+| `embed/pdf/fitScale.ts` | `pdfFitScale`: the viewer's fit zoom — width, or the whole page for a landscape slide taller than the viewport. |
 | `embed/pdf/raster.ts` | `pdfRasterRatio`: the device-pixel ratio a page canvas is painted at, capped at `PDF_MAX_CANVAS_PIXELS` (pdf.js's 2^25) so high zoom / poster pages stay bounded. |
 | `embed/pdf/scrollBox.ts` | `scrollIntoPdfBox`: the one way to scroll to a spot on a page. Never `Element.scrollIntoView` (it scrolls `overflow: hidden` ancestors too). |
 | `embed/pdf/PdfLinkDialog.tsx` | Confirm before a PDF link leaves the app: `MailMessageView`'s link confirm, full URL never truncated, no "always open". |

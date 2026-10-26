@@ -179,6 +179,7 @@ import {
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { pdfRasterRatio } from "./raster";
+import { pdfFitScale } from "./fitScale";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
 import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
 import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
@@ -4318,7 +4319,12 @@ function PdfCanvas({
     return () => { cancelled = true; };
   }, [pages, sources]);
 
-  // Fit the first page to the viewport width when a document loads.
+  // Fit the first page to the viewport when a document loads: by width, except
+  // a landscape page (a slide) taller than the viewport at that width, which is
+  // fitted whole (`pdfFitScale`). The toolbar button toggles `fitModeRef`; a
+  // load or a resize re-fit keeps whatever the reader last chose.
+  const fitModeRef = useRef<"page" | "width">("page");
+  const [fitNext, setFitNext] = useState<"page" | "width">("width");
   const fitWidth = useCallback(async (d: PDFDocumentProxy) => {
     const el = scrollRef.current;
     if (!el) return;
@@ -4326,7 +4332,11 @@ function PdfCanvas({
     const vp = page.getViewport({ scale: 1 });
     const avail = el.clientWidth - 24; // leave room for page margins
     if (avail > 0 && vp.width > 0) {
-      const nextScale = clampPdfScale(avail / vp.width);
+      const availH = el.clientHeight - 24;
+      const fit = pdfFitScale(avail, availH, vp.width, vp.height, fitModeRef.current === "page");
+      const nextScale = clampPdfScale(fit.scale);
+      // What the button offers next: the whole-page fit, only if it differs.
+      setFitNext(fit.fitsPage || !pdfFitScale(avail, availH, vp.width, vp.height, true).fitsPage ? "width" : "page");
       // Re-express the pending target BEFORE announcing that zoom is ready: the
       // restore layout effect runs before ordinary effects, so leaving this to
       // the scale effect below could apply (and clear) the old-scale offset one
@@ -4764,11 +4774,15 @@ function PdfCanvas({
         </button>
         <button
           className="file-viewer-zoom-btn file-viewer-zoom-text"
-          onClick={() => doc && void fitWidth(doc)}
+          onClick={() => {
+            if (!doc) return;
+            fitModeRef.current = fitNext;
+            void fitWidth(doc);
+          }}
           disabled={!doc}
-          title={t("pdfViewer.fitPageWidthTitle")}
+          title={t(fitNext === "page" ? "pdfViewer.fitPageTitle" : "pdfViewer.fitPageWidthTitle")}
         >
-          {t("pdfViewer.fitWidthButton")}
+          {t(fitNext === "page" ? "pdfViewer.fitPageButton" : "pdfViewer.fitWidthButton")}
         </button>
         {doc && (
           pageJumpOpen ? (

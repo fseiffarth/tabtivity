@@ -8632,6 +8632,8 @@ export const enSource = {
   "pdfViewer.fitWidthButton": "Fit width",
   "pdfViewer.goToPageLabel": "Go to page",
   "pdfViewer.goToPageTitle": "Go to page",
+  "pdfViewer.fitPageButton": "Fit page",
+  "pdfViewer.fitPageTitle": "Fit the whole page",
   "pdfViewer.findTitle": "Find",
   "pdfViewer.findLabel": "Find",
   "pdfViewer.arrangePagesTitle": "Arrange pages",

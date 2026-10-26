@@ -8308,6 +8308,8 @@ export const dict: Dict = {
   "pdfViewer.fitWidthButton": "Breite einpassen",
   "pdfViewer.goToPageLabel": "Zu Seite gehen",
   "pdfViewer.goToPageTitle": "Zu Seite gehen",
+  "pdfViewer.fitPageButton": "Seite einpassen",
+  "pdfViewer.fitPageTitle": "Ganze Seite einpassen",
   "pdfViewer.findTitle": "Suchen",
   "pdfViewer.findLabel": "Suchen",
   "pdfViewer.arrangePagesTitle": "Seiten anordnen",
