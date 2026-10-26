@@ -18,6 +18,10 @@
 //! never from code a holder calls (it is not reentrant) — the holders are the
 //! command and loop entry points, never the helpers under them.
 //!
+//! The user's own commands take it through [`acquire_manual`], which the
+//! background auto-sync pass yields to at its next safe point: a click never
+//! waits out a whole-tree walk.
+//!
 //! Its identity boundary is the state dir plus the project id: two separate
 //! installations, or two registrations of one checkout, do not coordinate and
 //! are external writers to each other.
@@ -81,6 +85,66 @@ pub async fn acquire_in(state_dir: &Path, project_id: &str) -> Result<SyncOp, St
     Ok(SyncOp { _file: file, _local: local })
 }
 
+/// The user's own sync commands waiting for a project's lock, and the signal a
+/// background pass listens for to give it up early.
+#[derive(Default)]
+struct Manual {
+    waiting: std::sync::atomic::AtomicUsize,
+    arrived: tokio::sync::Notify,
+}
+
+fn manual_for(project_id: &str) -> Arc<Manual> {
+    static MANUAL: OnceLock<std::sync::Mutex<HashMap<String, Arc<Manual>>>> = OnceLock::new();
+    let mut map = MANUAL.get_or_init(Default::default).lock_ok();
+    Arc::clone(map.entry(project_id.to_string()).or_default())
+}
+
+/// Counts one manual waiter for as long as it lives.
+struct ManualWait(Arc<Manual>);
+
+impl Drop for ManualWait {
+    fn drop(&mut self) {
+        self.0.waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// [`acquire`] for a command the user started (a pull, push, delete, checkout):
+/// while it waits, the background auto-sync pass holding the lock ends at its
+/// next safe point ([`manual_waiting`], [`manual_arrived`]) instead of making
+/// the click wait out a whole-tree walk — or, on a dropped session, forever.
+pub async fn acquire_manual(project_id: &str) -> Result<SyncOp, String> {
+    acquire_manual_in(&crate::storage::state_dir(), project_id).await
+}
+
+/// [`acquire_manual`] with its lock file under `state_dir`.
+pub async fn acquire_manual_in(state_dir: &Path, project_id: &str) -> Result<SyncOp, String> {
+    let manual = manual_for(project_id);
+    manual.waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let wait = ManualWait(manual);
+    wait.0.arrived.notify_waiters();
+    acquire_in(state_dir, project_id).await
+}
+
+/// Whether a manual command is waiting for `project_id`'s lock right now.
+pub fn manual_waiting(project_id: &str) -> bool {
+    manual_for(project_id).waiting.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
+/// Resolves once a manual command is waiting for `project_id`'s lock (at once
+/// when one already is). A background pass races its read-only work against it.
+pub async fn manual_arrived(project_id: &str) {
+    let manual = manual_for(project_id);
+    loop {
+        let arrived = manual.arrived.notified();
+        tokio::pin!(arrived);
+        arrived.as_mut().enable();
+        if manual.waiting.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return;
+        }
+        arrived.await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +190,30 @@ mod tests {
             .expect("taken once they let go")
             .unwrap()
             .unwrap();
+    }
+
+    /// A manual command waiting for the lock is announced to the holder, and
+    /// stops counting once it holds the lock itself.
+    #[tokio::test]
+    async fn a_waiting_manual_command_is_announced_to_the_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = acquire_in(dir.path(), "op-test-manual").await.unwrap();
+        assert!(!manual_waiting("op-test-manual"));
+        let announced = tokio::spawn(manual_arrived("op-test-manual"));
+        let root = dir.path().to_path_buf();
+        let waiting = tokio::spawn(async move { acquire_manual_in(&root, "op-test-manual").await.map(|_| ()) });
+        tokio::time::timeout(Duration::from_secs(5), announced)
+            .await
+            .expect("the holder hears of the waiter")
+            .unwrap();
+        assert!(manual_waiting("op-test-manual"));
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("taken once the holder lets go")
+            .unwrap()
+            .unwrap();
+        assert!(!manual_waiting("op-test-manual"));
     }
 
     /// A lock that exists but cannot be taken (its directory is a file) is an
