@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::git_push_mcp::{git, redact, tail, Category, Failure};
+use crate::services::git_push_mcp::{git, redact, tail, Category, Failure};
 
 const API: &str = "https://api.github.com";
 /// Reads per tab per rolling hour — well inside GitHub's own 5000/h.
@@ -81,7 +81,7 @@ pub fn resolve(dir: &Path) -> Result<CiRepo, Failure> {
 /// The token for api.github.com: only when github.com is one of the
 /// project's token origins (`git_hosting::token_origins`).
 fn api_token(project: &str) -> Option<String> {
-    let (token, origins) = super::git_push_mcp::creds(project);
+    let (token, origins) = crate::services::git_push_mcp::creds(project);
     token.filter(|_| origins.iter().any(|o| o == "https://github.com"))
 }
 
@@ -135,7 +135,7 @@ fn status_failure(status: reqwest::StatusCode, body: &str, have_token: bool) -> 
     match status.as_u16() {
         401 => Failure::new(Category::AuthFailed, "GitHub refused the stored token. Ask the user to check it in Settings → Git Hosting."),
         403 | 429 if lower.contains("rate limit") => Failure::new(Category::RateLimited, "GitHub's API rate limit is used up; try again later."),
-        403 | 404 if !have_token && super::git_push_mcp::keyring_free() => Failure::new(Category::NotAvailable, concat!("GitHub did not show this without a token, and this tab was started by ", crate::app_name!(), " Mobile while no window was open, which reads CI without the stored token. Ask the user to restart this tab from the ", crate::app_name!(), " window to read it with the token.")),
+        403 | 404 if !have_token && crate::services::git_push_mcp::keyring_free() => Failure::new(Category::NotAvailable, concat!("GitHub did not show this without a token, and this tab was started by ", crate::app_name!(), " Mobile while no window was open, which reads CI without the stored token. Ask the user to restart this tab from the ", crate::app_name!(), " window to read it with the token.")),
         403 | 404 if !have_token => Failure::new(Category::NotAvailable, "GitHub did not show this without a token. Ask the user to add a GitHub token in Settings → Git Hosting."),
         403 => Failure::new(Category::NotAvailable, "GitHub refused this for the stored token (its scopes may not cover it)."),
         404 => Failure::new(Category::NotFound, "GitHub has no such run, job or feature for this repository."),
@@ -225,14 +225,14 @@ pub fn log_excerpt(raw: &str, token: Option<&str>) -> String {
         _ => (lines.len().saturating_sub(150), lines.len()),
     };
     let text = lines[start..end].join("\n");
-    tail(&redact(&super::root_mcp_mail::strip_invisible(&text), token), EXCERPT_CAP)
+    tail(&redact(&crate::services::root_mcp_mail::strip_invisible(&text), token), EXCERPT_CAP)
 }
 
 /// Short, single-line, redacted text from GitHub (titles, messages).
 fn short(value: &Value, token: Option<&str>) -> Value {
     match value.as_str() {
         Some(s) => {
-            let clean: String = super::root_mcp_mail::strip_invisible(s).split_whitespace().collect::<Vec<_>>().join(" ");
+            let clean: String = crate::services::root_mcp_mail::strip_invisible(s).split_whitespace().collect::<Vec<_>>().join(" ");
             let clean = redact(&clean, token);
             Value::String(if clean.chars().count() > TEXT_CAP { format!("{}…", clean.chars().take(TEXT_CAP).collect::<String>()) } else { clean })
         }

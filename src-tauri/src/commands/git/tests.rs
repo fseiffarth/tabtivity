@@ -2055,7 +2055,7 @@ const BARE_GIT_ALLOWED: &[(&str, &str, &str)] = &[
     ("commands/git.rs", "git_command", "the hardened builder itself"),
     ("commands/git.rs", "surviving_denylisted_key", "`config --file` on one file, no repo"),
     ("commands/git.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
-    ("services/git_bounded.rs", "list_path_values", "`config --file` on one file, no repo"),
+    ("services/git/git_bounded.rs", "list_path_values", "`config --file` on one file, no repo"),
     ("commands/git.rs", "git_available_blocking", "`--version`, no repo"),
     ("commands/git.rs", "git_clone_blocking", "network clone into a new empty dir"),
     ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),

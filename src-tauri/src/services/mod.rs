@@ -1,3 +1,5 @@
+pub mod git;
+pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_init, git_peer, git_release};
 pub mod mail;
 pub use mail::{mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine, mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store, mail_thunderbird};
 pub mod agent_prompts;
@@ -29,8 +31,6 @@ pub mod schedule_mcp;
 // Agent-requested pushes: the `/mcp/git` lane, its policy, the fenced
 // tokenless preflight and the hooks-off host transport.
 pub mod git_push_mcp;
-pub mod git_release;
-pub mod git_ci;
 pub mod help_mcp;
 // The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
 pub mod web_lane;
@@ -129,16 +129,6 @@ pub mod codex_bind;
 // no longer write the JSONL rollout the model tag used to come from.
 pub mod codex_store;
 pub mod copilot;
-pub mod git_credentials;
-// The `.git` control files a sandbox keeps its occupant from writing (#158);
-// back in this crate since #2347 gave it `home_io`.
-pub mod git_guard;
-// Bounded local git runs: FIFO pre-check + timeout that reaps the subtree (#2349).
-pub mod git_bounded;
-// The default branch (`main`) for repositories Tabtivity creates, and the
-// unpublished-`master` rename that runs just before a publish.
-pub mod git_init;
-pub mod git_peer;
 // Directory-handle-relative I/O inside agent-writable homes: what every
 // unfenced write into a scope home goes through.
 pub mod home_io;

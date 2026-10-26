@@ -22,7 +22,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::git_ci::{self, TipCi};
-use super::git_push_mcp::{
+use crate::services::git_push_mcp::{
     classify_remote_error, clean_output, git, join_streams, lane_opts, lane_text, ls_remote_raw, repo_rewrites_urls, validate_sha,
     Category, Failure, TRANSPORT_TIMEOUT,
 };
@@ -268,7 +268,7 @@ pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, token: Option<&str
     // unpushed commit between this check and the transport.
     let result = pinned_tag_refspec(dir, plan).and_then(|refspec| {
         let mut cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
-        super::git_push_mcp::before_transport();
+        crate::services::git_push_mcp::before_transport();
         match crate::services::git_bounded::run(&mut cmd, lane_opts(None, TRANSPORT_TIMEOUT)) {
             Err(RunError::TimedOut(_)) => Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
             Err(e) => Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
@@ -403,7 +403,7 @@ mod tests {
         // tag was created and checked, right before the transport.
         let w = work.clone();
         let other = unpushed.clone();
-        super::super::git_push_mcp::BEFORE_TRANSPORT.with(|slot| *slot.borrow_mut() = Some(Box::new(move || {
+        crate::services::git_push_mcp::BEFORE_TRANSPORT.with(|slot| *slot.borrow_mut() = Some(Box::new(move || {
             sh(&w, &["tag", "-f", "-a", "v0.1.86", "-m", "moved", &other]);
         })));
         release(&work, &plan, "", None, &[]).unwrap();
