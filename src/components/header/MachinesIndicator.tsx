@@ -23,7 +23,7 @@ import { isCarefulHost } from "../../lib/remote/carefulHost";
 import { sameTarget } from "../../lib/remote/machineSync";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import type { ConnState } from "../../stores/remote/remoteStatus";
 import type { GlobalMachine, MachineImportEntry, ProjectEntry } from "../../types";
@@ -412,10 +412,10 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     window.clearTimeout(closeTimer.current);
     openMenu(MENU_ID);
   }, [openMenu]);
-  const scheduleClose = useCallback(() => {
+  const scheduleClose = useCallback((e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
     if (keepOpenRef.current || reorderDragRef.current) return;
-    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);
+    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   }, [closeMenu]);
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);

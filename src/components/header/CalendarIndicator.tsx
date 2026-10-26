@@ -13,7 +13,7 @@ import { useUse24h } from "../../lib/timeFormat";
 import { conferenceLink } from "../../lib/calendar/conference";
 import { joinConference } from "../../lib/linkTarget";
 import { useT } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { CalendarGlyph } from "./HeaderGlyphs";
 import { mutedCalendarIds } from "../../lib/calendar/alarms";
 import { VideoIcon } from "../common/icons/Icon";
@@ -163,9 +163,9 @@ export function CalendarIndicator() {
     window.clearTimeout(closeTimer.current);
     setMenuOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setMenuOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setMenuOpen(false), headerMenuCloseDelay(e));
   };
 
   return (

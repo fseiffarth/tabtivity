@@ -16,7 +16,7 @@ import {
 import { formatTime, timePart } from "../../lib/calendar/calendarTime";
 import { useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { TodoGlyph } from "./HeaderGlyphs";
 
 const MENU_ID = "todo";
@@ -143,9 +143,9 @@ export function TodoIndicator() {
     window.clearTimeout(closeTimer.current);
     setMenuOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setMenuOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setMenuOpen(false), headerMenuCloseDelay(e));
   };
 
   /**

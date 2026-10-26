@@ -11,7 +11,7 @@ import {
 import { useOllamaStatus } from "../../lib/ollamaStatus";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { ModelsGlyph } from "../header/HeaderGlyphs";
 import { LOCAL_MODEL_MENU_ID, useAutoloadNotice, useModelsHub } from "../models/useModelsHub";
@@ -197,12 +197,12 @@ export function LocalModelMenu() {
     [],
   );
 
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => {
       setOpen(false);
       closeTimer.current = null;
-    }, 250);
+    }, headerMenuCloseDelay(e));
   };
 
   // When exactly one model is resident in memory, make it the model for
@@ -281,9 +281,9 @@ export function LocalModelMenu() {
         pointerInRef.current = true;
         reveal();
       }}
-      onMouseLeave={() => {
+      onMouseLeave={(e) => {
         pointerInRef.current = false;
-        scheduleClose();
+        scheduleClose(e);
       }}
       // Focus leaving the button and its list (Tab onward, a click elsewhere)
       // closes a keyboard-opened dropdown, as `useHeaderMenu`'s menus do. Not

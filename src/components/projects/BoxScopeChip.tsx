@@ -6,7 +6,7 @@ import { ROOT_SCOPE } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxEditorStore } from "../../stores/boxEditor";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
@@ -115,9 +115,9 @@ export function BoxScopeChip({
     window.clearTimeout(closeTimer.current);
     openMenu(SCOPE_MENU_ID);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => closeMenu(SCOPE_MENU_ID), 250);
+    closeTimer.current = window.setTimeout(() => closeMenu(SCOPE_MENU_ID), headerMenuCloseDelay(e));
   };
   const dismiss = () => {
     window.clearTimeout(closeTimer.current);
@@ -452,7 +452,7 @@ export function BoxScopeChip({
             className="box-chip-menu"
             style={{ left: pos.x, top: pos.y }}
             // The list is portaled to <body>, so the pointer travelling down
-            // into it has LEFT the chip: without these the 250 ms grace would
+            // into it has LEFT the chip: without these the close timer would
             // fold it away under the cursor. It opens flush under the chip, so
             // there is no gap to cross.
             onMouseEnter={reveal}

@@ -21,7 +21,7 @@ import {
 import { keyringState, unlockKeyring, type KeyringState } from "../../lib/keyring";
 import type { StoredVpnConfig } from "../../types";
 import { useT } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { ErrorNote } from "../common/ErrorNote";
 import { VpnGlyph } from "./HeaderGlyphs";
@@ -232,9 +232,9 @@ export function VpnIndicator() {
     window.clearTimeout(closeTimer.current);
     setOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setOpen(false), headerMenuCloseDelay(e));
   };
 
   /**

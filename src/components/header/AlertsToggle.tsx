@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useT } from "../../lib/i18n";
 import { BellIcon } from "../common/BellIcon";
 import { useAlertsFeed } from "../files/useAlertsFeed";
@@ -99,10 +99,10 @@ export function AlertsToggle() {
     window.clearTimeout(closeTimer.current);
     setMenuOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     if (pinned) return;
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setMenuOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setMenuOpen(false), headerMenuCloseDelay(e));
   };
 
   return (
