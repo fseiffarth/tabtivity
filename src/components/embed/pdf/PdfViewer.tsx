@@ -2732,6 +2732,15 @@ function PdfCanvas({
   // canvases re-render asynchronously, so the content grows over several frames;
   // the ResizeObserver below re-applies this until the position is reachable.
   const restoreScroll = useRef<{ top: number; left: number } | null>(null);
+  // Where the reader last was while the pane was on screen (every settled scroll
+  // event). A same-path reload landing while the pane is hidden restores to this:
+  // a `display:none` scroller reads scrollTop/scrollLeft 0 in WebKitGTK (measured;
+  // the offset itself survives and comes back on show), so capturing it then — a
+  // TeX build finishing while its PDF sits behind the .tex or in a parked popout —
+  // sent the reader to the top on show and persisted that.
+  const lastScroll = useRef<{ top: number; left: number } | null>(null);
+  const paneVisibleRef = useRef(paneVisible);
+  paneVisibleRef.current = paneVisible;
   // True when the document about to load is a same-path reload (a recompile
   // rewrote this PDF). The fit effect reads it to keep the reader's current zoom
   // instead of snapping back to fit-width. Set at load-start so it reflects the
@@ -4033,9 +4042,14 @@ function PdfCanvas({
           // on a disk-change reload arriving mid-restore, and was "the PDF forgot
           // where I was" on every dev restart. Once the pending restore has been
           // applied and cleared, a genuine same-path reload (a recompile) falls
-          // through to capturing where the reader actually is.
+          // through to capturing where the reader actually is — read off the
+          // scroller only while it is on screen (`lastScroll`).
           (restoreScroll.current ??
-            (el ? { top: el.scrollTop, left: el.scrollLeft } : null))
+            (el
+              ? paneVisibleRef.current
+                ? { top: el.scrollTop, left: el.scrollLeft }
+                : lastScroll.current
+              : null))
         : null);
     reloadKeepZoom.current = samePathReload;
     loadedPath.current = path;
@@ -4576,6 +4590,7 @@ function PdfCanvas({
     reportScrollSync();
     const top = el.scrollTop;
     const left = el.scrollLeft;
+    lastScroll.current = { top, left };
     if (scrollPersistTimer.current != null) window.clearTimeout(scrollPersistTimer.current);
     scrollPersistTimer.current = window.setTimeout(
       () => viewPos.persist({ scrollTop: top, scrollLeft: left }),
