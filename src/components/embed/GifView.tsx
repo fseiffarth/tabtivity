@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ViewerHeader,
-  useViewerState,
   useNonPassiveWheel,
   zoomOffset,
   clampScale,
@@ -9,6 +8,7 @@ import {
   MAX_SCALE,
   ZOOM_STEP,
 } from "./FileViewerPane";
+import { useViewerState } from "./fileViewer/viewerState";
 import { useFileScope, usePaneVisible, readFileBytes } from "../../lib/files/fileAccess";
 import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { openGif, effectiveDelayMs } from "../../lib/viewers/gif";

@@ -50,7 +50,8 @@ import {
   usePaneVisible,
   writeFileBytes,
 } from "../../../lib/files/fileAccess";
-import { openLinkedFile, useViewerState } from "../FileViewerPane";
+import { openLinkedFile } from "../fileViewer/openLinked";
+import { useViewerState } from "../fileViewer/viewerState";
 import { useProjectsStore } from "../../../stores/projects";
 import {
   type Deck,

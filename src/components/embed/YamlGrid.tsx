@@ -7,7 +7,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useViewerState } from "./FileViewerPane";
+import { useViewerState } from "./fileViewer/viewerState";
 import { UntestedTag } from "../common/UntestedTag";
 import {
   addChild,

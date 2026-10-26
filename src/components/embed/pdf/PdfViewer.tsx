@@ -32,7 +32,9 @@ import {
 import { useExperimental } from "../../../lib/experimental";
 import { emptyDeck } from "../../../lib/viewers/deck/model";
 import { deckPathForPdf, serializeDeck } from "../../../lib/viewers/deck/sidecar";
-import { jumpToSource, SaveButton, useViewerState } from "../FileViewerPane";
+import { jumpToSource } from "../fileViewer/sourceJump";
+import { SaveButton } from "../FileViewerPane";
+import { useViewerState } from "../fileViewer/viewerState";
 import { canRecompileTexSource, recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import { isServerClient } from "../../../lib/transport/linkState";
 import {
@@ -1930,7 +1932,7 @@ function PdfCanvas({
       // after both modules have initialised, so deferring it costs nothing and
       // keeps the dependency one-way on paper — the same reason
       // `openProjectFilesTab` lives beside its tab rather than in the view.
-      const { openLinkedFile } = await import("../FileViewerPane");
+      const { openLinkedFile } = await import("../fileViewer/openLinked");
       openLinkedFile(tabKey, dirname(path) || "/", {
         path: deckPath,
         viewer: "eldeck",

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fileMtime } from "../../lib/files/fileAccess";
-import { jumpToSource } from "../embed/FileViewerPane";
+import { jumpToSource } from "../embed/fileViewer/sourceJump";
 import { resolvePath } from "../../lib/paths";
 import { REMARKS_FILE, resolveRemarkAbsPath, type ProjectRemark } from "../../lib/projects/projectRemarks";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";

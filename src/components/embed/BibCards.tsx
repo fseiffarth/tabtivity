@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useViewerState } from "./FileViewerPane";
+import { useViewerState } from "./fileViewer/viewerState";
 import { UntestedTag } from "../common/UntestedTag";
 import {
   BIB_ENTRY_TYPES,

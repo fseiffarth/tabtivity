@@ -102,7 +102,7 @@ import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
 import { listenTexCenter } from "../../stores/viewers/texCenter";
-import { listenSourceJump } from "../embed/FileViewerPane";
+import { listenSourceJump } from "../embed/fileViewer/sourceJump";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { listenSettingsChanged, useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../stores/tabs";

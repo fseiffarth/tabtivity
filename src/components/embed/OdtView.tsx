@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { ViewerHeader, useViewerState } from "./FileViewerPane";
+import { ViewerHeader } from "./FileViewerPane";
+import { useViewerState } from "./fileViewer/viewerState";
 import { useFileScope, readFileBytes } from "../../lib/files/fileAccess";
 import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { extractOdt, renderOdtDocument } from "../../lib/viewers/odt";

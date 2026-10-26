@@ -17,7 +17,7 @@ import {
   type GroupNode,
   type SplitNode,
 } from "../../stores/tabs";
-import { openLinkedFile } from "../../components/embed/FileViewerPane";
+import { openLinkedFile } from "../../components/embed/fileViewer/openLinked";
 
 beforeEach(() => {
   useLinkRoutingStore.setState({ routes: {} });

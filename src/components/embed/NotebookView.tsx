@@ -1,10 +1,7 @@
 import { useMemo } from "react";
-import {
-  ViewerHeader,
-  useViewerState,
-  useReadonlyFile,
-  openMarkdownTarget,
-} from "./FileViewerPane";
+import { ViewerHeader, useReadonlyFile } from "./FileViewerPane";
+import { useViewerState } from "./fileViewer/viewerState";
+import { openMarkdownTarget } from "./fileViewer/openLinked";
 import { escapeHtml } from "../../lib/textSafety";
 import { renderMarkdown } from "../../lib/viewers/markdown";
 import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";

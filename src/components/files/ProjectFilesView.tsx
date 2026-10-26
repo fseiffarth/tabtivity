@@ -30,7 +30,7 @@ import {
   type SyncSkippedFile,
 } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
-import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
+import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { useWindowsStore } from "../../stores/windows";
 import { rowStaysVisible, useWorkspaceCaps } from "../../lib/workspaceCaps";
 import { IS_LINUX } from "../../lib/platform";

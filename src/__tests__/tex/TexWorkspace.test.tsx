@@ -389,7 +389,7 @@ describe("TeX workspace — center switching + SyncTeX", () => {
     // A standalone PDF tab's reverse-click calls the module `jumpToSource`; for a
     // `.tex` source owned by an open workspace it focuses that workspace and
     // switches its center to the source instead of opening a scattered tab.
-    const { jumpToSource } = await import("../../components/embed/FileViewerPane");
+    const { jumpToSource } = await import("../../components/embed/fileViewer/sourceJump");
     await act(async () => {
       jumpToSource(CHILD, 2, 1, MAIN);
     });
@@ -659,7 +659,8 @@ describe("TeX workspace — center switching + SyncTeX", () => {
     const { useTabsStore } = await import("../../stores/tabs");
     useTabsStore.getState().setScope("p");
     // Deliberately no addTab — the popout's empty store (see (f)).
-    const { FileViewerPane, jumpToSource } = await import("../../components/embed/FileViewerPane");
+    const { FileViewerPane } = await import("../../components/embed/FileViewerPane");
+    const { jumpToSource } = await import("../../components/embed/fileViewer/sourceJump");
     await act(async () => {
       render(
         <FileViewerPane viewer="texworkspace" path={MAIN} projectId="p" tabKey="detached-tex" visible />,
@@ -716,7 +717,7 @@ describe("TeX workspace — center switching + SyncTeX", () => {
     vi.mocked(emit).mockClear();
 
     // Nothing is rendered here, so the registry misses and the escalation runs.
-    const { jumpToSource } = await import("../../components/embed/FileViewerPane");
+    const { jumpToSource } = await import("../../components/embed/fileViewer/sourceJump");
     await act(async () => {
       jumpToSource(CHILD, 2, 1, MAIN);
     });

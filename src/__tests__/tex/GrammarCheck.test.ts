@@ -9,7 +9,7 @@ import {
   resolveGrammarRanges,
   decorateGrammarRanges,
   type GrammarRange,
-} from "../../components/embed/FileViewerPane";
+} from "../../components/embed/fileViewer/decorations";
 import type { GrammarIssue } from "../../types";
 
 const issue = (over: Partial<GrammarIssue>): GrammarIssue => ({

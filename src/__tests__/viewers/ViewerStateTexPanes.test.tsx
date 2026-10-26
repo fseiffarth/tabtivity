@@ -24,7 +24,7 @@ vi.mock("../../stores/settings", () => {
   };
 });
 
-import { useViewerState } from "../../components/embed/FileViewerPane";
+import { useViewerState } from "../../components/embed/fileViewer/viewerState";
 import {
   TEX_PANES_CAP,
   flushViewerState,

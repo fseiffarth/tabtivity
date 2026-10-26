@@ -9,7 +9,7 @@ import {
   findMatchingBracket,
   decorateBracketMatch,
   decorateUnclosedBrackets,
-} from "../../components/embed/FileViewerPane";
+} from "../../components/embed/fileViewer/decorations";
 
 /** A single-character range at `i`, for terser expectations below. */
 function at(i: number) {

@@ -11,7 +11,7 @@ import {
   editSpan,
   remapChangeRange,
   decorateChangeRanges,
-} from "../../components/embed/FileViewerPane";
+} from "../../components/embed/fileViewer/decorations";
 
 describe("diffRange", () => {
   it("returns null when the text is unchanged", () => {

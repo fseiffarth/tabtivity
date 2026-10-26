@@ -2,12 +2,12 @@ import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ViewerHeader,
-  useViewerState,
   useEditableFile,
   SaveButton,
   UndoRedoButtons,
   ExternalChangeBanner,
 } from "./FileViewerPane";
+import { useViewerState } from "./fileViewer/viewerState";
 import { Dropdown } from "../common/Dropdown";
 import {
   parseTable,

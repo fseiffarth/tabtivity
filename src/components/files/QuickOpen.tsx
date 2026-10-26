@@ -17,7 +17,7 @@ import { resolveProjectDirectory } from "../../types";
 import { fuzzyMatch, fuzzyRank } from "../../lib/fuzzy";
 import { basename, resolvePath } from "../../lib/paths";
 import { IS_MAC } from "../../lib/platform";
-import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
+import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";
 import { useT } from "../../lib/i18n";
 import "./QuickOpen.css";
