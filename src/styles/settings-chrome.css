@@ -1611,6 +1611,10 @@ label.settings-toggle-card-row {
   /* Clips the first/last row's corners against the frame's radius. Rows never
      scroll inside the frame, so no scrollbar ever meets the rounded edge. */
   overflow: hidden;
+  /* A flex item of the dialog's scroll column, and `overflow: hidden` drops its
+     automatic min-height to 0: a long panel (Keyboard Shortcuts) shrank every
+     list to its border instead of scrolling. */
+  flex: none;
 }
 
 .settings-list.boxed > * {
