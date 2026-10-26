@@ -80,6 +80,17 @@ const HOOK_WORK_SILENCE_MS = 20_000;
 const DECISION_QUIET_MS = 600;
 const DONE_QUIET_MS = 2500;
 
+/// The quiet a tab under a hook "working" verdict needs before its screen is
+/// read for a question (Codex's approval menu, Claude's AskUserQuestion). A
+/// working agent paints all the time (Claude's spinner ~9 frames a second), but
+/// a hidden pane's output arrives as digests every 500 ms (`ACTIVITY_INTERVAL`
+/// in `terminal/mod.rs`), and one landing 100 ms late was enough for the 600 ms
+/// window: the tab lit as a question and lost its working ring until the next
+/// digest, over and over while it worked — its screen, a conversation full of
+/// numbered lists, reads as a menu easily. Past `TEXT_GAP_MS`, so the output
+/// that ends such a pause starts a fresh tail rather than re-matching this one.
+const VERDICT_DECISION_QUIET_MS = 2000;
+
 /// How much of an agent's output tail is kept to classify it by — enough to hold
 /// the last screenful of a TUI redraw, small enough to be free.
 const TAIL_CAP = 8000;
@@ -220,6 +231,7 @@ function nextWindowEnd(
   if (onset !== undefined) consider(onset + WORK_ONSET_MS);
   if (quietFrom !== undefined) {
     consider(quietFrom + DECISION_QUIET_MS);
+    consider(quietFrom + VERDICT_DECISION_QUIET_MS);
     consider(quietFrom + DONE_QUIET_MS);
   }
   if (turn?.state === "working" && !turn.job) {
@@ -928,11 +940,14 @@ function attentionFor(
   // Nor while the agent's hooks have the floor (`awaitingHookByPty`): it is at
   // its composer or running what the user just approved, and the screen then
   // holds its conversation, which reads as a menu far too easily.
+  // Under a "working" verdict the screen waits out a longer quiet: a working
+  // agent never pauses that long, a hidden pane's digests can (see
+  // `VERDICT_DECISION_QUIET_MS`).
   if (turn?.state === "decision") return "decision";
   if (
     turn?.state !== "done" &&
     awaitingHookByPty[ptyId] === undefined &&
-    quiet >= DECISION_QUIET_MS &&
+    quiet >= (turn?.state === "working" ? VERDICT_DECISION_QUIET_MS : DECISION_QUIET_MS) &&
     tailLooksLikeDecision(ptyId)
   ) {
     return "decision";

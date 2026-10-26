@@ -189,11 +189,32 @@ describe("activity store — hook verdicts", () => {
       PTY,
       "Would you like to run the following command?\r\n› 1. Yes, just this once\r\n  2. No, and tell Codex what to do\r\n",
     );
-    vi.advanceTimersByTime(700); // past DECISION_QUIET_MS
+    vi.advanceTimersByTime(700); // past DECISION_QUIET_MS, not the verdict's
+    state().recompute();
+    expect(attention()).toBeUndefined();
+    expect(busy()).toBe(true);
+    vi.advanceTimersByTime(1400); // past VERDICT_DECISION_QUIET_MS
     state().recompute();
     expect(attention()).toBe("decision");
     expect(busy()).toBe(false);
     expect(state().statusTabsByScope["proj-a"]).toEqual([{ key: "agent-1", state: "needs-decision" }]);
+  });
+
+  it("keeps a working Claude in a hidden pane working when a digest lands late", () => {
+    // A hidden pane's output arrives as 500 ms digests. Claude 2.1.310 repaints
+    // its full screen — a reply's numbered list included — and one digest came
+    // 150 ms late: that read as a question and dropped the working ring.
+    noteAgentTurn(PTY, "working");
+    const frame =
+      "● Two ways to go:\r\n  1. Run the gates now\r\n  2. Skip them for the docs change\r\n" +
+      "✢ Orchestrating… (running PostToolUse hook · 7s · ↓ 307 tokens)\r\n❯ ";
+    for (const gap of [500, 500, 650, 500, 500, 1100, 500]) {
+      vi.advanceTimersByTime(gap);
+      state().recompute();
+      expect(attention()).toBeUndefined();
+      expect(busy()).toBe(true);
+      notePtyOutput(PTY, frame);
+    }
   });
 
   it("reads no question into a finished turn whose reply quotes a menu", () => {
@@ -396,7 +417,7 @@ describe("activity store — hook verdicts", () => {
     noteAgentSessionStart(PTY, "startup");
     noteAgentTurn(PTY, "working");
     notePtyOutput(PTY, "Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n");
-    vi.advanceTimersByTime(700);
+    vi.advanceTimersByTime(2100); // past VERDICT_DECISION_QUIET_MS
     state().recompute();
     expect(attention()).toBe("decision");
   });
