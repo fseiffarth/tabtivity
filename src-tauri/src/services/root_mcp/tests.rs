@@ -1159,7 +1159,7 @@ fn a_series_expands_and_free_busy_finds_the_gaps() {
 #[test]
 fn a_read_shows_fields_not_the_stored_row() {
     let f = Fixture::new();
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     data.calendars.push(crate::schema::calendar::Calendar {
         rev: 0,
         id: "feed".into(), name: "Feed".into(), color: "#4aa3df".into(), visible: true, readonly: true,
@@ -1194,7 +1194,7 @@ fn a_read_shows_fields_not_the_stored_row() {
 #[test]
 fn a_calendar_imported_from_a_file_reads_as_external() {
     let f = Fixture::new();
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     data.calendars.push(crate::schema::calendar::Calendar {
         rev: 0,
         id: "file".into(), name: "Conf".into(), color: "#8d8fd6".into(), visible: true, readonly: false,
@@ -1226,14 +1226,14 @@ fn a_calendar_imported_from_a_file_reads_as_external() {
 fn mail_derived_rows_read_as_external() {
     use crate::schema::calendar::{TaskEventLink, TaskMailLink};
     let f = Fixture::new();
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     data.calendars.push(crate::schema::calendar::Calendar {
         rev: 0,
         id: "feed".into(), name: "Feed".into(), color: "#4aa3df".into(), visible: true, readonly: true,
         extra: HashMap::new(),
     });
     let stamp = HashMap::from([(
-        crate::commands::calendar::FROM_MAIL_KEY.to_string(),
+        crate::services::calendar_store::FROM_MAIL_KEY.to_string(),
         json!({ "message_id": "INBOX-7", "account_id": "a1" }),
     )]);
     data.events.push(CalendarEvent {
@@ -1297,10 +1297,10 @@ fn mail_derived_rows_read_as_external() {
     assert_eq!(text(&r)["external"], true);
     let (r, _) = f.call("todo_move", json!({ "id": "from-event", "column": "doing" }));
     assert_eq!(text(&r)["external"], true, "{r}");
-    let stored = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let stored = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     let stored = stored.events.iter().find(|e| e.id == "mail").unwrap();
     assert_eq!(stored.location, "Room 2");
-    assert!(stored.extra.contains_key(crate::commands::calendar::FROM_MAIL_KEY));
+    assert!(stored.extra.contains_key(crate::services::calendar_store::FROM_MAIL_KEY));
 }
 
 #[test]
@@ -1628,7 +1628,7 @@ fn moving_a_synced_card_deletes_the_server_copy_first() {
     let f = Fixture::new();
     f.call("calendar_create", json!({ "name": "Work" }));
     let id = add_card(&f, "Synced");
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     let task = data.tasks.iter_mut().find(|t| t.id == id).unwrap();
     task.extra.insert("caldav_href".into(), json!("/cal/personal/t.ics"));
     task.extra.insert("caldav_etag".into(), json!("\"e1\""));
@@ -1818,7 +1818,7 @@ fn an_edit_is_refused_where_it_could_not_be_pushed() {
     }
 
     // A calendar Tabtivity may show but not write back to.
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     data.calendars.push(crate::schema::calendar::Calendar {
         id: "sub".into(),
         name: "Subscribed".into(),
@@ -1868,7 +1868,7 @@ fn a_calendar_is_created_once_per_name_in_the_palette() {
 
 /// Give an event the address a CalDAV sync would have left on it.
 fn mark_synced(f: &Fixture, id: &str, href: &str) {
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     let event = data.events.iter_mut().find(|e| e.id == id).unwrap();
     event.extra.insert("caldav_href".into(), json!(href));
     event.extra.insert("caldav_etag".into(), json!("\"e1\""));
@@ -1933,7 +1933,7 @@ fn a_move_is_all_or_nothing_and_refused_where_it_could_not_be_pushed() {
     assert_eq!(text(&listed)["events"][0]["calendar_id"], "default", "the good id did not move either");
 
     // Neither into nor out of a calendar Tabtivity may not write back to.
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     data.calendars.push(crate::schema::calendar::Calendar {
         id: "sub".into(),
         name: "Subscribed".into(),
@@ -1943,7 +1943,7 @@ fn a_move_is_all_or_nothing_and_refused_where_it_could_not_be_pushed() {
     std::fs::write(&f.calendar, serde_json::to_string(&data).unwrap()).unwrap();
     let (r, _) = f.call("calendar_move_events", json!({ "ids": [a], "to": "Subscribed" }));
     assert!(r["content"][0]["text"].as_str().unwrap().contains("read-only"));
-    let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let mut data = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     data.events[0].calendar_id = "sub".into();
     std::fs::write(&f.calendar, serde_json::to_string(&data).unwrap()).unwrap();
     let (r, changes) = f.call("calendar_move_events", json!({ "ids": [a], "to": "Work" }));
@@ -1970,7 +1970,7 @@ fn moving_a_synced_event_deletes_the_server_copy_first() {
     assert_ne!(upsert.row["calendar_id"], "default");
     assert!(upsert.row.get("caldav_href").is_none(), "{}", upsert.row);
     assert!(upsert.row.get("caldav_etag").is_none());
-    let stored = crate::commands::calendar::read_data(&f.calendar).unwrap();
+    let stored = crate::services::calendar_store::read_data(&f.calendar).unwrap();
     assert!(!stored.events[0].extra.contains_key("caldav_href"), "and on disk");
 
     // `calendar_update_event`'s `calendar` is the same move.

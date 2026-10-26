@@ -1028,7 +1028,7 @@ async fn writes_with_side_effects_are_the_owners_with_no_window() {
     assert_eq!(month["desktop_available"], false);
     assert_eq!(month["calendar"]["events"][0]["title"], "Defense");
     let event_id = month["calendar"]["events"][0]["id"].as_str().expect("event id").to_string();
-    let data = crate::commands::calendar::read_data(&state_dir.join("calendar.json")).expect("calendar");
+    let data = crate::services::calendar_store::read_data(&state_dir.join("calendar.json")).expect("calendar");
     assert_eq!(data.events.len(), 1);
     assert!(!body.contains(&data.events[0].id), "raw event id leaked: {body}");
     let (status, _, body) = host
@@ -2589,7 +2589,7 @@ async fn persisted_state_is_answered_off_the_files_with_no_window() {
     )
     .expect("prompts fixture");
     let calendar = state_dir.join("calendar.json");
-    let task = crate::commands::calendar::create_task_at(
+    let task = crate::services::calendar_store::create_task_at(
         &calendar,
         crate::schema::calendar::CalendarTask {
             title: "Ship it".into(),
@@ -2598,7 +2598,7 @@ async fn persisted_state_is_answered_off_the_files_with_no_window() {
         },
     )
     .expect("task");
-    let event = crate::commands::calendar::create_event_at(
+    let event = crate::services::calendar_store::create_event_at(
         &calendar,
         crate::schema::calendar::CalendarEvent {
             title: "Defense".into(),
@@ -2689,7 +2689,7 @@ async fn persisted_state_is_answered_off_the_files_with_no_window() {
     assert_eq!(status, StatusCode::OK, "answered: {body}");
     assert_eq!(json(&body)["desktop_available"], false);
     assert_eq!(
-        crate::commands::calendar::read_data(&calendar).expect("calendar").tasks.len(),
+        crate::services::calendar_store::read_data(&calendar).expect("calendar").tasks.len(),
         2,
         "the card was written"
     );

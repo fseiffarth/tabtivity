@@ -1891,7 +1891,7 @@ fn redact_value(v: &mut Value) {
 
 fn has_server_copy(extra: &HashMap<String, Value>) -> bool {
     extra
-        .get(crate::commands::calendar::CALDAV_HREF_KEY)
+        .get(crate::services::calendar_store::CALDAV_HREF_KEY)
         .and_then(Value::as_str)
         .is_some_and(|h| !h.trim().is_empty())
 }
@@ -1911,7 +1911,7 @@ fn foreign_calendar(data: &crate::schema::calendar::CalendarData, calendar_id: &
 /// The event was made from a mail (the mail pane's AI extract stamps
 /// `from_mail`): its title is a sender's words, whoever's calendar it sits in.
 fn event_from_mail(event: &CalendarEvent) -> bool {
-    event.extra.get(crate::commands::calendar::FROM_MAIL_KEY).is_some_and(|v| !v.is_null())
+    event.extra.get(crate::services::calendar_store::FROM_MAIL_KEY).is_some_and(|v| !v.is_null())
 }
 
 /// An event whose text is not the user's own: in a foreign calendar, or made
@@ -2078,7 +2078,7 @@ fn calendar_list(stores: &Stores, args: &Value) -> Result<Value, String> {
     }
     let expand = args.get("expand").and_then(Value::as_bool).unwrap_or(false);
     let window = if expand { Some(bounded_window(from, to, "`expand`")?) } else { None };
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     // Stamps sort lexicographically, and a date is a prefix of its own day's
     // stamps, so plain string comparison is the range test. An event is in the
     // range while any of it is: one that began before `from` and is still
@@ -2140,7 +2140,7 @@ fn calendar_free_busy(stores: &Stores, args: &Value) -> Result<Value, String> {
         return Err("`day_end` must be after `day_start`".into());
     }
     let min_minutes = args.get("min_minutes").and_then(Value::as_i64).unwrap_or(30);
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let only = match str_arg(args, "calendar") {
         Some(wanted) => Some(
             data.calendars
@@ -2328,7 +2328,7 @@ fn calendar_add_event(stores: &Stores, args: &Value) -> Result<(Value, Change), 
         (start, end)
     };
 
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let calendar_id = resolve_calendar(&data, str_arg(args, "calendar"))?;
     let event = CalendarEvent {
         calendar_id,
@@ -2342,7 +2342,7 @@ fn calendar_add_event(stores: &Stores, args: &Value) -> Result<(Value, Change), 
         alarms: parse_reminders(&args["reminders"]),
         ..Default::default()
     };
-    let created = crate::commands::calendar::create_event_at(stores.calendar, event)?;
+    let created = crate::services::calendar_store::create_event_at(stores.calendar, event)?;
     let row = serde_json::to_value(&created).map_err(|e| e.to_string())?;
     Ok((event_view(&created, &data), Change { kind: "event", op: "upsert", row, local: false }))
 }
@@ -2433,7 +2433,7 @@ fn updated_span(event: &CalendarEvent, args: &Value) -> Result<(String, String, 
 
 fn calendar_update_event(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), String> {
     let id = str_arg(args, "id").ok_or("`id` is required")?;
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let mut event = data
         .events
         .iter()
@@ -2468,7 +2468,7 @@ fn calendar_update_event(stores: &Stores, args: &Value) -> Result<(Value, Vec<Ch
         }
         let to = resolve_calendar(&data, Some(calendar))?;
         if to != event.calendar_id {
-            crate::commands::calendar::relocate_event(&data, &mut event, &to)?;
+            crate::services::calendar_store::relocate_event(&data, &mut event, &to)?;
         }
     }
     // A rule this tool cannot express (a numbered weekday, an imported RRULE) is
@@ -2491,7 +2491,7 @@ fn calendar_update_event(stores: &Stores, args: &Value) -> Result<(Value, Vec<Ch
     event.end = end;
     event.all_day = all_day;
     let moved = before.calendar_id != event.calendar_id;
-    let updated = crate::commands::calendar::update_event_at(stores.calendar, event)?;
+    let updated = crate::services::calendar_store::update_event_at(stores.calendar, event)?;
     let row = serde_json::to_value(&updated).map_err(|e| e.to_string())?;
     let mut changes = Vec::new();
     if moved {
@@ -2540,7 +2540,7 @@ const CALENDAR_COLORS: [&str; 8] = [
 
 fn calendar_create(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
     let name = str_arg(args, "name").ok_or("`name` is required")?;
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     // Every calendar tool takes "id or name", and a name held twice would make
     // the second calendar unreachable by it.
     if data.calendars.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
@@ -2560,7 +2560,7 @@ fn calendar_create(stores: &Stores, args: &Value) -> Result<(Value, Change), Str
         readonly: false,
         extra: HashMap::new(),
     };
-    let created = crate::commands::calendar::create_calendar_at(stores.calendar, calendar)?;
+    let created = crate::services::calendar_store::create_calendar_at(stores.calendar, calendar)?;
     let row = serde_json::to_value(&created).map_err(|e| e.to_string())?;
     // `local`: a calendar made here is Tabtivity's own. CalDAV calendars are
     // subscribed to from the server's side, never created from this one.
@@ -2569,7 +2569,7 @@ fn calendar_create(stores: &Stores, args: &Value) -> Result<(Value, Change), Str
 
 fn calendar_move_events(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), String> {
     let to = str_arg(args, "to").ok_or("`to` is required")?;
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let to = resolve_calendar(&data, Some(to))?;
     let listed = args.get("ids").filter(|v| !v.is_null());
     let ids: Vec<String> = match (listed, str_arg(args, "from")) {
@@ -2598,7 +2598,7 @@ fn calendar_move_events(stores: &Stores, args: &Value) -> Result<(Value, Vec<Cha
     };
     if ids.len() > security::MAX_ROWS / 2 { return Err("Move at most 50 events per call".into()); }
     stores.check()?;
-    let moved = crate::commands::calendar::move_events_at(stores.calendar, &ids, &to)?;
+    let moved = crate::services::calendar_store::move_events_at(stores.calendar, &ids, &to)?;
     let mut changes = Vec::new();
     for m in &moved {
         changes.extend(server_copy_delete(&m.before)?);
@@ -2611,7 +2611,7 @@ fn calendar_move_events(stores: &Stores, args: &Value) -> Result<(Value, Vec<Cha
 
 fn calendar_delete_event(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
     let id = str_arg(args, "id").ok_or("`id` is required")?;
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let event = data
         .events
         .iter()
@@ -2620,7 +2620,7 @@ fn calendar_delete_event(stores: &Stores, args: &Value) -> Result<(Value, Change
     // The row rides along so the window can address the CalDAV copy, which is
     // unreachable once the local row is gone.
     let row = serde_json::to_value(event).map_err(|e| e.to_string())?;
-    crate::commands::calendar::delete_event_at(stores.calendar, id)?;
+    crate::services::calendar_store::delete_event_at(stores.calendar, id)?;
     Ok((json!({ "deleted": id }), Change { kind: "event", op: "delete", row, local: false }))
 }
 
@@ -2630,7 +2630,7 @@ fn todo_list(stores: &Stores, args: &Value) -> Result<Value, String> {
         Some(p) => Some(resolve_project(stores, p)?),
         None => None,
     };
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let cards: Vec<Value> = data
         .tasks
         .iter()
@@ -2666,7 +2666,7 @@ fn resolve_column(data: &crate::schema::calendar::CalendarData, wanted: &str) ->
 }
 
 fn find_task(stores: &Stores, id: &str) -> Result<CalendarTask, String> {
-    crate::commands::calendar::read_data(stores.calendar)?
+    crate::services::calendar_store::read_data(stores.calendar)?
         .tasks
         .into_iter()
         .find(|t| t.id == id)
@@ -2695,7 +2695,7 @@ fn task_change(task: &CalendarTask) -> Result<Change, String> {
 /// A card a write just stored, as its receipt shows it ([`task_view`], read
 /// against the store as the write left it) and as the window is told of it.
 fn task_upsert(stores: &Stores, task: &CalendarTask) -> Result<(Value, Change), String> {
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     Ok((task_view(task, &data, &stores.access), task_change(task)?))
 }
 
@@ -2763,7 +2763,7 @@ fn todo_add(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
         Some(p) => resolve_project(stores, p)?,
         None => String::new(),
     };
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     let column = match str_arg(args, "column") {
         Some(wanted) => resolve_column(&data, wanted)?,
         // Empty: `normalize` files the card into the board's first column.
@@ -2788,7 +2788,7 @@ fn todo_add(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
         subtasks: args.get("subtasks").map(|v| parse_subtasks(v, "", &[])).transpose()?.unwrap_or_default(),
         ..Default::default()
     };
-    task_upsert(stores, &crate::commands::calendar::create_task_at(stores.calendar, task)?)
+    task_upsert(stores, &crate::services::calendar_store::create_task_at(stores.calendar, task)?)
 }
 
 fn todo_complete(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
@@ -2797,7 +2797,7 @@ fn todo_complete(stores: &Stores, args: &Value) -> Result<(Value, Change), Strin
     task.completed = Some(completion_stamp(&task, args)?);
     task.percent = 100;
     // `normalize` moves a completed card into the board's done column.
-    task_upsert(stores, &crate::commands::calendar::update_task_at(stores.calendar, task)?)
+    task_upsert(stores, &crate::services::calendar_store::update_task_at(stores.calendar, task)?)
 }
 
 fn todo_reopen(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
@@ -2808,12 +2808,12 @@ fn todo_reopen(stores: &Stores, args: &Value) -> Result<(Value, Change), String>
     // Empty: an open card cannot stay in the done column, and `normalize` files
     // an unplaced one into the board's intake column. An archived card keeps
     // its place — archives are exempt from the done coupling.
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     if data.task_columns.iter().any(|c| c.done && c.id == task.column) {
         task.column = String::new();
         task.rank = None;
     }
-    task_upsert(stores, &crate::commands::calendar::update_task_at(stores.calendar, task)?)
+    task_upsert(stores, &crate::services::calendar_store::update_task_at(stores.calendar, task)?)
 }
 
 fn todo_update(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), String> {
@@ -2866,7 +2866,7 @@ fn todo_update(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), St
         if calendar.is_empty() {
             return Err("`calendar` cannot be empty; name the calendar to move the card to".into());
         }
-        let data = crate::commands::calendar::read_data(stores.calendar)?;
+        let data = crate::services::calendar_store::read_data(stores.calendar)?;
         let to = resolve_calendar(&data, Some(calendar))?;
         if to != task.calendar_id {
             // As for an event: the window would refuse the CalDAV delete a move
@@ -2874,11 +2874,11 @@ fn todo_update(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), St
             if data.calendars.iter().any(|c| c.id == task.calendar_id && c.readonly) {
                 return Err(format!("card '{id}' is in a read-only calendar"));
             }
-            crate::commands::calendar::relocate_task(&mut task, &to);
+            crate::services::calendar_store::relocate_task(&mut task, &to);
         }
     }
     let moved = before.calendar_id != task.calendar_id;
-    let (view, upsert) = task_upsert(stores, &crate::commands::calendar::update_task_at(stores.calendar, task)?)?;
+    let (view, upsert) = task_upsert(stores, &crate::services::calendar_store::update_task_at(stores.calendar, task)?)?;
     let mut changes = Vec::new();
     if moved {
         changes.extend(server_copy_delete_row("task", &before, &before.extra)?);
@@ -2901,7 +2901,7 @@ fn todo_move(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), Stri
     };
     // Resolve against the board the move itself is about to seed, so a column
     // can be named on a file that has never been dragged on.
-    let mut data = crate::commands::calendar::read_data(stores.calendar)?;
+    let mut data = crate::services::calendar_store::read_data(stores.calendar)?;
     data.ensure_board();
     data.normalize();
     let column = resolve_column(&data, wanted)?;
@@ -2910,14 +2910,14 @@ fn todo_move(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), Stri
         .iter()
         .find(|t| t.id == id)
         .ok_or_else(|| format!("card '{id}' not found"))?;
-    let placement = crate::commands::calendar::TaskPlacement {
+    let placement = crate::services::calendar_store::TaskPlacement {
         id: id.to_string(),
         column,
         index,
         completed_stamp: Some(completion_stamp(task, args)?),
     };
     let was_done = task.percent >= 100;
-    let changed = crate::commands::calendar::move_tasks_at(stores.calendar, vec![placement])?;
+    let changed = crate::services::calendar_store::move_tasks_at(stores.calendar, vec![placement])?;
     let moved = match changed.iter().find(|t| t.id == id) {
         Some(task) => task.clone(),
         // Already in that slot: nothing changed, which is still a success.
@@ -2932,7 +2932,7 @@ fn todo_move(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), Stri
             task_change(t).map(|change| Change { local, ..change })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let data = crate::commands::calendar::read_data(stores.calendar)?;
+    let data = crate::services::calendar_store::read_data(stores.calendar)?;
     Ok((task_view(&moved, &data, &stores.access), changes))
 }
 
@@ -2940,7 +2940,7 @@ fn todo_delete(stores: &Stores, args: &Value) -> Result<(Value, Change), String>
     let id = str_arg(args, "id").ok_or("`id` is required")?;
     // The row rides along, as for an event: the CalDAV copy is addressed by it.
     let row = serde_json::to_value(find_task(stores, id)?).map_err(|e| e.to_string())?;
-    crate::commands::calendar::delete_task_at(stores.calendar, id)?;
+    crate::services::calendar_store::delete_task_at(stores.calendar, id)?;
     Ok((json!({ "deleted": id }), Change { kind: "task", op: "delete", row, local: false }))
 }
 

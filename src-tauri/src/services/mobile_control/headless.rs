@@ -51,7 +51,7 @@ const MOBILE_CALENDAR_EVENTS: usize = 400;
 const CATEGORY_KEYS: &[&str] = &["work", "personal", "meeting", "travel", "birthday", "holiday", "important"];
 
 fn calendar_data(state_dir: &Path) -> Result<CalendarData, String> {
-    crate::commands::calendar::read_data(&state_dir.join("calendar.json"))
+    crate::services::calendar_store::read_data(&state_dir.join("calendar.json"))
 }
 
 /// `boundedText`: at most `max_bytes`, cut on a character boundary.
@@ -1682,7 +1682,7 @@ mod tests {
         let at = state.path().to_path_buf();
         assert_eq!(crate::services::home_io::within_deadline(move || turn_record(&at, "p", uid)), None);
     }
-    use crate::commands::calendar::{create_event_at, create_task_at};
+    use crate::services::calendar_store::{create_event_at, create_task_at};
     use crate::schema::calendar::{CalendarEvent, CalendarTask, Freq, Rrule};
 
     const KEY: [u8; 32] = [7u8; 32];
@@ -1759,7 +1759,7 @@ mod tests {
             },
         )
         .unwrap();
-        let hidden = crate::commands::calendar::create_calendar_at(
+        let hidden = crate::services::calendar_store::create_calendar_at(
             &calendar,
             Calendar { id: String::new(), name: "Hidden".into(), color: "#000".into(), visible: false, readonly: false, rev: 0, extra: Default::default() },
         )

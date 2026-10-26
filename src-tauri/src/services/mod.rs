@@ -13,7 +13,7 @@ pub use agent::{
 pub mod api;
 pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod calendar;
-pub use calendar::{caldav, calendar_alarms, calendar_recurrence, todo_board};
+pub use calendar::{caldav, calendar_alarms, calendar_recurrence, calendar_store, todo_board};
 pub mod git;
 pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release};
 pub mod mail;

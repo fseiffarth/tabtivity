@@ -12,4 +12,6 @@ pub mod calendar_alarms;
 // `src/lib/calendar/recurrence.ts` and `src/lib/todoBoard.ts`, so the Mobile
 // sidecar answers a month and the board with no window (headless owner, H0).
 pub mod calendar_recurrence;
+// The calendar.json store: CRUD, compare-and-swap, CalDAV reconciliation.
+pub mod calendar_store;
 pub mod todo_board;

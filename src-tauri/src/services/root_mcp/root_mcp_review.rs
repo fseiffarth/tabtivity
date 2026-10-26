@@ -3,7 +3,8 @@
 use crate::services::root_mcp::{self, Change, Effects, Stores};
 use app_core::sync::LockExt;
 use super::root_mcp_security::{self as security, Access};
-use crate::{commands::calendar, storage};
+use crate::services::calendar_store as calendar;
+use crate::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -1200,7 +1201,7 @@ mod tests {
         assert_eq!(f.proposals().last().unwrap().status, "conflicted");
         f.call("root:a", "todo_delete", json!({"id":a["id"]}));
         let p = f.proposals().last().unwrap().clone();
-        crate::commands::calendar::delete_task_at(&f.calendar, a["id"].as_str().unwrap()).unwrap();
+        crate::services::calendar_store::delete_task_at(&f.calendar, a["id"].as_str().unwrap()).unwrap();
         let original = std::fs::read(&f.calendar).unwrap();
         f.approve(&p);
         assert_eq!(std::fs::read(&f.calendar).unwrap(), original);

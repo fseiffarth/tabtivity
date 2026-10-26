@@ -19,7 +19,7 @@ use chrono::Local;
 
 use super::discovery::key_id;
 use super::protocol::{CalendarAction, MobileCalendarEventInput, TodoAction, TodoTaskInput};
-use crate::commands::calendar as cal;
+use crate::services::calendar_store as cal;
 use crate::schema::calendar::{Calendar, CalendarData, CalendarEvent, CalendarTask, Subtask, TaskColumn};
 use crate::services::todo_board::{board_columns, column_of, fallback_column_id};
 

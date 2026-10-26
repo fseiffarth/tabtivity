@@ -429,7 +429,7 @@ pub fn share_refusal(calendar: &Calendar) -> Option<&'static str> {
 /// taken out of `calendar.json` first (in one transaction), then shared; if
 /// the service refuses, put back as it was.
 pub fn share_in(path: &Path, state_dir: &Path, socket: &Path, calendar_id: &str) -> Result<CalInfo, String> {
-    use crate::commands::calendar::transact;
+    use crate::services::calendar_store::transact;
     let (taken, _) = transact(path, |data| {
         let calendar = data.calendars.iter().find(|c| c.id == calendar_id).cloned().ok_or("Unknown calendar")?;
         if let Some(why) = share_refusal(&calendar) {
@@ -508,7 +508,7 @@ pub fn unshare_in(path: &Path, state_dir: &Path, socket: &Path, id: &str) -> Res
 pub const RETURNED_DIR: &str = "shared-calendars-returned";
 
 fn put_back(path: &Path, state_dir: &Path, content: &CalContent) -> Result<(), String> {
-    use crate::commands::calendar::transact;
+    use crate::services::calendar_store::transact;
     let prefs = load_prefs(state_dir);
     transact(path, |data| {
         let mut cal_id = content.origin.clone().filter(|o| !o.is_empty()).unwrap_or_else(crate::storage::uuid_v4);
