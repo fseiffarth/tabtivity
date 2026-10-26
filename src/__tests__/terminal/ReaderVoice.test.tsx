@@ -133,6 +133,53 @@ describe("dictating into the Chat's composer", () => {
     expect(runInstallInTab).toHaveBeenCalledWith("Speech model", "bash '/s/voice/fetch-model.sh'", expect.any(String));
   });
 
+  it("lets the install card pick another speech model", async () => {
+    installed = false;
+    await composer(host);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Speech model" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Base · 60 MB/));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    });
+    expect(invoke).toHaveBeenCalledWith("voice_model_install_script", { id: "base" });
+    expect(invoke).toHaveBeenCalledWith("patch_settings", { patch: { voice_model: "base" } });
+  });
+
+  it("switches to an installed model from the card and dictates with it", async () => {
+    installed = false;
+    invoke.mockImplementation((command: string) => {
+      if (command === "voice_status") {
+        const s = status(false);
+        s.models.push({ id: "base", kind: "whisper", installed: true, sizeBytes: 60_000_000 });
+        return Promise.resolve(s);
+      }
+      if (command === "voice_listen_start") return Promise.resolve(11);
+      if (command === "agent_tab_transcript") return Promise.resolve({ available: true, version: "v1", entries: [{ kind: "prompt", text: "fix the parser", at: "2026-09-30T08:00:00Z" }] });
+      return Promise.resolve([]);
+    });
+    await composer(host);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Speech model" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Base · 60 MB.*installed/));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use this model" }));
+    });
+    expect(invoke).toHaveBeenCalledWith("voice_listen_start", expect.objectContaining({ model: "base" }));
+    expect(runInstallInTab).not.toHaveBeenCalled();
+  });
 
   it("warns about a muted mic, and drops the warning when sound returns", async () => {
     await composer(host);
@@ -143,6 +190,7 @@ describe("dictating into the Chat's composer", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "Stop dictating" })).toBeTruthy();
   });
+
   it("says why the mic would not open", async () => {
     invoke.mockImplementation((command: string) => command === "voice_listen_start"
       ? Promise.reject("no-device")

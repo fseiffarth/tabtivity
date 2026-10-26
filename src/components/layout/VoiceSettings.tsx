@@ -4,6 +4,7 @@ import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
   DEFAULT_VOICE_MODEL,
+  VOICE_MODEL_LABELS,
   VOICE_MODELS,
   voiceErrorKey,
   voiceModelInstallCommand,
@@ -14,13 +15,6 @@ import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { SettingRow } from "./settingsUi";
-
-/** A model's label in the picker: its id, size and whether it is here. */
-const MODEL_LABEL: Record<(typeof VOICE_MODELS)[number], TranslationKey> = {
-  base: "settings.voice.modelBase",
-  small: "settings.voice.modelSmall",
-  "large-v3-turbo": "settings.voice.modelLarge",
-};
 
 /**
  * Settings → Voice (docs/desktop_voice_plan.md, step 3): the speech model
@@ -64,7 +58,7 @@ export function VoiceSettings() {
               onChange={(value) => void updateSettings({ voice_model: value })}
               options={VOICE_MODELS.map((id) => ({
                 value: id,
-                label: `${t(MODEL_LABEL[id])}${installed(id) ? ` · ${t("settings.voice.installed")}` : ""}`,
+                label: `${t(VOICE_MODEL_LABELS[id])}${installed(id) ? ` · ${t("settings.voice.installed")}` : ""}`,
               }))}
             />
             {status && !installed(model) && !status.listen && (

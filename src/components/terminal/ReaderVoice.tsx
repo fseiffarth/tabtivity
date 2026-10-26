@@ -4,6 +4,8 @@ import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
   DEFAULT_VOICE_MODEL,
+  VOICE_MODELS,
+  VOICE_MODEL_LABELS,
   VOICE_PAUSE_MS,
   startDesktopDictation,
   voiceErrorKey,
@@ -13,18 +15,15 @@ import {
   voiceStatus,
   type DesktopDictation,
   type VoiceLangChoice,
+  type VoiceModel,
   type VoiceModelState,
 } from "../../lib/voice/desktopVoice";
 import { useSettingsStore } from "../../stores/settings";
+import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { paintMicLevel } from "../../../shared/voice";
 
 type Phase = "off" | "starting" | "preparing" | "listening";
-
-/** "small · 190 MB": the install card's model line. */
-function modelSize(model: VoiceModelState | undefined): string {
-  return model ? `${Math.round(model.sizeBytes / 1_000_000)} MB` : "";
-}
 
 /**
  * Dictation for the Chat's composer (`ReaderComposer`, docs/desktop_voice_plan.md
@@ -47,11 +46,12 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
   const t = useT();
   const uiLanguage = useI18nStore((s) => s.lang);
   const settings = useSettingsStore((s) => s.settings);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
   const [phase, setPhase] = useState<Phase>("off");
   const [heard, setHeard] = useState("");
   const [problem, setProblem] = useState<TranslationKey | null>(null);
-  /** The model to install, while the install card is open. */
-  const [install, setInstall] = useState<VoiceModelState | null>(null);
+  /** The install card, while open: the catalog's speech models and the one picked. */
+  const [install, setInstall] = useState<{ models: VoiceModelState[]; pick: VoiceModel } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const session = useRef<DesktopDictation | null>(null);
   /** Bumped by every start and end, so a start that resolves late stops. */
@@ -71,7 +71,8 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
     setHeard("");
   };
 
-  const start = async () => {
+  /** `use`: the model to listen with (the card's pick), else the setting's. */
+  const start = async (use: string = model) => {
     const mine = ++attempt.current;
     setProblem(null);
     setInstall(null);
@@ -84,15 +85,15 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
         setPhase("off");
         return;
       }
-      const chosen = status.models.find((m) => m.id === model && m.kind === "whisper");
+      const chosen = status.models.find((m) => m.id === use && m.kind === "whisper");
       if (!chosen?.installed) {
-        setInstall(chosen ?? null);
+        setInstall({ models: status.models.filter((m) => m.kind === "whisper"), pick: use as VoiceModel });
         setPhase("off");
         return;
       }
       const dictation = await startDesktopDictation({
         tabKey,
-        model,
+        model: use,
         lang: voiceLangTag(settings?.voice_lang as VoiceLangChoice | undefined, uiLanguage),
         mode: "dictate",
         pauseMs: settings?.voice_pause_ms ?? VOICE_PAUSE_MS.default,
@@ -161,12 +162,22 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
     session.current = null;
   }, [tabKey]);
 
+  const pickedHere = (target: { models: VoiceModelState[]; pick: VoiceModel }) =>
+    target.models.some((m) => m.id === target.pick && m.installed);
+
+  /** The card's button: switch to an installed model and dictate with it, or
+   * install the picked one. Either way it becomes the setting. */
   const runInstall = async () => {
     const target = install;
     setInstall(null);
     if (!target) return;
     try {
-      const command = await voiceModelInstallCommand(target.id);
+      if (target.pick !== model) await updateSettings({ voice_model: target.pick });
+      if (pickedHere(target)) {
+        void start(target.pick);
+        return;
+      }
+      const command = await voiceModelInstallCommand(target.pick);
       runInstallInTab(t("terminal.reader.voice.installTab"), command, IS_HOST_WINDOWS ? "powershell" : "bash");
     } catch (error) {
       setProblem(voiceErrorKey(error));
@@ -203,9 +214,18 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
       {install && (
         <div className="terminal-reader-voice-card" role="dialog" aria-label={t("terminal.reader.voice.installTitle")}>
           <strong>{t("terminal.reader.voice.installTitle")}</strong>
-          <span>{t("terminal.reader.voice.installBody", { model: install.id, size: modelSize(install) })}</span>
+          <span>{t("terminal.reader.voice.installBody")}</span>
+          <Dropdown
+            value={install.pick}
+            ariaLabel={t("settings.voice.model")}
+            onChange={(value) => setInstall({ ...install, pick: value as VoiceModel })}
+            options={VOICE_MODELS.map((id) => ({
+              value: id,
+              label: `${t(VOICE_MODEL_LABELS[id])}${install.models.some((m) => m.id === id && m.installed) ? ` · ${t("settings.voice.installed")}` : ""}`,
+            }))}
+          />
           <div className="terminal-reader-voice-actions">
-            <button type="button" className="settings-btn" onClick={() => void runInstall()}>{t("terminal.reader.voice.install")}</button>
+            <button type="button" className="settings-btn" onClick={() => void runInstall()}>{t(pickedHere(install) ? "terminal.reader.voice.use" : "terminal.reader.voice.install")}</button>
             <button type="button" className="settings-btn" onClick={() => setInstall(null)}>{t("terminal.reader.voice.notNow")}</button>
           </div>
           <UntestedTag id="terminal.reader.voice.install" />
