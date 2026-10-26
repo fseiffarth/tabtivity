@@ -200,7 +200,7 @@ fn validate_prompt(mut prompt: ScheduledAgentPrompt) -> Result<ScheduledAgentPro
     prompt.message = sanitize_message(&prompt.message);
     if prompt.origin.is_some() {
         if !prompt.preface.is_empty() { return Err("agent schedules cannot carry prefix commands".into()); }
-        prompt.message = super::schedule_mcp::sanitize_prompt(&prompt.message)?;
+        prompt.message = crate::services::schedule_mcp::sanitize_prompt(&prompt.message)?;
     }
     if prompt.message.trim().is_empty() {
         return Err("scheduled prompt is empty".into());
@@ -235,7 +235,7 @@ pub fn list(project_id: &str, target_id: &str) -> Result<Vec<ScheduledAgentPromp
     validate_id("schedule target id", target_id)?;
     let _guard = lock()?;
     let mut file = read()?;
-    if super::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339()) {
+    if crate::services::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339()) {
         write(&file)?;
     }
     Ok(schedules_of(&file, project_id, target_id))
@@ -252,7 +252,7 @@ pub fn list_at(
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
     let mut file = read_at(&file_path(state_dir))?;
-    super::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339());
+    crate::services::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339());
     Ok(schedules_of(&file, project_id, target_id))
 }
 
@@ -601,7 +601,7 @@ fn claim_locked(
     // whichever owner fires it and whatever happened while it was down.
     if let Some(device) = prompt.phone_device.as_deref() {
         let state_dir = path.parent().unwrap_or(std::path::Path::new("."));
-        match super::mobile_control::phone_origin::reaches(state_dir, device, project_id) {
+        match crate::services::mobile_control::phone_origin::reaches(state_dir, device, project_id) {
             Ok(true) => {}
             Ok(false) => {
                 let cancelled = CancelledRule {
@@ -611,7 +611,7 @@ fn claim_locked(
                 };
                 apply_delete(&mut file, project_id, target_id, schedule_id, false)?;
                 write_at(path, &file)?;
-                super::mobile_control::phone_origin::log_cancelled(std::slice::from_ref(&cancelled), "at fire time");
+                crate::services::mobile_control::phone_origin::log_cancelled(std::slice::from_ref(&cancelled), "at fire time");
                 return Ok(ClaimOutcome::Cancelled);
             }
             Err(why) => {
@@ -794,7 +794,7 @@ fn reserve_agent_delivery(target: &mut AgentPromptTarget, schedule_id: &str, occ
     let Some(prompt) = target.schedules.iter().find(|s| s.id == schedule_id) else { return false };
     if prompt.origin.is_none() { return true; }
     let day = now.format("%Y-%m-%d").to_string();
-    if super::schedule_mcp::delivery_count(target, &day) >= 6 { return false; }
+    if crate::services::schedule_mcp::delivery_count(target, &day) >= 6 { return false; }
     let id = delivery_id(prompt, occurrence);
     let cutoff = (now - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
     target.agent_deliveries.retain(|r| r.day >= cutoff);

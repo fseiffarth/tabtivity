@@ -292,7 +292,7 @@ async fn refresh_now(providers: &[Provider]) {
             continue;
         }
         let generation = KEY_GENERATION.load(Ordering::Acquire);
-        let Some(ids) = super::api_proxy::key_models(provider).await else {
+        let Some(ids) = crate::services::api_proxy::key_models(provider).await else {
             continue;
         };
         let _guard = STORE.lock_ok();

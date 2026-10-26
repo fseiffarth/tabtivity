@@ -1,32 +1,12 @@
+pub mod agent;
+pub use agent::{agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec, agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home, agent_install, agent_latest, agent_prompts, agent_relocate, agent_session, agent_shim, agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant, assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat, model_rows, opencode_models, opencode_session, opencode_store, transcript_watch};
 pub mod git;
 pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_init, git_peer, git_release};
 pub mod mail;
 pub use mail::{mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine, mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store, mail_thunderbird};
-pub mod agent_prompts;
-pub mod agent_session;
-pub mod agent_sqlite;
-// The turn state an agent's own hooks report (working / decision / done),
-// relayed from the hook script's per-tab record to the window's activity
-// store — the authority for the tab's working and finished marks.
-pub mod agent_turn;
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
-// The stored conversation behind an agent tab (Claude's session log, Codex's
-// rollout) as the prompt/answer entries the phone's Focus view lays out.
-pub mod agent_transcript;
-pub mod agent_chats;
-// An agent tab's conversation taken along to another worktree (the Reader's
-// branch chip).
-pub mod agent_relocate;
-pub mod google_chat;
-// The files that conversation changed, as the diffs its CLI recorded — the
-// desktop Reader's Changes panel.
-pub mod agent_changes;
-// Change notifications for the transcripts the desktop Reader shows.
-pub mod transcript_watch;
-pub mod agent_bin;
-pub mod agent_tasks;
 pub mod schedule_mcp;
 // Agent-requested pushes: the `/mcp/git` lane, its policy, the fenced
 // tokenless preflight and the hooks-off host transport.
@@ -41,60 +21,17 @@ pub mod markup_mcp;
 // snapshots of the work tree in the round's own object store under the state
 // dir, reverse-applied only when nothing changed since.
 pub mod markup_rounds;
-// Which release of each agent CLI is installed vs. the one Tabtivity's parsers
-// were checked against: the version recipes, the "verified against" notes from
-// docs/third_party_update_checklist.md as data, and the day-long probe cache.
-pub mod agent_versions;
-pub mod agent_latest;
-// Default-on Linux filesystem boundary for local agent tabs.  The authority
-// decision and root computation stay AppHandle-free; terminal spawn only applies
-// the resulting bubblewrap argv.
-pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub use app_core::services::fence_scope;
-// `--agent-exec`: an agent's secrets mapped from their app-named carriers to
-// the CLI's own variable names, just before the agent runs (no common name on
-// the user's tmux server).
-pub mod agent_exec;
-// The Claude credential mirror: one Tabtivity-owned inode mounted into every
-// fenced/contained tab in place of `~/.claude/.credentials.json`, kept in step
-// with the host file by in-place writes — a file bind mount pins an inode, and
-// Claude rotates that file by rename.
-pub mod agent_auth;
-// Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
-pub mod agent_api_keys;
 pub mod api_proxy;
 pub mod api_meter;
 pub mod api_prices;
 pub mod api_usage;
-pub mod agent_global;
-// What a live agent tab was handed (sandbox, MCP servers, skills, API key),
-// for the tab hover card.
-pub mod agent_features;
-pub mod agent_hint;
-pub mod agent_home;
-// The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
-pub mod assistant;
-// Claude's own `/model` list for the assistant's chats, read by a short-lived probe.
-pub mod assistant_model_probe;
-// The rows each CLI's own model picker last drew, per installed build.
-pub mod model_rows;
-// Where each CLI keeps its conversations in an agent home, for export/import.
-pub mod agent_history;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
 pub mod tar_stream;
-pub mod agent_install;
-pub mod agent_shim;
 // The AI switch: the side panel's power button, read by every AI gate.
 pub mod ai_switch;
-// Copilot CLI sign-in for fenced tabs: Tabtivity keeps the token in its own
-// keyring entry (the fence hides the keyring) and hands it to each fenced
-// Copilot as COPILOT_GITHUB_TOKEN.
-pub mod copilot_auth;
-// Copilot CLI's own session store: the tab's pinned session, its events, its
-// folder's chats (the Reader's chat, Diffs and Resume menu).
-pub mod copilot_session;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
@@ -123,11 +60,6 @@ pub mod desktop_images;
 pub mod dev_build;
 // The checkout's `todo/*.md` groups for the dev build's side-panel Todo view.
 pub mod dev_todo;
-pub mod codex_bind;
-// Codex's own SQLite thread store (`~/.codex/state_<n>.sqlite`), read
-// read-only for the model a Codex tab is running now that its releases
-// no longer write the JSONL rollout the model tag used to come from.
-pub mod codex_store;
 pub mod copilot;
 // Directory-handle-relative I/O inside agent-writable homes: what every
 // unfenced write into a scope home goes through.
@@ -172,9 +104,6 @@ pub mod private_file;
 pub mod connect;
 pub mod mobile_control;
 pub mod net_usage;
-pub mod opencode_models;
-pub mod opencode_session;
-pub mod opencode_store;
 pub mod openvpn;
 pub mod process_lease;
 pub mod project_runtime;

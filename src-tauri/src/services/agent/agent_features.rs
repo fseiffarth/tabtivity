@@ -125,7 +125,7 @@ const MAX_NAME_CHARS: usize = 64;
 fn clean_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut out: Vec<String> = names
         .into_iter()
-        .map(|n| super::root_mcp_mail::strip_invisible(&n).chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect::<String>())
+        .map(|n| crate::services::root_mcp_mail::strip_invisible(&n).chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect::<String>())
         .filter(|n| !n.trim().is_empty())
         .collect();
     out.sort();

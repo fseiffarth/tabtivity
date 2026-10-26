@@ -32,7 +32,7 @@
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its variant assertion fails."
   },
   {
-    "path": "src-tauri/src/services/agent_tasks.rs",
+    "path": "src-tauri/src/services/agent/agent_tasks.rs",
     "line": 63,
     "source": "if !path.exists() {",
     "rule": "rust/path-injection",
