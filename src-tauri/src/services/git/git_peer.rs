@@ -251,7 +251,7 @@ pub enum Peer {
 
 impl Peer {
     /// Run `git <args>` against this peer, returning the captured output (parsed
-    /// byte-identically for both, exactly like `commands::git::run_git`).
+    /// byte-identically for both, exactly like `services::git_hardened::run_git`).
     pub fn run(&self, args: &[&str]) -> Result<Output, String> {
         match self {
             // Hardened, hooks off: lockstep runs `status`/`checkout`/`merge`/
@@ -772,10 +772,10 @@ pub fn linked_checkout_branches(snap: &PeerSnapshot) -> std::collections::HashSe
 }
 
 /// The branches checked out across a peer's worktrees, from `git worktree list
-/// --porcelain`. Reuses `commands::git`'s parser so the two readings of the same
+/// --porcelain`. Reuses `services::git_worktrees`' parser so the two readings of the same
 /// output cannot drift. Pure.
 pub fn checked_out_branches(porcelain: &str) -> Vec<String> {
-    crate::commands::git::parse_worktree_porcelain(porcelain)
+    crate::services::git_worktrees::parse_worktree_porcelain(porcelain)
         .into_iter()
         .filter(|w| !w.branch.is_empty())
         .map(|w| w.branch)

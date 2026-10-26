@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::discovery::key_id;
-use crate::commands::git::{GitBranch, Worktree};
+use crate::commands::git::GitBranch;
+use crate::services::git_worktrees::Worktree;
 
 /// Worktree rows sent; the rest are counted in `worktrees_total`.
 pub const MAX_WORKTREES: usize = 20;

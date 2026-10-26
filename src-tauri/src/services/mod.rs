@@ -15,7 +15,7 @@ pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod calendar;
 pub use calendar::{caldav, calendar_alarms, calendar_recurrence, calendar_store, todo_board};
 pub mod git;
-pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release};
+pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release, git_worktrees};
 pub mod mail;
 pub use mail::{
     mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine,

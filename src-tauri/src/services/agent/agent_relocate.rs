@@ -276,7 +276,7 @@ fn is_live_folder(root: &str, dir: &str) -> bool {
 /// --porcelain` output. The main worktree is not one: it is the root, handled
 /// by the caller.
 fn listed_worktree(porcelain: &str, real: &Path) -> bool {
-    crate::commands::git::parse_worktree_porcelain(porcelain)
+    crate::services::git_worktrees::parse_worktree_porcelain(porcelain)
         .iter()
         .any(|w| !w.is_main && Path::new(&w.path).canonicalize().is_ok_and(|p| p == real))
 }

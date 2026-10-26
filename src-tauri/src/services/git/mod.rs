@@ -17,3 +17,5 @@ pub mod git_hosting;
 pub mod git_init;
 pub mod git_peer;
 pub mod git_release;
+// `git worktree list --porcelain` parsed into `Worktree` rows.
+pub mod git_worktrees;
