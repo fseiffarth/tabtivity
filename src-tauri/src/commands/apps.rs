@@ -175,6 +175,8 @@ pub(crate) enum WindowList {
     /// A Wayland session: only XWayland windows are listed. Authoritative
     /// for a row holding a window id (one only an XWayland window can
     /// have), silent about a row without one — its window may be native.
+    /// Built only by the Linux window list.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     XWaylandOnly(Vec<u64>),
     /// The enumeration failed: it says nothing about any row.
     Unknown,
