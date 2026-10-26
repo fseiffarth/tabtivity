@@ -983,6 +983,8 @@ export const enSource = {
   "mobile.subagent.noWay": "Not sent — Claude's agent list did not open this subagent.",
   "mobile.subagent.indexRegion": "Subagents in this conversation",
   "mobile.subagent.index": "Subagents ({count})",
+  "mobile.subagent.running": "Running ({count})",
+  "mobile.subagent.finished": "Finished ({count})",
   "mobile.sentIndex.region": "Files in this conversation",
   "mobile.sentIndex.toggle": "Files ({count})",
   "mobile.sentIndex.fromAgent": "From the agent",

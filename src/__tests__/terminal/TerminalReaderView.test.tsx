@@ -623,6 +623,9 @@ describe("the Reader's subagents", () => {
     expect(await screen.findByText("Subagents working in the background… (1)")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: /Subagents \(3\)/ }));
     expect(screen.getAllByRole("img", { name: "Agent is working…" })).toHaveLength(1);
+    // It sits under Running, the other two under Finished.
+    within(screen.getByRole("region", { name: "Running (1)" })).getByRole("button", { name: /Find the parser/ });
+    expect(within(screen.getByRole("region", { name: "Finished (2)" })).getAllByRole("button")).toHaveLength(2);
     await openListed("Find the parser");
     expect(await screen.findByText("Haiku is working…")).toBeTruthy();
     expect(screen.queryByText(/in the background…/)).toBeNull();

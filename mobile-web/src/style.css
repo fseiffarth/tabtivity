@@ -1087,7 +1087,10 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
 .sent-index-groups { display:grid; gap:10px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
-.sent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.sent-index-head, .subagent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.subagent-index-head { margin:0; color:#8c98b3; }
+.subagent-index-group { display:grid; gap:4px; }
+.subagent-index-group + .subagent-index-group { margin-top:6px; }
 .sent-index-head.phone { color:#a99cf0; }
 .sent-index-head.agent { color:#8fb8ff; }
 .sent-index-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:6px; margin:0; padding:0; list-style:none; }

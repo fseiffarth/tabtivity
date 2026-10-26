@@ -965,6 +965,8 @@ export const dict: Dict = {
   "mobile.subagent.noWay": "No enviado — la lista de agentes de Claude no abrió este subagente.",
   "mobile.subagent.indexRegion": "Subagentes de esta conversación",
   "mobile.subagent.index": "Subagentes ({count})",
+  "mobile.subagent.running": "En curso ({count})",
+  "mobile.subagent.finished": "Terminados ({count})",
   "mobile.sentIndex.region": "Archivos de esta conversación",
   "mobile.sentIndex.toggle": "Archivos ({count})",
   "mobile.sentIndex.fromAgent": "Del agente",

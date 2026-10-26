@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getTranscript, type TabRow, type TranscriptEntry } from "../api";
-import { openSubagent, subagentAtWork, subagentsIn, type SubagentStep } from "../terminal/subagents";
+import { openSubagent, splitByWork, subagentsIn, type SubagentStep } from "../terminal/subagents";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -13,8 +13,9 @@ const SESSION_TURNS = 120;
 const POLL = 5_000;
 
 /** The subagents of one agent tab's session, reached from its card's
- * subagent pill: newest first, the ones at work marked, and a tap opens the
- * session straight on that subagent's own conversation (`onOpen`). Read off
+ * subagent pill: the ones at work above the finished, newest first in each,
+ * and a tap opens the session straight on that subagent's own conversation
+ * (`onOpen`). Read off
  * the stored session as the Reader reads it — only opaque handles cross. */
 export function SubagentsSheet({ tab, onClose, onOpen }: {
   tab: TabRow;
@@ -56,11 +57,19 @@ export function SubagentsSheet({ tab, onClose, onOpen }: {
         : refs.length === 0
         ? <p className={failed ? "sheet-note error" : "sheet-note"} role={failed ? "alert" : "status"}>{t(failed ? "mobile.subagentSheet.failed" : "mobile.subagentSheet.none")}</p>
         : <div className="subagent-index-list">
-          {refs.map((ref, index) => ({ ref, index })).reverse().map(({ ref, index }) => <button type="button" key={`${ref.token}:${index}`} aria-label={`${ref.role ?? t("mobile.subagent.region")} · ${ref.task}`} onClick={() => onOpen(openSubagent([], ref, entries, -1)[0])}>
-            <small>{ref.role ?? t("mobile.subagent.region")}{subagentAtWork(ref, busy) && <em> · {t("mobile.subagentSheet.atWork")}</em>}</small>
-            <span>{ref.task}</span>
-            {ref.worktree && <WorktreeChip worktree={ref.worktree} title={worktreeTitle(t, ref.worktree)} />}
-          </button>)}
+          {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
+            const rows = splitByWork(refs, busy)[group];
+            if (rows.length === 0) return null;
+            const title = t(heading, { count: rows.length });
+            return <section key={group} className="subagent-index-group" aria-label={title}>
+              <h3 className="subagent-index-head">{title}</h3>
+              {[...rows].reverse().map((ref, index) => <button type="button" key={`${ref.token}:${index}`} aria-label={`${ref.role ?? t("mobile.subagent.region")} · ${ref.task}`} onClick={() => onOpen(openSubagent([], ref, entries, -1)[0])}>
+                <small>{ref.role ?? t("mobile.subagent.region")}{group === "running" && <em> · {t("mobile.subagentSheet.atWork")}</em>}</small>
+                <span>{ref.task}</span>
+                {ref.worktree && <WorktreeChip worktree={ref.worktree} title={worktreeTitle(t, ref.worktree)} />}
+              </button>)}
+            </section>;
+          })}
         </div>}
     </section>
   </div>;

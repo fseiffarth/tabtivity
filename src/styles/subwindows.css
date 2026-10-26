@@ -2800,6 +2800,22 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   margin-top: 6px;
   overflow-y: auto;
 }
+/* Running above Finished, each under its own small heading. */
+.terminal-reader-subagent-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.terminal-reader-subagent-group + .terminal-reader-subagent-group { margin-top: 6px; }
+.terminal-reader-subagent-head {
+  margin: 0;
+  padding: 0 2px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
 .terminal-reader-subagent-list button {
   display: flex;
   flex-direction: column;

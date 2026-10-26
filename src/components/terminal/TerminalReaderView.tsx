@@ -67,7 +67,7 @@ import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
-import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
@@ -1678,7 +1678,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     else chatBack();
   };
 
-  /** A list of the session's `agent` entries under a toggle: the chat's own
+  /** A list of the session's `agent` entries under a toggle, the ones at work
+   * grouped above the finished ones: the chat's own
    * Subagents index, or in the top bar Subagents and Workspaces (Claude
    * `Workflow` runs, the orchestrations) side by side. A pick opens it in the
    * chat; from the top bar it also brings the chat back over Diffs or the
@@ -1723,17 +1724,27 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
           buttons[next]?.focus();
         }}>
-          {list.map((entry, index) => (
-            <button type="button" key={`${entry.at ?? ""}:${index}`} disabled={!entry.subagent} onClick={() => { openAgent(entry, true); if (navigationSlot) { setOpen(() => false); onShowChat?.(); } }}>
-              <small>
-                {entry.role ?? subagentLabel}
-                {subagentAtWork(entry, !!live.working) && (
-                  <span className="terminal-reader-working-dots" role="img" aria-label={t("terminal.reader.working")}><i /><i /><i /></span>
-                )}
-              </small>
-              <span>{entry.text}{entry.cut && "…"}</span>
-            </button>
-          ))}
+          {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
+            const rows = splitByWork(list, !!live.working)[group];
+            if (rows.length === 0) return null;
+            const title = t(heading, { count: rows.length });
+            return (
+              <section key={group} className="terminal-reader-subagent-group" aria-label={title}>
+                <h3 className="terminal-reader-subagent-head">{title}</h3>
+                {rows.map((entry, index) => (
+                  <button type="button" key={`${entry.at ?? ""}:${index}`} disabled={!entry.subagent} onClick={() => { openAgent(entry, true); if (navigationSlot) { setOpen(() => false); onShowChat?.(); } }}>
+                    <small>
+                      {entry.role ?? subagentLabel}
+                      {group === "running" && (
+                        <span className="terminal-reader-working-dots" role="img" aria-label={t("terminal.reader.working")}><i /><i /><i /></span>
+                      )}
+                    </small>
+                    <span>{entry.text}{entry.cut && "…"}</span>
+                  </button>
+                ))}
+              </section>
+            );
+          })}
           {earlier > 0 && (
             <button type="button" className="terminal-reader-subagent-earlier" onClick={showEarlier}>
               {t("mobile.subagent.earlier")}

@@ -149,7 +149,7 @@ import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chat
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
 import { pullQueuedPrompts, queuedHintShown } from "../terminal/queuePull";
-import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
 import { inboxInPlace, inboxLeaves, inboxSegments, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
@@ -4681,13 +4681,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {subagentListOpen && <div id="mobile-subagent-list" className="subagent-index-list">
-                {sessionAgents.map((entry, index) => {
-                  const status = entry.finished ? "done" : subagentAtWork(entry, sessionBusy) ? "working" : null;
-                  return <button type="button" key={`${entry.at ?? index}:${index}`} className={status ? "has-status" : undefined} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
-                    <small>{entry.role ?? t("mobile.subagent.region")}</small>
-                    <span>{entry.text}{entry.cut && "…"}</span>
-                    {status && <AgentStatusMark status={status} />}
-                  </button>;
+                {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
+                  const rows = splitByWork(sessionAgents, sessionBusy)[group];
+                  if (rows.length === 0) return null;
+                  const title = t(heading, { count: rows.length });
+                  return <section key={group} className="subagent-index-group" aria-label={title}>
+                    <h3 className="subagent-index-head">{title}</h3>
+                    {rows.map((entry, index) => {
+                      const status = group === "running" ? "working" : entry.finished ? "done" : null;
+                      return <button type="button" key={`${entry.at ?? index}:${index}`} className={status ? "has-status" : undefined} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
+                        <small>{entry.role ?? t("mobile.subagent.region")}</small>
+                        <span>{entry.text}{entry.cut && "…"}</span>
+                        {status && <AgentStatusMark status={status} />}
+                      </button>;
+                    })}
+                  </section>;
                 })}
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
