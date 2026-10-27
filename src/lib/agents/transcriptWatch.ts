@@ -56,6 +56,8 @@ export function watchedReads(read: (watch: string) => Promise<boolean>): () => v
   let stopped = false;
   let busy = false;
   let again = false;
+  /** Whether the last read came back watched. */
+  let armed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const run = async (): Promise<void> => {
     if (stopped) return;
@@ -78,7 +80,13 @@ export function watchedReads(read: (watch: string) => Promise<boolean>): () => v
       if (watched) unwatch(id);
       return;
     }
-    if (again) {
+    // The backend arms a watch only once the read that asks for it is done:
+    // a write during that read (the record of a prompt sent just before)
+    // tells no one, and the chat waited for the agent's next write. A watch
+    // just armed reads once more — cheap, `unchanged` unless something came.
+    const caughtUp = armed || !watched;
+    armed = watched;
+    if (again || !caughtUp) {
       again = false;
       void run();
       return;
