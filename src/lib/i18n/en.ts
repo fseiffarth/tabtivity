@@ -7771,6 +7771,7 @@ export const enSource = {
   "mail.keys.generate": "Create a key",
   "mail.keys.generateHint": "Creates a Curve25519 key for this account. Send the public half to anyone who should be able to write to you encrypted.",
   "mail.keys.ownKey": "your key",
+  "mail.keys.ownKeyUnverified": "imported private key — use it for an account only if it is yours (compare its fingerprint with your other copy)",
   "mail.keys.boundTo": "used for {label}",
   "mail.keys.useForAccount": "Use for this account",
   "mail.keys.verifiedCheckbox": "I checked this fingerprint with its owner",

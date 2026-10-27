@@ -84,6 +84,10 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
   const mine = keys.filter((k) => k.secret);
   const theirs = keys.filter((k) => !k.secret);
   const boundHere = account ? mine.find((k) => k.accounts.includes(account.id)) : undefined;
+  // The backend refuses to bind a key whose user ids do not name the account's
+  // address; offering the button anyway would only end in that error.
+  const namesAccount = (key: PgpKeyInfo) =>
+    !!account && key.addresses.includes(account.address.trim().toLowerCase());
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -147,7 +151,9 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
               info={key}
               boundTo={account && key.accounts.includes(account.id) ? account : null}
               busy={busy}
-              onVerify={() => {}}
+              onVerify={(verified) =>
+                void run(() => mailPgpSetVerified(key.fingerprint, verified))
+              }
               onExport={() =>
                 void run(async () => {
                   setExported({
@@ -157,7 +163,7 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
                 })
               }
               onBind={
-                account
+                account && namesAccount(key)
                   ? () => void run(() => mailPgpBind(key.fingerprint, account.id, true))
                   : undefined
               }
@@ -288,18 +294,28 @@ function KeyRow({
           trust model, and an abbreviated one is worse than none because it looks
           like it was checked. */}
       <code className="mail-key-fingerprint">{formatFingerprint(info.fingerprint)}</code>
-      {info.secret ? (
+      {info.secret && info.verified ? (
         <span className="mail-note">{t("mail.keys.ownKey")}</span>
       ) : (
-        <label className="mail-key-verified">
-          <input
-            type="checkbox"
-            checked={info.verified}
-            disabled={busy}
-            onChange={(e) => onVerify(e.target.checked)}
-          />
-          <span>{t("mail.keys.verifiedCheckbox")}</span>
-        </label>
+        <>
+          {/* An imported private key is still somebody's claim about its user
+              ids: it earns trust by the same fingerprint check as anyone's key,
+              or by being bound to an account it names. */}
+          {info.secret && (
+            <span className="mail-note">
+              {t("mail.keys.ownKeyUnverified")} <UntestedTag id="mail.keys.ownKeyUnverified" />
+            </span>
+          )}
+          <label className="mail-key-verified">
+            <input
+              type="checkbox"
+              checked={info.verified}
+              disabled={busy}
+              onChange={(e) => onVerify(e.target.checked)}
+            />
+            <span>{t("mail.keys.verifiedCheckbox")}</span>
+          </label>
+        </>
       )}
       <div className="mail-key-actions">
         {onBind && (

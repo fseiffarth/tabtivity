@@ -7443,6 +7443,7 @@ export const dict: Dict = {
   "mail.keys.generate": "Crear una clave",
   "mail.keys.generateHint": "Crea una clave Curve25519 para esta cuenta. Envía la mitad pública a quien deba poder escribirte cifrado.",
   "mail.keys.ownKey": "tu clave",
+  "mail.keys.ownKeyUnverified": "clave privada importada: úsala para una cuenta solo si es tuya (compara su huella con tu otra copia)",
   "mail.keys.boundTo": "usada para {label}",
   "mail.keys.useForAccount": "Usar para esta cuenta",
   "mail.keys.verifiedCheckbox": "He comprobado esta huella con su propietario",

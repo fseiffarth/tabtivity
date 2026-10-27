@@ -81,6 +81,12 @@ struct KeyringFile {
     version: u32,
     #[serde(default)]
     entries: Vec<StoredKey>,
+    /// The one-time demotion of private keys an older build imported as
+    /// Verified has run (see [`demote_imported_secrets`]). A marker rather than
+    /// a `version` bump: an older build refuses a newer version outright, and
+    /// this field it simply ignores.
+    #[serde(default)]
+    secret_trust_migrated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,7 +96,8 @@ struct StoredKey {
     identities: Vec<String>,
     /// Whether `material` is a transferable *secret* key.
     secret: bool,
-    /// `true` once the user has confirmed the fingerprint out of band.
+    /// `true` once the user has confirmed the fingerprint out of band, bound
+    /// this (secret) key to one of their accounts, or generated it here.
     #[serde(default)]
     verified: bool,
     /// Mail account ids this key is the identity for. Only meaningful for a
@@ -116,7 +123,9 @@ pub struct PgpKeyInfo {
     pub addresses: Vec<String>,
     /// We hold the private half: this is one of the user's own keys.
     pub secret: bool,
-    /// The user has compared this fingerprint out of band.
+    /// The user has compared this fingerprint out of band — or, for one of
+    /// their own keys, generated it here or bound it to an account while every
+    /// address it names is one of their accounts'.
     pub verified: bool,
     pub accounts: Vec<String>,
     pub algorithm: String,
@@ -218,7 +227,7 @@ impl PgpKeyring {
                     .chain(self.old_wraps.iter())
                     .find_map(|wrap| mail_crypt::open(wrap, KEYRING_AAD, &raw).ok())
                     .ok_or_else(|| format!("the keyring could not be decrypted: {}", mail_crypt::CryptError::NotAuthentic))?;
-                let file: KeyringFile = serde_json::from_slice(&plain)
+                let mut file: KeyringFile = serde_json::from_slice(&plain)
                     .map_err(|e| format!("the keyring is corrupt: {e}"))?;
                 if file.version != KEYRING_VERSION {
                     return Err(format!(
@@ -226,11 +235,18 @@ impl PgpKeyring {
                         file.version
                     ));
                 }
+                if !file.secret_trust_migrated {
+                    demote_imported_secrets(&mut file);
+                    // Best effort: a failed write leaves the demotion in this
+                    // read's copy and runs it again on the next one.
+                    let _ = self.write(&file);
+                }
                 Ok(file)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(KeyringFile {
                 version: KEYRING_VERSION,
                 entries: Vec::new(),
+                secret_trust_migrated: true,
             }),
             Err(e) => Err(e.to_string()),
         }
@@ -284,8 +300,9 @@ impl PgpKeyring {
             identities: user_ids_of_details(&secret.details),
             secret: true,
             // A key we generated on this machine needs no out-of-band check: we
-            // watched it being made. This is the one place `verified` is set
-            // without a fingerprint comparison, and it is not a shortcut.
+            // watched it being made. Besides binding an account (the user naming
+            // it their identity), this is the one place `verified` is set without
+            // a fingerprint comparison, and it is not a shortcut.
             verified: true,
             accounts: vec![account_id.to_string()],
             algorithm: "Curve25519".into(),
@@ -312,9 +329,14 @@ impl PgpKeyring {
     /// private half strictly supersedes holding only the public one, and two
     /// entries with one fingerprint would make every lookup a coin flip.
     ///
-    /// An imported public key is `Known`, never `Verified` — importing is not
-    /// checking. Only [`PgpKeyring::set_verified`] promotes it, and only from an
-    /// explicit "I compared this fingerprint" click.
+    /// An imported key is `Known`, never `Verified` — importing is not
+    /// checking. That holds for a *secret* key too: holding the private half
+    /// proves nothing about whose its user ids are, and "here is my key" can be
+    /// a secret key an attacker made with a friend's address on it. Only
+    /// [`PgpKeyring::set_verified`] (an explicit "I compared this fingerprint"
+    /// click) or [`PgpKeyring::bind_account`] (an explicit "this is my
+    /// identity", for a key naming only the user's own addresses) promotes it. Re-importing a key we already hold keeps its
+    /// flag either way, so it can neither verify nor un-verify a key.
     pub fn import(&self, data: &[u8]) -> Result<Vec<PgpKeyInfo>, String> {
         let mut file = self.read()?;
         let mut added = Vec::new();
@@ -334,9 +356,7 @@ impl PgpKeyring {
                 fingerprint: fingerprint.clone(),
                 identities: user_ids_of_details(&key.details),
                 secret: true,
-                // Importing a *private* key is possession, not a claim about
-                // someone else, so it needs no out-of-band check either.
-                verified: true,
+                verified: was_verified(&file, &fingerprint),
                 accounts: carry_accounts(&file, &fingerprint),
                 algorithm: algorithm_label(key.algorithm()),
                 material: B64.encode(&material),
@@ -387,10 +407,11 @@ impl PgpKeyring {
 
     /// Record that the user compared this key's fingerprint out of band.
     ///
-    /// The only way a key becomes `Verified`, and therefore the only way any
-    /// message ever earns positive chrome. It is a deliberate, per-key,
-    /// user-initiated act — there is no heuristic that can stand in for it,
-    /// because there is no authority to ask.
+    /// The only way a correspondent's key becomes `Verified` (an own key also
+    /// gets there by being generated here or bound to an account), and
+    /// therefore the only way their messages earn positive chrome. It is a
+    /// deliberate, per-key, user-initiated act — there is no heuristic that can
+    /// stand in for it, because there is no authority to ask.
     pub fn set_verified(&self, fingerprint: &str, verified: bool) -> Result<PgpKeyInfo, String> {
         let fp = normalize_fingerprint(fingerprint);
         let mut file = self.read()?;
@@ -405,35 +426,62 @@ impl PgpKeyring {
         Ok(info)
     }
 
-    /// Bind (or with `None`, unbind) one of our own keys to a mail account.
+    /// Bind (or with `bind == false`, unbind) one of our own keys to a mail
+    /// account.
+    ///
+    /// Binding needs the key's user ids to name `account_address`: a key that
+    /// does not name the address it would sign for is not that account's
+    /// identity, however it got into the keyring. Binding is also the user
+    /// saying "this key is mine", so it promotes the key to `Verified` — but
+    /// only when *every* address on it is one of `own_addresses` (all the
+    /// user's accounts). A key that also names somebody else stays as trusted
+    /// as it was, or binding it would vouch for that somebody too. Unbinding
+    /// does not demote: the key is still the user's, only no longer this
+    /// account's. `account_address` and `own_addresses` are unused for it.
     pub fn bind_account(
         &self,
         fingerprint: &str,
         account_id: &str,
         bind: bool,
+        account_address: &str,
+        own_addresses: &[String],
     ) -> Result<(), String> {
         let fp = normalize_fingerprint(fingerprint);
         let mut file = self.read()?;
-        // One key per account: a second binding would make "which key signs this
-        // message" a question with two answers.
+        let at = file
+            .entries
+            .iter()
+            .position(|e| e.fingerprint == fp)
+            .ok_or("no such key")?;
         if bind {
+            let entry = &file.entries[at];
+            if !entry.secret {
+                return Err(
+                    "only a key you hold the private half of can be an account's identity".into(),
+                );
+            }
+            let addresses = info_of(entry).addresses;
+            let wanted = account_address.trim().to_ascii_lowercase();
+            if !addresses.contains(&wanted) {
+                return Err(format!(
+                    "this key's user ids do not name {wanted}, so it cannot be that account's identity"
+                ));
+            }
+            let all_ours = addresses
+                .iter()
+                .all(|a| own_addresses.iter().any(|o| o.trim().eq_ignore_ascii_case(a)));
+            // One key per account: a second binding would make "which key signs
+            // this message" a question with two answers.
             for e in file.entries.iter_mut() {
                 e.accounts.retain(|a| a != account_id);
             }
-        }
-        let entry = file
-            .entries
-            .iter_mut()
-            .find(|e| e.fingerprint == fp)
-            .ok_or("no such key")?;
-        if !entry.secret && bind {
-            return Err(
-                "only a key you hold the private half of can be an account's identity".into(),
-            );
-        }
-        entry.accounts.retain(|a| a != account_id);
-        if bind {
+            let entry = &mut file.entries[at];
             entry.accounts.push(account_id.to_string());
+            if all_ours {
+                entry.verified = true;
+            }
+        } else {
+            file.entries[at].accounts.retain(|a| a != account_id);
         }
         self.write(&file)
     }
@@ -1209,6 +1257,21 @@ fn was_verified(file: &KeyringFile, fingerprint: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Builds before the import fix stored every imported private key as
+/// Verified, and its user ids are claims like any other key's. Demote each
+/// unbound one to Known, once (`secret_trust_migrated` stops a key the user
+/// verifies afterwards from being demoted again). Nothing records whether a key
+/// was imported or generated, so this also demotes a generated key that a newer
+/// one took the account binding from; it shows as Known until checked again.
+fn demote_imported_secrets(file: &mut KeyringFile) {
+    for e in file.entries.iter_mut() {
+        if e.secret && e.verified && e.accounts.is_empty() {
+            e.verified = false;
+        }
+    }
+    file.secret_trust_migrated = true;
+}
+
 fn info_of(entry: &StoredKey) -> PgpKeyInfo {
     PgpKeyInfo {
         fingerprint: entry.fingerprint.clone(),
@@ -1515,7 +1578,10 @@ mod tests {
         let fp = mine.import(armored.as_bytes()).unwrap()[0]
             .fingerprint
             .clone();
-        assert!(mine.bind_account(&fp, "acct-1", true).is_err());
+        let own = vec!["bob@example.org".to_string()];
+        assert!(mine
+            .bind_account(&fp, "acct-1", true, "bob@example.org", &own)
+            .is_err());
     }
 
     #[test]
@@ -1538,6 +1604,191 @@ mod tests {
         mine.set_verified(&fps[1], true).unwrap();
         let (_key, info) = mine.public_for_address("BOB@Example.ORG").unwrap().unwrap();
         assert_eq!(info.fingerprint, fps[1], "the checked key wins");
+    }
+
+    /// A transferable secret key someone else made, carrying `uid` — the
+    /// "here is my key" file that is really a private key with a borrowed name.
+    fn foreign_secret(uid: &str) -> (String, Vec<u8>) {
+        let key = generate_curve25519(uid).unwrap();
+        (fingerprint_hex(&key.fingerprint()), key.to_bytes().unwrap())
+    }
+
+    /// Holding the private half proves nothing about whose the user ids are. An
+    /// imported secret key that could grant itself `Verified` would let anyone
+    /// who mails the user one sign as anybody, with the only positive chrome.
+    #[test]
+    fn an_imported_secret_key_is_known_and_its_signatures_earn_no_tick() {
+        let (fp, bytes) = foreign_secret("Friend <friend@corp.example>");
+        // The attacker signs with it from their own keyring.
+        let (_d, attacker) = keyring();
+        attacker.import(&bytes).unwrap();
+        attacker
+            .bind_account(&fp, "evil", true, "friend@corp.example", &["friend@corp.example".into()])
+            .unwrap();
+        let sig = attacker.sign_detached("evil", b"wire the money").unwrap();
+
+        let (_d2, mine) = keyring();
+        let added = mine.import(&bytes).unwrap();
+        assert_eq!(added.len(), 1);
+        assert!(added[0].secret);
+        assert!(!added[0].verified, "importing a private key is not checking it");
+        assert_eq!(added[0].trust(), SignerTrust::Known);
+
+        let outcome = mine.verify_detached(b"wire the money", sig.as_bytes());
+        match &outcome {
+            VerifyOutcome::Good { trust, .. } => assert_eq!(*trust, SignerTrust::Known),
+            other => panic!("expected Good/Known, got {other:?}"),
+        }
+        let info = crate::services::mail_crypto::info_for(
+            CryptoKind::PgpSigned,
+            Some(&outcome),
+            false,
+            "friend@corp.example",
+        );
+        assert_ne!(info.state, crate::schema::mail::MailCryptoState::Verified);
+    }
+
+    #[test]
+    fn an_imported_secret_key_does_not_outrank_the_genuine_key_for_encryption() {
+        let (_d, friend) = keyring();
+        friend
+            .generate("Friend", "friend@corp.example", "f")
+            .unwrap();
+        let genuine = friend.list().unwrap()[0].fingerprint.clone();
+        let (forged, bytes) = foreign_secret("Friend <friend@corp.example>");
+
+        let (_d2, mine) = keyring();
+        mine.import(friend.export_public(&genuine).unwrap().as_bytes())
+            .unwrap();
+        mine.import(&bytes).unwrap();
+        // Neither checked: being secret is no reason to win.
+        let (_k, info) = mine.public_for_address("friend@corp.example").unwrap().unwrap();
+        assert_eq!(info.fingerprint, genuine, "the secret import must not jump the queue");
+        // The user checks the genuine one: it wins, whatever order they came in.
+        mine.set_verified(&genuine, true).unwrap();
+        let (_k, info) = mine.public_for_address("friend@corp.example").unwrap().unwrap();
+        assert_eq!(info.fingerprint, genuine);
+        assert_ne!(info.fingerprint, forged);
+    }
+
+    /// Re-importing must not quietly verify a key the user had un-verified —
+    /// the old code replaced the entry with a fresh `verified: true`.
+    #[test]
+    fn re_importing_a_secret_key_keeps_its_verified_flag() {
+        let (fp, bytes) = foreign_secret("Carol <carol@example.org>");
+        let (_d, mine) = keyring();
+        mine.import(&bytes).unwrap();
+        mine.set_verified(&fp, false).unwrap();
+        mine.import(&bytes).unwrap();
+        assert!(!mine.get(&fp).unwrap().unwrap().verified, "still unverified");
+
+        mine.set_verified(&fp, true).unwrap();
+        mine.import(&bytes).unwrap();
+        assert!(mine.get(&fp).unwrap().unwrap().verified, "and still verified");
+    }
+
+    /// Binding a private key to an account is the user naming it their own
+    /// identity, which is the check; unbinding takes the account, not the trust.
+    #[test]
+    fn binding_a_secret_key_to_an_account_verifies_it() {
+        let (fp, bytes) = foreign_secret("Alice <alice@example.com>");
+        let (_d, mine) = keyring();
+        mine.import(&bytes).unwrap();
+        assert!(!mine.get(&fp).unwrap().unwrap().verified);
+
+        let own = vec!["Alice@Example.com".to_string(), "alice@work.example".to_string()];
+        mine.bind_account(&fp, "acct-1", true, "ALICE@example.com", &own)
+            .unwrap();
+        let bound = mine.get(&fp).unwrap().unwrap();
+        assert!(bound.verified);
+        assert_eq!(bound.accounts, vec!["acct-1"]);
+
+        mine.bind_account(&fp, "acct-1", false, "", &[]).unwrap();
+        let unbound = mine.get(&fp).unwrap().unwrap();
+        assert!(unbound.accounts.is_empty());
+        assert!(unbound.verified, "unbinding does not demote");
+    }
+
+    /// The one-click path: a planted key naming a friend must not become an
+    /// account's identity (and so Verified) because the user pressed "Use for
+    /// this account" beside it.
+    #[test]
+    fn a_key_that_does_not_name_the_account_address_cannot_be_bound() {
+        let (fp, bytes) = foreign_secret("Friend <friend@corp.example>");
+        let (_d, mine) = keyring();
+        mine.import(&bytes).unwrap();
+        let own = vec!["me@example.com".to_string()];
+        assert!(mine
+            .bind_account(&fp, "acct-1", true, "me@example.com", &own)
+            .is_err());
+        let after = mine.get(&fp).unwrap().unwrap();
+        assert!(after.accounts.is_empty(), "not bound");
+        assert!(!after.verified, "and not verified");
+    }
+
+    /// A key naming the user *and* somebody else, in whatever order the
+    /// attacker chose, may sign for the user's account — but binding it must not
+    /// vouch for the other address.
+    #[test]
+    fn binding_a_key_with_a_foreign_user_id_does_not_verify_it() {
+        let mut params = SecretKeyParamsBuilder::default();
+        params
+            .key_type(KeyType::Ed25519Legacy)
+            .can_certify(true)
+            .can_sign(true)
+            .can_encrypt(EncryptionCaps::None)
+            .primary_user_id("Friend <friend@corp.example>".into())
+            .user_ids(vec!["Me <me@example.com>".into()]);
+        let key = params
+            .build()
+            .unwrap()
+            .generate(rand::rngs::OsRng)
+            .unwrap();
+        let fp = fingerprint_hex(&key.fingerprint());
+
+        let (_d, mine) = keyring();
+        mine.import(&key.to_bytes().unwrap()).unwrap();
+        let own = vec!["me@example.com".to_string()];
+        mine.bind_account(&fp, "acct-1", true, "me@example.com", &own)
+            .unwrap();
+        let after = mine.get(&fp).unwrap().unwrap();
+        assert_eq!(after.accounts, vec!["acct-1"], "bound: it does name the account");
+        assert!(!after.verified, "but friend@corp.example is not ours to vouch for");
+        assert_eq!(after.trust(), SignerTrust::Known);
+    }
+
+    /// Keyrings written before the import fix hold imported private keys as
+    /// Verified. The first read demotes the unbound ones, once.
+    #[test]
+    fn old_imported_secret_keys_are_demoted_once() {
+        let (_d, mine) = keyring();
+        let generated = mine.generate("Alice", "alice@example.com", "acct-1").unwrap();
+        let (imported, bytes) = foreign_secret("Friend <friend@corp.example>");
+        mine.import(&bytes).unwrap();
+        // What an older build left behind: the import Verified, no marker.
+        let mut file = mine.read().unwrap();
+        assert!(file.secret_trust_migrated, "a fresh keyring needs no migration");
+        file.entries
+            .iter_mut()
+            .find(|e| e.fingerprint == imported)
+            .unwrap()
+            .verified = true;
+        file.secret_trust_migrated = false;
+        mine.write(&file).unwrap();
+
+        assert!(
+            !mine.get(&imported).unwrap().unwrap().verified,
+            "an unbound private key is demoted"
+        );
+        assert!(
+            mine.get(&generated.fingerprint).unwrap().unwrap().verified,
+            "a bound one keeps its trust"
+        );
+        assert!(mine.read().unwrap().secret_trust_migrated, "and the marker is written back");
+
+        // The user checks it by hand afterwards: that sticks.
+        mine.set_verified(&imported, true).unwrap();
+        assert!(mine.get(&imported).unwrap().unwrap().verified);
     }
 
     #[test]

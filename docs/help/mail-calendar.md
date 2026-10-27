@@ -77,7 +77,12 @@ Keys: **Add a key** (paste or **From a file…**) for other people's public keys
 — tick **I checked this fingerprint with its owner** only after comparing it in
 person or by phone; **Copy out** gives your public key to share (your private
 key is never exported); **Use for this account** binds your key to an
-account. Tabtivity supports modern Curve25519 keys only, not RSA.
+account (and trusts it when every address on the key is one of your
+accounts), so use it only for a key that is really yours: an
+imported private key starts out unchecked, and a "here is my key" file can be
+someone else's private key with your contact's address on it. The button
+appears only for a key that names the account's address. Tabtivity supports
+modern Curve25519 keys only, not RSA.
 
 ## Calendar
 

@@ -423,6 +423,7 @@ export const UNTESTED = {
   "mail.encryption.title": { area: "mail", what: "MailEncryptionDialog · Local mail encryption" },
   "mail.filters.title": { area: "mail", what: "MailFiltersDialog · Mail filters" },
   "mail.keys.title": { area: "mail", what: "MailKeysDialog · OpenPGP keys" },
+  "mail.keys.ownKeyUnverified": { area: "mail", what: "MailKeysDialog · an imported private key is listed under Your keys as untrusted, with the fingerprint checkbox; Use for this account appears only for a key naming the account's address and trusts it only when every address on it is one of your accounts (then it shows as your key); re-importing keeps its trust" },
   "mail.contacts.title": { area: "mail", what: "MailAddressBook · Address Book tab (Personal / Collected books, lists, card editor, Write)" },
   "mail.contacts.importExport": { area: "mail", what: "MailAddressBook · vCard Import… / Export… (backend-raised file dialogs)" },
   "mail.contacts.fromInbox": { area: "mail", what: "MailAddressBook · Add from Inbox (senders of indexed Inbox mail → Collected; robots and own addresses skipped)" },

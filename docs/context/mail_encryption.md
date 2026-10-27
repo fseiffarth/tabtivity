@@ -175,6 +175,11 @@ else. So an imported key is `Known`, only an explicit "I checked this" promotes
 it, and **only `Verified` *and* address-aligned earns positive chrome**. Drop the
 middle clause and a padlock goes to whoever last emailed you a key; drop the last
 and it goes to anyone with *a* verified key signing as anyone they like.
+That holds for an imported *private* key too: holding the private half proves
+nothing about whose its user ids are. It starts `Known`; binding it to an
+account it names verifies it only when every address on it is one of the user's
+accounts; a key generated here is `Verified` from the start. Keyrings written
+before this rule had their unbound private keys demoted once on first read.
 
 **Headers are outside the signature, in both formats.** A signed message does not
 authenticate its own `From`, `Subject` or `Date`. The backend emits a

@@ -7447,6 +7447,7 @@ export const dict: Dict = {
   "mail.keys.generate": "Schlüssel erstellen",
   "mail.keys.generateHint": "Erstellt einen Curve25519-Schlüssel für dieses Konto. Schicke die öffentliche Hälfte an alle, die dir verschlüsselt schreiben können sollen.",
   "mail.keys.ownKey": "dein Schlüssel",
+  "mail.keys.ownKeyUnverified": "importierter privater Schlüssel — verwende ihn nur für ein Konto, wenn er wirklich deiner ist (vergleiche seinen Fingerabdruck mit deiner anderen Kopie)",
   "mail.keys.boundTo": "verwendet für {label}",
   "mail.keys.useForAccount": "Für dieses Konto verwenden",
   "mail.keys.verifiedCheckbox": "Ich habe diesen Fingerabdruck mit dem Inhaber abgeglichen",
