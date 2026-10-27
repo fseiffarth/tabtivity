@@ -223,6 +223,8 @@ describe("Mobile assistant — the Focus chat", () => {
         return json({ tab: chat("fresh", "Fresh", { assistant_launch: made }) });
       }
       if (init?.method === "DELETE") return json({ closed: true });
+      if (path.endsWith("/assistant-models")) return json({ rows: [{ id: "default", label: "Default (recommended)" }, { id: "claude-opus-5-5", label: "Opus 5.5" }], current: "default" });
+      if (init?.method === "POST" && path.endsWith("/assistant-model")) return json({ switched: true });
       if (path === "/api/v1/projects/scope") return json({ ...SCOPE, tabs: [chat("old", "Old"), { ...TAB }, ...(made ? [chat("fresh", "Fresh")] : [])] });
       return json({ error: "not_found" }, 404);
     });
@@ -255,10 +257,23 @@ describe("Mobile assistant — the Focus chat", () => {
     expect(within(menu).getByText(/Codex is not signed in/)).toBeTruthy();
     fireEvent.click(codex);
     expect(posts()).toEqual([]);
-    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /qwen3:8b/ }));
+    // One row per CLI: the model is the model dropdown's.
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /^OpenCode$/ }));
     await waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ id: "fresh" })));
     expect(JSON.parse(String((posts()[0]?.[1] as RequestInit).body))).toMatchObject({ kind: "agent", assistant: "h-oc-qwen" });
     expect(deletes().sort()).toEqual(["/api/v1/tabs/old", "/api/v1/tabs/tab-7"]);
+  });
+
+  it("switches the model from the head's model line, with no status line", async () => {
+    serve();
+    const { container } = render(<Terminal tab={TAB} project="scope" back={() => {}} />);
+    const model = await screen.findByRole("button", { name: /Default \(recommended\)/ });
+    expect(container.querySelector(".session-facts")).toBeNull();
+    fireEvent.click(model);
+    fireEvent.click(await screen.findByRole("button", { name: /Opus 5\.5/ }));
+    await waitFor(() => expect(posts().some(([url]) => String(url).endsWith("/tabs/tab-7/assistant-model"))).toBe(true));
+    const sent = posts().find(([url]) => String(url).endsWith("/assistant-model"));
+    expect(JSON.parse(String((sent?.[1] as RequestInit).body))).toEqual({ model: "claude-opus-5-5" });
   });
 
   it("Relaunch starts a fresh session on the same launch", async () => {

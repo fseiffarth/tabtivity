@@ -809,6 +809,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-screen header { padding:0 12px; gap:8px; }
 .terminal-title { display:grid; min-width:0; flex:1; gap:1px; }
 .terminal-title h1,.terminal-title small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Tabby's model dropdown under its CLI's: a caption that stays on a phone,
+   where the other titles' captions go. */
+.terminal-title .tabby-model { justify-self:start; color:var(--ink-muted); font-size:var(--fs-caption); }
 .terminal-view-switch { display:flex; gap:3px; padding:3px; border:1px solid #34384a; border-radius:10px; background:#151822; }
 .terminal-view-switch button { padding:6px 9px; border:0; border-radius:7px; background:transparent; font-size:.76rem; }
 /* An agent tab's Focus opens a list once it is up: where Focus reads from. */

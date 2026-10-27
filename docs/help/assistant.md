@@ -30,8 +30,10 @@ web access.
 ## Choose a CLI and model
 
 The dropdown at the top of the Tabby view lists the CLIs you have installed;
-for a local one a second dropdown picks the Ollama model. Picking another one
-starts a fresh chat on it in place of the current chat. **Relaunch** beside it
+a second dropdown picks the model (Claude's and Codex's own models, or the
+Ollama model for a local one). Picking another CLI starts a fresh chat on it in
+place of the current chat; picking another model restarts the same chat on it
+and keeps the conversation. **Relaunch** beside it
 starts a fresh session of the same CLI (the current conversation ends).
 
 | Choice | Runs on | Web search |
@@ -97,8 +99,9 @@ With the experimental switch on, **Settings → Mobile → Tabby from the phone*
 phone's tab bar on Home; Tabby is not listed among the projects. Tap it for the
 same one chat as on the desktop: the last chat, started again if the desktop
 restarted, or a new one on the default CLI. In the chat, tap the CLI name at the
-top to pick another CLI or local model (dimmed when not signed in on the
-desktop), or the ↻ button to relaunch a fresh session. The phone's chat has no
+top to pick another CLI (dimmed when not signed in on the desktop), the model
+name under it to switch the chat's model, or the ↻ button to relaunch a fresh
+session. The phone's chat has no
 files, outbox, upload or Commit buttons. Tabby works from the phone with the
 desktop window closed as long as Tabtivity is running. Turning the phone switch
 off removes the button. There is no phone chat on Windows (it needs tmux).

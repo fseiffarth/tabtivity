@@ -2138,7 +2138,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   </>;
   return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
-        ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} />
+        ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
+          label: assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip,
+          open: openAssistantSheet,
+          disabled: !connected || tab.agent_status === "working" || tab.agent_status === "question",
+          expanded: assistantSheet,
+        }} />
         : <div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
@@ -2439,7 +2444,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         <button className="primary" onClick={() => setMarkupAway(null)}>{t("mobile.markup.awayBack")}</button>
       </div>}
       {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}>✕</button></div>}
-      {(tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
+      {/* No facts row in a Tabby chat: its head's model dropdown says enough
+          (the desktop's Tabby view draws none either). */}
+      {!bare && (tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
         {/* An agent tab's model, mode and status lead the row as tappable facts:
             the composer keeps the whole bar for the draft and its buttons. */}
         {tab.kind === "agent" && <>
@@ -2450,8 +2457,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               cannot reach it (the desktop switches its model by restarting it). */}
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
-            : bare
-            ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openAssistantSheet} aria-haspopup="dialog" aria-expanded={assistantSheet} title={t("terminal.reader.assistantModelHint")}><span className="fact-action-label">{assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip}</span></button>
             : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
