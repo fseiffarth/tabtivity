@@ -5432,6 +5432,11 @@ export const dict: Dict = {
   "devBuild.buildNow": "Compiler maintenant",
   "devBuild.buildNowHint": "Compiler HEAD une fois maintenant, sans reprendre les builds automatiques. Suspendre à nouveau l'annule.",
   "devBuild.startingBuild": "Démarrage…",
+  "devBuild.stop": "Arrêter le build",
+  "devBuild.stopHint": "Annuler ce build. Les builds automatiques restent actifs : le prochain commit compile comme d'habitude.",
+  "devBuild.stopInstallingHint": "Le build est en cours d'installation et se termine dans un instant ; une installation interrompue à mi-chemin laisserait un binaire cassé.",
+  "devBuild.stopping": "Arrêt…",
+  "devBuild.stoppedDetail": "Build arrêté. Le prochain commit recompile.",
   "devBuild.logTab": "Journal du build",
   "statusCluster.settingLabel": "Replier les indicateurs d'état de l'en-tête",
   "statusCluster.settingHelp":

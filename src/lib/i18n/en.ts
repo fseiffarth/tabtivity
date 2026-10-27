@@ -5595,6 +5595,11 @@ export const enSource = {
   "devBuild.buildNow": "Build now",
   "devBuild.buildNowHint": "Build HEAD once now, without resuming auto-builds. Pausing again cancels it.",
   "devBuild.startingBuild": "Starting…",
+  "devBuild.stop": "Stop build",
+  "devBuild.stopHint": "Cancel this build. Auto-builds stay on: the next commit builds as usual.",
+  "devBuild.stopInstallingHint": "The build is installing and finishes in a moment; an install stopped halfway would leave a broken binary.",
+  "devBuild.stopping": "Stopping…",
+  "devBuild.stoppedDetail": "Build stopped. The next commit builds again.",
   "devBuild.logTab": "Dev build log",
   "statusCluster.settingLabel": "Collapse header status indicators",
   "statusCluster.settingHelp":

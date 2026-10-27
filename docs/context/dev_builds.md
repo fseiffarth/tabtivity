@@ -231,7 +231,16 @@ change was not run live.
   it and cancels the pass. `--build-now` and `--resume` return only once the
   detached run holds the lock (at most 5 s; `await_run`), since the chip
   re-reads at once and an earlier read still said idle — "Build now" looked
-  like it needed a second click (2026-10-20); the hook's `--queue` never waits;
+  like it needed a second click (2026-10-20); the hook's `--queue` never waits.
+  **Stop** (user, 2026-10-27; `--stop`, the chip's "Stop build" while a pass
+  runs or settles, `dev_build_stop`) cancels only that pass: auto-builds stay
+  on. It writes HEAD into `package-dev-auto.stopped`, which a running pass
+  cancels itself for (not a failure; an install under way still finishes) and
+  which keeps `queue_if_behind` from starting that same HEAD again on its next
+  poll; every `queue()` (the next commit), `--resume` and `--build-now` drop
+  it, and "Build now" is offered after a stop as while paused. `--stop` waits
+  for the run to let go of the lock (at most 15 s), and the settle wait now
+  sleeps a second at a time so a stop ends it at once;
   `scripts/package-dev-auto.sh --status` says what it is doing and
   `~/.local/share/tabtivity/package-dev-auto.log` holds the last build's output.
   After each run the loop calls `scripts/target-prune.sh` (2026-10-21; `target/`

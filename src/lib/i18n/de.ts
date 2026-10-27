@@ -5454,6 +5454,11 @@ export const dict: Dict = {
   "devBuild.buildNow": "Jetzt bauen",
   "devBuild.buildNowHint": "HEAD einmal jetzt bauen, ohne Auto-Builds fortzusetzen. Erneutes Pausieren bricht den Build ab.",
   "devBuild.startingBuild": "Startet…",
+  "devBuild.stop": "Build stoppen",
+  "devBuild.stopHint": "Diesen Build abbrechen. Auto-Builds bleiben an: der nächste Commit baut wie gewohnt.",
+  "devBuild.stopInstallingHint": "Der Build installiert gerade und ist gleich fertig; eine halb abgebrochene Installation hinterließe ein kaputtes Programm.",
+  "devBuild.stopping": "Stoppt…",
+  "devBuild.stoppedDetail": "Build gestoppt. Der nächste Commit baut wieder.",
   "devBuild.logTab": "Dev-Build-Log",
   "statusCluster.settingLabel": "Statusanzeigen in der Kopfleiste einklappen",
   "statusCluster.settingHelp":

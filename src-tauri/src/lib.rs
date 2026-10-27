@@ -2430,6 +2430,7 @@ pub fn run() {
             commands::debug::dev_build_relaunch,
             commands::debug::dev_build_set_paused,
             commands::debug::dev_build_now,
+            commands::debug::dev_build_stop,
             commands::debug::dev_todo_groups,
             commands::debug::dev_todo_read,
             commands::debug::dev_todo_write,

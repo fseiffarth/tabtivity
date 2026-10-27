@@ -217,6 +217,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["dev_build_relaunch", "admin"],
   ["dev_build_set_paused", "admin"],
   ["dev_build_status", "admin"],
+  ["dev_build_stop", "admin"],
   ["dev_todo_groups", "admin"],
   ["dev_todo_read", "admin"],
   ["dev_todo_write", "admin"],

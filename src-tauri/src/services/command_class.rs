@@ -407,6 +407,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("dev_build_relaunch", Admin),
     ("dev_build_set_paused", Admin),
     ("dev_build_status", Admin),
+    ("dev_build_stop", Admin),
     // The checkout under `dev_build::SOURCE_ROOT`, a build-time host path.
     ("dev_todo_groups", Admin),
     ("dev_todo_read", Admin),

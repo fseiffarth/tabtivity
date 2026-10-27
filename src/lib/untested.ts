@@ -248,6 +248,7 @@ export const UNTESTED = {
   "devBuild.relaunchNow": { area: "header", what: "DevBuildIndicator · Relaunch now (onto the newer snapshot)", tested: "2026-09-28" },
   "devBuild.pause": { area: "header", what: "DevBuildIndicator · Pause / resume auto-builds (cancels a running compile)" },
   "devBuild.buildNow": { area: "header", what: "DevBuildIndicator · Build now while paused (one build of a newer HEAD, stays paused)" },
+  "devBuild.stop": { area: "header", what: "DevBuildIndicator · Stop build (cancels the running pass; auto-builds stay on)" },
   "machinesIndicator.1": { area: "header", what: "MachinesIndicator · Choose which machines to write to a shareable JSON file. Only the host, port and label ar…", tested: "2026-09-20" },
   "machinesIndicator.10": { area: "header", what: "MachinesIndicator · to which project?" },
   "machinesIndicator.11": { area: "header", what: "MachinesIndicator · here — then removes it from the list. Projects it was added to keep their own copy." },

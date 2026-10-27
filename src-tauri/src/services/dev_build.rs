@@ -5,8 +5,9 @@
 //! hook (see `docs/context/dev_builds.md`). This module never starts one
 //! itself; it asks the script to `--queue` a commit the hook could not queue
 //! itself (`queue_if_behind`), to `--pause`/`--resume` when the user
-//! clicks the chip's switch (`set_paused`), and to `--build-now` when they
-//! click its "Build now" while paused (`build_now`). Otherwise it
+//! clicks the chip's switch (`set_paused`), to `--stop` from its "Stop build"
+//! (`stop`), and to `--build-now` when they click its "Build now" while
+//! paused or stopped (`build_now`). Otherwise it
 //! reads the files that script already keeps for `--status`:
 //! the lock directory and its pid, the pending marker, the installed-commit
 //! stamp, the last failure, and the tail of the log, whose own lines say which
@@ -103,6 +104,9 @@ pub struct DevBuildStatus {
     /// Auto-builds are paused (`package-dev-auto.sh --pause`): nothing queues
     /// until the user resumes.
     pub paused: bool,
+    /// The user stopped the build of a commit that is still not installed
+    /// (`--stop`); the next commit builds as usual.
+    pub stopped: bool,
     pub log_path: String,
 }
 
@@ -351,6 +355,8 @@ pub fn status() -> Option<DevBuildStatus> {
     });
     let stamp = read_trimmed(&dir.join("package-dev-auto.stamp"));
     let behind = stamp.as_deref().and_then(|sha| commits_behind(root, sha));
+    // A stop during the install could not cancel it: that commit is built.
+    let stopped = read_trimmed(&dir.join(STOPPED_FILE)).is_some_and(|sha| stamp.as_deref() != Some(&sha));
     let binary = dir.join(crate::brand::DEV_BIN_NAME);
     let (frozen, replaced) = match own_exe() {
         Some((exe, replaced)) if exe == binary => (true, replaced),
@@ -372,12 +378,17 @@ pub fn status() -> Option<DevBuildStatus> {
         can_relaunch: frozen && (replaced || adoptable.is_some()),
         adoptable,
         paused: dir.join(PAUSED_FILE).exists(),
+        stopped,
         log_path: log_path.to_string_lossy().into_owned(),
     })
 }
 
 /// The script's pause mark (`package-dev-auto.sh --pause`).
 const PAUSED_FILE: &str = "package-dev-auto.paused";
+
+/// The HEAD the user stopped the build of (`package-dev-auto.sh --stop`);
+/// dropped by the script's next queue.
+const STOPPED_FILE: &str = "package-dev-auto.stopped";
 
 /// The HEAD this process last asked the script to freeze, so a HEAD the script
 /// declined (`tabtivity.autoDevBuild false`) or already failed is asked for once,
@@ -418,6 +429,11 @@ pub fn queue_if_behind() {
     if dir.join(PAUSED_FILE).exists() {
         return;
     }
+    // The user stopped this very HEAD's build: starting it again on the next
+    // poll would undo the click.
+    if read_trimmed(&dir.join(STOPPED_FILE)).as_deref() == Some(head.as_str()) {
+        return;
+    }
     let stamp = read_trimmed(&dir.join("package-dev-auto.stamp"));
     let failed = read_trimmed(&dir.join("package-dev-auto.failed"))
         .and_then(|line| line.split(' ').next().map(str::to_string));
@@ -456,7 +472,16 @@ pub fn set_paused(paused: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Build HEAD once while auto-builds stay paused, from the chip's "Build now".
+/// Cancel the running (or settling) build, from the chip's "Stop build".
+/// Unlike a pause the next commit builds as usual; an install already under
+/// way still finishes. Returns once the build has let go (at most 15 s).
+/// User-clicked only.
+pub fn stop() -> Result<(), String> {
+    run_script("--stop")
+}
+
+/// Build HEAD once while auto-builds stay paused or after a stop, from the
+/// chip's "Build now".
 /// The script does nothing when the installed snapshot already is HEAD, and
 /// detaches the build otherwise. User-clicked only.
 pub fn build_now() -> Result<(), String> {
