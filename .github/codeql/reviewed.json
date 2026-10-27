@@ -9,35 +9,123 @@
   },
   {
     "path": "src-tauri/src/commands/assistant.rs",
-    "line": 429,
+    "line": 430,
     "source": "assert!(crate::services::agent_session::is_uuid_shaped(&chat.uid), \"{}\", chat.uid);",
     "rule": "rust/cleartext-logging",
-    "sha256": "b15455e3db79562e954ba7d2721e9384e7e7cd73326ee8014a9a01d4e2e7d8f6",
+    "sha256": "11a1a9641cf8a66f25f7cc25f55b5e15c7b4be84cb1acfc59a896d1b1dcb78a5",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated chat uid when the uuid-shape assertion fails; a uid is not a credential."
   },
   {
-    "path": "src-tauri/src/commands/projects.rs",
-    "line": 5179,
+    "path": "src-tauri/src/commands/projects/tests.rs",
+    "line": 46,
     "source": "assert!(crate::services::agent_session::is_uuid_shaped(&a), \"{a}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "bb7eb099d64d920571a8b6d85cac7e74a1753da736a1ba9312461d2b4515aee9",
+    "sha256": "2c9f8fd6ea4bcb36207b201d8b43325e8b746f546dfcf2616c5b50e8058b2769",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its shape assertion fails."
   },
   {
-    "path": "src-tauri/src/commands/projects.rs",
-    "line": 5181,
+    "path": "src-tauri/src/commands/projects/tests.rs",
+    "line": 48,
     "source": "assert!(matches!(&a[19..20], \"8\" | \"9\" | \"a\" | \"b\"), \"{a}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "bb7eb099d64d920571a8b6d85cac7e74a1753da736a1ba9312461d2b4515aee9",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its variant assertion fails."
+    "sha256": "2c9f8fd6ea4bcb36207b201d8b43325e8b746f546dfcf2616c5b50e8058b2769",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its shape assertion fails."
   },
   {
     "path": "src-tauri/src/services/agent/agent_tasks.rs",
     "line": 63,
     "source": "if !path.exists() {",
     "rule": "rust/path-injection",
-    "sha256": "c91388347b3c914015e63adccf015223b2c3e668831acce5ad240c8322a79422",
+    "sha256": "856b4f505c43a9e34fff52f31764a2286dd1073f13857456ef02c40c5674a0db",
     "reason": "read_at receives only the schedule file under the startup-selected state directory, through file_path or trusted scheduler paths. The environment override belongs to the process owner; phone input never selects this path."
+  },
+  {
+    "path": "src-tauri/src/services/agent/codex_bind.rs",
+    "line": 630,
+    "source": "eprintln!(\"codex_bind: record session for {uid}: {e}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "7e73efe7144a961df4a0395fa3c8d244ec98179c18d181d6fc66e76c950ff7df",
+    "reason": "Logs the tab uid (the opaque tab id that names the live-session file) and an io error; no credential is logged."
+  },
+  {
+    "path": "src-tauri/src/services/agent/codex_bind.rs",
+    "line": 681,
+    "source": "eprintln!(\"codex_bind: withdraw guessed session for {uid}: {e}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "7e73efe7144a961df4a0395fa3c8d244ec98179c18d181d6fc66e76c950ff7df",
+    "reason": "Logs the tab uid (the opaque tab id that names the live-session file) and an io error; no credential is logged."
+  },
+  {
+    "path": "src-tauri/src/services/api/api_meter.rs",
+    "line": 2074,
+    "source": "assert!((m.worst_case(MONTH) - expect).abs() < 1e-12, \"{}\", m.worst_case(MONTH));",
+    "rule": "rust/cleartext-logging",
+    "sha256": "70e7a29566d819604f6e4ac73c42e2a5605c504cd62fcdad4a44df340c9110cd",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a computed cost estimate in dollars; no API key is involved."
+  },
+  {
+    "path": "src-tauri/src/services/api/api_meter.rs",
+    "line": 2088,
+    "source": "assert!((base - (input as f64 * 1.50 + GEMINI_MAX_OUTPUT as f64 * 9.0) / 1e6).abs() < 1e-12, \"{base}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "70e7a29566d819604f6e4ac73c42e2a5605c504cd62fcdad4a44df340c9110cd",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a computed cost estimate in dollars; no API key is involved."
+  },
+  {
+    "path": "src-tauri/src/services/api/api_meter.rs",
+    "line": 2094,
+    "source": "assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, \"{}\", m.worst_case(MONTH));",
+    "rule": "rust/cleartext-logging",
+    "sha256": "70e7a29566d819604f6e4ac73c42e2a5605c504cd62fcdad4a44df340c9110cd",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a computed cost estimate in dollars; no API key is involved."
+  },
+  {
+    "path": "src-tauri/src/services/api/api_meter.rs",
+    "line": 2157,
+    "source": "assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, \"{}\", m.worst_case(MONTH));",
+    "rule": "rust/cleartext-logging",
+    "sha256": "70e7a29566d819604f6e4ac73c42e2a5605c504cd62fcdad4a44df340c9110cd",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a computed cost estimate in dollars; no API key is involved."
+  },
+  {
+    "path": "src-tauri/src/services/api/api_meter.rs",
+    "line": 2162,
+    "source": "assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, \"{}\", m.worst_case(MONTH));",
+    "rule": "rust/cleartext-logging",
+    "sha256": "70e7a29566d819604f6e4ac73c42e2a5605c504cd62fcdad4a44df340c9110cd",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a computed cost estimate in dollars; no API key is involved."
+  },
+  {
+    "path": "src-tauri/src/services/api/api_meter.rs",
+    "line": 2174,
+    "source": "assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, \"{}\", m.worst_case(MONTH));",
+    "rule": "rust/cleartext-logging",
+    "sha256": "70e7a29566d819604f6e4ac73c42e2a5605c504cd62fcdad4a44df340c9110cd",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a computed cost estimate in dollars; no API key is involved."
+  },
+  {
+    "path": "src-tauri/src/services/calendar/caldav/tests.rs",
+    "line": 568,
+    "source": "\"hunter2\".into(), // privacy-check: ok — test fixture, never sent",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "99feddd28687803c8ef8969e333cb3ce5daa1e67b6d528e6b4139f73d940b73c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture password for caldav Credentials; it reaches no network."
+  },
+  {
+    "path": "src-tauri/src/services/calendar/caldav/tests.rs",
+    "line": 671,
+    "source": "\"pw\".into(), // privacy-check: ok — test fixture, reaches no network",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "99feddd28687803c8ef8969e333cb3ce5daa1e67b6d528e6b4139f73d940b73c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture password for caldav Credentials; it reaches no network."
+  },
+  {
+    "path": "src-tauri/src/services/calendar/caldav/tests.rs",
+    "line": 976,
+    "source": "let err = Credentials::new(\"me\".into(), \"x\".into(), \"http://dav.example.org/\").unwrap_err();",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "99feddd28687803c8ef8969e333cb3ce5daa1e67b6d528e6b4139f73d940b73c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture password for caldav Credentials; it reaches no network."
   },
   {
     "path": "src-tauri/src/services/home_io.rs",
@@ -52,63 +140,207 @@
     "line": 2007,
     "source": "assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), \"{uid:?}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "31a8ef7f212bcb7fbc3b26de8f21d9b03b7672f3269d7e70f00c64d6817508c0",
+    "sha256": "5ef7dc43e78fbe5ffda50f1c5c7aed324fb677576dc1d098bb33bcc7034441fd",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the malformed fixture uid being refused."
   },
   {
+    "path": "src-tauri/src/services/mail/mail_authres.rs",
+    "line": 375,
+    "source": "assert_eq!(r.methods.len(), 2, \"{:?}\", r.methods);",
+    "rule": "rust/cleartext-logging",
+    "sha256": "0287bd3777610ad12dae842e43de8a7684620a1540cf20a4f769c01934161c5c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the Authentication-Results methods parsed from a fixture header; trusted() is the trusted-authserv check, not a secret."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_authres.rs",
+    "line": 391,
+    "source": "assert_eq!(r.methods.len(), 2, \"{:?}\", r.methods);",
+    "rule": "rust/cleartext-logging",
+    "sha256": "0287bd3777610ad12dae842e43de8a7684620a1540cf20a4f769c01934161c5c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the Authentication-Results methods parsed from a fixture header; trusted() is the trusted-authserv check, not a secret."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_authres.rs",
+    "line": 551,
+    "source": "assert!(r.methods.len() <= MAX_METHODS, \"{}\", r.methods.len());",
+    "rule": "rust/cleartext-logging",
+    "sha256": "0287bd3777610ad12dae842e43de8a7684620a1540cf20a4f769c01934161c5c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the Authentication-Results methods parsed from a fixture header; trusted() is the trusted-authserv check, not a secret."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_authres.rs",
+    "line": 640,
+    "source": "assert!(method(&r, \"dkim\").is_some(), \"{:?}\", r.methods);",
+    "rule": "rust/cleartext-logging",
+    "sha256": "0287bd3777610ad12dae842e43de8a7684620a1540cf20a4f769c01934161c5c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the Authentication-Results methods parsed from a fixture header; trusted() is the trusted-authserv check, not a secret."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_authres.rs",
+    "line": 647,
+    "source": "assert!(r.methods.is_empty(), \"{:?}\", r.methods);",
+    "rule": "rust/cleartext-logging",
+    "sha256": "0287bd3777610ad12dae842e43de8a7684620a1540cf20a4f769c01934161c5c",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the Authentication-Results methods parsed from a fixture header; trusted() is the trusted-authserv check, not a secret."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_crypt.rs",
+    "line": 433,
+    "source": "let mut okm = [0u8; 32];",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "bfdc477d348af7e36d0a60778c7cd4f5f4b44c4a260eed8a0342e1459137d9fa",
+    "reason": "Zeroed HKDF output buffer: hk.expand fills it from the store's random key material before Key::from_bytes, then it is zeroized."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_crypt.rs",
+    "line": 709,
+    "source": "let mut out = [0u8; 32];",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "bfdc477d348af7e36d0a60778c7cd4f5f4b44c4a260eed8a0342e1459137d9fa",
+    "reason": "Zeroed Argon2id output buffer: hash_password_into fills it from the user's passphrase and the key file's random salt, then it is zeroized."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_crypt.rs",
+    "line": 743,
+    "source": "let mut key = Key([0u8; 32]);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "bfdc477d348af7e36d0a60778c7cd4f5f4b44c4a260eed8a0342e1459137d9fa",
+    "reason": "Key([0u8; 32]) is fully overwritten by the vault's HKDF subkey (copy_from_slice) before it is returned."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_crypt.rs",
+    "line": 1183,
+    "source": "Key::from_bytes([7u8; 32])",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "bfdc477d348af7e36d0a60778c7cd4f5f4b44c4a260eed8a0342e1459137d9fa",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Key::from_bytes([7u8; 32]) is the fixture key of mail_crypt's mod tests."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_crypt.rs",
+    "line": 1275,
+    "source": "let other = Key::from_bytes([9u8; 32]);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "bfdc477d348af7e36d0a60778c7cd4f5f4b44c4a260eed8a0342e1459137d9fa",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Key::from_bytes([9u8; 32]) is the wrong-key fixture of mail_crypt's mod tests."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_engine/tests.rs",
+    "line": 92,
+    "source": "assert!(chunks.len() > 1, \"expected a split, got {chunks:?}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "665fe2767a07470f45d2a58a802968d8ea7df34b1f130b8313ce7074551af5ce",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints IMAP UID-set chunks (message numbers); a mail UID is not a credential."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_engine/tests.rs",
+    "line": 94,
+    "source": "assert!(c.len() <= 40, \"chunk over budget: {c:?}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "665fe2767a07470f45d2a58a802968d8ea7df34b1f130b8313ce7074551af5ce",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints IMAP UID-set chunks (message numbers); a mail UID is not a credential."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_engine/tests.rs",
+    "line": 95,
+    "source": "assert!(!c.starts_with(','), \"chunk starts with a separator: {c:?}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "665fe2767a07470f45d2a58a802968d8ea7df34b1f130b8313ce7074551af5ce",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints IMAP UID-set chunks (message numbers); a mail UID is not a credential."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_engine/tests.rs",
+    "line": 96,
+    "source": "assert!(!c.ends_with(','), \"chunk ends with a separator: {c:?}\");",
+    "rule": "rust/cleartext-logging",
+    "sha256": "665fe2767a07470f45d2a58a802968d8ea7df34b1f130b8313ce7074551af5ce",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints IMAP UID-set chunks (message numbers); a mail UID is not a credential."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store.rs",
+    "line": 2997,
+    "source": "return Ok(false);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "b540edcd463fa8dab7302c8241690f942aec477975f7eee1dd993834fc72e3e2",
+    "reason": "The flagged constant is a bool or count the cleartext-store migration returns (Ok(false), Ok(0), changed = 0); no hard-coded value reaches a key: seal_text seals with the account's derived keys."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store.rs",
+    "line": 3010,
+    "source": "return Ok(false);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "b540edcd463fa8dab7302c8241690f942aec477975f7eee1dd993834fc72e3e2",
+    "reason": "The flagged constant is a bool or count the cleartext-store migration returns (Ok(false), Ok(0), changed = 0); no hard-coded value reaches a key: seal_text seals with the account's derived keys."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store.rs",
+    "line": 3109,
+    "source": "return Ok(0);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "b540edcd463fa8dab7302c8241690f942aec477975f7eee1dd993834fc72e3e2",
+    "reason": "The flagged constant is a bool or count the cleartext-store migration returns (Ok(false), Ok(0), changed = 0); no hard-coded value reaches a key: seal_text seals with the account's derived keys."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store.rs",
+    "line": 3155,
+    "source": "return Ok(0);",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "b540edcd463fa8dab7302c8241690f942aec477975f7eee1dd993834fc72e3e2",
+    "reason": "The flagged constant is a bool or count the cleartext-store migration returns (Ok(false), Ok(0), changed = 0); no hard-coded value reaches a key: seal_text seals with the account's derived keys."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store.rs",
+    "line": 3164,
+    "source": "let mut changed = 0usize;",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "b540edcd463fa8dab7302c8241690f942aec477975f7eee1dd993834fc72e3e2",
+    "reason": "The flagged constant is a bool or count the cleartext-store migration returns (Ok(false), Ok(0), changed = 0); no hard-coded value reaches a key: seal_text seals with the account's derived keys."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store/tests.rs",
+    "line": 2005,
+    "source": "\"{secret:?} is readable in {}\", // privacy-check: ok — test fixture, never sent",
+    "rule": "rust/cleartext-logging",
+    "sha256": "fe0eeb8d7dd76e0c605707f561d00ffed1d6c62c7066ae147d038a2ac49e78c2",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the fixture plaintext the test checks is no longer readable in the store file."
+  },
+  {
+    "path": "src-tauri/src/services/mail/mail_store/tests.rs",
+    "line": 2362,
+    "source": "\"{secret:?} survived the migration in {}\", // privacy-check: ok — test fixture, never sent",
+    "rule": "rust/cleartext-logging",
+    "sha256": "fe0eeb8d7dd76e0c605707f561d00ffed1d6c62c7066ae147d038a2ac49e78c2",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the fixture plaintext the test checks is no longer readable in the store file."
+  },
+  {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 903,
+    "line": 951,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_open reads only the fixed settings.json leaf to check the assistant opt-in."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1303,
-    "source": "fs::read(state_dir.join(\"settings.json\"))",
-    "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
-    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed settings.json leaf to check the shell-tab opt-in."
-  },
-  {
-    "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1448,
-    "source": "fs::read(state_dir.join(\"projects.json\")).map_err(|e| format!(\"read projects: {e}\"))?;",
-    "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
-    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed projects.json registry, never a project-folder file."
-  },
-  {
-    "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1454,
-    "source": "let boxes: Vec<BoxRecord> = fs::read(state_dir.join(\"boxes.json\"))",
-    "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
-    "reason": "state_dir comes from HostConfig at startup, not from HTTP input. This reads only the fixed boxes.json registry."
-  },
-  {
-    "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 939,
+    "line": 990,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_devices reads only the fixed settings.json leaf for the assistant's per-phone list."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1169,
+    "line": 1220,
     "source": "let projects: Vec<ProjectRecord> = match fs::read(state_dir.join(\"projects.json\")) {",
     "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. launch_place reads only the fixed projects.json registry, never a project-folder file."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1405,
+    "line": 1456,
     "source": "fs::read(&path)",
     "rule": "rust/path-injection",
-    "sha256": "8a8fe6c5211fa61d7f502db245331ef8c96845a7c24ea49fe888620ad5254ecd",
+    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. read_session reads <state_dir>/sessions/<key>/terminals.json, where project_key maps every character outside [A-Za-z0-9_-] to '_' (and empty to 'x'), so no id can climb out of sessions/."
   },
   {
@@ -176,27 +408,139 @@
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixed nonce in a login-link test; production nonces are random."
   },
   {
-    "path": "src-tauri/src/services/openvpn.rs",
-    "line": 3245,
+    "path": "src-tauri/src/services/openvpn/tests.rs",
+    "line": 383,
     "source": "assert_eq!(write_userpass(&stem, \"alice\", \"pw\").unwrap(), auth);",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "5922e781022190ef02c8b828f269ec5d043008f821f93d08aee4bbefe3bfed8b",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixture password written to a temp auth-user-pass file."
+    "sha256": "46b498de930a1b7ef1a63041311dfed78a49ecd6376b10eb0968155d949cd958",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture management password or auth-user-pass value, used against a local test listener or a temp file."
   },
   {
-    "path": "src-tauri/src/services/openvpn.rs",
-    "line": 3247,
+    "path": "src-tauri/src/services/openvpn/tests.rs",
+    "line": 385,
     "source": "let pass = write_askpass(&stem, \"secret\").unwrap();",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "5922e781022190ef02c8b828f269ec5d043008f821f93d08aee4bbefe3bfed8b",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. A fixture password written to a temp askpass script."
+    "sha256": "46b498de930a1b7ef1a63041311dfed78a49ecd6376b10eb0968155d949cd958",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture management password or auth-user-pass value, used against a local test listener or a temp file."
+  },
+  {
+    "path": "src-tauri/src/services/openvpn/tests.rs",
+    "line": 458,
+    "source": "assert!(management_send_sigterm(port, \"s3cret\"));",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "46b498de930a1b7ef1a63041311dfed78a49ecd6376b10eb0968155d949cd958",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture management password or auth-user-pass value, used against a local test listener or a temp file."
+  },
+  {
+    "path": "src-tauri/src/services/openvpn/tests.rs",
+    "line": 482,
+    "source": "assert!(!management_send_sigterm(port, \"wrong\"));",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "46b498de930a1b7ef1a63041311dfed78a49ecd6376b10eb0968155d949cd958",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture management password or auth-user-pass value, used against a local test listener or a temp file."
+  },
+  {
+    "path": "src-tauri/src/services/openvpn/tests.rs",
+    "line": 493,
+    "source": "assert!(!management_send_sigterm(port, \"whatever\"));",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "46b498de930a1b7ef1a63041311dfed78a49ecd6376b10eb0968155d949cd958",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture management password or auth-user-pass value, used against a local test listener or a temp file."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2289,
+    "source": "\"missing accept-new in {args:?}\"",
+    "rule": "rust/cleartext-logging",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the ssh argv built for a fixture host when the accept-new check fails; the password builders put no password in argv (it goes through askpass)."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2348,
+    "source": "let ap = make_askpass(\"hunter2\", &vetted_args()).unwrap();",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2453,
+    "source": "let ap = make_askpass(\"hunter2\", &vetted_args()).unwrap();",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2595,
+    "source": "let ap = make_askpass_for(SecretKind::KeyPassphrase, \"hunter2\", &args).unwrap();",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2622,
+    "source": "let ap = make_askpass_for(SecretKind::KeyPassphrase, \"hunter2\", &args).unwrap();",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2752,
+    "source": "match make_askpass(\"hunter2\", &args) {",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2759,
+    "source": "assert!(make_askpass(\"hunter2\", &key_args).is_err());",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/remote/ssh_common.rs",
+    "line": 2762,
+    "source": "assert!(make_askpass(\"hunter2\", &vetted_args()).is_ok());",
+    "rule": "rust/hard-coded-cryptographic-value",
+    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
+  },
+  {
+    "path": "src-tauri/src/services/root_mcp/root_mcp_review.rs",
+    "line": 102,
+    "source": "if !path.exists() {",
+    "rule": "rust/path-injection",
+    "sha256": "9cee1c529611653a05cc1dc8af0680b177af504d2ce3f85d87f4dcebd1cb3849",
+    "reason": "load receives the startup-selected state directory (storage::state_dir) joined with the fixed root_mcp/proposals.json leaf; no agent- or phone-supplied part."
+  },
+  {
+    "path": "src-tauri/src/services/root_mcp/root_mcp_review.rs",
+    "line": 105,
+    "source": "if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > security::MAX_LOG_BYTES as u64 {",
+    "rule": "rust/path-injection",
+    "sha256": "9cee1c529611653a05cc1dc8af0680b177af504d2ce3f85d87f4dcebd1cb3849",
+    "reason": "load receives the startup-selected state directory (storage::state_dir) joined with the fixed root_mcp/proposals.json leaf; no agent- or phone-supplied part."
+  },
+  {
+    "path": "src-tauri/src/services/root_mcp/tests.rs",
+    "line": 1889,
+    "source": "let [change] = changes.as_slice() else { panic!(\"one row: {changes:?}\") };",
+    "rule": "rust/cleartext-logging",
+    "sha256": "f7eef0c5114b2a5b291396a07adb2e226b629614e02891bf50d070eff5af5109",
+    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the calendar change rows of a fixture; the account names are fixture strings."
   },
   {
     "path": "src-tauri/src/services/terminal_service.rs",
     "line": 690,
     "source": "eprintln!(\"terminal_service: persisted tab '{}' set {keys} in its env — dropped\", tab.label);",
     "rule": "rust/cleartext-logging",
-    "sha256": "774a53f9a42fbdc745760fcdcd2fe4e1e9cd174a855dbb5d493ba94a666bc978",
+    "sha256": "b9bee63cf22a6e65f3207756b21b2e13871428c045760fb121e613e333e88dbf",
     "reason": "Logs the tab label and the names of the denied env keys it dropped, never their values. The finding's \"uid\" source is the tab id, not a credential."
   },
   {
