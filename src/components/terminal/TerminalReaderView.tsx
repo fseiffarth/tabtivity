@@ -1496,7 +1496,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const dropPending = useCallback((ids: number[]) => {
     if (sendTarget) forgetSentPrompts(sendTarget, ids);
   }, [sendTarget]);
-  /** The composer's pull, for the last sending bubble's Cancel and edit. */
+  /** The composer's pull, for the sending bubbles' Cancel and edit. */
   const pullQueued = useRef<(() => void) | null>(null);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
@@ -1920,12 +1920,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </Fragment>
             );
           })}
-          {!openStep && !browsed && pending.map((item, index) => (
+          {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
                   queue at once; ↑ in the empty composer takes it back. Both
-                  act on the whole queue, so their buttons go under the last. */}
+                  act on the whole queue; every queued bubble carries them. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
                 <small className="terminal-reader-pending-hint">
                   {t("terminal.reader.sendNowHint")}
@@ -1933,7 +1933,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                   <UntestedTag id="terminal.reader.queuePull" />
                 </small>
               )}
-              {live.working && isClaudeCommand(tab?.cmd) && index === pending.length - 1 && (
+              {live.working && isClaudeCommand(tab?.cmd) && (
                 <div className="terminal-reader-queued-actions">
                   <button type="button" className="terminal-reader-stop" onClick={pressEscape} title={t("terminal.reader.sendNowTitle")}>
                     {t("terminal.reader.sendNow")}

@@ -346,8 +346,9 @@ function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
  * (`outboxPosts`), as picture messages.
  * `part` draws only the settled chat or only the prompts the desktop still
  * holds (`queued`), so the agent at work can be drawn between the two; both
- * halves key and date their bubbles from the whole of `entries`. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, posts, renderPost, inbox }: {
+ * halves key and date their bubbles from the whole of `entries`.
+ * `queuedActions` goes under every queued prompt's bubble. */
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -364,6 +365,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   onResend?: (pending: number) => void;
   /** Rewrite a prompt the desktop still holds, by its pending id. */
   onEdit?: (pending: number) => void;
+  /** Drawn under each queued prompt: the moves on the CLI's whole queue. */
+  queuedActions?: ReactNode;
   /** The agent's files to draw after each record, by its index. */
   posts?: ReadonlyMap<number, readonly ChatPost[]>;
   renderPost?: (post: ChatPost) => ReactNode;
@@ -417,6 +420,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
         </div>}
+    {turn.queued && turn.kind === "prompt" && queuedActions}
     {renderPost && posts?.get(turn.index)?.map((post) => <Fragment key={post.key}>{renderPost(post)}</Fragment>)}
   </Fragment>;
   })}{menu}{linkSheet}</>;
@@ -2377,14 +2381,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                   <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
-                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox} />}
-                  {/* Both act on Claude's whole queue: once, under its last bubble. */}
-                  {queuedShown && agentAtWork && !editing && agentKey === "claude" && <div className="transcript-queued-actions">
-                    {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
-                    {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
-                    <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
-                    {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
-                  </div>}
+                  {/* Both act on Claude's whole queue, so every queued bubble
+                      carries the same pair. */}
+                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
+                    queuedActions={agentAtWork && !editing && agentKey === "claude" && <div className="transcript-queued-actions">
+                      {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
+                      {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
+                      <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
+                      {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
+                    </div>} />}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
