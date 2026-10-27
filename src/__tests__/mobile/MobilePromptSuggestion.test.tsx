@@ -1,8 +1,8 @@
 /**
  * Claude Code's prompt suggestion in the phone's Focus chat
  * (`mobile-web/src/terminal/promptSuggestion.ts`). The CLI draws it dimmed in
- * its empty input box, which the chat hides; the composer shows it as a row a
- * tap puts into the field. It is never sent on its own.
+ * its empty input box, which the chat hides; the composer is filled with it
+ * once per suggestion. It is never sent on its own.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,7 +78,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
-import { BRAND } from "../../lib/brand";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-s", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
 const RULE = "─".repeat(60);
@@ -104,8 +104,9 @@ const paint = async (text: string) => {
   await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
 };
 
-const suggestionRow = () => screen.queryByRole("group", { name: "Claude suggests" });
+const hint = () => screen.queryByRole("group", { name: "Claude suggests" });
 const field = () => screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement;
+const SUGGESTION = "make it ask for my name";
 
 describe(`${BRAND.display} Mobile Focus — Claude's prompt suggestion`, () => {
   beforeEach(() => {
@@ -122,33 +123,60 @@ describe(`${BRAND.display} Mobile Focus — Claude's prompt suggestion`, () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the dimmed suggestion over the empty field; a tap fills it and sends nothing", async () => {
+  const open = async (box: string) => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
-    await paint(idle(`${DIM}❯ make it ask for my name`));
-    const row = suggestionRow();
-    expect(row?.textContent).toContain("make it ask for my name");
     FakeWebSocket.sent = [];
-    fireEvent.click(screen.getByRole("button", { name: "make it ask for my name" }));
-    expect(field().value).toBe("make it ask for my name");
-    expect(suggestionRow()).toBeNull();
+    await paint(idle(box));
+  };
+
+  it("puts the dimmed suggestion into the empty field and sends nothing", async () => {
+    await open(`${DIM}❯ ${SUGGESTION}`);
+    expect(field().value).toBe(SUGGESTION);
+    expect(hint()).not.toBeNull();
     expect(FakeWebSocket.sent).toEqual([]);
   });
 
-  it("is hidden while the reader has typed something, and shows again once the field is empty", async () => {
+  it("does not fill it again once the reader has emptied the field", async () => {
+    await open(`${DIM}❯ ${SUGGESTION}`);
+    fireEvent.change(field(), { target: { value: "" } });
+    await paint(idle(`${DIM}❯ ${SUGGESTION}`));
+    expect(field().value).toBe("");
+    expect(hint()).toBeNull();
+  });
+
+  it("leaves a draft the reader typed alone, now and when it is emptied", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
-    await paint(idle(`${DIM}❯ make it ask for my name`));
     fireEvent.change(field(), { target: { value: "no" } });
-    expect(suggestionRow()).toBeNull();
+    await paint(idle(`${DIM}❯ ${SUGGESTION}`));
+    expect(field().value).toBe("no");
+    expect(hint()).toBeNull();
     fireEvent.change(field(), { target: { value: "" } });
-    expect(suggestionRow()).not.toBeNull();
+    expect(field().value).toBe("");
+  });
+
+  it("takes an untouched suggestion out again when the CLI no longer shows it; an edited one stays", async () => {
+    await open(`${DIM}❯ ${SUGGESTION}`);
+    await paint(idle("❯ "));
+    expect(field().value).toBe("");
+    await paint(idle(`${DIM}❯ run the tests`));
+    expect(field().value).toBe("run the tests");
+    fireEvent.change(field(), { target: { value: "run the tests twice" } });
+    expect(hint()).toBeNull();
+    await paint(idle("❯ "));
+    expect(field().value).toBe("run the tests twice");
+  });
+
+  it("does not keep an untouched suggestion as the tab's saved draft", async () => {
+    await open(`${DIM}❯ ${SUGGESTION}`);
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 600)); });
+    expect(localStorage.getItem(storageKey("mobile.drafts")) ?? "").not.toContain("ask for my name");
   });
 
   it("reads a typed (not dim) draft in the CLI's box as no suggestion", async () => {
-    render(<Terminal tab={TAB} back={() => {}} />);
-    await act(async () => {});
-    await paint(idle("❯ make it ask for my name"));
-    expect(suggestionRow()).toBeNull();
+    await open(`❯ ${SUGGESTION}`);
+    expect(field().value).toBe("");
+    expect(hint()).toBeNull();
   });
 });

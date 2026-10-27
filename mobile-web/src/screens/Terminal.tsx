@@ -724,9 +724,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [editing, setEditing] = useState<{ id: number; before: string } | null>(null);
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  /** Claude's prompt suggestion (`promptSuggestion` below) once it has been
+   * put into the field: `offered` is the one already dealt with, so a field
+   * the reader emptied is not filled again; `filled` is the text while the
+   * draft is still exactly it, which is no draft of the reader's. */
+  const suggestionRef = useRef({ offered: "", filled: "" });
   /** What the draft store keeps for this tab: never a held prompt's words
-   * mid-edit, which a later Send would otherwise deliver a second time. */
-  const savedDraft = () => editingRef.current?.before ?? withAttachments(draftRef.current, uploadsRef.current);
+   * mid-edit, which a later Send would otherwise deliver a second time, and
+   * never a suggestion the reader has not touched — it is stale by the time
+   * the tab is opened again. */
+  const savedDraft = () => editingRef.current?.before
+    ?? withAttachments(suggestionRef.current.filled && draftRef.current === suggestionRef.current.filled ? "" : draftRef.current, uploadsRef.current);
   /** An edit is on its way to the desktop. */
   const [editSending, setEditSending] = useState(false);
   /** The composer grows with its draft, line by line, up to the CSS
@@ -1823,12 +1831,36 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     [liveTail, liveScreen, agentLabel],
   );
   /** Claude Code's prompt suggestion, dimmed in its own empty box, which the
-   * chat hides (`promptSuggestion.ts`): a row over the composer that a tap
-   * puts into the field — never sent. The terminal view shows the CLI's box. */
+   * chat hides (`promptSuggestion.ts`). It is put into the field — never sent,
+   * and only once per suggestion — so the reader edits it or sends it as they
+   * would take it with Tab in the CLI. The terminal view shows the CLI's box. */
   const promptSuggestion = useMemo(
     () => (view === "focus" && tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
     [view, tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
   );
+  const suggestionOffered = promptSuggestion && connected && !subagentTarget && pending.length === 0 && !editing ? promptSuggestion : "";
+  useEffect(() => {
+    const state = suggestionRef.current;
+    let draftNow = draftRef.current;
+    // Gone from the CLI's box (sent, taken, a new turn): a field still holding
+    // exactly it goes with it; one the reader has changed is theirs.
+    if (state.filled && state.filled !== suggestionOffered) {
+      const gone = state.filled;
+      state.filled = "";
+      if (draftNow === gone) {
+        draftNow = "";
+        setDraft("");
+      }
+    }
+    if (!promptSuggestion) state.offered = "";
+    if (!suggestionOffered || suggestionOffered === state.offered) return;
+    // Offered once even when not taken: a reader typing or holding a draft
+    // does not get the suggestion dropped into the middle of it later.
+    state.offered = suggestionOffered;
+    if (draftNow || document.activeElement === composerInput.current) return;
+    state.filled = suggestionOffered;
+    setDraft(suggestionOffered);
+  }, [promptSuggestion, suggestionOffered]);
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -2498,17 +2530,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             {suggestion.used && <button className="slash-forget" onPointerDown={(event) => event.preventDefault()} onClick={() => forgetSlash(suggestion.line)} aria-label={t("mobile.slash.forget", { command: suggestion.line })} title={t("mobile.slash.forget", { command: suggestion.line })}>✕</button>}
           </div>)}
         </div>}
-        {promptSuggestion && connected && !draft && !subagentTarget && pending.length === 0 && <div className="slash-menu prompt-suggestion" role="group" aria-label={t("terminal.reader.suggestion")}>
-          <div className="slash-menu-head">{t("terminal.reader.suggestion")} {isUntested("mobile.composer.promptSuggestion") && <em>{t("mobile.focus.untested")}</em>}</div>
-          {/* As the `/` menu's rows: the tap keeps the keyboard up. */}
-          <div className="slash-row">
-            <button className="slash-pick" onPointerDown={(event) => event.preventDefault()} onClick={() => { setDraft(promptSuggestion); composerInput.current?.focus(); }} title={t("mobile.composer.suggestionHint")}>
-              <strong>{promptSuggestion}</strong>
-            </button>
-          </div>
+        {draft && draft === suggestionRef.current.filled && <div className="slash-menu prompt-suggestion" role="group" aria-label={t("terminal.reader.suggestion")}>
+          <div className="slash-menu-head">{t("terminal.reader.suggestion")} · {t("mobile.composer.suggestionHint")} {isUntested("mobile.composer.promptSuggestion") && <em>{t("mobile.focus.untested")}</em>}</div>
         </div>}
         <div className="composer-field">
-          <textarea ref={composerInput} value={draft} disabled={!connected} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={() => setComposerTyping(true)} onBlur={typingStopped} onKeyDown={(event) => {
+          <textarea ref={composerInput} value={draft} disabled={!connected} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey) return;
             // Enter confirms a candidate inside an IME composition (CJK keyboards,
             // and 229 is what Android keyboards report mid-composition); that
