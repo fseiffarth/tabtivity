@@ -56,7 +56,7 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
   return <div className={others.length === 0 ? "readable-turn agent outbox-post pictures-only" : "readable-turn agent outbox-post"} role="group" aria-label={t("mobile.outbox.post", { count: post.files.length })}>
     {tiles.length > 0 && <div className={`outbox-post-album tiles-${tiles.length}`} style={tiles.length === 1 ? { aspectRatio: String(ratio) } : undefined}>
       {tiles.map((file, i) => <button key={file.name} className="outbox-post-picture" onClick={() => onOpen(file)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
-        <img src={outboxFileUrl(scope, file.name)} alt="" loading="lazy" decoding="async" onLoad={(event) => settle(event.currentTarget)} />
+        <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" onLoad={(event) => settle(event.currentTarget)} />
         {more > 0 && i === tiles.length - 1 && <span className="outbox-post-more" aria-hidden="true">+{more}</span>}
       </button>)}
     </div>}
@@ -68,7 +68,7 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
       return !file.kind.startsWith("text/") && file.kind !== "application/pdf"
-        ? <a key={file.name} className="outbox-post-file" href={outboxFileUrl(scope, file.name, true)} download={sentName(file)} aria-label={label}>{card}</a>
+        ? <a key={file.name} className="outbox-post-file" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={label}>{card}</a>
         : <button key={file.name} className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>;
     })}
     <small className="outbox-post-meta">{untested && <em>{t("mobile.outbox.untested")} · </em>}{time}</small>

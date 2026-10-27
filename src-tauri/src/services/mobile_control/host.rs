@@ -5894,7 +5894,8 @@ async fn outbox_listing(
 /// typed by what its header says it is, never by its name. Loaded by an
 /// `<img>` on the PWA's own origin, so the session cookie is the credential
 /// and the CSP's `img-src 'self'` is what lets it render; the middleware's
-/// `nosniff` and `no-store` apply as to every `/api/` answer. Anything the
+/// `nosniff` applies as to every `/api/` answer, and `no-store` unless the
+/// read names the file's version (`outbox_bytes`). Anything the
 /// listing would not offer — a symlink, an oversized file, a name with a
 /// separator — is `file_not_found`, not a different error.
 async fn outbox_file(
@@ -5912,7 +5913,7 @@ async fn outbox_file(
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
-    outbox_bytes(root, name, query.get("download").is_some_and(|v| v == "1")).await
+    outbox_bytes(root, name, &query).await
 }
 
 /// `GET /api/v1/projects/{project_id}/outbox/{name}` — the same bytes by the
@@ -5932,7 +5933,7 @@ async fn project_outbox_file(
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
-    outbox_bytes(root, name, query.get("download").is_some_and(|v| v == "1")).await
+    outbox_bytes(root, name, &query).await
 }
 
 /// `DELETE /api/v1/tabs/{tab_id}/outbox/{name}` — drop one of the files the
@@ -6056,16 +6057,25 @@ async fn outbox_removal(root: PathBuf, name: String) -> (StatusCode, Json<serde_
     }
 }
 
-async fn outbox_bytes(root: PathBuf, name: String, download: bool) -> Response<Body> {
+async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, String>) -> Response<Body> {
     if !outbox::valid_name(&name) {
         return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
     }
+    let download = query.get("download").is_some_and(|v| v == "1");
     // Saved under the name it was sent as, not the stamped leaf.
     let filename = outbox::sent_name(&name).to_string();
     let read = tokio::task::spawn_blocking(move || outbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
-    file_response(read, &filename, download)
+    let mut response = file_response(read, &filename, download);
+    // A leaf can be rewritten under its name, so only a read the phone named
+    // by its version (`?v=<modified>-<size>`, `outboxFileUrl`) may be kept:
+    // without it the chat's album, the viewer and its Share each pulled the
+    // whole picture down the link again, side by side.
+    if response.status() == StatusCode::OK && !download && query.contains_key("v") {
+        response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(INBOX_FILE_CACHE));
+    }
+    response
 }
 
 /// A drop-box read as the phone gets it: typed by the bytes, inline unless it
@@ -6158,8 +6168,8 @@ async fn inbox_file(
     response
 }
 
-/// How long the phone may keep an inbox picture (`inbox_file`): this device
-/// only, a day.
+/// How long the phone may keep an inbox picture (`inbox_file`) or a
+/// versioned outbox one (`outbox_bytes`): this device only, a day.
 const INBOX_FILE_CACHE: &str = "private, max-age=86400, immutable";
 
 /// `POST /api/v1/tabs/{tab_id}/markup` — the markup view's **Submit**

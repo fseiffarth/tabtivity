@@ -1292,9 +1292,13 @@ export async function listOutbox(scope: OutboxScope, signal?: AbortSignal): Prom
 }
 
 /** The URL an `<img>` loads one outbox image from — same origin, so the
- * session cookie rides along and the CSP's `img-src 'self'` lets it render. */
-export function outboxFileUrl(scope: OutboxScope, name: string, download = false): string {
-  return `${outboxBase(scope)}/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
+ * session cookie rides along and the CSP's `img-src 'self'` lets it render.
+ * `v` names this version of the file (time and size): the sidecar lets the
+ * phone keep a versioned picture, so the chat's album, the viewer, its Share
+ * and a remounted chat read the bytes over the radio once, and a file
+ * rewritten under the same name is a new URL. */
+export function outboxFileUrl(scope: OutboxScope, file: Pick<OutboxFile, "name" | "modified" | "size">, download = false): string {
+  return `${outboxBase(scope)}/${encodeURIComponent(file.name)}?v=${file.modified}-${file.size}${download ? "&download=1" : ""}`;
 }
 
 /** Which side of the file browser: this computer's folder, or (`host`) a
@@ -1333,7 +1337,7 @@ export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = f
   if ("files" in scope) {
     return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}${scope.on === "host" ? "&on=host" : ""}`;
   }
-  return outboxFileUrl(scope, file.name, download);
+  return outboxFileUrl(scope, file, download);
 }
 
 /** Open one of the file URLs above in the browser's own tab (its PDF viewer).

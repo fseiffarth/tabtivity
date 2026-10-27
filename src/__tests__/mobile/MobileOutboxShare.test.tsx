@@ -91,7 +91,7 @@ describe("Mobile outbox — sharing a file", () => {
     expect(file.name).toBe("plot.png");
     expect(file.type).toBe("image/png");
     expect(file.size).toBe(4);
-    expect(fetch).toHaveBeenCalledWith("/api/v1/projects/p1/outbox/plot.png");
+    expect(fetch).toHaveBeenCalledWith("/api/v1/projects/p1/outbox/plot.png?v=1770000000-4");
   });
 
   it("asks for a second tap when the download outlived the first, and shares the held bytes", async () => {
@@ -110,13 +110,13 @@ describe("Mobile outbox — sharing a file", () => {
     await waitFor(() => expect(share).toHaveBeenCalledTimes(2));
     expect(shared(share, 1).name).toBe("plot.png");
     // The bytes came over once.
-    expect(fetch.mock.calls.filter(([url]) => String(url) === "/api/v1/projects/p1/outbox/plot.png")).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([url]) => String(url) === "/api/v1/projects/p1/outbox/plot.png?v=1770000000-4")).toHaveLength(1);
     await waitFor(() => expect(within(gallery).getByRole("button", { name: "Share plot.png" })).toBeTruthy());
   });
 
   it("says so when the held bytes are refused too, or cannot be read", async () => {
     vi.stubGlobal("fetch", host([PLOT, { ...PLOT, name: "gone.png" }], async (url) =>
-      url.endsWith("/gone.png") ? new Response("", { status: 404 }) : new Response(new Uint8Array([1]))));
+      url.includes("/gone.png?") ? new Response("", { status: 404 }) : new Response(new Uint8Array([1]))));
     share.mockImplementation(() => Promise.reject(new DOMException("no", "NotAllowedError")));
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
 
@@ -153,6 +153,32 @@ describe("Mobile outbox — sharing a file", () => {
     fireEvent.click(within(gallery).getByRole("button", { name: "Open plot.png" }));
     const viewer = screen.getByRole("dialog", { name: "plot.png" });
     expect(within(viewer).getByRole("button", { name: "Share…" })).toBeTruthy();
+  });
+
+  it("lets the shown picture load before the Share bytes, and says so while it does or when it fails", async () => {
+    const fetch = host([PLOT]);
+    vi.stubGlobal("fetch", fetch);
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+
+    const gallery = await openGallery(1);
+    fireEvent.click(within(gallery).getByRole("button", { name: "Open plot.png" }));
+    const viewer = screen.getByRole("dialog", { name: "plot.png" });
+    const picture = () => viewer.querySelector(".outbox-viewer-stage img")!;
+    const reads = () => fetch.mock.calls.filter(([url]) => String(url).startsWith("/api/v1/projects/p1/outbox/plot.png")).length;
+    await settle();
+    // Nothing competes with the picture on screen for the radio.
+    expect(within(viewer).getByRole("status").textContent).toBe("Loading…");
+    expect(reads()).toBe(0);
+
+    fireEvent.error(picture());
+    expect(within(viewer).getByRole("alert").textContent).toContain("could not be loaded");
+    fireEvent.click(within(viewer).getByRole("button", { name: "Retry" }));
+    expect(within(viewer).getByRole("status")).toBeTruthy();
+
+    fireEvent.load(picture());
+    expect(within(viewer).queryByRole("status")).toBeNull();
+    expect(within(viewer).queryByRole("alert")).toBeNull();
+    await waitFor(() => expect(reads()).toBe(1));
   });
 
   it("shares a Markdown file from the viewer as .txt, which the share sheet takes", async () => {

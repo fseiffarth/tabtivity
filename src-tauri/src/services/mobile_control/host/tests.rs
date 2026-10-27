@@ -3950,6 +3950,14 @@ async fn the_outbox_lists_and_serves_the_agents_images_by_leaf_only() {
     // 0x89; the declared length and the tail prove the bytes came through.
     assert_eq!(headers.get(header::CONTENT_LENGTH).unwrap(), png.len().to_string().as_str());
     assert!(body.ends_with("IHDR-body"), "{body:?}");
+    // A leaf can be rewritten under its name: kept on the phone only when
+    // the read names its version, never as a download.
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store", "an unversioned read is not kept");
+    let (status, headers, _) = host.send(get_as(&format!("{list}/plot.png?v=1-2"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), INBOX_FILE_CACHE, "a versioned read is cacheable");
+    let (_, headers, _) = host.send(get_as(&format!("{list}/plot.png?v=1-2&download=1"), &cookie)).await;
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store", "a download is not kept");
 
     std::fs::write(dir.join("archive.zip"), b"PK\0\x01").unwrap();
     std::fs::write(dir.join("20260930-101530-20260930-101010-deck.zip"), b"PK\0\x01").unwrap();

@@ -198,6 +198,13 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   const [text, setText] = useState<string | null>(null);
   const [failure, setFailure] = useState("");
   const isText = file.kind.startsWith("text/");
+  // A picture's own state, by the URL it is for: the bytes for Share and the
+  // neighbours wait until it is in, so the picture on screen has the radio
+  // to itself; while it is not, the stage says so rather than staying blank.
+  const [picture, setPicture] = useState<{ url: string; state: "loaded" | "failed" } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const pictureState = picture?.url === url ? picture.state : "loading";
+  const settled = !isImage || pictureState !== "loading";
   // The whole of a long text is read in here, not handed to the browser's
   // own tab: on an iPhone or iPad the installed app could not be got back to
   // from there. Only a text too big for that still goes out — where it can.
@@ -221,7 +228,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   useEffect(() => clearPrint, []);
   // Fetch the bytes on opening, so a tap on Share shares at once rather than
   // after the radio — the button itself does not wait for them.
-  useEffect(() => { prepare(file); }, [prepare, file]);
+  useEffect(() => { if (settled) prepare(file); }, [prepare, file, settled]);
   useEffect(() => {
     // Marking up, the arrow keys belong to the note being typed.
     if (!onStep || marking || (!previous && !next)) return;
@@ -235,12 +242,13 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     return () => window.removeEventListener("keydown", onKey);
   }, [onStep, marking, previous, next]);
   useEffect(() => {
-    // Warm the neighbours, so a step lands on a picture rather than a blank
-    // while it loads over the phone's radio.
+    // Warm the neighbours once this picture is in, so a step lands on a
+    // picture rather than a blank while it loads over the phone's radio.
+    if (!settled) return;
     for (const neighbour of [previous, next]) {
       if (neighbour) new Image().src = viewerFileUrl(scope, neighbour);
     }
-  }, [scope, previous, next]);
+  }, [scope, previous, next, settled]);
 
   useEffect(() => {
     // A turned phone reshapes the stage; start the picture over, fitted.
@@ -406,8 +414,14 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
         onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url).then((opened) => { if (opened === "host_outdated") setFailure(t("mobile.open.hostOutdated")); }); }}>{t("mobile.outbox.whole")}</button>}
     </div> : isImage ? <div ref={stage} className={`outbox-viewer-stage${zoomed ? " zoomed" : ""}`}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-      <img ref={image} src={url} alt={sentName(file)} draggable={false}
+      <img key={attempt} ref={image} src={url} alt={sentName(file)} draggable={false}
+        onLoad={() => setPicture({ url, state: "loaded" })} onError={() => setPicture({ url, state: "failed" })}
         style={zoomed ? { transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` } : undefined} />
+      {pictureState === "loading" && <p className="outbox-viewer-status" role="status">{t("mobile.outbox.loading")}</p>}
+      {pictureState === "failed" && <p className="outbox-viewer-status" role="alert">
+        {t("mobile.outbox.error")}
+        <button className="outbox-action" onClick={() => { setPicture(null); setAttempt((n) => n + 1); }}>{t("mobile.app.retry")}</button>
+      </p>}
       {previous && <button className="outbox-step outbox-step-previous" onClick={() => onStep?.(previous)} aria-label={t("mobile.outbox.previous")}><span aria-hidden="true">‹</span></button>}
       {next && <button className="outbox-step outbox-step-next" onClick={() => onStep?.(next)} aria-label={t("mobile.outbox.next")}><span aria-hidden="true">›</span></button>}
     </div> : null}

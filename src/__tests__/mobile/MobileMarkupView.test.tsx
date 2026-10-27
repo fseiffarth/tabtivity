@@ -305,7 +305,7 @@ describe("MarkupView", () => {
       const PDF = { name: "paper.pdf", kind: "application/pdf", size: 6, modified: 1_790_000_000 };
       // The PDF's latest fetch is the one fed.
       let feed!: ReadableStreamDefaultController<Uint8Array>;
-      vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => (String(input).endsWith("/outbox/paper.pdf")
+      vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => (String(input).includes("/outbox/paper.pdf?")
         ? new Response(new ReadableStream<Uint8Array>({ start: (controller) => { feed = controller; } }), { status: 200, headers: { "content-length": "6" } })
         : new Response(JSON.stringify({ error: "not_found" }), { status: 404 }))));
       store.loadLayer.mockResolvedValue(null);
@@ -417,7 +417,7 @@ describe("OutboxViewer · Mark up", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Mark up paper.pdf" }).classList.contains("has-marks")).toBe(true));
     expect(screen.queryByText(/changed since/)).toBeNull();
     // Save still hands over the copy.
-    expect(screen.getByRole("link", { name: "Save" }).getAttribute("href")).toBe("/api/v1/tabs/t1/outbox/20261004-120000-paper.pdf?download=1");
+    expect(screen.getByRole("link", { name: "Save" }).getAttribute("href")).toBe("/api/v1/tabs/t1/outbox/20261004-120000-paper.pdf?v=1790000000-9000&download=1");
     cleanup();
 
     // The project file has marks of its own: they win, nothing is merged.
