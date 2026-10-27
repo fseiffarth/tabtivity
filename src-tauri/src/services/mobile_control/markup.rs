@@ -789,7 +789,17 @@ pub struct LocalPage {
 /// Whether `bytes` is a PNG of sane size: the signature, then the `IHDR`
 /// chunk first with a width and height in `1..=MAX_LAYER_SIDE`.
 pub fn check_layer_png(bytes: &[u8]) -> Result<(), MarkupError> {
-    if bytes.len() > MAX_LAYER_BYTES || bytes.len() < 33 || !bytes.starts_with(PNG_MAGIC) || &bytes[8..16] != b"\0\0\0\x0dIHDR" {
+    check_png(bytes, MAX_LAYER_BYTES)
+}
+
+/// `check_layer_png` for a picture source's composed copy: the picture at its
+/// own size (`MAX_COMPOSED` a side), bounded by what the inbox stores.
+pub fn check_picture_png(bytes: &[u8]) -> Result<(), MarkupError> {
+    check_png(bytes, inbox::MAX_INBOX_FILE)
+}
+
+fn check_png(bytes: &[u8], max: usize) -> Result<(), MarkupError> {
+    if bytes.len() > max || bytes.len() < 33 || !bytes.starts_with(PNG_MAGIC) || &bytes[8..16] != b"\0\0\0\x0dIHDR" {
         return Err(MarkupError::InvalidLayer);
     }
     let side = |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
@@ -853,9 +863,10 @@ pub fn resolve_local_source(root: &Path, path: &Path) -> Result<ResolvedSource, 
 /// `tabtivity-send` line: the viewer reloads the file from disk. The
 /// instruction is the desktop's own setting (`Settings::pdf_markup_instruction`,
 /// passed in by the viewer, bounded like the phone's), `DEFAULT_INSTRUCTION`
-/// when unset; `ask` is its dial (`Settings::pdf_markup_ask`). PDFs only —
-/// the desktop marks no pictures. Always a `list` round
-/// (`submit_local_with_undo` takes the **Apply marks directly** switch).
+/// when unset; `ask` is its dial (`Settings::pdf_markup_ask`). A PDF here;
+/// a picture goes through `submit_local_with_undo` with its composed copy.
+/// Always a `list` round (`submit_local_with_undo` takes the **Apply marks
+/// directly** switch).
 pub fn submit_local(
     root: &Path,
     path: &Path,
@@ -865,7 +876,7 @@ pub fn submit_local(
     round: Option<String>,
 ) -> Result<Submitted, MarkupError> {
     let list = UndoRequest { mode: Mode::List, target: Err(NoUndo::Failed) };
-    submit_local_with_undo(root, path, pages, instruction, ask, round, list)
+    submit_local_with_undo(root, path, pages, None, instruction, ask, round, list)
 }
 
 /// What a desktop Submit asks of its undo: the mode its switch asked for and
@@ -878,10 +889,17 @@ pub struct UndoRequest<'a> {
 /// `submit_local` with the **Apply marks directly** switch: an `apply`
 /// round's snapshot is taken after the layers and the marked copy are in the
 /// inbox, before the prompt is built (`bake_and_prompt`).
+///
+/// `picture_png`: for a picture source (the desktop image viewer's Mark up),
+/// the picture with its marks drawn on — the phone's `picture` upload, stored
+/// into the inbox here as `<stem>-marked.png`. Required for a picture, refused
+/// for a PDF; a picture is one page, `n` 1, in its pixels.
+#[allow(clippy::too_many_arguments)]
 pub fn submit_local_with_undo(
     root: &Path,
     path: &Path,
     pages: Vec<LocalPage>,
+    picture_png: Option<Vec<u8>>,
     instruction: Option<String>,
     ask: Option<u8>,
     round: Option<String>,
@@ -924,9 +942,16 @@ pub fn submit_local_with_undo(
     if total > MAX_LAYERS_TOTAL {
         return Err(MarkupError::InvalidLayer);
     }
+    if let Some(png) = &picture_png {
+        check_picture_png(png)?;
+    }
     speakable(&source)?;
     let (bytes, kind) = read_source(root, &source)?;
-    if kind != "application/pdf" {
+    // A PDF bakes its own marked copy; a picture brings its composed one.
+    let pdf = kind == "application/pdf" && picture_png.is_none();
+    // Checked before the first write, as `bake_and_prompt` will again.
+    let picture = kind.starts_with("image/") && picture_png.is_some() && request.pages.len() == 1 && request.pages[0].n == 1;
+    if !(pdf || picture) {
         return Err(MarkupError::Unsupported);
     }
     let stem = source.stem();
@@ -934,6 +959,9 @@ pub fn submit_local_with_undo(
         let kind = if page.composed { "marked" } else { "layer" };
         let stored = inbox::store(root, &format!("{stem}-p{}-{kind}.png", page.n), png).map_err(MarkupError::Inbox)?;
         page.layer = stored.reference;
+    }
+    if let Some(png) = &picture_png {
+        request.picture = Some(inbox::store(root, &format!("{stem}-marked.png"), png).map_err(MarkupError::Inbox)?.reference);
     }
     layers_present(root, &request)?;
     bake_and_prompt(root, &source, &request, false, bytes, kind, undo.target)

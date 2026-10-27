@@ -148,9 +148,11 @@ export type PdfMarkupResult = { prompt: string; marked: string | null; mode?: Pd
  * Settings → PDF markup → Apply marks directly asks for. `round` (`mintRound`)
  * names the Submit, so the prompt numbers its marks and the agent can tick
  * them off (`markup_done`, `docs/done/markup_tick_approve_plan.md`).
+ * `picturePng`: for a picture (the image viewer's Mark up), the picture with
+ * its marks drawn on, base64 — what the backend keeps as the marked copy.
  */
-export function submitPdfMarkup(projectId: string, path: string, pages: PdfMarkupPage[], instruction?: string | null, ask?: number | null, mode?: PdfMarkupMode, round?: string): Promise<PdfMarkupResult> {
-  return invoke<PdfMarkupResult>("pdf_markup_submit", { projectId, path, pages, ...(instruction ? { instruction } : {}), ...(ask != null ? { ask } : {}), ...(round ? { round } : {}), ...(mode ? { mode } : {}) });
+export function submitPdfMarkup(projectId: string, path: string, pages: PdfMarkupPage[], instruction?: string | null, ask?: number | null, mode?: PdfMarkupMode, round?: string, picturePng?: string): Promise<PdfMarkupResult> {
+  return invoke<PdfMarkupResult>("pdf_markup_submit", { projectId, path, pages, ...(picturePng ? { picturePng } : {}), ...(instruction ? { instruction } : {}), ...(ask != null ? { ask } : {}), ...(round ? { round } : {}), ...(mode ? { mode } : {}) });
 }
 
 // ── The undo of an `apply` round (`docs/done/pdf_markup_direct_apply_plan.md`) ──

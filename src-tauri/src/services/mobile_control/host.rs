@@ -53,6 +53,7 @@ use super::{
         MAX_TAB_LABEL,
     },
     pty_bridge::{self, TerminalRegistry},
+    remarks,
     scheduler,
     uploads,
     push::{AgentTabRef, PushPrefs},
@@ -6902,7 +6903,9 @@ fn files_rel(
 /// project, read-only: sealed tokens, leaf names, kind, size, mtime. No `dir`
 /// is the project root. No path appears in the answer. `uploads` says whether
 /// **Upload here** may write into this folder (`project_files_upload`): the
-/// switch is on and no segment of the folder starts with a dot.
+/// switch is on and no segment of the folder starts with a dot. `remarks`
+/// says whether the reader may write remarks into a PDF of it
+/// (`project_files_remarks`).
 ///
 /// `&on=host` lists the remote side instead: the project's tree on its
 /// primary host (`host_files`), with host-side tokens and never `uploads`.
@@ -6931,6 +6934,7 @@ async fn project_files_list(
             Ok(listing) => {
                 let mut answer = json!(listing);
                 answer["uploads"] = json!(false);
+                answer["remarks"] = json!(false);
                 (StatusCode::OK, Json(answer))
             }
             Err(error) => files_error(error),
@@ -6954,6 +6958,7 @@ async fn project_files_list(
         Ok(listing) => {
             let mut answer = json!(listing);
             answer["uploads"] = json!(accepts && uploads::uploads_open(&state.config.state_dir));
+            answer["remarks"] = json!(remarks::remarks_open(&state.config.state_dir));
             (StatusCode::OK, Json(answer))
         }
         Err(error) => files_error(error),
@@ -7165,6 +7170,75 @@ async fn project_files_upload(
         Ok(None) => upload_error(uploads::UploadError::NotFound),
         Err(error) => upload_error(error),
     }
+}
+
+/// The largest remarks body: a page's worth of highlights and notes is a few
+/// KB; the markup bounds (`markup::validate_body`) apply after parsing.
+const REMARKS_BODY: usize = 2 * 1024 * 1024;
+
+/// `POST /api/v1/projects/{project_id}/files/remarks?f=<token>` — the PDF
+/// reader's **Annotate → Save**: highlights and sticky notes appended to the
+/// project PDF itself as an incremental update (`remarks.rs`). Same guards as
+/// an upload — session, exact origin, the browser's scope — and its own switch
+/// (`remarks_off`). The body names the size and mtime the phone read; a file
+/// changed since is `409 file_changed`. The answer is the file's fresh row.
+async fn project_files_remarks(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    if !remarks::remarks_open(&state.config.state_dir) {
+        return remarks_error(remarks::RemarksError::Off);
+    }
+    let Some(token) = query.get("f") else {
+        return remarks_error(remarks::RemarksError::NotFound);
+    };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let Ok(request) = serde_json::from_slice::<remarks::RemarksRequest>(&body) else {
+        return remarks_error(remarks::RemarksError::Invalid);
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    // Reads and bakes up to MAX_OUTBOX_FILE bytes: off the executor.
+    let saved = tokio::task::spawn_blocking(move || {
+        remarks::save(&root, &rel, request).map(|()| files::entry(&root, &rel, &key, &raw_id))
+    })
+    .await
+    .unwrap_or_else(|error| Err(remarks::RemarksError::Io(error.to_string())));
+    match saved {
+        Ok(Some(file)) => (StatusCode::OK, Json(json!({ "file": file }))),
+        Ok(None) => remarks_error(remarks::RemarksError::NotFound),
+        Err(error) => remarks_error(error),
+    }
+}
+
+fn remarks_error(error: remarks::RemarksError) -> (StatusCode, Json<serde_json::Value>) {
+    api_error(
+        match error {
+            remarks::RemarksError::Off | remarks::RemarksError::NotFound => StatusCode::NOT_FOUND,
+            remarks::RemarksError::Invalid | remarks::RemarksError::PageMissing => StatusCode::BAD_REQUEST,
+            remarks::RemarksError::Unsupported => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            remarks::RemarksError::Changed => StatusCode::CONFLICT,
+            remarks::RemarksError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            remarks::RemarksError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+        error.code(),
+    )
 }
 
 /// `DELETE /api/v1/projects/{project_id}/files/upload?f=<token>` — the landed
@@ -7433,6 +7507,10 @@ fn router(state: HostState) -> Router {
             "/api/v1/projects/{project_id}/files/upload",
             delete(project_files_upload_undo)
                 .merge(post(project_files_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/files/remarks",
+            post(project_files_remarks).layer(DefaultBodyLimit::max(REMARKS_BODY)),
         )
         .route(
             "/api/v1/projects/{project_id}/outbox",

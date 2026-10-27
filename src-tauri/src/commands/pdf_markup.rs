@@ -90,18 +90,21 @@ fn submit_in_with(
     round: Option<String>,
 ) -> Result<PdfMarkupSubmitted, String> {
     let list = markup::UndoRequest { mode: markup::Mode::List, target: Err(markup_rounds::NoUndo::Failed) };
-    submit_in_with_undo(root, path, pages, instruction, ask, round, list)
+    submit_in_with_undo(root, path, pages, None, instruction, ask, round, list)
 }
 
 /// Decodes the payload and runs the shared core. Blocking (file reads, the
-/// bake, inbox writes, an `apply` round's snapshot). `instruction`: the
-/// desktop's own Mark up prompt setting; `None` or blank is the mode's
-/// default. `ask`: its asking dial (`markup::ASK_LINES`); `None` is
+/// bake, inbox writes, an `apply` round's snapshot). `picture_png`: a picture
+/// source's composed copy, standard base64 (`markup::submit_local_with_undo`).
+/// `instruction`: the desktop's own Mark up prompt setting; `None` or blank is
+/// the mode's default. `ask`: its asking dial (`markup::ASK_LINES`); `None` is
 /// `DEFAULT_ASK`. `undo`: the switch's mode and where the snapshot goes.
+#[allow(clippy::too_many_arguments)]
 fn submit_in_with_undo(
     root: &Path,
     path: &str,
     pages: Vec<PdfMarkupPage>,
+    picture_png: Option<String>,
     instruction: Option<String>,
     ask: Option<u8>,
     round: Option<String>,
@@ -121,7 +124,19 @@ fn submit_in_with_undo(
             .map_err(|_| markup::MarkupError::InvalidLayer.code().to_string())?;
         local.push(LocalPage { n: page.n, size: page.size, marks: page.marks, layer_png, composed: page.composed, anchors: page.anchors });
     }
-    markup::submit_local_with_undo(root, Path::new(path), local, instruction, ask, round, undo)
+    let picture = match picture_png {
+        Some(text) => {
+            if text.len() > crate::services::mobile_control::inbox::MAX_INBOX_FILE / 3 * 4 + 4 {
+                return Err(markup::MarkupError::InvalidLayer.code().into());
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(text.as_bytes())
+                .map_err(|_| markup::MarkupError::InvalidLayer.code().to_string())?;
+            Some(bytes)
+        }
+        None => None,
+    };
+    markup::submit_local_with_undo(root, Path::new(path), local, picture, instruction, ask, round, undo)
         .map(|done| PdfMarkupSubmitted {
             prompt: done.prompt,
             marked: done.marked,
@@ -132,8 +147,10 @@ fn submit_in_with_undo(
         .map_err(|error| error.code().into())
 }
 
-/// `pdf_markup_submit({ projectId, path, pages, instruction?, ask?, round?, mode? })` →
-/// `{ prompt, marked, mode, undo, noUndo }`. `round` is the id the viewer
+/// `pdf_markup_submit({ projectId, path, pages, picturePng?, instruction?, ask?, round?, mode? })` →
+/// `{ prompt, marked, mode, undo, noUndo }`. `picturePng`: the image viewer's
+/// Mark up — the picture with its marks drawn on, base64; `marked` is then its
+/// inbox reference. `round` is the id the viewer
 /// minted for this Submit (`markup::valid_round`), under which the agent
 /// ticks marks off. `mode`: `"apply"` (the **Apply marks directly** switch,
 /// `Settings::pdf_markup_direct`) or `"list"`; absent is `list`.
@@ -143,6 +160,7 @@ pub async fn pdf_markup_submit(
     project_id: String,
     path: String,
     pages: Vec<PdfMarkupPage>,
+    picture_png: Option<String>,
     instruction: Option<String>,
     ask: Option<u8>,
     round: Option<String>,
@@ -158,7 +176,7 @@ pub async fn pdf_markup_submit(
             mode: mode.unwrap_or_default(),
             target: Ok(markup::UndoTarget { state_dir: &state_dir, owner: desktop_owner(&project_id) }),
         };
-        submit_in_with_undo(&root, &path, pages, instruction, ask, round, undo)
+        submit_in_with_undo(&root, &path, pages, picture_png, instruction, ask, round, undo)
     })
     .await
     .map_err(|_| "markup_failed".to_string())?
@@ -490,7 +508,7 @@ mod tests {
             target: Ok(markup::UndoTarget { state_dir, owner: desktop_owner("p") }),
         };
         // A folder in no git work tree: list, and why.
-        let plain = submit_in_with_undo(&root, &path, vec![page(1)], None, None, None, apply(state.path())).unwrap();
+        let plain = submit_in_with_undo(&root, &path, vec![page(1)], None, None, None, None, apply(state.path())).unwrap();
         assert_eq!((plain.mode, plain.undo.as_deref(), plain.no_undo), (markup::Mode::List, None, Some("not_git")));
         let wire = serde_json::to_value(&plain).unwrap();
         assert_eq!((wire["mode"].as_str(), wire["noUndo"].as_str()), (Some("list"), Some("not_git")));
@@ -498,7 +516,7 @@ mod tests {
         // In a repo: apply, with a snapshot the same owner can settle.
         let ok = std::process::Command::new("git").args(["init", "-q"]).current_dir(&root).env_remove("GIT_DIR").env_remove("GIT_INDEX_FILE").status().unwrap();
         assert!(ok.success());
-        let done = submit_in_with_undo(&root, &path, vec![page(1)], None, None, None, apply(state.path())).unwrap();
+        let done = submit_in_with_undo(&root, &path, vec![page(1)], None, None, None, None, apply(state.path())).unwrap();
         assert_eq!((done.mode, done.no_undo), (markup::Mode::Apply, None));
         let id = done.undo.unwrap();
         assert!(done.prompt.contains(markup::DEFAULT_APPLY_INSTRUCTION));
@@ -512,5 +530,34 @@ mod tests {
         assert_eq!(serde_json::to_value(&conflict).unwrap(), serde_json::json!({ "code": "undo_conflict", "files": ["a.tex"], "more": 2 }));
         let gone = PdfMarkupUndoFailure::from(markup_rounds::RoundError::Gone);
         assert_eq!((gone.code, gone.files.len(), gone.more), ("undo_gone", 0, 0));
+    }
+
+    #[test]
+    fn a_picture_submit_stores_its_composed_copy_as_the_marked_one() {
+        let (_dir, root, _pdf) = project();
+        fs::write(root.join("docs/plot.png"), png()).unwrap();
+        let mut one = page(1);
+        one.size = [1200.0, 1553.0];
+        let list = || markup::UndoRequest { mode: markup::Mode::List, target: Err(markup_rounds::NoUndo::Failed) };
+        let done = submit_in_with_undo(&root, &path_of(&root, "docs/plot.png"), vec![one], Some(b64(&png())), None, None, None, list()).unwrap();
+        let marked = done.marked.clone().expect("the composed copy");
+        assert!(marked.ends_with("-plot-marked.png"), "{marked}");
+        assert_eq!(fs::read(root.join(&marked)).unwrap(), png());
+        assert!(done.prompt.contains("docs/plot.png"), "{}", done.prompt);
+        assert_eq!(inbox_names(&root).len(), 2, "the layer and the composed copy");
+    }
+
+    #[test]
+    fn a_picture_needs_its_copy_and_a_pdf_takes_none() {
+        let (_dir, root, _pdf) = project();
+        fs::write(root.join("docs/plot.png"), png()).unwrap();
+        let list = || markup::UndoRequest { mode: markup::Mode::List, target: Err(markup_rounds::NoUndo::Failed) };
+        let picture = path_of(&root, "docs/plot.png");
+        let pdf = path_of(&root, "docs/draft.pdf");
+        assert_eq!(submit_in_with_undo(&root, &picture, vec![page(1)], None, None, None, None, list()), Err("unsupported_source".into()));
+        assert_eq!(submit_in_with_undo(&root, &picture, vec![page(2)], Some(b64(&png())), None, None, None, list()), Err("unsupported_source".into()));
+        assert_eq!(submit_in_with_undo(&root, &pdf, vec![page(1)], Some(b64(&png())), None, None, None, list()), Err("unsupported_source".into()));
+        assert_eq!(submit_in_with_undo(&root, &picture, vec![page(1)], Some(b64(b"not a png")), None, None, None, list()), Err("invalid_layer".into()));
+        assert!(inbox_names(&root).is_empty(), "nothing written before a refusal");
     }
 }

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import { ApiError, holdPrompt, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
+import { ApiError, holdPrompt, listProjectFiles, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, saveRemarks, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure, type FromFrame, type ToFrame } from "../markup/frameProtocol";
 import { anchorsFor, textMarks, wordsIn, type Anchor } from "../markup/anchors";
 import type { TextRun } from "../markup/findText";
@@ -43,6 +43,20 @@ const PEN_STYLE_GLYPHS: Record<(typeof PEN_STYLES)[number], string> = { pen: "�
 const STAMP_GLYPHS: Record<(typeof STAMP_SYMBOLS)[number], string> = { insert: "⁁", delete: "✕", paragraph: "¶", swap: "⇄" };
 /** The toolbar's tools, in order. */
 const TOOLBAR: readonly PenTool[] = ["ink", "box", "text", "textmark", "stamp", "select", "eraser"];
+/** **Annotate**'s tools: what becomes a remark in the PDF — a highlight over
+ * words or a box, a note — and the select tool (a highlight's remark) and the
+ * eraser. */
+const REMARK_TOOLBAR: readonly PenTool[] = ["textmark", "box", "text", "select", "eraser"];
+/** Annotate's layer is kept apart from the marks for an agent. */
+const REMARKS_KEY = "#remarks";
+/** What a refused remarks save says. */
+const REMARKS_FAILURES: Record<string, TranslationKey> = {
+  file_changed: "mobile.remarks.failed.changed",
+  remarks_off: "mobile.remarks.failed.off",
+  unsupported_source: "mobile.remarks.failed.unsupported",
+  page_missing: "mobile.remarks.failed.changed",
+  file_not_found: "mobile.remarks.failed.gone",
+};
 /** How near a tap of the select tool must come to a mark, CSS pixels. */
 const SELECT_PX = 12;
 /** A preset chip's glyph: its pen's style, or its tool's. */
@@ -414,11 +428,27 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const isPdf = file.kind === "application/pdf";
   const reading = reader !== undefined;
   const canMark = onSend !== undefined || newTab !== undefined;
+  /** **Annotate**: remarks and highlights saved into the project PDF itself
+   * (`saveRemarks`), the desktop's own remarks — offered on a project file's
+   * PDF while the desktop allows it (the listing's `remarks`). Its layer is
+   * its own (`REMARKS_KEY`); Save clears it, the PDF then draws the remarks. */
+  const projectFiles = "files" in scope && scope.on !== "host" ? scope.files : null;
+  const [remarksOpen, setRemarksOpen] = useState(false);
+  useEffect(() => {
+    if (!isPdf || !reading || !projectFiles || !file.ref) return;
+    let live = true;
+    void listProjectFiles(projectFiles, folder).then((listing) => { if (live) setRemarksOpen(listing.remarks === true); }, () => {});
+    return () => { live = false; };
+  }, [isPdf, reading, projectFiles, folder, file.ref]);
+  const canAnnotate = remarksOpen && projectFiles !== null && !!file.ref;
+  const [annotating, setAnnotating] = useState(false);
+  /** A layer is drawn and kept: the agent's marks, or Annotate's. */
+  const canLayer = canMark || annotating;
   const url = viewerFileUrl(scope, file);
   const source = useMemo<MarkupSource>(() => ("files" in scope ? { files: file.ref ?? "" } : { outbox: file.name }), [scope, file.ref, file.name]);
   const keyOf = useCallback(
-    (name: string) => layerKey(projectId, "files" in scope ? { files: `${place ?? ""}/${name}` } : { outbox: name }),
-    [projectId, scope, place],
+    (name: string) => layerKey(projectId, "files" in scope ? { files: `${place ?? ""}/${name}` } : { outbox: name }) + (annotating ? REMARKS_KEY : ""),
+    [projectId, scope, place, annotating],
   );
   const key = useMemo(() => keyOf(file.name), [keyOf, file.name]);
   /** The file as its card among the project screen's tabs knows it
@@ -431,7 +461,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** A file with marks — or one whose round just went to `tab` — keeps a
    * card among the project's tabs, so the markup is found again there. */
   const keepCard = (tab?: string) => {
-    if (!cardFile) return;
+    // Remarks go into the PDF, not to an agent: no markup card.
+    if (!cardFile || annotating) return;
     keepMarkupTab(projectId, {
       ...cardFile,
       token: cardFile.from === "outbox" ? file.name : file.ref ?? "",
@@ -464,8 +495,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** The pen bar's choices, kept on this phone (`markup/pen.ts`). */
   const [pen, setPen] = useState<PenPrefs>(readPenPrefs);
   useEffect(() => writePenPrefs(pen), [pen]);
-  const tool = pen.tool;
-  const color = colorOf(pen);
+  const tool = annotating && !REMARK_TOOLBAR.includes(pen.tool) ? "textmark" : pen.tool;
+  /** The text marks' mode: Annotate's are highlights, the one remark a run of
+   * words can be. */
+  const textMark = annotating ? "highlight" : pen.textMark;
+  const color = colorOf({ ...pen, textMark }, tool);
   const setColor = (next: MarkColor) => setPen((was) => withColor(was, next));
   /** The area eraser's rectangle while it is dragged, page units — or the
    * select tool's (`select`). */
@@ -691,7 +725,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   // The saved layer, once per file — not again when a Reload gives the same
   // file a new fingerprint, which would call the marks drawn on it stale.
   useEffect(() => {
-    if (!canMark) return;
+    if (!canLayer) return;
     if (movedTo.current === key) { movedTo.current = null; return; }
     let live = true;
     void loadLayer(key).then(async (stored) => {
@@ -723,18 +757,18 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       setLoaded(true);
     });
     return () => { live = false; };
-  }, [canMark, key, adoptFrom]);
+  }, [canLayer, key, adoptFrom]);
 
   // Saved as each change lands — never before the saved one was read.
   useEffect(() => {
-    if (!loaded || !canMark) return;
+    if (!loaded || !canLayer) return;
     if (skipSave.current) { skipSave.current = false; return; }
     const layer = history.present;
     void saveLayer(key, layer, fingerprint, undefined, history.past).then((ok) => {
       setStorage(ok ? "saved" : "unsaved");
       if (ok && (!isEmpty(layer) || hasSent(layer))) keepCardRef.current();
     });
-  }, [loaded, canMark, key, history.present, history.past, fingerprint]);
+  }, [loaded, canLayer, key, history.present, history.past, fingerprint]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -1072,7 +1106,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** What a text-mark drag makes over the page's words — none on a page
    * whose text is not known (yet) or that has none. */
   const textMarksOf = (g: Extract<Gesture, { kind: "textmark" }>, size: Size) =>
-    textMarks(pageRuns[g.n] ?? [], g.start, g.end, pen.textMark, color, strokeWidth(size[0], { size: pen.size, style: "pen" }));
+    textMarks(pageRuns[g.n] ?? [], g.start, g.end, textMark, color, strokeWidth(size[0], { size: pen.size, style: "pen" }));
   /** The selected marks' boxes together, page units — `null` for none. */
   const selectionBox = (page: PageLayer | undefined, indices: readonly number[]): [number, number, number, number] | null => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -1357,12 +1391,38 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     return next;
   };
 
+  /** Switches between the agent's marks and Annotate's remarks: the layer in
+   * hand is let go at once and the other one read (the load effect, on the
+   * new key) — never saved under the other's key in between. */
+  const switchLayer = (remarks: boolean) => {
+    gesture.current = null;
+    setPreview(null);
+    setPopover(null);
+    setNote(null);
+    setSelection(null);
+    setScratch(null);
+    setSendFailure(null);
+    setLoaded(false);
+    setHistory(startHistory());
+    setAnnotating(remarks);
+    setMarking(true);
+    // Annotate arms a tool that makes remarks: a pen or stamp would draw none.
+    if (remarks) setPen((was) => (REMARK_TOOLBAR.includes(was.tool) ? was : { ...was, tool: "textmark" }));
+  };
+
   /** Done: a note still open is kept, as the phone's own Markup keeps it. */
   const done = () => {
     gesture.current = null;
     setPreview(null);
     setPopover(null);
     const next = note ? saveNote(note.text) : history.present;
+    if (annotating) {
+      // The note lands in the remarks layer before the agent's is read back.
+      if (note && loaded) void saveLayer(key, next, fingerprint, undefined, next === history.present ? history.past : [...history.past, history.present]);
+      switchLayer(false);
+      setMarking(false);
+      return;
+    }
     if (reading) { setMarking(false); return; }
     // The view goes away before the save effect would run.
     if (note && loaded) void saveLayer(key, next, fingerprint, undefined, next === history.present ? history.past : [...history.past, history.present]).finally(onClose);
@@ -1403,6 +1463,36 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** The marked pages a Submit carries: a page past the end of the PDF (it
    * shrank on a Reload) keeps its marks, but they are not drawn or sent. */
   const sendable = markedPages(history.present).filter((n) => !isPdf || !sizes || n <= sizes.length);
+  /** **Annotate → Save**: the remarks go into the PDF itself; the layer is
+   * then cleared and the file loaded again, which draws them. A PDF changed
+   * since it was opened is refused — Reload, then save again. */
+  const [remarksChanged, setRemarksChanged] = useState(false);
+  const saveToPdf = async () => {
+    if (!projectFiles || !file.ref || sending !== null || note) return;
+    const present = history.present;
+    if (!sendable.length) return;
+    setSending(t("mobile.remarks.saving"));
+    setSendFailure(null);
+    setRemarksChanged(false);
+    let saved: Awaited<ReturnType<typeof saveRemarks>>;
+    try {
+      saved = await saveRemarks(projectFiles, file.ref, {
+        size: file.size,
+        modified: file.modified,
+        pages: sendable.map((n) => ({ n, size: present.pages[n].size, marks: present.pages[n].marks })),
+      });
+    } catch (error) {
+      setSending(null);
+      const code = error instanceof ApiError ? error.code : "";
+      setRemarksChanged(code === "file_changed" || code === "page_missing");
+      setSendFailure(t(REMARKS_FAILURES[code] ?? "mobile.remarks.failed.other", { code: code || "network" }));
+      return;
+    }
+    setSending(null);
+    // The PDF draws them now: the layer's copy would show them twice.
+    setHistory(startHistory());
+    void reload(false, { name: saved.name, kind: saved.kind, size: saved.size, modified: saved.modified, ref: saved.token });
+  };
   const leftOut = markedPages(history.present).length - sendable.length;
   const reason = (error: unknown) => {
     const code = error instanceof ApiError ? error.code : "";
@@ -1764,7 +1854,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       // The listing failed: the same file, fetched again, is still a reload.
     }
     const nextKey = keyOf(next.name);
-    if (nextKey !== key && canMark) {
+    if (nextKey !== key && canLayer) {
       // Before `file` changes: the save effect then writes the marks in hand
       // under the new key, and the load effect leaves them be.
       await moveLayer(key, nextKey, fingerprintOf(next));
@@ -2103,7 +2193,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * may wear: yellow only when one of them highlights. */
   const offeredColors = tool === "select"
     ? colorsFor(selectedMarks.some((mark) => mark.kind === "box" || (mark.kind === "ink" && mark.style === "marker")) ? "box" : "ink", "pen")
-    : colorsFor(tool, pen.style, pen.textMark);
+    : colorsFor(tool, pen.style, textMark);
   /** The colour ringed: the armed tool's, or the selection's when its marks
    * share one. */
   const shownColor: MarkColor | null = tool !== "select" ? color
@@ -2136,7 +2226,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     rememberPenMode(next);
   };
   const editNote = (text: string) => setNote((draft) => draft && { ...draft, text });
-  const layerCanvas = (n: number, size: Size) => canMark && <>
+  const layerCanvas = (n: number, size: Size) => canLayer && <>
     <LayerCanvas n={n} size={size} page={layer.pages[n]} sent={showSent ? layer.sent?.pages[n] : undefined} preview={preview?.n === n ? preview.marks : null}
       pixelWidth={pixelWidth} register={register} handlers={handlers} />
     {/* What the area eraser will take, or the select tool pick, while it is dragged. */}
@@ -2168,23 +2258,29 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <h2>{sentName(file)}</h2>
         <small>
           {marking
-            ? t("mobile.markup.subtitle")
+            ? t(annotating ? "mobile.remarks.subtitle" : "mobile.markup.subtitle")
             : `${sizes && isPdf ? `${t("mobile.outbox.pdfPage", { n: current, count: sizes.length })} · ` : ""}${formatBytes(file.size)}`}
           {untested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </small>
       </div>
       {marking ? <>
-        {onSend && pickModel && <button className="outbox-action markup-model" onClick={pickModel} disabled={agent === "working" || sending !== null || !online}
+        {!annotating && onSend && pickModel && <button className="outbox-action markup-model" onClick={pickModel} disabled={agent === "working" || sending !== null || !online}
           aria-haspopup="dialog" title={t("mobile.markup.modelTitle")} aria-label={t("mobile.markup.modelTitle")}>
           {agentModel ?? t("terminal.reader.model")} ▾{isUntested("mobile.markup.model") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </button>}
-        <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online} onClick={() => void submit()} title={t("mobile.markup.submitTitle")}>
-          {t("mobile.markup.submit")}
-        </button>
+        {annotating
+          ? <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online || note !== null} onClick={() => void saveToPdf()} title={t("mobile.remarks.saveTitle")}>
+            {t("mobile.remarks.save")}{isUntested("mobile.remarks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+          </button>
+          : <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online} onClick={() => void submit()} title={t("mobile.markup.submitTitle")}>
+            {t("mobile.markup.submit")}
+          </button>}
         <button className="outbox-action markup-done" onClick={done} disabled={sending !== null}>{t("mobile.markup.done")}</button>
       </> : <>
         {canMark && <button className={`outbox-action markup-toggle${empty ? "" : " has-marks"}`} onClick={() => setMarking(true)}
           aria-label={t("mobile.markup.openFile", { name: sentName(file) })}>{t("mobile.markup.open")}</button>}
+        {canAnnotate && <button className="outbox-action markup-toggle" onClick={() => switchLayer(true)}
+          title={t("mobile.remarks.openTitle")} aria-label={t("mobile.remarks.openFile", { name: sentName(file) })}>{t("mobile.remarks.open")}</button>}
         {reader?.actions}
         {printable && <button className="outbox-action" disabled={printing !== null} onClick={() => void print()}
           aria-label={t("mobile.outbox.printFile", { name: sentName(file) })}>{t("mobile.outbox.print")}</button>}
@@ -2234,7 +2330,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       {marking && leftOut > 0 && <p role="status">{t(leftOut === 1 ? "mobile.markup.leftOutOne" : "mobile.markup.leftOut", { count: leftOut })}</p>}
       {limitHit && <p role="alert">{t("mobile.markup.limit")}</p>}
       {sending && <p role="status">{sending}</p>}
-      {sendFailure && <p role="alert">{sendFailure}</p>}
+      {sendFailure && <p role="alert">{sendFailure}
+        {annotating && remarksChanged && <button className="outbox-action markup-reload" disabled={reloading || sending !== null}
+          onClick={() => { setRemarksChanged(false); setSendFailure(null); void reload(); }}>{t("mobile.markup.reload")}</button>}
+      </p>}
       {failure && <p role="alert">{t(FAILURE_KEYS[failure])}</p>}
       {reader?.alert && <p role="alert">{reader.alert}</p>}
       {printing && <p role="status">{t("mobile.outbox.printing", { n: printing.n, count: printing.count })}</p>}
@@ -2326,7 +2425,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </div>}
       {popover === "colors" && tool !== "eraser" && tool !== "select" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.penOptions")}>
         {/* Saved pens: one tap arms one. */}
-        <div className="markup-pen-row markup-presets" role="group" aria-label={t("mobile.markup.presets")}>
+        {!annotating && <div className="markup-pen-row markup-presets" role="group" aria-label={t("mobile.markup.presets")}>
           {pen.presets.map((preset, i) => <button key={i} className={`markup-preset${isPreset(preset) ? " selected" : ""}`} aria-pressed={isPreset(preset)}
             onClick={() => { setPen((was) => applyPreset(was, preset)); setPopover(null); }}
             aria-label={t("mobile.markup.preset", { n: i + 1 })} title={t("mobile.markup.preset", { n: i + 1 })}>
@@ -2334,8 +2433,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             <span className="markup-preset-dot" style={{ background: INK[preset.color] }} aria-hidden="true" />
           </button>)}
           {isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
-        </div>
-        {tool === "textmark" && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.textmark")}>
+        </div>}
+        {tool === "textmark" && !annotating && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.textmark")}>
           {TEXT_MARK_MODES.map((mode) => <button key={mode} className={`markup-pen-style${pen.textMark === mode ? " selected" : ""}`} aria-pressed={pen.textMark === mode}
             onClick={() => setPen((was) => ({ ...was, textMark: mode }))}
             aria-label={t(`mobile.markup.textMark.${mode}` as TranslationKey)} title={t(`mobile.markup.textMark.${mode}` as TranslationKey)}>
@@ -2355,7 +2454,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             <span aria-hidden="true">{PEN_STYLE_GLYPHS[style]}</span>
           </button>)}
         </div>}
-        {(tool === "ink" || (tool === "textmark" && pen.textMark !== "highlight")) && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.size")}>
+        {(tool === "ink" || (tool === "textmark" && textMark !== "highlight")) && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.size")}>
           {PEN_SIZES.map((size) => <button key={size} className={`markup-pen-size${pen.size === size ? " selected" : ""}`} aria-pressed={pen.size === size}
             onClick={() => setPen((was) => ({ ...was, size }))} aria-label={t(`mobile.markup.size.${size}` as TranslationKey)} title={t(`mobile.markup.size.${size}` as TranslationKey)}>
             <span className="markup-pen-dot" style={{ width: 5 + 4 * size, height: 5 + 4 * size, background: INK[color] }} aria-hidden="true" />
@@ -2427,10 +2526,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </p>}
       {!popover && tool === "eraser" && <p className="markup-hint">{t(pen.eraser === "area" ? "mobile.markup.eraserAreaHint" : "mobile.markup.eraserHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
       <div className="markup-toolbar" role="toolbar" aria-label={t("mobile.markup.tools")}>
-        {TOOLBAR.map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
+        {(annotating ? REMARK_TOOLBAR : TOOLBAR).map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
           onClick={() => pickTool(name)} aria-label={t(`mobile.markup.tool.${name}` as TranslationKey)} title={t(`mobile.markup.tool.${name}` as TranslationKey)}>
           {name === "eraser" ? <EraserIcon />
-            : name === "textmark" ? <span className={`markup-textmark-glyph is-${pen.textMark}`} aria-hidden="true">ab</span>
+            : name === "textmark" ? <span className={`markup-textmark-glyph is-${textMark}`} aria-hidden="true">ab</span>
             : <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : name === "text" ? "T" : name === "stamp" ? STAMP_GLYPHS[pen.stamp] : "↖"}</span>}
         </button>)}
         {/* On a wide screen the armed tool's colours sit in the toolbar too —

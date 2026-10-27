@@ -4472,6 +4472,63 @@ async fn upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it() {
     assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
 }
 
+#[tokio::test]
+async fn annotate_appends_remarks_to_a_project_pdf_behind_its_own_switch() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(41)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    let base = format!("/api/v1/projects/{project_id}/files");
+    let pdf = crate::services::mobile_control::markup_pdf::tests::classic_pdf(&[0], false);
+    std::fs::write(host.root.join("draft.pdf"), &pdf).unwrap();
+    let switches = |files: bool, remarks: bool| {
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_remarks": remarks } }).to_string(),
+        )
+        .unwrap();
+    };
+    switches(true, false);
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    assert_eq!(json(&body)["remarks"], false, "{body}");
+    let row = json(&body)["entries"].as_array().unwrap().iter().find(|e| e["name"] == "draft.pdf").expect("the PDF").clone();
+    let token = row["token"].as_str().unwrap().to_string();
+    let save = |origin: &str, size: u64, modified: u64| {
+        let body = json!({ "size": size, "modified": modified, "pages": [{ "n": 1, "size": [600, 800], "marks": [
+            { "kind": "box", "color": "yellow", "rect": [50, 60, 200, 14], "comment": "check" },
+            { "kind": "text", "color": "black", "at": [300, 400], "size": 12, "text": "a remark" }
+        ] }] });
+        Request::builder()
+            .method("POST")
+            .uri(format!("{base}/remarks?f={token}"))
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::from(body.to_string()))
+            .expect("request")
+    };
+    let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+    let (size, modified) = (row["size"].as_u64().unwrap(), row["modified"].as_u64().unwrap());
+
+    assert_eq!(refused(host.send(save(ORIGIN, size, modified)).await), (StatusCode::NOT_FOUND, json!("remarks_off")));
+    switches(false, true);
+    assert_eq!(refused(host.send(save(ORIGIN, size, modified)).await), (StatusCode::NOT_FOUND, json!("files_off")));
+    switches(true, true);
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    assert_eq!(json(&body)["remarks"], true, "{body}");
+    assert_eq!(refused(host.send(save("https://elsewhere.example", size, modified)).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+    assert_eq!(refused(host.send(save(ORIGIN, size + 1, modified)).await), (StatusCode::CONFLICT, json!("file_changed")));
+    assert_eq!(std::fs::read(host.root.join("draft.pdf")).unwrap(), pdf, "nothing written before the save");
+
+    let (status, _, body) = host.send(save(ORIGIN, size, modified)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let after = std::fs::read(host.root.join("draft.pdf")).unwrap();
+    assert!(after.starts_with(&pdf) && after.len() > pdf.len());
+    assert_eq!(json(&body)["file"]["size"].as_u64(), Some(after.len() as u64), "the fresh row: {body}");
+    assert!(!body.contains(host.root.to_str().unwrap()), "{body}");
+    // The read the phone did is stale now: a second save of it is refused.
+    assert_eq!(refused(host.send(save(ORIGIN, size, modified)).await), (StatusCode::CONFLICT, json!("file_changed")));
+}
+
 /// The route's own body limit outranks the router's control-message one:
 /// a file past `MAX_CONTROL_MESSAGE` lands, one past `MAX_INBOX_FILE` is
 /// refused before the handler runs.

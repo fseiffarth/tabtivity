@@ -57,7 +57,7 @@ use ::windows::{
             SetFileInformationByHandle, DELETE, FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_DIRECTORY,
             FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
             FILE_DISPOSITION_INFO, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO,
             FILE_INFO_BY_HANDLE_CLASS,
             FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE,
             FILE_SHARE_READ, FILE_SHARE_WRITE, SYNCHRONIZE,
@@ -261,6 +261,16 @@ impl ProjectDir {
     /// which goes through the filter for a placeholder. The file is truncated
     /// only after its own handle proved it regular.
     pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        self.open_existing(name, true)
+    }
+
+    /// [`Self::open_existing_for_write`] for reading and appending: the same
+    /// refusals, and the file is left as it is (`remarks.rs`).
+    pub(crate) fn open_existing_for_update(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        self.open_existing(name, false)
+    }
+
+    fn open_existing(&self, name: &str, truncate: bool) -> Result<Option<fs::File>, WriteRefusal> {
         let options = FILE_NON_DIRECTORY_FILE;
         let io = |error: std::io::Error| match error.kind() {
             std::io::ErrorKind::NotFound => Ok(None),
@@ -277,7 +287,7 @@ impl ProjectDir {
             Ok(probe) => probe,
             Err(error) => return io(error),
         };
-        let access = FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES;
+        let access = if truncate { FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES } else { FILE_GENERIC_READ | FILE_GENERIC_WRITE };
         let file = match reopened(probe, |plain| {
             let options = if plain { options | FILE_OPEN_REPARSE_POINT } else { options };
             self.nt_create(name, access, FILE_OPEN, options, Default::default())
@@ -290,7 +300,9 @@ impl ProjectDir {
         if !meta.is_file() {
             return Err(WriteRefusal::NotFile);
         }
-        file.set_len(0).map_err(WriteRefusal::Io)?;
+        if truncate {
+            file.set_len(0).map_err(WriteRefusal::Io)?;
+        }
         Ok(Some(file))
     }
 

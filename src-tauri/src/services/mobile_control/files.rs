@@ -390,8 +390,20 @@ impl ProjectDir {
     /// refused, never followed, and so is anything but a regular file; the
     /// file is truncated only after its own descriptor proved it regular.
     pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        self.open_existing(name, true)
+    }
+
+    /// [`Self::open_existing_for_write`] for reading and appending: the same
+    /// refusals, and the file is left as it is (the phone's PDF remarks,
+    /// `remarks.rs`, append an incremental update).
+    pub(crate) fn open_existing_for_update(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        self.open_existing(name, false)
+    }
+
+    fn open_existing(&self, name: &str, truncate: bool) -> Result<Option<fs::File>, WriteRefusal> {
         // Non-blocking, so a FIFO swapped in is refused below, not waited on.
-        let flags = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        let access = if truncate { libc::O_WRONLY } else { libc::O_RDWR };
+        let flags = access | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
         let file = match self.openat(name, flags, 0) {
             Ok(file) => file,
             Err(error) => {
@@ -409,7 +421,9 @@ impl ProjectDir {
         if !meta.is_file() {
             return Err(WriteRefusal::NotFile);
         }
-        file.set_len(0).map_err(WriteRefusal::Io)?;
+        if truncate {
+            file.set_len(0).map_err(WriteRefusal::Io)?;
+        }
         Ok(Some(file))
     }
 

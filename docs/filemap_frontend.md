@@ -301,7 +301,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/fileViewer/TexView.tsx` | TeX editor: compile, SyncTeX, diagnostics, hover preview. |
 | `embed/fileViewer/texParts.tsx` | TeX helpers shared by TexView and the workspace: compile options, Beamer bar, create-ref banner, copy-diagnostic button. |
 | `embed/fileViewer/TexWorkspaceView.tsx` | The multi-pane TeX workspace (structure sidebar, source panes, PDF). |
-| `embed/fileViewer/ImageView.tsx` | Image viewer (zoom/pan, drag-out, annotator) and the shared `zoomOffset`/`clampScale`/scale constants. |
+| `embed/fileViewer/ImageView.tsx` | Image viewer (zoom/pan, drag-out, annotator, **Mark up** — `usePdfMarkup` with `picture`, the PDF strip over the image, `pdf_markup_submit` + `picturePng`) and the shared `zoomOffset`/`clampScale`/scale constants. |
 | `embed/MdGraphView.tsx` | Markdown relationship graph (`md_graph` flag): BFS rings from `lib/viewers/mdGraph.ts`, fitted zoom/pan canvas and markdown hover previews; one bounded scope-confined read per look, never polled. |
 | `embed/YamlTree.tsx` | YAML/JSON tree: renders rows but edits text (every action splices the draft), so edits are ordinary undoable changes. Pointer-drag reorder (HTML5 DnD is broken on WebKitGTK). |
 | `embed/BibCards.tsx` | BibTeX card view: one card per entry, filter over all fields, per-card fold (`ViewerState.bibCollapsed`); Source is the other half. |

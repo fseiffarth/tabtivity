@@ -122,11 +122,10 @@ import { readViewerSelection, type ViewerSelection } from "./selection";
 import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
-import { PdfMarkupBar, selectionColors } from "./PdfMarkupBar";
+import { markupStripKey, PdfMarkupBar } from "./PdfMarkupBar";
 import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
-import { usePdfMarkup, type MarkupEdit, type MarkupTool, type QuestionFocus } from "./usePdfMarkup";
-import { colorsFor } from "../../../../mobile-web/src/markup/pen";
+import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
 import {
   claimMarkup,
@@ -3734,44 +3733,11 @@ function PdfCanvas({
     [settings, browserEnabled, mailEnabled, t],
   );
 
-  /** The markup strip's bare keys, while marking: P / B / T / M / K / S / E
-   *  arm the pen, box, note, text marks, stamp, select tool and eraser (P
-   *  again steps the pen's style, M the text marks' mode, K the stamp's
-   *  symbol, E switches to the area eraser and back), 1–4 pick the armed
-   *  tool's colours in strip order (a selection's, with marks selected),
-   *  Shift+1–4 a preset, [ and ] step the size, Delete or Backspace delete
-   *  the selected marks. Whether it took the key. */
-  const markupKey = useCallback((e: { key: string; code: string; shiftKey: boolean }): boolean => {
-    const m = markupRef.current;
-    const { key } = e;
-    // By the key's place: Shift turns the digit into a layout's own symbol.
-    const preset = e.shiftKey ? /^Digit([1-4])$/.exec(e.code) : null;
-    if (preset) {
-      m.applyPreset(Number(preset[1]) - 1);
-      return true;
-    }
-    if ((key === "Delete" || key === "Backspace") && m.edit.selection) {
-      m.deleteSelection();
-      return true;
-    }
-    const tools: Record<string, MarkupTool> = { p: "ink", b: "box", t: "text", m: "textmark", k: "stamp", s: "select", e: "eraser" };
-    const lower = key.toLowerCase();
-    if (tools[lower] && !e.shiftKey) {
-      m.pressTool(tools[lower]);
-      return true;
-    }
-    if (key === "[" || key === "]") {
-      m.stepSize(key === "[" ? -1 : 1);
-      return true;
-    }
-    const offered = m.tool === "select" ? selectionColors(m.edit.base, m.edit.selection) : colorsFor(m.tool, m.pen.style, m.pen.textMark);
-    const color = /^[1-4]$/.test(key) ? offered[Number(key) - 1] : undefined;
-    if (color && m.tool !== "eraser") {
-      m.setColor(color);
-      return true;
-    }
-    return false;
-  }, []);
+  /** The markup strip's bare keys, while marking (`markupStripKey`). */
+  const markupKey = useCallback(
+    (e: { key: string; code: string; shiftKey: boolean }): boolean => markupStripKey(markupRef.current, e),
+    [],
+  );
 
   // Ctrl/Cmd+F opens the find bar, Ctrl/Cmd+G opens go-to-page, Ctrl/Cmd+P opens
   // the print preview; Esc closes whichever is open. Bound on the host so it

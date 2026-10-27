@@ -98,6 +98,12 @@ pub struct AppMobileHostSettings {
     /// (`mobile_control::uploads::uploads_open`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_uploads: Option<bool>,
+    /// May a paired phone write remarks and highlights into a PDF of its
+    /// Mobile projects (the reader's Annotate)? Default off, and only in
+    /// effect while `project_files` is on too. Read by the sidecar per request
+    /// (`mobile_control::remarks::remarks_open`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_remarks: Option<bool>,
     /// Serve the desktop app to a browser on this machine (Settings → Mobile →
     /// Browser access, loopback only)? Default off. Read by the sidecar
     /// (`mobile_control::config::MobileHostSettings`); named here so a

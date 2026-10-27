@@ -1379,8 +1379,10 @@ export interface ProjectFileEntry {
 }
 /** `uploads`: whether **Upload here** may add files to this folder — the
  * desktop's "Phone may add files to projects" switch is on and no folder on
- * the way down starts with a dot. An older desktop omits it (no uploads). */
-export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
+ * the way down starts with a dot. An older desktop omits it (no uploads).
+ * `remarks`: whether the PDF reader's **Annotate** may write into a PDF of the
+ * project ("Phone may write remarks into PDFs"); omitted by an older desktop. */
+export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
  * the project; no `dir` is the project's root. Answers only while the
@@ -1438,6 +1440,26 @@ export function refreshProjectFile(projectId: string, folder: string | undefined
     const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
     return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
   };
+}
+
+/** One page of **Annotate**'s remarks, in the page's displayed units (the
+ * markup layer's own): highlights (`box`) and notes (`text`) only. */
+export interface RemarksPageBody { n: number; size: [number, number]; marks: Mark[] }
+
+/** `POST /api/v1/projects/{id}/files/remarks?f=<token>` — the PDF reader's
+ * **Annotate → Save**: the remarks go into the project PDF itself, appended as
+ * the desktop's own remarks are kept (`remarks.rs`). `size` and `modified`
+ * are the file as the phone opened it; a PDF changed since is refused with
+ * `409 file_changed`, the switch off with `remarks_off`. Answers the file's
+ * fresh row. */
+export async function saveRemarks(projectId: string, token: string, body: { size: number; modified: number; pages: RemarksPageBody[] }): Promise<ProjectFileEntry> {
+  const answer = await api<{ file?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/remarks?f=${encodeURIComponent(token)}`,
+    { method: "POST", body: JSON.stringify(body) },
+    MARKUP_TIMEOUT,
+  );
+  if (!answer.file?.token) throw new ApiError(200, "malformed_response");
+  return answer.file;
 }
 
 /** `DELETE …/outbox/{name}` — drop one of those files. The sidecar deletes

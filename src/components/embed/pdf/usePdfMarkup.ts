@@ -23,6 +23,11 @@
  * project on the asks' triggers — map onto sent marks; the viewer shows a ✓
  * on each, and only the reader's click (one, or Approve all) removes a mark.
  * An undone `apply` round is forgotten from the log: its ticks show nothing.
+ *
+ * The image viewer marks a picture with the same hook (`picture`): one page,
+ * in the picture's pixels, sent as the marks alone plus the picture with them
+ * drawn on (`composedPng`) — the phone's picture Submit. A picture has no
+ * words, so the text marks find none.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -127,6 +132,7 @@ import {
   type TextMarkMode,
 } from "../../../../mobile-web/src/markup/pen";
 import { layerKey, loadLayer, saveLayer, stale, type Fingerprint } from "../../../../mobile-web/src/markup/store";
+import { composedPng, layerPng } from "../../../../mobile-web/src/markup/rasterize";
 import {
   canApply,
   canUndo,
@@ -141,6 +147,9 @@ import {
 
 /** When a tab's dialog is read a second time after its wait began. */
 const DIALOG_REREAD_MS = 1_000;
+
+/** A picture's words: none, so the text marks say so. */
+const NO_RUNS: readonly TextRun[] = [];
 
 export type MarkupTool = "ink" | "box" | "text" | "stamp" | "textmark" | "select" | "eraser";
 
@@ -296,6 +305,7 @@ export function usePdfMarkup({
   docSize,
   docVersion,
   doc = null,
+  picture = null,
 }: {
   /** The project the viewer is scoped to, when markup is offered at all. */
   projectId: string | null;
@@ -316,6 +326,9 @@ export function usePdfMarkup({
   /** The loaded document: Submit draws each marked page from it and reads
    *  the words under each mark (`markupPage.ts`). */
   doc?: PDFDocumentProxy | null;
+  /** Marking a picture, not a PDF: the image as shown, which Submit draws the
+   *  marks onto. Page 1 is the picture, in its natural pixels. */
+  picture?: HTMLImageElement | null;
 }) {
   const t = useT();
   const key = useMemo(() => (projectId ? layerKey(projectId, { files: path }) : null), [projectId, path]);
@@ -784,8 +797,8 @@ export function usePdfMarkup({
     [doc],
   );
   const runsOf = useCallback(
-    (n: number) => (runs.doc === doc ? runs.pages[n] : undefined),
-    [runs, doc],
+    (n: number) => (picture ? NO_RUNS : runs.doc === doc ? runs.pages[n] : undefined),
+    [runs, doc, picture],
   );
 
   // ── The select tool's marks: they stand only on the layer they were picked
@@ -978,23 +991,32 @@ export function usePdfMarkup({
     const words: Record<number, (string | null)[]> = {};
     try {
       const body: PdfMarkupPage[] = [];
-      for (const n of pages) {
-        const page = present.pages[n];
-        const picture = await markupPagePicture(doc, n, page);
-        if (picture.words) words[n] = picture.words;
-        body.push({
-          n,
-          size: page.size,
-          marks: page.marks,
-          layerPng: await blobBase64(picture.png),
-          ...(picture.composed ? { composed: true } : {}),
-          ...(picture.anchors.length ? { anchors: picture.anchors } : {}),
-        });
+      let picturePng: string | undefined;
+      if (picture) {
+        // The phone's picture Submit: the marks alone, and the picture with
+        // them drawn on as the marked copy.
+        const page = present.pages[pages[0]];
+        body.push({ n: 1, size: page.size, marks: page.marks, layerPng: await blobBase64(await layerPng(page)) });
+        picturePng = await blobBase64(await composedPng(picture, page));
+      } else {
+        for (const n of pages) {
+          const page = present.pages[n];
+          const drawn = await markupPagePicture(doc, n, page);
+          if (drawn.words) words[n] = drawn.words;
+          body.push({
+            n,
+            size: page.size,
+            marks: page.marks,
+            layerPng: await blobBase64(drawn.png),
+            ...(drawn.composed ? { composed: true } : {}),
+            ...(drawn.anchors.length ? { anchors: drawn.anchors } : {}),
+          });
+        }
       }
       const settings = useSettingsStore.getState().settings;
       const instruction = pdfMarkupInstruction(settings?.pdf_markup_instruction);
       const direct = settings?.pdf_markup_direct ?? true;
-      const answer = await submitPdfMarkup(projectId, path, body, instruction, pdfMarkupAsk(settings?.pdf_markup_ask), direct ? "apply" : "list", roundId);
+      const answer = await submitPdfMarkup(projectId, path, body, instruction, pdfMarkupAsk(settings?.pdf_markup_ask), direct ? "apply" : "list", roundId, picturePng);
       prompt = answer.prompt;
       // The mode the backend gave the round decides its follow-up — Undo or
       // Make these changes — never the setting.
@@ -1037,7 +1059,7 @@ export function usePdfMarkup({
     setRoundTargetId(target.scheduleTargetId);
     setRound(startRound(queued, Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
     setSending(false);
-  }, [projectId, target, sending, note, history.present, pageCount, path, doc, t]);
+  }, [projectId, target, sending, note, history.present, pageCount, path, doc, picture, t]);
 
   // An `apply` round's snapshot is settled each time the round finishes — a
   // later turn (an answered question) moves it on, and the last one wins. A

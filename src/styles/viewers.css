@@ -941,6 +941,18 @@ select.file-viewer-run-args-input {
   cursor: var(--cur-grabbing, grabbing);
 }
 
+/* Mark up over the picture: the layer at the image's place and zoom
+   (`PdfMarkupLayer` sizes itself; this box only moves it with the pan). */
+.file-viewer-image-markup {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+.file-viewer-image-viewport:focus {
+  outline: none;
+}
+
 .file-viewer-image {
   position: absolute;
   top: 0;
