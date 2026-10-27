@@ -58,7 +58,10 @@ describe("SyncHostOnlyFiles", () => {
     await userEvent.click(screen.getByRole("button", { name: "Find remote-only files" }));
     await screen.findByText("logs/a.log");
     await userEvent.click(screen.getByRole("button", { name: "Delete all on the host" }));
-    await waitFor(() => expect(useSyncConfirmStore.getState().pending?.hostOnly).toBe(true));
+    await waitFor(() => {
+      const pending = useSyncConfirmStore.getState().pending;
+      expect(pending && "hostOnly" in pending && pending.hostOnly).toBe(true);
+    });
     expect(mockInvoke).not.toHaveBeenCalledWith("sync_apply_delete", expect.anything());
     useSyncConfirmStore.getState().proceed();
     await waitFor(() => expect(screen.queryByText("logs/a.log")).toBeNull());
