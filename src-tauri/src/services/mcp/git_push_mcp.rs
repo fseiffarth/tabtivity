@@ -866,18 +866,59 @@ fn update(id: &str, f: impl FnOnce(&mut Proposal)) -> Option<Proposal> {
     f(p);
     Some(p.clone())
 }
-/// A proposal just staged supersedes the same tab's older still-pending
-/// ones of its kind: their card describes a branch tip the newer one has
+/// A proposal just staged supersedes the older still-pending ones of its
+/// kind from the same tab, and every tab's pending pushes of the same branch
+/// in the same checkout: their card describes a branch tip the newer one has
 /// replaced, so they are dismissed without the user pressing anything. The
 /// agent polling `git_push_status` sees the dismissal and why.
 fn supersede_older(id: &str) {
     let mut list = proposals().lock_ok();
-    let Some((tab, kind)) = list.iter().find(|p| p.id == id).map(|p| (p.tab.clone(), p.kind)) else { return };
-    for p in list.iter_mut().filter(|p| p.id != id && p.tab == tab && p.kind == kind && p.status == Status::Pending) {
+    let Some(new) = list.iter().find(|p| p.id == id).cloned() else { return };
+    let same_branch = |p: &Proposal| new.kind == Kind::Push && p.dir == new.dir && new.branch.is_some() && p.branch == new.branch;
+    for p in list.iter_mut().filter(|p| p.id != id && p.kind == new.kind && p.status == Status::Pending && (p.tab == new.tab || same_branch(p))) {
         p.status = Status::Dismissed;
         p.category = Some(Category::Dismissed);
-        p.message = "Superseded by a newer request of this tab.".into();
+        p.message = if p.tab == new.tab { "Superseded by a newer request of this tab." } else { "Superseded by a newer push request of this branch." }.into();
     }
+}
+
+/// `branch` of the checkout at `dir` just went out through this lane: every
+/// other pending push card of it is either on the remote now or describes a
+/// tip the branch has left, so it is dismissed.
+fn dismiss_pushed_branch(id: &str, dir: &Path, branch: &str) {
+    let mut list = proposals().lock_ok();
+    for p in list.iter_mut().filter(|p| p.id != id && p.kind == Kind::Push && p.status == Status::Pending && p.dir == dir && p.branch.as_deref() == Some(branch)) {
+        p.status = Status::Dismissed;
+        p.category = Some(Category::Dismissed);
+        p.message = "A newer push of this branch went out; this request no longer applies.".into();
+    }
+}
+
+/// Dismiss the pending push cards (of `project`, or of `tab`) whose commit
+/// the branch's remote-tracking ref already contains: the branch was pushed
+/// another way (a terminal, the git bar), so the card has nothing left to
+/// send. Local refs only, no network; the tracking ref only ever records
+/// what the remote held. Runs git, so callers are off the UI thread.
+pub fn settle_pushed_elsewhere(project: Option<&str>, tab: Option<&str>) {
+    // Snapshot first: git never runs under the proposals lock.
+    let cards: Vec<(String, PathBuf, String, String)> = proposals()
+        .lock_ok()
+        .iter()
+        .filter(|p| p.kind == Kind::Push && p.status == Status::Pending && project.is_none_or(|id| p.project == id) && tab.is_none_or(|t| p.tab == t))
+        .filter_map(|p| Some((p.id.clone(), p.dir.clone(), format!("refs/remotes/{}/{}", p.remote.as_deref()?, p.branch.as_deref()?), p.head.clone()?)))
+        .collect();
+    let mut settled = false;
+    for (id, dir, tracking, head) in cards {
+        let on_remote = lane_git_command(&dir, &["merge-base", "--is-ancestor", head.as_str(), tracking.as_str()]).bounded_output().is_ok_and(|o| o.status.success());
+        if !on_remote { continue; }
+        settled |= update(&id, |p| if p.status == Status::Pending && p.head.as_deref() == Some(head.as_str()) {
+            p.status = Status::Dismissed;
+            p.category = Some(Category::Dismissed);
+            p.message = "Already on the remote: the branch was pushed another way.".into();
+        })
+        .is_some_and(|p| p.status == Status::Dismissed);
+    }
+    if settled { changed(); }
 }
 fn get(id: &str) -> Option<Proposal> {
     proposals().lock_ok().iter().find(|p| p.id == id).cloned()
@@ -1081,6 +1122,7 @@ fn push_now(id: &str, plan: &Plan, token: Option<&str>, origins: &[String]) {
                 p.state = local_state(&p.dir);
                 p.state.remote_sha = Some(plan.head.clone());
             });
+            dismiss_pushed_branch(id, &p.dir, &plan.branch);
             changed();
         }
         Err(failure) => { fail(id, failure); }
@@ -1464,6 +1506,7 @@ fn call_cancel(session: &Session, id: &str) -> Result<Value, String> {
 }
 
 fn call_status(session: &Session, dir: &Path, policy: &ProjectPolicy) -> Value {
+    settle_pushed_elsewhere(None, Some(&session.identity.tab));
     let rows: Vec<Value> = proposals_for(None, Some(&session.identity.tab)).iter().map(proposal_view).collect();
     json!({"state":local_state(dir),"level":policy.level(),"protected":policy.protected,"allowedBranches":allowed_branches(dir, policy),"defaultBranch":upstream_default_branch(dir),"urlConfirmed":policy.confirmed_url,"proposals":rows})
 }
@@ -2123,6 +2166,45 @@ mod tests {
         let ran = crate::services::git_bounded::run(&mut cmd, lane_opts(None, Duration::from_secs(30))).expect("bwrap ran");
         assert!(!marker.exists(), "the fenced hook wrote into $HOME: {}", lane_text(&ran.output).1);
         let _ = std::fs::remove_file(&marker);
+    }
+
+    #[test]
+    fn a_push_request_or_a_push_dismisses_every_tabs_older_cards_of_the_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, other) = (session("tab:branch-cards", dir.path()), session("tab:branch-cards-other", dir.path()));
+        let (theirs, feature, new) = (test_proposal(&other, dir.path()), test_proposal(&other, dir.path()), test_proposal(&s, dir.path()));
+        for (id, branch) in [(&theirs, "develop"), (&feature, "feature"), (&new, "develop")] {
+            update(id, |p| { p.status = Status::Pending; p.branch = Some(branch.into()); });
+        }
+        supersede_older(&new);
+        let status = |id: &str| get(id).unwrap().status;
+        assert_eq!((status(&theirs), status(&feature), status(&new)), (Status::Dismissed, Status::Pending, Status::Pending));
+        // The newer card goes out: the branch's other pending cards go with it.
+        let later = test_proposal(&other, dir.path());
+        update(&later, |p| { p.status = Status::Pending; p.branch = Some("develop".into()); });
+        dismiss_pushed_branch(&new, dir.path(), "develop");
+        assert_eq!((status(&later), status(&feature), status(&new)), (Status::Dismissed, Status::Pending, Status::Pending));
+        proposals().lock().unwrap().retain(|p| !p.tab.starts_with("tab:branch-cards"));
+    }
+
+    #[test]
+    fn a_card_the_remote_already_holds_is_dismissed() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let head = commit(&work, "b.txt");
+        let s = session("tab:elsewhere", &work);
+        let id = test_proposal(&s, &work);
+        set_pending(&id, &Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: head.clone(),
+            remote_sha: sh(&work, &["rev-parse", "origin/develop"]), to_default: false, default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false });
+        settle_pushed_elsewhere(None, Some("tab:elsewhere"));
+        assert_eq!(get(&id).unwrap().status, Status::Pending, "not on the remote yet");
+        // The user pushes from a terminal, a commit past the card's.
+        commit(&work, "c.txt");
+        sh(&work, &["push", "-q", "origin", "develop"]);
+        settle_pushed_elsewhere(None, Some("tab:elsewhere"));
+        let p = get(&id).unwrap();
+        assert_eq!((p.status, p.category), (Status::Dismissed, Some(Category::Dismissed)), "{}", p.message);
+        proposals().lock().unwrap().retain(|p| p.tab != "tab:elsewhere");
     }
 
     #[test]

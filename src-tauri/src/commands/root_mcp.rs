@@ -874,10 +874,15 @@ pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Opt
 }
 
 /// The push proposals of one project (the git bar's and the Agents view's
-/// card), pruned of expired and orphaned ones.
+/// card), pruned of expired and orphaned ones and of pushes the branch's
+/// remote already holds (that check runs git, hence off the UI thread).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn git_push_mcp_proposals(project_id: String) -> Vec<crate::services::git_push_mcp::Proposal> {
-    crate::services::git_push_mcp::proposals_for(Some(&project_id), None)
+pub async fn git_push_mcp_proposals(project_id: String) -> Result<Vec<crate::services::git_push_mcp::Proposal>, String> {
+    app_core::rt::blocking("root console", move || {
+        crate::services::git_push_mcp::settle_pushed_elsewhere(Some(&project_id), None);
+        crate::services::git_push_mcp::proposals_for(Some(&project_id), None)
+    })
+    .await
 }
 /// Push (approve) or dismiss a pending proposal. Approval re-checks the
 /// bound SHA and the remote, confirms a first URL, then pushes; the reply is

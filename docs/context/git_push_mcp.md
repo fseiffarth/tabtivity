@@ -115,9 +115,16 @@ is `auth_failed` up front.
 `admit` validates arguments and takes the budget before any git runs: six
 `git_push` calls per tab per rolling hour (`Session::admit_push_rate`), at most
 two pending/running requests per tab. A request that gets staged dismisses the
-tab's older still-pending ones of the same kind (`supersede_older`; the card
+tab's older still-pending ones of the same kind, and every tab's pending
+pushes of the same branch in the same checkout (`supersede_older`; the card
 no longer matches the branch), so a pending push never counts against a new
-push. A `git_push` creates a proposal record
+push. A push that goes out dismisses the branch's other pending cards
+(`dismiss_pushed_branch`), and a card whose commit the branch's
+remote-tracking ref already holds — pushed from a terminal or the git bar —
+is dismissed when the card list or `git_push_status` is read
+(`settle_pushed_elsewhere`; local refs, no network). The ref is in the
+project folder, so an agent can forge it, but that only dismisses a card,
+never sends anything. A `git_push` creates a proposal record
 and runs plan → preflight → stage-or-push on a worker under a per-project lock;
 the call waits up to 18 s (the listener's sockets live 30 s) and otherwise
 answers `running` with the id. **propose** stages after the preflight, so the
