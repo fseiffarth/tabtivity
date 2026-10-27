@@ -968,6 +968,11 @@
   align-items: center;
   gap: 2px 6px;
   min-height: 30px;
+  /* The menu is a height-capped flex column, and an explicit min-height turns
+     off the automatic content minimum: without this the column shrank the row
+     to 30px and the wrapped result note ("everything up to date") hung out
+     below the row's box, over the next section's label. */
+  flex-shrink: 0;
   padding: 6px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
