@@ -1984,7 +1984,7 @@ mod encrypted {
                 .unwrap();
         }
 
-        let secrets = [
+        let plaintexts = [
             "Redundancy list",
             "the following roles are at risk",
             "body of the message",
@@ -1999,10 +1999,10 @@ mod encrypted {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
-            for secret in secrets {
+            for plaintext in plaintexts {
                 assert!(
-                    !contains(&bytes, secret.as_bytes()),
-                    "{secret:?} is readable in {}", // privacy-check: ok — test fixture, never sent
+                    !contains(&bytes, plaintext.as_bytes()),
+                    "{plaintext:?} is readable in {}", // privacy-check: ok — test fixture, never sent
                     path.display()
                 );
             }
@@ -2351,15 +2351,15 @@ mod encrypted {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
-            for secret in [
+            for plaintext in [
                 "Redundancy list",
                 "body text",
                 "attachment plaintext",
                 "outgoing plaintext",
             ] {
                 assert!(
-                    !contains(&bytes, secret.as_bytes()),
-                    "{secret:?} survived the migration in {}", // privacy-check: ok — test fixture, never sent
+                    !contains(&bytes, plaintext.as_bytes()),
+                    "{plaintext:?} survived the migration in {}", // privacy-check: ok — test fixture, never sent
                     path.display()
                 );
             }

@@ -296,22 +296,6 @@
     "reason": "The flagged constant is a bool or count the cleartext-store migration returns (Ok(false), Ok(0), changed = 0); no hard-coded value reaches a key: seal_text seals with the account's derived keys."
   },
   {
-    "path": "src-tauri/src/services/mail/mail_store/tests.rs",
-    "line": 2005,
-    "source": "\"{secret:?} is readable in {}\", // privacy-check: ok — test fixture, never sent",
-    "rule": "rust/cleartext-logging",
-    "sha256": "fe0eeb8d7dd76e0c605707f561d00ffed1d6c62c7066ae147d038a2ac49e78c2",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the fixture plaintext the test checks is no longer readable in the store file."
-  },
-  {
-    "path": "src-tauri/src/services/mail/mail_store/tests.rs",
-    "line": 2362,
-    "source": "\"{secret:?} survived the migration in {}\", // privacy-check: ok — test fixture, never sent",
-    "rule": "rust/cleartext-logging",
-    "sha256": "fe0eeb8d7dd76e0c605707f561d00ffed1d6c62c7066ae147d038a2ac49e78c2",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the fixture plaintext the test checks is no longer readable in the store file."
-  },
-  {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
     "line": 951,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
