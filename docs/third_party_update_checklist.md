@@ -344,6 +344,22 @@ Claude's `/fast` — different thing.
   sentence; the rest is gateways, compaction, Windows hooks Tabtivity does
   not register (`PreToolUse`/`PermissionRequest`), sandbox wording, mods,
   VS Code, cloud sessions, Claude Tag — nothing Tabtivity reads.
+  Re-checked against 2.1.311 (2026-10-27, live, from a scratch directory,
+  both `*_TAB_UID` names unset, the same `-p` dump: keys identical to
+  2.1.310's on all 9 payloads of a `--session-id` run plus its `--resume`
+  (SessionStart startup/resume, UserPromptSubmit, PostToolUse, Stop,
+  SessionEnd), `session_id` equal to the `--session-id` passed, the hook's
+  `sed` extractions (session_id, permission_mode, source, hook_event_name,
+  reason, transcript_path) matching `jq` on every one, the resume start's four
+  cost fields included; the transcript carries the same record types as
+  before (`api-request-shape`, `api-request`, `api-request-blob` among them;
+  not run beside a 2.1.310 session this time);
+  `-p --resume` of a `plan` session still reports the default; `/usage` three
+  meters, every reset resolved; `--help` differs only in the `purge`
+  subcommand's wording; the quoted notification types
+  (`permission_prompt`, `idle_prompt`, `elicitation_dialog`, …) and the mode
+  label strings count the same, the cold-resume dialog string too — the extra
+  raw `permission_prompt` hit is minified-name churn).
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
