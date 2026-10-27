@@ -10691,6 +10691,7 @@ export const enSource = {
   "assistant.openOllama": "Open Ollama settings",
   "assistant.newChat.intro": "{assistant} searches and reads the web for you. It can't see any file, project or setting on this computer.",
   "assistant.newChat.cli": "CLI",
+  "assistant.newChat.cliLocal": "{cli} (local)",
   "assistant.newChat.model": "Local model",
   "assistant.newChat.noModel": "No model installed",
   "assistant.newChat.cloudModel": "Model",

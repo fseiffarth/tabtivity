@@ -289,13 +289,6 @@ pub fn is_offered(cli: AssistantCli) -> bool {
     matches!(cli, AssistantCli::Claude | AssistantCli::Codex | AssistantCli::OpenCodeLocal | AssistantCli::ClaudeLocal)
 }
 
-/// Whether a new chat may pick the profile, and the options list it. Cloud
-/// Claude is offered but no longer listed (the user's call, 2026-10-26): a
-/// chat made with it before still resumes, a new one is refused.
-pub fn is_listed(cli: AssistantCli) -> bool {
-    is_offered(cli) && cli != AssistantCli::Claude
-}
-
 impl AssistantCli {
     /// Whether the profile talks to the web lane at all. A local profile has
     /// no search or fetch of its own and needs it ([`Refusal::NoLane`]
@@ -944,9 +937,6 @@ pub fn new_chat_record(
     request_hash: Option<&str>,
 ) -> Result<TabEntry, Refusal> {
     validate_launch(launch)?;
-    if !is_listed(launch.cli) {
-        return Err(Refusal::NotOffered);
-    }
     let cwd = chat_dir(state_dir, uid)?;
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
     extra.insert("kind".into(), serde_json::json!("agent"));
@@ -1765,14 +1755,8 @@ mod tests {
     #[test]
     fn a_stored_record_keeps_a_launch_only_when_it_still_validates() {
         let state = Path::new("state");
-        let good = new_chat_record(state, &launch(AssistantCli::Codex, Some("gpt-5")), UID, None).unwrap();
+        let good = new_chat_record(state, &launch(AssistantCli::Claude, Some("claude-opus-5")), UID, None).unwrap();
         assert!(record_launch(&good).is_some());
-        // Cloud Claude takes no new chat, but a chat made with it before resumes.
-        assert_eq!(new_chat_record(state, &launch(AssistantCli::Claude, None), UID, None).unwrap_err(), Refusal::NotOffered);
-        let mut older = good.clone();
-        older.cmd = "claude".into();
-        older.extra.insert("assistant".into(), serde_json::json!({ "cli": "claude" }));
-        assert_eq!(record_launch(&older), Some(launch(AssistantCli::Claude, None)));
         let mutate = |f: &dyn Fn(&mut TabEntry)| {
             let mut tab = good.clone();
             f(&mut tab);

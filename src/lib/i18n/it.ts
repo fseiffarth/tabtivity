@@ -10596,6 +10596,7 @@ export const dict: Dict = {
   "assistant.openOllama": "Apri le impostazioni di Ollama",
   "assistant.newChat.intro": "{assistant} cerca e legge il web per te. Non vede alcun file, progetto o impostazione di questo computer.",
   "assistant.newChat.cli": "CLI",
+  "assistant.newChat.cliLocal": "{cli} (locale)",
   "assistant.newChat.model": "Modello locale",
   "assistant.newChat.cloudModel": "Modello",
   "assistant.newChat.defaultModel": "Modello predefinito",

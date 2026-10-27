@@ -5,7 +5,7 @@ import type { AssistantSettings as AssistantSettingsBlock } from "../../types";
 import { Dropdown } from "../common/Dropdown";
 import { SettingRow, SettingsCard } from "../layout/settingsUi";
 import { AssistantSearchSetup } from "./AssistantSearchSetup";
-import { useAssistantOptions } from "./useAssistantOptions";
+import { orderedClis, useAssistantOptions } from "./useAssistantOptions";
 
 /**
  * Settings → the assistant's page (below the section title the panel draws):
@@ -21,7 +21,8 @@ import { useAssistantOptions } from "./useAssistantOptions";
 export function AssistantSettings() {
   const t = useT();
   const enabled = useExperimental("assistant");
-  const stored = useSettingsStore((s) => s.settings?.assistant_settings);
+  const settings = useSettingsStore((s) => s.settings);
+  const stored = settings?.assistant_settings;
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const { options, error, refresh } = useAssistantOptions(enabled);
 
@@ -52,7 +53,10 @@ export function AssistantSettings() {
               ariaLabel={t("assistant.settings.defaultCli")}
               options={[
                 { value: "", label: t("assistant.settings.firstAvailable") },
-                ...(options?.clis ?? []).map((c) => ({ value: c.id, label: c.label })),
+                ...orderedClis(options?.clis ?? [], settings).map((c) => ({
+                  value: c.id,
+                  label: c.local ? t("assistant.newChat.cliLocal", { cli: c.label }) : c.label,
+                })),
               ]}
               onChange={(v) => write({ default_cli: v || undefined })}
             />

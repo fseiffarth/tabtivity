@@ -128,9 +128,8 @@ way around the pinned tool set: the help tools read no file and run nothing.
 ## The profiles, as built
 
 Pinned against Claude Code 2.1.300, Codex 0.162.1, OpenCode 1.19.1 and
-Ollama 0.40.3 (A0). All four are offered (`is_offered`), but cloud Claude is
-no longer listed (`is_listed`, the user's call 2026-10-26): no new chat picks
-it, desktop or phone, and a chat made with it before still resumes.
+Ollama 0.40.3 (A0). All four are offered and listed (cloud Claude was
+unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
 
 | Profile | What `launch_line` sets | Web |
 |---|---|---|

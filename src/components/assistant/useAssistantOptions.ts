@@ -5,7 +5,10 @@ import {
   type AssistantCliOption,
   type AssistantOptions,
 } from "../../lib/assistant";
+import { AGENT_CLI_ROWS } from "../../lib/agents/agentClis";
+import { effectiveAgentOrder, sortByAgentOrder } from "../../lib/tabs/newTabItems";
 import { usePoll } from "../../lib/usePoll";
+import type { Settings } from "../../types";
 
 /** How often the options are re-read while a surface that shows them is up.
  *  A sign-in or an Ollama start changes them; nothing else does. */
@@ -79,4 +82,17 @@ export function defaultModelOf(options: AssistantOptions, preferred: string | un
   if (preferred && models.includes(preferred)) return preferred;
   if (options.defaultModel && models.includes(options.defaultModel)) return options.defaultModel;
   return models[0] ?? "";
+}
+
+/** The agent binary each profile runs (`AssistantCli::bin`). */
+const CLI_BIN: Record<string, string> = { claude: "claude", claude_local: "claude", codex: "codex", opencode_local: "opencode" };
+
+/** `clis` in the general agent order — the + menu's (`agent_order`, else the
+ *  default agent first, then registry order), by the binary each runs; for one
+ *  binary the backend's order stays (cloud before local). */
+export function orderedClis(clis: readonly AssistantCliOption[], settings: Settings | null | undefined): AssistantCliOption[] {
+  const defaultCmd = settings?.default_agent_cmd || "claude";
+  const defaultBin = AGENT_CLI_ROWS.find((row) => row.id === defaultCmd)?.bin ?? defaultCmd;
+  const order = effectiveAgentOrder(AGENT_CLI_ROWS.map((row) => row.bin), settings?.agent_order, defaultBin);
+  return sortByAgentOrder(clis, (cli) => CLI_BIN[cli.id] ?? cli.id, order);
 }

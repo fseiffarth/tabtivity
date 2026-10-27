@@ -28,7 +28,7 @@ const SEARCH_OFF = { kind: null, searxngUrl: null, ollamaKeyStored: false, keyri
 const OPTIONS = {
   clis: [
     { id: "claude", label: "Claude", local: false, installed: true, signedIn: true, ready: true },
-    { id: "opencode_local", label: "OpenCode (local model)", local: true, installed: true, signedIn: null, ready: true },
+    { id: "opencode_local", label: "OpenCode", local: true, installed: true, signedIn: null, ready: true },
   ],
   localModels: ["qwen3:8b"],
   ollamaReachable: true,
@@ -99,7 +99,7 @@ describe("the assistant's settings page", () => {
     render(<AssistantSettings />);
     await screen.findByRole("button", { name: "Default CLI" });
     fireEvent.click(screen.getByRole("button", { name: "Default CLI" }));
-    fireEvent.click(await screen.findByRole("option", { name: "OpenCode (local model)" }));
+    fireEvent.click(await screen.findByRole("option", { name: "OpenCode (local)" }));
     await waitFor(() => expect(patches()).toHaveLength(1));
     expect(patches()[0].assistant_settings).toEqual({
       default_cli: "opencode_local",

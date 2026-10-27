@@ -18,7 +18,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { AttachedAgentPane } from "../layout/AttachedAgentPane";
 import { CliBlockCard, SearchSetupCard } from "./AssistantCards";
-import { cliBlock, defaultCliOf, defaultModelOf, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
+import { cliBlock, defaultCliOf, defaultModelOf, orderedClis, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
 
 /** A CLI and, for a local one, the model it drives. */
 interface Launch {
@@ -50,7 +50,8 @@ export function AssistantView() {
   const t = useT();
   const handle = useAssistantOptions(true);
   const { options } = handle;
-  const stored = useSettingsStore((s) => s.settings?.assistant_settings);
+  const settings = useSettingsStore((s) => s.settings);
+  const stored = settings?.assistant_settings;
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -214,7 +215,10 @@ export function AssistantView() {
           value={current?.cli ?? ""}
           ariaLabel={t("assistant.newChat.cli")}
           title={t("assistant.newChat.cli")}
-          options={options?.clis.map((c) => ({ value: c.id, label: c.label })) ?? []}
+          options={orderedClis(options?.clis ?? [], settings).map((c) => ({
+            value: c.id,
+            label: c.local ? t("assistant.newChat.cliLocal", { cli: c.label }) : c.label,
+          }))}
           placeholder={t("assistant.loading")}
           disabled={!options || busy || switching}
           onChange={pickCli}

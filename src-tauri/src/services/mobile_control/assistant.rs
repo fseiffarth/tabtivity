@@ -79,7 +79,7 @@ pub fn launch_handle(host_key: &[u8], cli: AssistantCli, model: Option<&str>) ->
 
 /// Every launch `options` allows, in the desktop menu's order: a cloud CLI
 /// once, a local CLI once per installed Ollama model. A CLI the options name
-/// but this build does not know or no longer lists, a local one without Ollama, and a model name
+/// but this build does not know, a local one without Ollama, and a model name
 /// that is not a safe CLI argument (`model_name_ok`) are skipped.
 pub fn choices(host_key: &[u8], options: &AssistantOptions) -> Vec<Choice> {
     let mut out: Vec<Choice> = Vec::new();
@@ -90,7 +90,7 @@ pub fn choices(host_key: &[u8], options: &AssistantOptions) -> Vec<Choice> {
         .take(MAX_MODELS)
         .collect();
     for option in &options.clis {
-        let Some(cli) = AssistantCli::from_id(&option.id).filter(|cli| crate::services::assistant::is_listed(*cli)) else {
+        let Some(cli) = AssistantCli::from_id(&option.id) else {
             continue;
         };
         let wanted: Vec<Option<&str>> = if cli.is_local() {
@@ -161,7 +161,7 @@ pub(crate) fn fixture_options() -> AssistantOptions {
     AssistantOptions {
         clis: vec![
             fixture_cli("claude", false, true, true),
-            fixture_cli("codex", false, true, true),
+            fixture_cli("codex", false, false, false),
             fixture_cli("opencode_local", true, true, true),
             fixture_cli("claude_local", true, true, false),
             fixture_cli("future_cli", false, true, true),
@@ -188,25 +188,25 @@ mod tests {
 
     #[test]
     fn launches_are_listed_per_cli_and_model_under_opaque_ids() {
-        let mut options = fixture_options();
+        let options = fixture_options();
         let all = choices(&KEY, &options);
         let names: Vec<_> = all.iter().map(|c| (c.launch.cli.id(), c.launch.model.as_deref())).collect();
         assert_eq!(
             names,
             [
+                ("claude", None),
                 ("codex", None),
                 ("opencode_local", Some("qwen3:8b")),
                 ("opencode_local", Some("llama3.2")),
                 ("claude_local", Some("qwen3:8b")),
                 ("claude_local", Some("llama3.2")),
             ],
-            "an unknown CLI, an unlisted one (cloud Claude) and an unsafe model name are not offered"
+            "an unknown CLI and an unsafe model name are not offered"
         );
-        // Listed: only what is installed. A not-installed CLI still resolves.
-        options.clis[1].installed = false;
+        // Listed: only what is installed. The not-installed Codex still resolves.
         let listed = phone_options(&KEY, &options);
         assert!(listed.ollama_reachable);
-        assert_eq!(listed.launches.len(), 4);
+        assert_eq!(listed.launches.len(), 5);
         assert!(listed.launches.iter().all(|l| l.label != "Codex"));
         let ids: std::collections::HashSet<_> = all.iter().map(|c| c.public.id.clone()).collect();
         assert_eq!(ids.len(), all.len(), "one id per launch");
@@ -232,7 +232,7 @@ mod tests {
         options.local_models.clear();
         let all = choices(&KEY, &options);
         assert!(all.iter().all(|c| !c.public.local));
-        assert_eq!(all.len(), 1);
+        assert_eq!(all.len(), 2);
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("mobile-control")).unwrap();
         std::fs::write(dir.path().join("mobile-control/host.key"), KEY).unwrap();
-        for (cli, model) in [(AssistantCli::Codex, None), (AssistantCli::OpenCodeLocal, Some("qwen3:8b"))] {
+        for (cli, model) in [(AssistantCli::Claude, None), (AssistantCli::OpenCodeLocal, Some("qwen3:8b"))] {
             assert_eq!(
                 super::super::discovery::opaque_control_id(dir.path(), DOMAIN, &handle_value(cli, model)).unwrap(),
                 launch_handle(&KEY, cli, model)
